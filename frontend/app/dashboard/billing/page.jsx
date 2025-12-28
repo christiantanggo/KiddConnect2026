@@ -42,6 +42,13 @@ function BillingPage() {
       setInvoices(invoicesRes.data.invoices || []);
       setPackages(packagesRes.data.packages || []);
       
+      // Debug logging for subscription price
+      console.log('[Billing Page] Billing data:', billingRes.data);
+      console.log('[Billing Page] Subscription:', billingRes.data?.subscription);
+      console.log('[Billing Page] Subscription price:', billingRes.data?.subscription?.price);
+      console.log('[Billing Page] Subscription_price:', billingRes.data?.subscription_price);
+      console.log('[Billing Page] Plan tier:', billingRes.data?.plan_tier);
+      
       if (userRes.data?.business) {
         setSettings({
           minutes_exhausted_behavior: userRes.data.business.minutes_exhausted_behavior || 'disable_ai',
@@ -217,7 +224,16 @@ function BillingPage() {
                           {getPlanDetails(billing.plan_tier).name} Plan
                         </p>
                         <p className="text-sm text-gray-600">
-                          ${(billing.subscription?.price || billing.subscription_price || getPlanDetails(billing.plan_tier).price).toFixed(2)}/month
+                          ${(() => {
+                            const price = billing.subscription?.price || billing.subscription_price || getPlanDetails(billing.plan_tier).price;
+                            console.log('[Billing Page] Display price calculation:', {
+                              'subscription.price': billing.subscription?.price,
+                              'subscription_price': billing.subscription_price,
+                              'plan_tier price': getPlanDetails(billing.plan_tier).price,
+                              'final price': price
+                            });
+                            return typeof price === 'number' ? price.toFixed(2) : parseFloat(price || 0).toFixed(2);
+                          })()}/month
                         </p>
                       </div>
                       <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
