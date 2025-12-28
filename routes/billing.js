@@ -240,40 +240,40 @@ router.get('/status', authenticate, async (req, res) => {
             ? await stripe.paymentMethods.retrieve(subscription.default_payment_method)
             : subscription.default_payment_method;
         }
+        
+        // Extract actual subscription price from Stripe subscription
+        if (subscription?.items?.data?.length > 0) {
+          // Get the price from the first subscription item (should only be one)
+          const subscriptionItem = subscription.items.data[0];
+          let priceObject = subscriptionItem.price;
+          
+          // If price is a string ID, we need to retrieve it separately
+          if (typeof priceObject === 'string') {
+            try {
+              priceObject = await stripe.prices.retrieve(priceObject);
+            } catch (priceError) {
+              console.warn('[Billing Status] Could not retrieve price object:', priceError.message);
+            }
+          }
+          
+          if (priceObject?.unit_amount) {
+            // Convert from cents to dollars and store in subscription object
+            subscription._actualPrice = priceObject.unit_amount / 100;
+            console.log('[Billing Status] ✅ Extracted subscription price from Stripe:', subscription._actualPrice);
+          } else {
+            console.warn('[Billing Status] ⚠️ Price object does not have unit_amount:', JSON.stringify(priceObject));
+          }
+        } else if (subscription) {
+          console.warn('[Billing Status] ⚠️ Subscription has no items:', subscription.id);
+        }
       } catch (stripeError) {
         console.warn('[Billing Status] Error fetching Stripe data:', stripeError.message);
         // Continue without Stripe data - return what we have
       }
     }
 
-    // Extract actual subscription price from Stripe subscription
-    let actualSubscriptionPrice = null;
-    if (subscription?.items?.data?.length > 0) {
-      // Get the price from the first subscription item (should only be one)
-      const subscriptionItem = subscription.items.data[0];
-      let priceObject = subscriptionItem.price;
-      
-      // If price is a string ID, we need to retrieve it separately
-      if (typeof priceObject === 'string') {
-        try {
-          const { getStripeInstance } = await import('../services/stripe.js');
-          const stripe = getStripeInstance();
-          priceObject = await stripe.prices.retrieve(priceObject);
-        } catch (priceError) {
-          console.warn('[Billing Status] Could not retrieve price object:', priceError.message);
-        }
-      }
-      
-      if (priceObject?.unit_amount) {
-        // Convert from cents to dollars
-        actualSubscriptionPrice = priceObject.unit_amount / 100;
-        console.log('[Billing Status] ✅ Extracted subscription price from Stripe:', actualSubscriptionPrice);
-      } else {
-        console.warn('[Billing Status] ⚠️ Price object does not have unit_amount:', JSON.stringify(priceObject));
-      }
-    } else if (subscription) {
-      console.warn('[Billing Status] ⚠️ Subscription has no items:', subscription.id);
-    }
+    // Extract actual subscription price (use stored value or fallback)
+    let actualSubscriptionPrice = subscription?._actualPrice || null;
     
     // Fallback to purchased_at_sale_price if available, otherwise use package monthly_price
     // This handles the case where Stripe data isn't available
