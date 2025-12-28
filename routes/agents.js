@@ -157,24 +157,23 @@ router.put('/', authenticate, async (req, res) => {
     
     // ALWAYS rebuild VAPI assistant when agent settings change
     // This ensures the assistant has the latest data (FAQs, hours, greetings, etc.)
+    // CRITICAL: Do this synchronously (not in async IIFE) to ensure it completes
     console.log('[Agent Settings] 🔄 Triggering VAPI assistant rebuild...');
-    (async () => {
-      try {
-        console.log('[Agent Settings] Starting async rebuild process...');
-        const { rebuildAssistant } = await import('../services/vapi.js');
-        console.log('[Agent Settings] Rebuild function imported, calling rebuildAssistant...');
-        await rebuildAssistant(req.businessId);
-        console.log('[Agent Settings] ✅ VAPI assistant rebuilt successfully');
-      } catch (vapiError) {
-        console.error('[Agent Settings] ❌❌❌ ERROR rebuilding VAPI assistant (non-blocking):', {
-          message: vapiError.message,
-          stack: vapiError.stack,
-          code: vapiError.code,
-          response: vapiError.response?.data,
-        });
-        // Don't fail the request if VAPI update fails
-      }
-    })();
+    try {
+      const { rebuildAssistant } = await import('../services/vapi.js');
+      console.log('[Agent Settings] Rebuild function imported, calling rebuildAssistant...');
+      await rebuildAssistant(req.businessId);
+      console.log('[Agent Settings] ✅ VAPI assistant rebuilt successfully');
+    } catch (vapiError) {
+      console.error('[Agent Settings] ❌❌❌ ERROR rebuilding VAPI assistant:', {
+        message: vapiError.message,
+        stack: vapiError.stack,
+        code: vapiError.code,
+        response: vapiError.response?.data,
+      });
+      // Don't fail the request if VAPI update fails, but log it prominently
+      console.error('[Agent Settings] ⚠️ WARNING: Assistant rebuild failed. User should manually rebuild via dashboard button.');
+    }
     
     res.json({ agent });
   } catch (error) {
