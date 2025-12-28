@@ -256,6 +256,7 @@ router.get('/status', authenticate, async (req, res) => {
       // If price is a string ID, we need to retrieve it separately
       if (typeof priceObject === 'string') {
         try {
+          const { getStripeInstance } = await import('../services/stripe.js');
           const stripe = getStripeInstance();
           priceObject = await stripe.prices.retrieve(priceObject);
         } catch (priceError) {
