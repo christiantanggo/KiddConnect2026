@@ -211,7 +211,7 @@ router.get('/status', authenticate, async (req, res) => {
         if (business.stripe_subscription_id) {
           try {
             subscription = await stripe.subscriptions.retrieve(business.stripe_subscription_id, {
-              expand: ['default_payment_method', 'items.data.price']
+              expand: ['default_payment_method']
             });
           } catch (subError) {
             console.warn('[Billing Status] Could not retrieve subscription:', subError.message);
@@ -251,18 +251,39 @@ router.get('/status', authenticate, async (req, res) => {
     if (subscription?.items?.data?.length > 0) {
       // Get the price from the first subscription item (should only be one)
       const subscriptionItem = subscription.items.data[0];
-      if (subscriptionItem?.price?.unit_amount) {
-        // Convert from cents to dollars
-        actualSubscriptionPrice = subscriptionItem.price.unit_amount / 100;
+      let priceObject = subscriptionItem.price;
+      
+      // If price is a string ID, we need to retrieve it separately
+      if (typeof priceObject === 'string') {
+        try {
+          const stripe = getStripeInstance();
+          priceObject = await stripe.prices.retrieve(priceObject);
+        } catch (priceError) {
+          console.warn('[Billing Status] Could not retrieve price object:', priceError.message);
+        }
       }
+      
+      if (priceObject?.unit_amount) {
+        // Convert from cents to dollars
+        actualSubscriptionPrice = priceObject.unit_amount / 100;
+        console.log('[Billing Status] ✅ Extracted subscription price from Stripe:', actualSubscriptionPrice);
+      } else {
+        console.warn('[Billing Status] ⚠️ Price object does not have unit_amount:', JSON.stringify(priceObject));
+      }
+    } else if (subscription) {
+      console.warn('[Billing Status] ⚠️ Subscription has no items:', subscription.id);
     }
     
     // Fallback to purchased_at_sale_price if available, otherwise use package monthly_price
     // This handles the case where Stripe data isn't available
     if (!actualSubscriptionPrice && business.purchased_at_sale_price) {
       actualSubscriptionPrice = parseFloat(business.purchased_at_sale_price);
+      console.log('[Billing Status] ✅ Using purchased_at_sale_price from business:', actualSubscriptionPrice);
     } else if (!actualSubscriptionPrice && packageDetails?.monthly_price) {
       actualSubscriptionPrice = parseFloat(packageDetails.monthly_price);
+      console.log('[Billing Status] ✅ Using package monthly_price:', actualSubscriptionPrice);
+    } else if (!actualSubscriptionPrice) {
+      console.warn('[Billing Status] ⚠️ No price found - using fallback from getPlanDetails');
     }
 
     res.json({
