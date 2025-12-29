@@ -222,6 +222,7 @@ import contactsRoutes from "./routes/contacts.js";
 import diagnosticsRoutes from "./routes/diagnostics.js";
 import demoRoutes from "./routes/demo.js";
 import demoTestEmailRoutes from "./routes/demo-test-email.js";
+import clickbankRoutes from "./routes/clickbank.js";
 
 // Apply specific rate limiters
 app.use("/api/auth/login", authLimiter);
@@ -260,6 +261,7 @@ app.use("/api/contacts", contactsRoutes);
 app.use("/api/diagnostics", diagnosticsRoutes);
 app.use("/api/demo", demoRoutes);
 app.use("/api/demo-test-email", demoTestEmailRoutes);
+app.use("/api/clickbank", clickbankRoutes);
 const demoFollowupRoutes = (await import("./routes/demo-followup.js")).default;
 app.use("/api/demo-followup", demoFollowupRoutes);
 app.use("/api/demo-followup", (await import("./routes/demo-followup.js")).default);
