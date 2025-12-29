@@ -131,10 +131,12 @@ The Tavari Support Team
       });
 
     console.log(`[Support Contact] ✅ Contact form submission processed successfully`);
+    console.log(`[Support Contact] Sending success response to client`);
     res.status(200).json({ 
       success: true, 
       message: "Your message has been sent successfully. We'll get back to you soon!" 
     });
+    console.log(`[Support Contact] ✅ Response sent to client`);
   } catch (error) {
     console.error("[Support Contact] Error processing contact form:", error);
     console.error("[Support Contact] Error details:", {
