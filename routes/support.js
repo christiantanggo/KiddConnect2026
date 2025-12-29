@@ -13,10 +13,10 @@ const router = express.Router();
 // POST /api/support/contact
 router.post("/contact", async (req, res) => {
   try {
-    const { name, email, subject: formSubject, message } = req.body;
+    const { name, email, subject, message } = req.body;
 
     // Validate required fields
-    if (!name || !email || !formSubject || !message) {
+    if (!name || !email || !subject || !message) {
       return res.status(400).json({ 
         error: "All fields are required: name, email, subject, and message" 
       });
@@ -36,7 +36,7 @@ router.post("/contact", async (req, res) => {
       feature: "Feature Request",
       other: "General Inquiry",
     };
-    const readableSubject = subjectMap[formSubject] || formSubject;
+    const readableSubject = subjectMap[subject] || subject;
 
     // Support email address
     const supportEmail = process.env.SUPPORT_EMAIL || "info@tanggo.ca";
