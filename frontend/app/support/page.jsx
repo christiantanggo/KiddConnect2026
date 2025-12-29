@@ -16,11 +16,17 @@ export default function SupportPage() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    e.stopPropagation();
+    
+    console.log('[Support Form] Form submitted with data:', formData);
     setSubmitting(true);
     
     try {
       const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
-      const response = await fetch(`${API_URL}/api/support/contact`, {
+      const url = `${API_URL}/api/support/contact`;
+      console.log('[Support Form] Sending request to:', url);
+      
+      const response = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -28,17 +34,31 @@ export default function SupportPage() {
         body: JSON.stringify(formData),
       });
 
+      console.log('[Support Form] Response status:', response.status);
+      console.log('[Support Form] Response ok:', response.ok);
+      
+      // Check if response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('[Support Form] Non-JSON response:', text.substring(0, 200));
+        throw new Error('Server returned an invalid response. Please try again later.');
+      }
+
       const data = await response.json();
+      console.log('[Support Form] Response data:', data);
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to send message');
       }
 
       // Success!
+      console.log('[Support Form] ✅ Success!');
       setSubmitted(true);
       setSubmitting(false);
     } catch (error) {
-      console.error('Error submitting contact form:', error);
+      console.error('[Support Form] ❌ Error submitting contact form:', error);
+      console.error('[Support Form] Error stack:', error.stack);
       alert(error.message || 'Failed to send message. Please try again later.');
       setSubmitting(false);
     }

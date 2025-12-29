@@ -12,8 +12,13 @@ const router = express.Router();
 // Public contact form endpoint (no authentication required)
 // POST /api/support/contact
 router.post("/contact", async (req, res) => {
+  console.log('[Support Contact] ========== CONTACT FORM REQUEST RECEIVED ==========');
+  console.log('[Support Contact] Request body:', JSON.stringify(req.body, null, 2));
+  console.log('[Support Contact] Request headers:', req.headers);
+  
   try {
     const { name, email, subject, message } = req.body;
+    console.log('[Support Contact] Parsed data:', { name, email, subject, message: message?.substring(0, 50) + '...' });
 
     // Validate required fields
     if (!name || !email || !subject || !message) {
