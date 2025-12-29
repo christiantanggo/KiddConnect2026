@@ -176,7 +176,7 @@ export default function AffiliatesPage() {
                     <p className="text-gray-700 mb-4">
                       Tavari AI is an AI-powered phone answering service designed specifically for small businesses. 
                       It answers every call, 24/7, using your business information to handle customer inquiries, 
-                      answer FAQs, take messages, and book appointments.
+                      answer FAQs, and take messages.
                     </p>
                   </div>
 
