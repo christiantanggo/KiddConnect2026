@@ -4,10 +4,144 @@
 import express from "express";
 import { authenticate } from "../middleware/auth.js";
 import { supabaseClient } from "../config/database.js";
-import { sendSupportTicketNotification } from "../services/notifications.js";
+import { sendSupportTicketNotification, sendEmail } from "../services/notifications.js";
 import { Business } from "../models/Business.js";
 
 const router = express.Router();
+
+// Public contact form endpoint (no authentication required)
+// POST /api/support/contact
+router.post("/contact", async (req, res) => {
+  try {
+    const { name, email, subject: formSubject, message } = req.body;
+
+    // Validate required fields
+    if (!name || !email || !formSubject || !message) {
+      return res.status(400).json({ 
+        error: "All fields are required: name, email, subject, and message" 
+      });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: "Invalid email address" });
+    }
+
+    // Map subject dropdown to readable format
+    const subjectMap = {
+      technical: "Technical Support",
+      billing: "Billing & Payments",
+      account: "Account Issues",
+      feature: "Feature Request",
+      other: "General Inquiry",
+    };
+    const readableSubject = subjectMap[formSubject] || formSubject;
+
+    // Support email address
+    const supportEmail = process.env.SUPPORT_EMAIL || "info@tanggo.ca";
+
+    // Create email subject
+    const emailSubject = `Contact Form: ${readableSubject} - ${name}`;
+
+    // Create email body (HTML)
+    const bodyHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2563eb;">New Contact Form Submission</h2>
+        
+        <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; margin: 20px 0;">
+          <p><strong>From:</strong> ${name}</p>
+          <p><strong>Email:</strong> <a href="mailto:${email}">${email}</a></p>
+          <p><strong>Subject:</strong> ${readableSubject}</p>
+        </div>
+        
+        <div style="background-color: #ffffff; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+          <h3 style="color: #111827; margin-top: 0;">Message:</h3>
+          <p style="color: #374151; white-space: pre-wrap;">${message.replace(/\n/g, '<br>')}</p>
+        </div>
+        
+        <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+          This message was sent from the Tavari customer support contact form.<br>
+          You can reply directly to this email to respond to ${name}.
+        </p>
+      </div>
+    `;
+
+    // Create plain text version
+    const bodyText = `
+New Contact Form Submission
+
+From: ${name}
+Email: ${email}
+Subject: ${readableSubject}
+
+Message:
+${message}
+
+---
+This message was sent from the Tavari customer support contact form.
+You can reply directly to this email to respond to ${name}.
+    `.trim();
+
+    // Send email to support
+    console.log(`[Support Contact] Sending contact form email from ${name} (${email})`);
+    await sendEmail(supportEmail, emailSubject, bodyText, bodyHtml, "Tavari Support", null);
+
+    // Send confirmation email to the user (optional but good practice)
+    const confirmationSubject = "Thank you for contacting Tavari Support";
+    const confirmationBodyHtml = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #2563eb;">Thank You for Contacting Us</h2>
+        <p>Hi ${name},</p>
+        <p>We've received your message and our support team will get back to you as soon as possible.</p>
+        <p><strong>Your inquiry:</strong> ${readableSubject}</p>
+        <p style="color: #6b7280; font-size: 14px; margin-top: 30px;">
+          If you have any urgent questions, please don't hesitate to reach out to us directly at <a href="mailto:${supportEmail}">${supportEmail}</a>.
+        </p>
+        <p style="color: #6b7280; font-size: 14px;">
+          Best regards,<br>
+          The Tavari Support Team
+        </p>
+      </div>
+    `;
+    const confirmationBodyText = `
+Thank You for Contacting Us
+
+Hi ${name},
+
+We've received your message and our support team will get back to you as soon as possible.
+
+Your inquiry: ${readableSubject}
+
+If you have any urgent questions, please don't hesitate to reach out to us directly at ${supportEmail}.
+
+Best regards,
+The Tavari Support Team
+    `.trim();
+
+    // Send confirmation email (non-blocking - don't fail if this fails)
+    sendEmail(email, confirmationSubject, confirmationBodyText, confirmationBodyHtml, "Tavari", null)
+      .catch(err => {
+        console.warn(`[Support Contact] Failed to send confirmation email (non-blocking):`, err.message);
+      });
+
+    console.log(`[Support Contact] ✅ Contact form submission processed successfully`);
+    res.status(200).json({ 
+      success: true, 
+      message: "Your message has been sent successfully. We'll get back to you soon!" 
+    });
+  } catch (error) {
+    console.error("[Support Contact] Error processing contact form:", error);
+    console.error("[Support Contact] Error details:", {
+      message: error.message,
+      stack: error.stack,
+    });
+    res.status(500).json({ 
+      error: "Failed to send message. Please try again later.",
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
 
 // Create support ticket
 router.post("/tickets", authenticate, async (req, res) => {

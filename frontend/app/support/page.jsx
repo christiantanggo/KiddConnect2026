@@ -18,12 +18,30 @@ export default function SupportPage() {
     e.preventDefault();
     setSubmitting(true);
     
-    // You can implement actual form submission here
-    // For now, just show success message
-    setTimeout(() => {
+    try {
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+      const response = await fetch(`${API_URL}/api/support/contact`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(formData),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || 'Failed to send message');
+      }
+
+      // Success!
       setSubmitted(true);
       setSubmitting(false);
-    }, 1000);
+    } catch (error) {
+      console.error('Error submitting contact form:', error);
+      alert(error.message || 'Failed to send message. Please try again later.');
+      setSubmitting(false);
+    }
   };
 
   return (

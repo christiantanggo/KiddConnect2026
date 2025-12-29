@@ -44,6 +44,20 @@ export const authLimiter = rateLimit({
   },
 });
 
+// Contact form rate limiter (stricter to prevent spam)
+export const contactLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // Limit each IP to 5 contact form submissions per hour
+  message: "Too many contact form submissions. Please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator, // Use custom key generator
+  skip: (req) => {
+    // Skip rate limiting for CORS preflight requests
+    return req.method === 'OPTIONS';
+  },
+});
+
 // Admin rate limiter
 export const adminLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes

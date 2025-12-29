@@ -198,7 +198,7 @@ import { initSentry } from "./config/sentry.js";
 initSentry();
 
 // Rate limiting - load synchronously
-import { apiLimiter, authLimiter, adminLimiter, webhookLimiter } from "./middleware/rateLimiter.js";
+import { apiLimiter, authLimiter, adminLimiter, webhookLimiter, contactLimiter } from "./middleware/rateLimiter.js";
 app.use("/api", apiLimiter);
 
 // Load routes synchronously - they're all ES modules
@@ -228,6 +228,7 @@ app.use("/api/auth/login", authLimiter);
 app.use("/api/auth/signup", authLimiter);
 app.use("/api/admin/login", authLimiter); // Use auth limiter for admin login (must be before general admin limiter)
 app.use("/api/vapi/webhook", webhookLimiter);
+app.use("/api/support/contact", contactLimiter); // Stricter rate limiting for public contact form
 
 // Apply admin limiter to all admin routes EXCEPT login (which is handled above)
 app.use("/api/admin", (req, res, next) => {
