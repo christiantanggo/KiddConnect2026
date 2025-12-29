@@ -22,7 +22,7 @@ export default function SupportPage() {
     setSubmitting(true);
     
     try {
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, ''); // Remove trailing slash
       const url = `${API_URL}/api/support/contact`;
       console.log('[Support Form] Sending request to:', url);
       
