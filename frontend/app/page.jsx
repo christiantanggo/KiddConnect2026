@@ -276,6 +276,9 @@ export default function Home() {
               <Link href="/legal/terms" className="hover:text-blue-600 transition-colors">
                 Terms of Service
               </Link>
+              <Link href="/affiliates" className="hover:text-blue-600 transition-colors">
+                Affiliates
+              </Link>
             </div>
           </div>
         </div>
