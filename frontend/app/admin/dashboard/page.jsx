@@ -17,7 +17,7 @@ function AdminDashboardPage() {
   const loadStats = async () => {
     try {
       const token = getAdminToken();
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, ''); // Remove trailing slash
       const response = await fetch(`${API_URL}/api/admin/stats`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -61,7 +61,7 @@ function AdminDashboardPage() {
 
     try {
       const token = getAdminToken();
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, ''); // Remove trailing slash
       const response = await fetch(`${API_URL}/api/admin/rebuild-all-assistants`, {
         method: 'POST',
         headers: {
