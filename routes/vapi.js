@@ -702,7 +702,16 @@ async function handleCallStart(event) {
       ai_enabled: business.ai_enabled,
     });
 
-  // Check if AI is enabled
+  // CRITICAL: Check minutes availability FIRST - this will re-enable AI if minutes are available
+  const minutesCheck = await checkMinutesAvailable(business.id, 0);
+  
+  // Refresh business object after minutes check (in case AI was re-enabled)
+  const refreshedBusiness = await Business.findById(business.id);
+  if (refreshedBusiness) {
+    business = refreshedBusiness;
+  }
+  
+  // Check if AI is enabled (after potential re-enable from minutes check)
   if (!business.ai_enabled) {
     console.log(`[VAPI Webhook] AI disabled for business ${business.id}, forwarding call`);
     
