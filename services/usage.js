@@ -56,6 +56,17 @@ export async function checkMinutesAvailable(businessId, callDurationMinutes = 0)
   const totalAvailable = planLimit + bonusMinutes;
   const minutesRemaining = totalAvailable - totalMinutesUsed;
 
+  // CRITICAL: Re-enable AI if minutes are now available and AI was disabled due to exhaustion
+  if (!business.ai_enabled && totalMinutesUsed < totalAvailable) {
+    console.log(`[Usage] ✅ Minutes available again (${minutesRemaining} remaining), re-enabling AI for business ${businessId}`);
+    await Business.update(businessId, { ai_enabled: true });
+    // Refresh business object to get updated ai_enabled value
+    const updatedBusiness = await Business.findById(businessId);
+    if (updatedBusiness) {
+      business.ai_enabled = true;
+    }
+  }
+
   // Check usage threshold (before checking exhaustion)
   const usagePercent = totalAvailable > 0 ? (totalMinutesUsed / totalAvailable) * 100 : 0;
   const threshold = business.usage_threshold_percent || 80;
@@ -76,11 +87,12 @@ export async function checkMinutesAvailable(businessId, callDurationMinutes = 0)
   if (totalMinutesUsed >= totalAvailable) {
     // Minutes exhausted
     if (business.minutes_exhausted_behavior === "disable_ai") {
-      // Option A: Disable AI
-      await Business.update(businessId, { ai_enabled: false });
-      
-      // Send mandatory notification
-      await sendAIDisabledNotification(business, "minutes_exhausted", {
+      // Option A: Disable AI (only if not already disabled to avoid unnecessary updates)
+      if (business.ai_enabled) {
+        await Business.update(businessId, { ai_enabled: false });
+        
+        // Send mandatory notification
+        await sendAIDisabledNotification(business, "minutes_exhausted", {
         minutesTotal: totalAvailable,
         resetDate: billingCycle.end,
       });
