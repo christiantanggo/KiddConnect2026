@@ -508,10 +508,18 @@ router.get("/webhook/diagnostic", async (req, res) => {
  * VAPI needs a fast response to answer calls properly
  */
 router.post("/webhook", async (req, res) => {
-  // 🔥 IMMEDIATE LOG - First thing we do (concise)
+  // 🔥 IMMEDIATE LOG - First thing we do (comprehensive)
   const eventType = req.body?.type || req.body?.event || req.body?.message?.type;
   const callId = req.body?.call?.id || req.body?.message?.call?.id;
-  console.log(`🔥🔥🔥 INBOUND WEBHOOK HIT 🔥🔥🔥 [${eventType || 'unknown'}] Call: ${callId || 'N/A'}`);
+  const assistantId = req.body?.call?.assistant?.id || req.body?.message?.assistant?.id;
+  const businessId = req.body?.call?.assistant?.metadata?.businessId || req.body?.message?.assistant?.metadata?.businessId;
+  
+  console.log(`🔥🔥🔥 INBOUND WEBHOOK HIT 🔥🔥🔥`);
+  console.log(`🔥 Event Type: ${eventType || 'unknown'}`);
+  console.log(`🔥 Call ID: ${callId || 'N/A'}`);
+  console.log(`🔥 Assistant ID: ${assistantId || 'N/A'}`);
+  console.log(`🔥 Business ID: ${businessId || 'N/A'}`);
+  console.log(`🔥 Timestamp: ${new Date().toISOString()}`);
   
   // RESPOND IMMEDIATELY - Don't wait for anything
   // This tells VAPI we received the webhook
