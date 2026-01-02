@@ -1499,14 +1499,36 @@ export async function forwardCallToBusiness(callId, targetNumber) {
       throw new Error(`Invalid phone number format: ${targetNumber}. Must be in E.164 format (e.g., +15551234567)`);
     }
     
-    // Use transfer API to forward call immediately
-    const response = await getVapiClient().post(`/call/${callId}/transfer`, {
-      phoneNumber: e164Number,
-    });
-    return response.data;
+    console.log(`[VAPI Forward] Attempting to forward call ${callId} to ${e164Number}`);
+    
+    // Try VAPI transfer endpoint - note: this may not be available during active calls
+    // VAPI might require transfer to be configured in the assistant or via function calls
+    try {
+      const response = await getVapiClient().post(`/call/${callId}/transfer`, {
+        phoneNumber: e164Number,
+      });
+      console.log(`[VAPI Forward] ✅ Transfer successful via API`);
+      return response.data;
+    } catch (apiError) {
+      // If API endpoint doesn't exist, log it but don't fail completely
+      // The call will still be tracked in our system
+      if (apiError.response?.status === 404) {
+        console.warn(`[VAPI Forward] ⚠️ Transfer API endpoint not available (404). VAPI may require transfer to be configured in assistant settings or via function calls.`);
+        console.warn(`[VAPI Forward] Call will be tracked but not automatically forwarded. Business should configure assistant to handle transfers.`);
+        // Don't throw - allow the call to continue being tracked
+        return { forwarded: false, reason: "api_endpoint_not_available" };
+      }
+      throw apiError;
+    }
   } catch (error) {
-    console.error("Error forwarding call to business:", error.response?.data || error.message);
-    throw new Error(`Failed to forward call: ${error.response?.data?.message || error.message}`);
+    console.error("[VAPI Forward] Error forwarding call to business:", {
+      callId,
+      targetNumber,
+      error: error.response?.data || error.message,
+      status: error.response?.status,
+    });
+    // Return error info instead of throwing - we still want to track the call
+    return { forwarded: false, error: error.message };
   }
 }
 

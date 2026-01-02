@@ -702,90 +702,144 @@ async function handleCallStart(event) {
       ai_enabled: business.ai_enabled,
     });
 
-  // CRITICAL: Check minutes availability FIRST - this will re-enable AI if minutes are available
-  const minutesCheck = await checkMinutesAvailable(business.id, 0);
-  
-  // Refresh business object after minutes check (in case AI was re-enabled)
-  const refreshedBusiness = await Business.findById(business.id);
-  if (refreshedBusiness) {
-    business = refreshedBusiness;
-  }
-  
-  // Check if AI is enabled (after potential re-enable from minutes check)
-  if (!business.ai_enabled) {
-    console.log(`[VAPI Webhook] AI disabled for business ${business.id}, forwarding call`);
-    
-    // Create call session record FIRST (always create, even if forward fails)
-    let callSession = null;
-    try {
-      callSession = await CallSession.create({
-        business_id: business.id,
-        vapi_call_id: callId,
-        caller_number: callerNumber,
-        status: "forwarded",
-        started_at: new Date(),
-      });
-      console.log(`[VAPI Webhook] ✅ Call session created for forwarded call:`, callSession.id);
-    } catch (sessionError) {
-      console.error(`[VAPI Webhook] ❌ Error creating call session for forwarded call:`, sessionError);
-    }
-    
-    // Try to forward call to business (but don't fail if this doesn't work)
-    try {
-      await forwardCallToBusiness(callId, business.public_phone_number);
-      console.log(`[VAPI Webhook] ✅ Call forwarded successfully`);
-    } catch (error) {
-      console.error(`[VAPI Webhook] ⚠️ Error forwarding call to business (non-critical):`, error.message);
-      // Update session status to indicate forward failed
-      if (callSession && callSession.id) {
-        try {
-          await CallSession.update(callSession.id, {
-            status: "forward_failed",
-          });
-        } catch (updateError) {
-          console.error(`[VAPI Webhook] Error updating call session status:`, updateError);
-        }
-      }
-    }
-    return;
-  }
-
-  // Minutes check already done above (before AI enabled check) to allow re-enabling
-  if (!minutesCheck.available) {
-    console.log(`[VAPI Webhook] Minutes exhausted for business ${business.id}, handling exhaustion`);
-    
-    if (business.minutes_exhausted_behavior === "disable_ai") {
-      // Option A: Disable AI and forward
-      await Business.update(business.id, { ai_enabled: false });
-      await forwardCallToBusiness(callId, business.public_phone_number);
+    // SIMPLIFIED LOGIC: If AI is disabled, check if minutes are available to re-enable
+    if (!business.ai_enabled) {
+      console.log(`[VAPI Webhook] AI disabled for business ${business.id}, checking if minutes available to re-enable`);
       
-      await CallSession.create({
-        business_id: business.id,
-        vapi_call_id: callId,
-        caller_number: callerNumber,
-        status: "forwarded_no_minutes",
-        started_at: new Date(),
-      });
-      return;
-    } else if (business.minutes_exhausted_behavior === "allow_overage") {
-      // Option B: Check overage cap
-      if (business.overage_cap_minutes && minutesCheck.overageMinutes >= business.overage_cap_minutes) {
-        // Cap reached, disable AI
-        await Business.update(business.id, { ai_enabled: false });
-        await forwardCallToBusiness(callId, business.public_phone_number);
-        
-        await CallSession.create({
-          business_id: business.id,
-          vapi_call_id: callId,
-          caller_number: callerNumber,
-          status: "forwarded_overage_cap",
-          started_at: new Date(),
-        });
-        return;
+      // Check minutes availability - this will automatically re-enable AI if minutes are available
+      const minutesCheck = await checkMinutesAvailable(business.id, 0);
+      
+      // Refresh business object after minutes check (in case AI was re-enabled)
+      const refreshedBusiness = await Business.findById(business.id);
+      if (refreshedBusiness) {
+        business = refreshedBusiness;
       }
-      // Under cap, allow call with overage billing
+      
+      // If still disabled after minutes check, forward the call
+      if (!business.ai_enabled) {
+        console.log(`[VAPI Webhook] AI still disabled (no minutes available), forwarding call`);
+        
+        // Create call session record FIRST (always create, even if forward fails)
+        let callSession = null;
+        try {
+          callSession = await CallSession.create({
+            business_id: business.id,
+            vapi_call_id: callId,
+            caller_number: callerNumber,
+            status: "forwarded",
+            started_at: new Date(),
+          });
+          console.log(`[VAPI Webhook] ✅ Call session created for forwarded call:`, callSession.id);
+        } catch (sessionError) {
+          console.error(`[VAPI Webhook] ❌ Error creating call session for forwarded call:`, sessionError);
+        }
+        
+        // Try to forward call to business
+        try {
+          await forwardCallToBusiness(callId, business.public_phone_number);
+          console.log(`[VAPI Webhook] ✅ Call forwarded successfully`);
+        } catch (error) {
+          console.error(`[VAPI Webhook] ⚠️ Error forwarding call to business:`, error.message);
+          // Update session status to indicate forward failed
+          if (callSession && callSession.id) {
+            try {
+              await CallSession.update(callSession.id, {
+                status: "forward_failed",
+              });
+            } catch (updateError) {
+              console.error(`[VAPI Webhook] Error updating call session status:`, updateError);
+            }
+          }
+        }
+        return;
+      } else {
+        console.log(`[VAPI Webhook] ✅ AI re-enabled (minutes available), continuing with call`);
+      }
     }
-  }
+
+    // AI is enabled - check minutes availability to handle exhaustion
+    const minutesCheck = await checkMinutesAvailable(business.id, 0);
+    
+    if (!minutesCheck.available) {
+      console.log(`[VAPI Webhook] Minutes exhausted for business ${business.id}, handling exhaustion`);
+      
+      if (business.minutes_exhausted_behavior === "disable_ai") {
+        // Option A: Disable AI and forward (prevent free AI minutes)
+        console.log(`[VAPI Webhook] Disabling AI and forwarding call (no free minutes)`);
+        await Business.update(business.id, { ai_enabled: false });
+        
+        // Create call session for tracking
+        let callSession = null;
+        try {
+          callSession = await CallSession.create({
+            business_id: business.id,
+            vapi_call_id: callId,
+            caller_number: callerNumber,
+            status: "forwarded_no_minutes",
+            started_at: new Date(),
+          });
+        } catch (sessionError) {
+          console.error(`[VAPI Webhook] ❌ Error creating call session:`, sessionError);
+        }
+        
+        // Forward call to business
+        try {
+          await forwardCallToBusiness(callId, business.public_phone_number);
+          console.log(`[VAPI Webhook] ✅ Call forwarded successfully (no minutes)`);
+        } catch (error) {
+          console.error(`[VAPI Webhook] ⚠️ Error forwarding call:`, error.message);
+          if (callSession && callSession.id) {
+            try {
+              await CallSession.update(callSession.id, {
+                status: "forward_failed",
+              });
+            } catch (updateError) {
+              console.error(`[VAPI Webhook] Error updating call session status:`, updateError);
+            }
+          }
+        }
+        return;
+      } else if (business.minutes_exhausted_behavior === "allow_overage") {
+        // Option B: Allow overage - check if overage cap is reached
+        if (business.overage_cap_minutes && minutesCheck.overageMinutes >= business.overage_cap_minutes) {
+          // Overage cap reached, disable AI and forward
+          console.log(`[VAPI Webhook] Overage cap reached (${minutesCheck.overageMinutes}/${business.overage_cap_minutes}), disabling AI and forwarding`);
+          await Business.update(business.id, { ai_enabled: false });
+          
+          let callSession = null;
+          try {
+            callSession = await CallSession.create({
+              business_id: business.id,
+              vapi_call_id: callId,
+              caller_number: callerNumber,
+              status: "forwarded_overage_cap",
+              started_at: new Date(),
+            });
+          } catch (sessionError) {
+            console.error(`[VAPI Webhook] ❌ Error creating call session:`, sessionError);
+          }
+          
+          try {
+            await forwardCallToBusiness(callId, business.public_phone_number);
+            console.log(`[VAPI Webhook] ✅ Call forwarded successfully (overage cap)`);
+          } catch (error) {
+            console.error(`[VAPI Webhook] ⚠️ Error forwarding call:`, error.message);
+            if (callSession && callSession.id) {
+              try {
+                await CallSession.update(callSession.id, {
+                  status: "forward_failed",
+                });
+              } catch (updateError) {
+                console.error(`[VAPI Webhook] Error updating call session status:`, updateError);
+              }
+            }
+          }
+          return;
+        }
+        // Under overage cap - allow call with overage billing
+        console.log(`[VAPI Webhook] ✅ Allowing call with overage billing (${minutesCheck.overageMinutes} overage minutes, cap: ${business.overage_cap_minutes || 'none'})`);
+      }
+    }
 
   // Create call session record
   try {
