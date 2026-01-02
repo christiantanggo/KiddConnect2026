@@ -750,9 +750,7 @@ async function handleCallStart(event) {
     return;
   }
 
-  // Check minutes availability
-  const minutesCheck = await checkMinutesAvailable(business.id, 0); // Estimate 0 for now, will update on call-end
-  
+  // Minutes check already done above (before AI enabled check) to allow re-enabling
   if (!minutesCheck.available) {
     console.log(`[VAPI Webhook] Minutes exhausted for business ${business.id}, handling exhaustion`);
     
