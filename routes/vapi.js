@@ -1390,19 +1390,92 @@ function extractMessageFromTranscript(transcript, summary, vapiCallData = null) 
   // Fallback: Extract from transcript/summary text
   const lines = (transcript || "").split("\n");
   
+  // Common words/phrases to exclude from name extraction
+  const excludedPhrases = [
+    "not able", "not sure", "not certain", "not available", "not here",
+    "not available", "not working", "not open", "not closed",
+    "able to", "sure about", "certain about", "available for",
+    "here to", "speaking to", "calling to", "calling about",
+    "the owner", "the manager", "the business", "the company",
+    "someone", "anyone", "anybody", "somebody",
+    "thanks", "thank you", "please", "sorry", "excuse me"
+  ];
+  
   // Extract name - look for patterns like "name is John" or "my name is John"
+  // Prioritize User lines in transcript, then summary, then full text
   if (!name || name === "Unknown") {
-    const namePatterns = [
-      /(?:name is|my name is|this is|i'm|i am)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
-      /(?:name|caller)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
-      /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:here|speaking|calling)/i,
-    ];
+    // First, try to extract from User lines in transcript (most reliable)
+    const userLines = lines.filter(line => line.trim().toLowerCase().startsWith("user:"));
+    for (const userLine of userLines) {
+      const userText = userLine.replace(/^user:\s*/i, "").trim();
+      
+      // Look for explicit name patterns in user speech
+      const explicitNamePatterns = [
+        /(?:^|^my\s+name\s+is|^this\s+is|^i'm|^i\s+am)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+        /(?:name|call\s+me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+      ];
+      
+      for (const pattern of explicitNamePatterns) {
+        const match = userText.match(pattern);
+        if (match && match[1]) {
+          const candidate = match[1].trim();
+          // Filter out excluded phrases
+          const candidateLower = candidate.toLowerCase();
+          if (!excludedPhrases.some(phrase => candidateLower.includes(phrase))) {
+            // Additional validation: names should be 2-30 characters and not all lowercase
+            if (candidate.length >= 2 && candidate.length <= 30 && /[A-Z]/.test(candidate)) {
+              name = candidate;
+              break;
+            }
+          }
+        }
+      }
+      if (name && name !== "Unknown") break;
+    }
     
-    for (const pattern of namePatterns) {
-      const match = fullText.match(pattern);
-      if (match && match[1]) {
-        name = match[1].trim();
-        break;
+    // If not found in user lines, try summary (often has structured info)
+    if ((!name || name === "Unknown") && summary) {
+      // Summary often has format like "Christian called..." or "The owner, Christian, called..."
+      const summaryNamePatterns = [
+        /^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:called|requested|asked)/i,
+        /(?:owner|manager|customer|caller|user)[,\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+        /(?:name|named)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+      ];
+      
+      for (const pattern of summaryNamePatterns) {
+        const match = summary.match(pattern);
+        if (match && match[1]) {
+          const candidate = match[1].trim();
+          const candidateLower = candidate.toLowerCase();
+          if (!excludedPhrases.some(phrase => candidateLower.includes(phrase))) {
+            if (candidate.length >= 2 && candidate.length <= 30 && /[A-Z]/.test(candidate)) {
+              name = candidate;
+              break;
+            }
+          }
+        }
+      }
+    }
+    
+    // Last resort: try full text with stricter patterns
+    if ((!name || name === "Unknown")) {
+      const strictNamePatterns = [
+        /(?:my\s+name\s+is|this\s+is|i'm|i\s+am)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?:\s|$|,|\.)/i,
+        /(?:name|call\s+me)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)(?:\s|$|,|\.)/i,
+      ];
+      
+      for (const pattern of strictNamePatterns) {
+        const match = fullText.match(pattern);
+        if (match && match[1]) {
+          const candidate = match[1].trim();
+          const candidateLower = candidate.toLowerCase();
+          if (!excludedPhrases.some(phrase => candidateLower.includes(phrase))) {
+            if (candidate.length >= 2 && candidate.length <= 30 && /[A-Z]/.test(candidate)) {
+              name = candidate;
+              break;
+            }
+          }
+        }
       }
     }
   }
