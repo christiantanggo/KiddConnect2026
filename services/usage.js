@@ -93,13 +93,14 @@ export async function checkMinutesAvailable(businessId, callDurationMinutes = 0)
         
         // Send mandatory notification
         await sendAIDisabledNotification(business, "minutes_exhausted", {
-        minutesTotal: totalAvailable,
-        resetDate: billingCycle.end,
-      });
+          minutesTotal: totalAvailable,
+          resetDate: billingCycle.end,
+        });
 
-      // Send optional notification if enabled
-      if (business.notify_minutes_fully_used) {
-        await sendMinutesFullyUsedNotification(business, totalAvailable, billingCycle.end, true);
+        // Send optional notification if enabled
+        if (business.notify_minutes_fully_used) {
+          await sendMinutesFullyUsedNotification(business, totalAvailable, billingCycle.end, true);
+        }
       }
 
       return {
