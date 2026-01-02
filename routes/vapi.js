@@ -706,20 +706,37 @@ async function handleCallStart(event) {
   if (!business.ai_enabled) {
     console.log(`[VAPI Webhook] AI disabled for business ${business.id}, forwarding call`);
     
-    // Immediately forward call to business
+    // Create call session record FIRST (always create, even if forward fails)
+    let callSession = null;
     try {
-      await forwardCallToBusiness(callId, business.public_phone_number);
-      
-      // Create call session record for tracking
-      await CallSession.create({
+      callSession = await CallSession.create({
         business_id: business.id,
         vapi_call_id: callId,
         caller_number: callerNumber,
         status: "forwarded",
         started_at: new Date(),
       });
+      console.log(`[VAPI Webhook] ✅ Call session created for forwarded call:`, callSession.id);
+    } catch (sessionError) {
+      console.error(`[VAPI Webhook] ❌ Error creating call session for forwarded call:`, sessionError);
+    }
+    
+    // Try to forward call to business (but don't fail if this doesn't work)
+    try {
+      await forwardCallToBusiness(callId, business.public_phone_number);
+      console.log(`[VAPI Webhook] ✅ Call forwarded successfully`);
     } catch (error) {
-      console.error(`[VAPI Webhook] Error forwarding call:`, error);
+      console.error(`[VAPI Webhook] ⚠️ Error forwarding call to business (non-critical):`, error.message);
+      // Update session status to indicate forward failed
+      if (callSession && callSession.id) {
+        try {
+          await CallSession.update(callSession.id, {
+            status: "forward_failed",
+          });
+        } catch (updateError) {
+          console.error(`[VAPI Webhook] Error updating call session status:`, updateError);
+        }
+      }
     }
     return;
   }
