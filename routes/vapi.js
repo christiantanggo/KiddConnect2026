@@ -689,7 +689,7 @@ async function handleCallStart(event) {
     
     // Find business by assistant ID
     console.log(`[VAPI Webhook] Looking up business for assistant: ${assistantId}`);
-    const business = await Business.findByVapiAssistantId(assistantId);
+    let business = await Business.findByVapiAssistantId(assistantId);
     if (!business) {
       console.error(`[VAPI Webhook] ❌❌❌ Business not found for assistant: ${assistantId}`);
       console.error(`[VAPI Webhook] This is a CRITICAL error - call will not be tracked!`);
