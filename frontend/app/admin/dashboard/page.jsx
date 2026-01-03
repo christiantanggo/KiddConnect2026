@@ -98,6 +98,7 @@ function AdminDashboardPage() {
   };
 
   const handleOpenDemoModal = async (marketingConsentOnly = false) => {
+    console.log('[Demo Modal] Opening modal, marketingConsentOnly:', marketingConsentOnly);
     setShowMarketingConsentOnly(marketingConsentOnly);
     setShowDemoModal(true);
     setDemoUsersLoading(true);
@@ -105,11 +106,11 @@ function AdminDashboardPage() {
     try {
       const token = getAdminToken();
       const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
-      const url = marketingConsentOnly 
-        ? `${API_URL}/api/admin/demo-users?marketing_consent=true`
-        : `${API_URL}/api/admin/demo-users`;
+      // Always fetch ALL users - marketing consent is just an indicator, not a filter
+      const url = `${API_URL}/api/admin/demo-users`;
       
       console.log('[Demo Modal] Fetching demo users from:', url);
+      console.log('[Demo Modal] Will filter by marketing consent in frontend:', marketingConsentOnly);
       
       const response = await fetch(url, {
         headers: {
@@ -126,10 +127,17 @@ function AdminDashboardPage() {
       
       const data = await response.json();
       console.log('[Demo Modal] Received data:', data);
-      console.log('[Demo Modal] Demos array:', data.demos);
-      console.log('[Demo Modal] Demos length:', data.demos?.length || 0);
+      console.log('[Demo Modal] All demos array:', data.demos);
+      console.log('[Demo Modal] All demos length:', data.demos?.length || 0);
       
-      setDemoUsers(data.demos || []);
+      // Filter by marketing consent in frontend if needed
+      let filteredDemos = data.demos || [];
+      if (marketingConsentOnly) {
+        filteredDemos = filteredDemos.filter(d => d.marketing_consent === true);
+        console.log('[Demo Modal] Filtered to marketing consent only:', filteredDemos.length);
+      }
+      
+      setDemoUsers(filteredDemos);
     } catch (error) {
       console.error('[Demo Modal] Failed to load demo users:', error);
       setDemoUsers([]);
