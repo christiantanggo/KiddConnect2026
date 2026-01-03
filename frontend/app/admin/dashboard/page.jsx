@@ -225,7 +225,7 @@ function AdminDashboardPage() {
             <h2 className="text-xl font-bold mb-4 text-gray-900">Demo Usage (VAPI Costs)</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <button
-                onClick={handleOpenDemoModal}
+                onClick={() => handleOpenDemoModal(false)}
                 className="text-center p-4 bg-blue-50 rounded hover:bg-blue-100 transition-colors cursor-pointer"
               >
                 <p className="text-2xl font-bold text-blue-600">{stats?.demo_usage?.total_demos || 0}</p>
@@ -234,7 +234,7 @@ function AdminDashboardPage() {
                 <p className="text-xs text-blue-600 mt-2 font-medium">Click to view users</p>
               </button>
               <button
-                onClick={handleOpenDemoModal}
+                onClick={() => handleOpenDemoModal(false)}
                 className="text-center p-4 bg-green-50 rounded hover:bg-green-100 transition-colors cursor-pointer"
               >
                 <p className="text-2xl font-bold text-green-600">{stats?.demo_usage?.total_demos_today || 0}</p>
@@ -243,7 +243,7 @@ function AdminDashboardPage() {
                 <p className="text-xs text-green-600 mt-2 font-medium">Click to view users</p>
               </button>
               <button
-                onClick={handleOpenDemoModal}
+                onClick={() => handleOpenDemoModal(false)}
                 className="text-center p-4 bg-purple-50 rounded hover:bg-purple-100 transition-colors cursor-pointer"
               >
                 <p className="text-2xl font-bold text-purple-600">{stats?.demo_usage?.total_demos_this_month || 0}</p>
