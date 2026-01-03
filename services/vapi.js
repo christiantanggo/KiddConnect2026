@@ -1457,6 +1457,21 @@ export async function getCallSummary(callId) {
 }
 
 /**
+ * Get full call data from VAPI (includes transport/call leg info)
+ * @param {string} callId - VAPI call ID
+ * @returns {Promise<Object>} Full call data object
+ */
+export async function getCallData(callId) {
+  try {
+    const response = await getVapiClient().get(`/call/${callId}`);
+    return response.data;
+  } catch (error) {
+    console.error("[VAPI] Error getting call data:", error.response?.data || error.message);
+    throw error; // Let caller handle this error
+  }
+}
+
+/**
  * Transfer a call to the business number
  * @param {string} callId - VAPI call ID
  * @param {string} targetNumber - Business phone number to transfer to (must be E.164 format)
@@ -1484,10 +1499,58 @@ export async function transferCall(callId, targetNumber) {
 }
 
 /**
+ * Transfer a call via Telnyx Call Control API
+ * @param {string} callLegId - Telnyx call leg ID (call_control_id)
+ * @param {string} targetNumber - Phone number to transfer to (E.164 format)
+ * @returns {Promise<Object>} Telnyx API response
+ */
+export async function forwardCallViaTelnyx(callLegId, targetNumber) {
+  try {
+    const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
+    if (!TELNYX_API_KEY) {
+      throw new Error("TELNYX_API_KEY not configured");
+    }
+    
+    const { formatPhoneNumberE164, validatePhoneNumber } = await import("../utils/phoneFormatter.js");
+    const e164Number = formatPhoneNumberE164(targetNumber);
+    
+    if (!e164Number || !validatePhoneNumber(e164Number)) {
+      throw new Error(`Invalid phone number format: ${targetNumber}`);
+    }
+    
+    console.log(`[Telnyx Transfer] Transferring call leg ${callLegId} to ${e164Number}`);
+    
+    const axios = (await import("axios")).default;
+    const response = await axios.post(
+      `https://api.telnyx.com/v2/calls/${callLegId}/actions/transfer`,
+      { to: e164Number },
+      {
+        headers: {
+          Authorization: `Bearer ${TELNYX_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        timeout: 10000, // 10 second timeout
+      }
+    );
+    
+    console.log(`[Telnyx Transfer] ✅ Transfer successful`);
+    return response.data;
+  } catch (error) {
+    console.error("[Telnyx Transfer] Error:", {
+      callLegId,
+      targetNumber,
+      error: error.response?.data || error.message,
+      status: error.response?.status,
+    });
+    throw error; // Let caller handle this error
+  }
+}
+
+/**
  * Forward a call to business immediately (no AI interaction)
  * @param {string} callId - VAPI call ID
  * @param {string} targetNumber - Business phone number (must be E.164 format)
- * @returns {Promise<Object>} Forward response
+ * @returns {Promise<Object>} Forward response (always returns object, never throws)
  */
 export async function forwardCallToBusiness(callId, targetNumber) {
   try {
@@ -1496,39 +1559,70 @@ export async function forwardCallToBusiness(callId, targetNumber) {
     const e164Number = formatPhoneNumberE164(targetNumber);
     
     if (!e164Number || !validatePhoneNumber(e164Number)) {
-      throw new Error(`Invalid phone number format: ${targetNumber}. Must be in E.164 format (e.g., +15551234567)`);
+      console.error(`[VAPI Forward] Invalid phone number format: ${targetNumber}`);
+      return { forwarded: false, reason: "invalid_phone_number", error: `Invalid phone number format: ${targetNumber}` };
     }
     
-    console.log(`[VAPI Forward] Attempting to forward call ${callId} to ${e164Number}`);
+    console.log(`[VAPI Forward] ========== ATTEMPTING CALL FORWARD ==========`);
+    console.log(`[VAPI Forward] Call ID: ${callId}`);
+    console.log(`[VAPI Forward] Target Number: ${e164Number}`);
     
-    // Try VAPI transfer endpoint - note: this may not be available during active calls
-    // VAPI might require transfer to be configured in the assistant or via function calls
+    // STEP 1: Fetch full call data from VAPI to get Telnyx call leg ID
+    console.log(`[VAPI Forward] Step 1: Fetching call data from VAPI...`);
+    let callData = null;
     try {
-      const response = await getVapiClient().post(`/call/${callId}/transfer`, {
-        phoneNumber: e164Number,
+      callData = await getCallData(callId);
+      console.log(`[VAPI Forward] ✅ Call data fetched successfully`);
+      console.log(`[VAPI Forward] Call data structure:`, {
+        hasTransport: !!callData?.transport,
+        hasPhoneCallProviderId: !!callData?.phoneCallProviderId,
+        phoneCallProvider: callData?.phoneCallProvider,
+        transportKeys: callData?.transport ? Object.keys(callData.transport) : [],
       });
-      console.log(`[VAPI Forward] ✅ Transfer successful via API`);
-      return response.data;
-    } catch (apiError) {
-      // If API endpoint doesn't exist, log it but don't fail completely
-      // The call will still be tracked in our system
-      if (apiError.response?.status === 404) {
-        console.warn(`[VAPI Forward] ⚠️ Transfer API endpoint not available (404). VAPI may require transfer to be configured in assistant settings or via function calls.`);
-        console.warn(`[VAPI Forward] Call will be tracked but not automatically forwarded. Business should configure assistant to handle transfers.`);
-        // Don't throw - allow the call to continue being tracked
-        return { forwarded: false, reason: "api_endpoint_not_available" };
-      }
-      throw apiError;
+    } catch (error) {
+      console.error(`[VAPI Forward] ❌ Failed to fetch call data:`, error.message);
+      return { forwarded: false, reason: "failed_to_fetch_call_data", error: error.message };
     }
+    
+    // STEP 2: Extract Telnyx call leg ID from transport data
+    console.log(`[VAPI Forward] Step 2: Extracting Telnyx call leg ID...`);
+    const callLegId = callData?.transport?.callLegId || callData?.transport?.call_leg_id;
+    
+    if (!callLegId) {
+      console.error(`[VAPI Forward] ❌ Call leg ID not found in call data`);
+      console.error(`[VAPI Forward] Available transport data:`, JSON.stringify(callData?.transport || {}, null, 2));
+      return { forwarded: false, reason: "call_leg_id_not_found", callData: callData?.transport };
+    }
+    
+    console.log(`[VAPI Forward] ✅ Found call leg ID: ${callLegId}`);
+    
+    // STEP 3: Transfer call via Telnyx API
+    console.log(`[VAPI Forward] Step 3: Transferring call via Telnyx API...`);
+    try {
+      const result = await forwardCallViaTelnyx(callLegId, e164Number);
+      console.log(`[VAPI Forward] ✅✅✅ TRANSFER SUCCESSFUL via Telnyx API`);
+      return { forwarded: true, method: "telnyx", result };
+    } catch (telnyxError) {
+      console.error(`[VAPI Forward] ❌ Telnyx transfer failed:`, telnyxError.message);
+      console.error(`[VAPI Forward] Telnyx error details:`, telnyxError.response?.data || telnyxError.message);
+      return { 
+        forwarded: false, 
+        reason: "telnyx_transfer_failed", 
+        error: telnyxError.message,
+        telnyxError: telnyxError.response?.data,
+        callLegId,
+      };
+    }
+    
   } catch (error) {
-    console.error("[VAPI Forward] Error forwarding call to business:", {
+    // Catch-all for any unexpected errors - NEVER throw, always return error object
+    console.error("[VAPI Forward] Unexpected error:", {
       callId,
       targetNumber,
       error: error.response?.data || error.message,
       status: error.response?.status,
     });
-    // Return error info instead of throwing - we still want to track the call
-    return { forwarded: false, error: error.message };
+    return { forwarded: false, reason: "unexpected_error", error: error.message };
   }
 }
 
