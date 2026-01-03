@@ -244,6 +244,67 @@ router.get("/webhook/phone-check", async (req, res) => {
 });
 
 /**
+ * Test endpoint to manually trigger call forwarding
+ * GET /api/vapi/webhook/test-forward?callId=xxx&businessId=xxx
+ * This allows testing forwarding without exhausting minutes
+ */
+router.get("/webhook/test-forward", async (req, res) => {
+  try {
+    const { callId, businessId } = req.query;
+    
+    if (!callId || !businessId) {
+      return res.status(400).json({
+        error: "Missing required parameters",
+        required: ["callId", "businessId"],
+        example: "/api/vapi/webhook/test-forward?callId=xxx&businessId=xxx",
+      });
+    }
+    
+    console.log(`[Test Forward] ========== MANUAL FORWARD TEST ==========`);
+    console.log(`[Test Forward] Call ID: ${callId}`);
+    console.log(`[Test Forward] Business ID: ${businessId}`);
+    
+    // Get business to get phone number
+    const business = await Business.findById(businessId);
+    if (!business) {
+      return res.status(404).json({ error: "Business not found" });
+    }
+    
+    if (!business.public_phone_number) {
+      return res.status(400).json({ error: "Business has no public phone number configured" });
+    }
+    
+    console.log(`[Test Forward] Business: ${business.name}`);
+    console.log(`[Test Forward] Target Number: ${business.public_phone_number}`);
+    
+    // Call the forwarding function
+    const result = await forwardCallToBusiness(callId, business.public_phone_number);
+    
+    console.log(`[Test Forward] Result:`, result);
+    console.log(`[Test Forward] =========================================`);
+    
+    res.status(200).json({
+      success: result.forwarded === true,
+      message: result.forwarded 
+        ? "Call forwarding initiated successfully" 
+        : "Call forwarding failed - check logs for details",
+      result: result,
+      business: {
+        id: business.id,
+        name: business.name,
+        phone: business.public_phone_number,
+      },
+    });
+  } catch (error) {
+    console.error("[Test Forward] Error:", error);
+    res.status(500).json({
+      error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+});
+
+/**
  * Diagnostic endpoint to check webhook configuration (detailed)
  */
 router.get("/webhook/diagnostic", async (req, res) => {
@@ -703,59 +764,43 @@ async function handleCallStart(event) {
       ai_enabled: business.ai_enabled,
     });
 
-    // SIMPLIFIED LOGIC: If AI is disabled, check if minutes are available to re-enable
+    // If AI is disabled, forward the call to the business
     if (!business.ai_enabled) {
-      console.log(`[VAPI Webhook] AI disabled for business ${business.id}, checking if minutes available to re-enable`);
+      console.log(`[VAPI Webhook] AI disabled for business ${business.id}, forwarding call to business`);
       
-      // Check minutes availability - this will automatically re-enable AI if minutes are available
-      const minutesCheck = await checkMinutesAvailable(business.id, 0);
-      
-      // Refresh business object after minutes check (in case AI was re-enabled)
-      const refreshedBusiness = await Business.findById(business.id);
-      if (refreshedBusiness) {
-        business = refreshedBusiness;
+      // Create call session record FIRST (always create, even if forward fails)
+      let callSession = null;
+      try {
+        callSession = await CallSession.create({
+          business_id: business.id,
+          vapi_call_id: callId,
+          caller_number: callerNumber,
+          status: "forwarded",
+          started_at: new Date(),
+        });
+        console.log(`[VAPI Webhook] ✅ Call session created for forwarded call:`, callSession.id);
+      } catch (sessionError) {
+        console.error(`[VAPI Webhook] ❌ Error creating call session for forwarded call:`, sessionError);
       }
       
-      // If still disabled after minutes check, forward the call
-      if (!business.ai_enabled) {
-        console.log(`[VAPI Webhook] AI still disabled (no minutes available), forwarding call`);
-        
-        // Create call session record FIRST (always create, even if forward fails)
-        let callSession = null;
-        try {
-          callSession = await CallSession.create({
-            business_id: business.id,
-            vapi_call_id: callId,
-            caller_number: callerNumber,
-            status: "forwarded",
-            started_at: new Date(),
-          });
-          console.log(`[VAPI Webhook] ✅ Call session created for forwarded call:`, callSession.id);
-        } catch (sessionError) {
-          console.error(`[VAPI Webhook] ❌ Error creating call session for forwarded call:`, sessionError);
-        }
-        
-        // Try to forward call to business
-        try {
-          await forwardCallToBusiness(callId, business.public_phone_number);
-          console.log(`[VAPI Webhook] ✅ Call forwarded successfully`);
-        } catch (error) {
-          console.error(`[VAPI Webhook] ⚠️ Error forwarding call to business:`, error.message);
-          // Update session status to indicate forward failed
-          if (callSession && callSession.id) {
-            try {
-              await CallSession.update(callSession.id, {
-                status: "forward_failed",
-              });
-            } catch (updateError) {
-              console.error(`[VAPI Webhook] Error updating call session status:`, updateError);
-            }
+      // Try to forward call to business
+      try {
+        await forwardCallToBusiness(callId, business.public_phone_number);
+        console.log(`[VAPI Webhook] ✅ Call forwarded successfully`);
+      } catch (error) {
+        console.error(`[VAPI Webhook] ⚠️ Error forwarding call to business:`, error.message);
+        // Update session status to indicate forward failed
+        if (callSession && callSession.id) {
+          try {
+            await CallSession.update(callSession.id, {
+              status: "forward_failed",
+            });
+          } catch (updateError) {
+            console.error(`[VAPI Webhook] Error updating call session status:`, updateError);
           }
         }
-        return;
-      } else {
-        console.log(`[VAPI Webhook] ✅ AI re-enabled (minutes available), continuing with call`);
       }
+      return;
     }
 
     // AI is enabled - check minutes availability to handle exhaustion
