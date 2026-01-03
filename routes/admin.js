@@ -582,6 +582,8 @@ router.get("/demo-users", authenticateAdmin, async (req, res) => {
     const { marketing_consent } = req.query;
     const { supabaseClient } = await import("../config/database.js");
     
+    console.log("[Admin Demo Users] Fetching demo users, marketing_consent filter:", marketing_consent);
+    
     let query = supabaseClient
       .from("demo_usage")
       .select("*")
@@ -596,14 +598,23 @@ router.get("/demo-users", authenticateAdmin, async (req, res) => {
     
     if (error) {
       console.error("[Admin Demo Users] Error fetching demo users:", error);
-      return res.status(500).json({ error: "Failed to fetch demo users" });
+      console.error("[Admin Demo Users] Error details:", JSON.stringify(error, null, 2));
+      return res.status(500).json({ 
+        error: "Failed to fetch demo users",
+        details: error.message,
+        hint: error.message?.includes("does not exist") 
+          ? "The demo_usage table may not exist. Please run the migration: migrations/add_demo_usage_table.sql"
+          : undefined
+      });
     }
+    
+    console.log("[Admin Demo Users] Raw demo records from DB:", demos?.length || 0);
     
     // Group by email to show unique users (keep most recent demo per email)
     const uniqueDemos = [];
     const seenEmails = new Set();
     
-    if (demos) {
+    if (demos && demos.length > 0) {
       for (const demo of demos) {
         if (demo.email && !seenEmails.has(demo.email)) {
           seenEmails.add(demo.email);
@@ -620,16 +631,25 @@ router.get("/demo-users", authenticateAdmin, async (req, res) => {
           });
         }
       }
+      console.log("[Admin Demo Users] Grouped to unique users:", uniqueDemos.length);
+    } else {
+      console.log("[Admin Demo Users] No demo records found in database");
+      console.log("[Admin Demo Users] Note: Demo tracking was added recently. Demos from before the tracking was implemented won't appear in this list.");
     }
     
     res.json({
       demos: uniqueDemos,
       total: uniqueDemos.length,
       with_marketing_consent: uniqueDemos.filter(d => d.marketing_consent).length,
+      raw_count: demos?.length || 0,
     });
   } catch (error) {
-    console.error("[Admin Demo Users] Error:", error);
-    res.status(500).json({ error: "Failed to get demo users" });
+    console.error("[Admin Demo Users] Exception:", error);
+    console.error("[Admin Demo Users] Error stack:", error.stack);
+    res.status(500).json({ 
+      error: "Failed to get demo users",
+      details: error.message 
+    });
   }
 });
 
