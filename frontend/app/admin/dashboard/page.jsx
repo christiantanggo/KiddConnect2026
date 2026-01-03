@@ -97,14 +97,15 @@ function AdminDashboardPage() {
     }
   };
 
-  const handleOpenDemoModal = async () => {
+  const handleOpenDemoModal = async (marketingConsentOnly = false) => {
+    setShowMarketingConsentOnly(marketingConsentOnly);
     setShowDemoModal(true);
     setDemoUsersLoading(true);
     
     try {
       const token = getAdminToken();
       const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
-      const url = showMarketingConsentOnly 
+      const url = marketingConsentOnly 
         ? `${API_URL}/api/admin/demo-users?marketing_consent=true`
         : `${API_URL}/api/admin/demo-users`;
       
@@ -238,10 +239,7 @@ function AdminDashboardPage() {
             {stats?.demo_usage?.users_with_marketing_consent !== undefined && (
               <div className="mt-4 pt-4 border-t border-gray-200">
                 <button
-                  onClick={() => {
-                    setShowMarketingConsentOnly(true);
-                    handleOpenDemoModal();
-                  }}
+                  onClick={() => handleOpenDemoModal(true)}
                   className="text-sm text-blue-600 hover:text-blue-700 font-medium"
                 >
                   View {stats.demo_usage.users_with_marketing_consent} users with marketing consent →
@@ -372,10 +370,7 @@ function AdminDashboardPage() {
                       </p>
                       {!showMarketingConsentOnly && (
                         <button
-                          onClick={() => {
-                            setShowMarketingConsentOnly(true);
-                            handleOpenDemoModal();
-                          }}
+                          onClick={() => handleOpenDemoModal(true)}
                           className="text-sm text-blue-600 hover:text-blue-700 font-medium"
                         >
                           Filter: Marketing Consent Only →
@@ -383,10 +378,7 @@ function AdminDashboardPage() {
                       )}
                       {showMarketingConsentOnly && (
                         <button
-                          onClick={() => {
-                            setShowMarketingConsentOnly(false);
-                            handleOpenDemoModal();
-                          }}
+                          onClick={() => handleOpenDemoModal(false)}
                           className="text-sm text-gray-600 hover:text-gray-700 font-medium"
                         >
                           Show All Users →
