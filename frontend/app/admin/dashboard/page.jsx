@@ -244,14 +244,11 @@ function AdminDashboardPage() {
                 <p className="text-xs text-purple-600 mt-2 font-medium">Click to view users</p>
               </button>
             </div>
-            {stats?.demo_usage?.users_with_marketing_consent !== undefined && (
+            {stats?.demo_usage?.users_with_marketing_consent !== undefined && stats.demo_usage.users_with_marketing_consent > 0 && (
               <div className="mt-4 pt-4 border-t border-gray-200">
-                <button
-                  onClick={() => handleOpenDemoModal(true)}
-                  className="text-sm text-blue-600 hover:text-blue-700 font-medium"
-                >
-                  View {stats.demo_usage.users_with_marketing_consent} users with marketing consent →
-                </button>
+                <p className="text-sm text-gray-600">
+                  {stats.demo_usage.users_with_marketing_consent} users have consented to marketing
+                </p>
               </div>
             )}
           </div>
