@@ -371,31 +371,31 @@ router.post("/send-summary", async (req, res) => {
     };
     
     // Step 5.5: Track demo usage in database
-    if (duration > 0) {
-      try {
-        const { supabaseClient } = await import("../config/database.js");
-        const now = new Date();
-        const minutesUsed = (duration / 60).toFixed(2);
-        
-        await supabaseClient
-          .from('demo_usage')
-          .insert({
-            assistant_id: assistantId,
-            call_id: actualCallId || null,
-            business_name: demoData.businessName,
-            email: email,
-            duration_seconds: duration,
-            minutes_used: parseFloat(minutesUsed),
-            date: now.toISOString().split('T')[0],
-            month: now.getMonth() + 1,
-            year: now.getFullYear(),
-          });
-        
-        console.log(`[Demo] ✅ Tracked demo usage: ${minutesUsed} minutes (${duration}s) for assistant ${assistantId}`);
-      } catch (trackingError) {
-        // Log error but don't fail the email sending
-        console.error(`[Demo] Error tracking demo usage:`, trackingError.message);
-      }
+    // Track even if duration is 0 (browser-based demos may not report duration)
+    // This ensures all demos are counted in the admin portal
+    try {
+      const { supabaseClient } = await import("../config/database.js");
+      const now = new Date();
+      const minutesUsed = duration > 0 ? parseFloat((duration / 60).toFixed(2)) : 0;
+      
+      await supabaseClient
+        .from('demo_usage')
+        .insert({
+          assistant_id: assistantId,
+          call_id: actualCallId || null,
+          business_name: demoData.businessName,
+          email: email,
+          duration_seconds: duration,
+          minutes_used: minutesUsed,
+          date: now.toISOString().split('T')[0],
+          month: now.getMonth() + 1,
+          year: now.getFullYear(),
+        });
+      
+      console.log(`[Demo] ✅ Tracked demo usage: ${minutesUsed} minutes (${duration}s) for assistant ${assistantId}`);
+    } catch (trackingError) {
+      // Log error but don't fail the email sending
+      console.error(`[Demo] Error tracking demo usage:`, trackingError.message);
     }
     
     // Step 6: Send demo email with marketing CTA

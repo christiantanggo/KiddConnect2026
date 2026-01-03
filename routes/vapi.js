@@ -1002,31 +1002,46 @@ async function handleCallEnd(event) {
     console.log(`[VAPI Webhook] Demo email: ${demoData.email}`);
     
     // Track demo usage in database (even if frontend endpoint isn't called)
-    if (duration > 0) {
+    // For browser-based demos, duration might be 0 in webhook but available from API
+    let actualDuration = duration;
+    if (actualDuration === 0 && callId) {
       try {
-        const { supabaseClient } = await import("../config/database.js");
-        const now = new Date();
-        const minutesUsed = parseFloat((duration / 60).toFixed(2));
-        
-        await supabaseClient
-          .from('demo_usage')
-          .insert({
-            assistant_id: assistantId,
-            call_id: callId || null,
-            business_name: demoData.businessName || null,
-            email: demoData.email || null,
-            duration_seconds: duration,
-            minutes_used: minutesUsed,
-            date: now.toISOString().split('T')[0],
-            month: now.getMonth() + 1,
-            year: now.getFullYear(),
-          });
-        
-        console.log(`[VAPI Webhook] ✅ Tracked demo usage: ${minutesUsed} minutes (${duration}s) for assistant ${assistantId}`);
-      } catch (trackingError) {
-        // Log error but don't fail the webhook
-        console.error(`[VAPI Webhook] Error tracking demo usage:`, trackingError.message);
+        // Try to fetch duration from VAPI API (browser calls might not report duration in webhook)
+        const { getCallData } = await import("../services/vapi.js");
+        const callData = await getCallData(callId);
+        actualDuration = callData?.durationSeconds || callData?.duration || 0;
+        console.log(`[VAPI Webhook] Fetched duration from VAPI API: ${actualDuration} seconds`);
+      } catch (apiError) {
+        console.warn(`[VAPI Webhook] Could not fetch duration from VAPI API:`, apiError.message);
+        // Continue with duration 0 - we'll track anyway to record the demo happened
       }
+    }
+    
+    // Track demo usage even if duration is 0 (browser-based demos may not report duration)
+    // This ensures all demos are counted in the admin portal
+    try {
+      const { supabaseClient } = await import("../config/database.js");
+      const now = new Date();
+      const minutesUsed = actualDuration > 0 ? parseFloat((actualDuration / 60).toFixed(2)) : 0;
+      
+      await supabaseClient
+        .from('demo_usage')
+        .insert({
+          assistant_id: assistantId,
+          call_id: callId || null,
+          business_name: demoData.businessName || null,
+          email: demoData.email || null,
+          duration_seconds: actualDuration,
+          minutes_used: minutesUsed,
+          date: now.toISOString().split('T')[0],
+          month: now.getMonth() + 1,
+          year: now.getFullYear(),
+        });
+      
+      console.log(`[VAPI Webhook] ✅ Tracked demo usage: ${minutesUsed} minutes (${actualDuration}s) for assistant ${assistantId}`);
+    } catch (trackingError) {
+      // Log error but don't fail the webhook
+      console.error(`[VAPI Webhook] Error tracking demo usage:`, trackingError.message);
     }
     
     // For browser-based demo calls, webhooks might not be reliable
