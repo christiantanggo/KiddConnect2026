@@ -14,7 +14,7 @@ export default function DemoModal({ isOpen, onClose }) {
     faq2: '',
     answer2: '',
     email: '',
-    marketingConsent: false,
+    marketingConsent: true, // Auto-checked by default
   });
   const [building, setBuilding] = useState(false);
   const [buildingText, setBuildingText] = useState('');
@@ -82,7 +82,7 @@ export default function DemoModal({ isOpen, onClose }) {
       faq2: '',
       answer2: '',
       email: '',
-      marketingConsent: false,
+      marketingConsent: true, // Auto-checked by default
     });
     setAssistantId(null);
     setBusinessName('');

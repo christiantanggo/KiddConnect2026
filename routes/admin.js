@@ -455,17 +455,31 @@ router.post("/accounts/:id/sync-vapi", authenticateAdmin, async (req, res) => {
       total_minutes_today: 0,
       total_demos_this_month: 0,
       total_minutes_this_month: 0,
+      total_unique_users: 0,
+      users_with_marketing_consent: 0,
     };
     
     try {
       // Total demo usage (all time)
       const { data: allDemos, error: allDemosError } = await supabaseClient
         .from("demo_usage")
-        .select("minutes_used");
+        .select("minutes_used, email, marketing_consent");
       
       if (!allDemosError && allDemos) {
         demoStats.total_demos = allDemos.length;
         demoStats.total_minutes = allDemos.reduce((sum, demo) => sum + (parseFloat(demo.minutes_used) || 0), 0);
+        
+        // Count unique users
+        const uniqueEmails = new Set(allDemos.filter(d => d.email).map(d => d.email));
+        demoStats.total_unique_users = uniqueEmails.size;
+        
+        // Count users with marketing consent
+        const usersWithConsent = new Set(
+          allDemos
+            .filter(d => d.email && d.marketing_consent === true)
+            .map(d => d.email)
+        );
+        demoStats.users_with_marketing_consent = usersWithConsent.size;
       }
       
       // Demo usage today
@@ -558,6 +572,64 @@ router.post("/accounts/:id/sync-vapi", authenticateAdmin, async (req, res) => {
   } catch (error) {
     console.error("Get stats error:", error);
     res.status(500).json({ error: "Failed to get stats" });
+  }
+});
+
+// Get demo users (for outreach)
+// GET /api/admin/demo-users?marketing_consent=true
+router.get("/demo-users", authenticateAdmin, async (req, res) => {
+  try {
+    const { marketing_consent } = req.query;
+    const { supabaseClient } = await import("../config/database.js");
+    
+    let query = supabaseClient
+      .from("demo_usage")
+      .select("*")
+      .order("created_at", { ascending: false });
+    
+    // Filter by marketing consent if specified
+    if (marketing_consent === "true") {
+      query = query.eq("marketing_consent", true);
+    }
+    
+    const { data: demos, error } = await query;
+    
+    if (error) {
+      console.error("[Admin Demo Users] Error fetching demo users:", error);
+      return res.status(500).json({ error: "Failed to fetch demo users" });
+    }
+    
+    // Group by email to show unique users (keep most recent demo per email)
+    const uniqueDemos = [];
+    const seenEmails = new Set();
+    
+    if (demos) {
+      for (const demo of demos) {
+        if (demo.email && !seenEmails.has(demo.email)) {
+          seenEmails.add(demo.email);
+          uniqueDemos.push({
+            email: demo.email,
+            business_name: demo.business_name,
+            marketing_consent: demo.marketing_consent || false,
+            last_demo_date: demo.date,
+            total_demos: demos.filter(d => d.email === demo.email).length,
+            total_minutes: demos
+              .filter(d => d.email === demo.email)
+              .reduce((sum, d) => sum + (parseFloat(d.minutes_used) || 0), 0),
+            created_at: demo.created_at,
+          });
+        }
+      }
+    }
+    
+    res.json({
+      demos: uniqueDemos,
+      total: uniqueDemos.length,
+      with_marketing_consent: uniqueDemos.filter(d => d.marketing_consent).length,
+    });
+  } catch (error) {
+    console.error("[Admin Demo Users] Error:", error);
+    res.status(500).json({ error: "Failed to get demo users" });
   }
 });
 

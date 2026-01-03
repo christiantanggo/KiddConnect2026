@@ -1033,6 +1033,7 @@ async function handleCallEnd(event) {
           email: demoData.email || null,
           duration_seconds: actualDuration,
           minutes_used: minutesUsed,
+          marketing_consent: demoData.marketingConsent || false,
           date: now.toISOString().split('T')[0],
           month: now.getMonth() + 1,
           year: now.getFullYear(),

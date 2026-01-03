@@ -387,6 +387,7 @@ router.post("/send-summary", async (req, res) => {
           email: email,
           duration_seconds: duration,
           minutes_used: minutesUsed,
+          marketing_consent: demoData.marketingConsent || false,
           date: now.toISOString().split('T')[0],
           month: now.getMonth() + 1,
           year: now.getFullYear(),
