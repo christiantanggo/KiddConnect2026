@@ -109,6 +109,8 @@ function AdminDashboardPage() {
         ? `${API_URL}/api/admin/demo-users?marketing_consent=true`
         : `${API_URL}/api/admin/demo-users`;
       
+      console.log('[Demo Modal] Fetching demo users from:', url);
+      
       const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -117,13 +119,19 @@ function AdminDashboardPage() {
       });
       
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error('[Demo Modal] HTTP error:', response.status, errorText);
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
       const data = await response.json();
+      console.log('[Demo Modal] Received data:', data);
+      console.log('[Demo Modal] Demos array:', data.demos);
+      console.log('[Demo Modal] Demos length:', data.demos?.length || 0);
+      
       setDemoUsers(data.demos || []);
     } catch (error) {
-      console.error('Failed to load demo users:', error);
+      console.error('[Demo Modal] Failed to load demo users:', error);
       setDemoUsers([]);
     } finally {
       setDemoUsersLoading(false);
