@@ -353,6 +353,7 @@ router.post('/signup', async (req, res) => {
         allow_call_transfer: business.allow_call_transfer ?? true,
         opening_greeting: agent.greeting_text,
         voice_settings: agent.voice_settings || {},
+        ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
         businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
       });
       

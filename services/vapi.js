@@ -1005,6 +1005,62 @@ export async function linkAssistantToNumber(assistantId, phoneNumberId) {
 }
 
 /**
+ * Unlink assistant from phone number (set assistantId to null)
+ * This allows calls to bypass VAPI and go directly to Telnyx forwarding
+ * @param {string} phoneNumberId - VAPI phone number ID
+ * @returns {Promise<Object>} Updated phone number object
+ */
+export async function unlinkAssistantFromNumber(phoneNumberId) {
+  try {
+    console.log(`[VAPI] Unlinking assistant from phone number ${phoneNumberId}...`);
+    
+    // Set assistantId to null to unlink
+    let response;
+    try {
+      response = await getVapiClient().patch(`/phone-number/${phoneNumberId}`, {
+        assistantId: null,
+      });
+    } catch (patchError) {
+      // If PATCH fails, try PUT
+      if (patchError.response?.status === 405 || patchError.response?.status === 404) {
+        console.log(`[VAPI] PATCH failed, trying PUT...`);
+        response = await getVapiClient().put(`/phone-number/${phoneNumberId}`, {
+          assistantId: null,
+        });
+      } else {
+        throw patchError;
+      }
+    }
+    
+    console.log(`[VAPI] ✅ Successfully unlinked assistant from phone number`);
+    
+    // Verify the unlink was successful
+    const verifyResponse = await getVapiClient().get(`/phone-number/${phoneNumberId}`);
+    const linkedAssistantId = verifyResponse.data?.assistantId || verifyResponse.data?.assistant?.id;
+    
+    if (!linkedAssistantId || linkedAssistantId === null) {
+      console.log(`[VAPI] ✅ Verification: Phone number is correctly unlinked (no assistant)`);
+    } else {
+      console.warn(`[VAPI] ⚠️  Verification: Phone number still shows assistant ID ${linkedAssistantId}`);
+    }
+    
+    return response.data;
+  } catch (error) {
+    console.error("[VAPI] Error unlinking assistant from number:", {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data,
+    });
+    
+    if (error.response?.status === 404) {
+      throw new Error(`Phone number ${phoneNumberId} not found in VAPI.`);
+    }
+    
+    throw new Error(`Failed to unlink assistant from number: ${error.response?.data?.message || error.message}`);
+  }
+}
+
+/**
  * Update a VAPI assistant
  * @param {string} assistantId - VAPI assistant ID
  * @param {Object} updates - Updates to apply
@@ -1140,6 +1196,7 @@ export async function rebuildAssistant(businessId) {
     const businessTimezone = businessRecord.timezone || "America/New_York";
     const allowTransfer = businessRecord.allow_call_transfer ?? true;
     const afterHoursBehavior = businessRecord.after_hours_behavior || "take_message";
+    const aiEnabled = businessRecord.ai_enabled ?? true; // Default to true if not set
     
     // CRITICAL: Check if business_hours exists and has actual data
     // If it's null, undefined, or an empty object, we should NOT use defaults

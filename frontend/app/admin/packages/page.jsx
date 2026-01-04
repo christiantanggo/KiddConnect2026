@@ -186,13 +186,31 @@ function PackagesPage() {
         <nav className="bg-white shadow-sm">
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
             <h1 className="text-xl font-bold text-blue-600">Package Management</h1>
-            <div className="flex gap-4">
+            <div className="flex gap-4 items-center">
               <Link href="/admin/dashboard" className="text-gray-700 hover:text-blue-600">
                 Dashboard
               </Link>
+              <span className="text-gray-300">|</span>
               <Link href="/admin/accounts" className="text-gray-700 hover:text-blue-600">
                 Accounts
               </Link>
+              <span className="text-gray-300">|</span>
+              <Link href="/admin/pricing" className="text-blue-600 font-medium">
+                Pricing
+              </Link>
+              <span className="text-gray-300">|</span>
+              <Link href="/admin/settings" className="text-gray-700 hover:text-blue-600">
+                Settings
+              </Link>
+              <span className="text-gray-300">|</span>
+              <Link href="/admin/website-analytics" className="text-gray-700 hover:text-blue-600">
+                Website Analytics
+              </Link>
+              <span className="text-gray-300">|</span>
+              <Link href="/admin/support" className="text-gray-700 hover:text-blue-600">
+                Support Tickets
+              </Link>
+              <span className="text-gray-300">|</span>
               <button
                 onClick={() => {
                   document.cookie = 'admin_token=; path=/; max-age=0';

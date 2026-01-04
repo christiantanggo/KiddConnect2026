@@ -245,6 +245,7 @@ router.post("/accounts/:id/retry-activation", authenticateAdmin, async (req, res
       contact_email: business.email,
       address: business.address || "",
       allow_call_transfer: business.allow_call_transfer ?? true,
+      ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
       businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
     });
     
@@ -2124,6 +2125,103 @@ router.put('/invoice-settings', authenticateAdmin, async (req, res) => {
   } catch (error) {
     console.error('Update invoice settings error:', error);
     res.status(500).json({ error: 'Failed to update invoice settings' });
+  }
+});
+
+// Get website analytics
+router.get("/website-analytics", authenticateAdmin, async (req, res) => {
+  try {
+    const { startDate, endDate, event_name, category, location } = req.query;
+    const { supabaseClient } = await import("../config/database.js");
+
+    let query = supabaseClient
+      .from("website_analytics")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(10000); // Limit to prevent huge queries
+
+    if (startDate) {
+      query = query.gte("created_at", startDate);
+    }
+    if (endDate) {
+      query = query.lte("created_at", endDate);
+    }
+    if (event_name) {
+      query = query.eq("event_name", event_name);
+    }
+    if (category) {
+      query = query.eq("category", category);
+    }
+    if (location) {
+      query = query.eq("location", location);
+    }
+
+    const { data: events, error } = await query;
+
+    if (error) {
+      console.error("[Admin Website Analytics] Error:", error);
+      return res.status(500).json({ error: "Failed to fetch website analytics" });
+    }
+
+    // Calculate summary statistics
+    const summary = {
+      total_events: events?.length || 0,
+      by_event_name: {},
+      by_category: {},
+      by_location: {},
+      by_label: {},
+      unique_paths: new Set(),
+      date_range: {
+        earliest: null,
+        latest: null,
+      },
+    };
+
+    if (events && events.length > 0) {
+      events.forEach((event) => {
+        // Count by event name
+        summary.by_event_name[event.event_name] = (summary.by_event_name[event.event_name] || 0) + 1;
+
+        // Count by category
+        if (event.category) {
+          summary.by_category[event.category] = (summary.by_category[event.category] || 0) + 1;
+        }
+
+        // Count by location
+        if (event.location) {
+          summary.by_location[event.location] = (summary.by_location[event.location] || 0) + 1;
+        }
+
+        // Count by label
+        if (event.label) {
+          summary.by_label[event.label] = (summary.by_label[event.label] || 0) + 1;
+        }
+
+        // Track paths
+        if (event.path) {
+          summary.unique_paths.add(event.path);
+        }
+
+        // Track date range
+        const eventDate = new Date(event.created_at);
+        if (!summary.date_range.earliest || eventDate < new Date(summary.date_range.earliest)) {
+          summary.date_range.earliest = event.created_at;
+        }
+        if (!summary.date_range.latest || eventDate > new Date(summary.date_range.latest)) {
+          summary.date_range.latest = event.created_at;
+        }
+      });
+
+      summary.unique_paths = Array.from(summary.unique_paths);
+    }
+
+    res.json({
+      events: events || [],
+      summary: summary,
+    });
+  } catch (error) {
+    console.error("[Admin Website Analytics] Error:", error);
+    res.status(500).json({ error: "Failed to get website analytics" });
   }
 });
 

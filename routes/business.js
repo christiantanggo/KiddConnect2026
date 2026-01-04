@@ -82,6 +82,11 @@ router.put("/settings", authenticate, async (req, res) => {
       updateData.website = null;
     }
 
+    // Get current business state BEFORE update to check if ai_enabled changed
+    const currentBusiness = await Business.findById(req.businessId);
+    const aiEnabledChanged = ai_enabled !== undefined && ai_enabled !== currentBusiness.ai_enabled;
+    const newAiEnabled = ai_enabled !== undefined ? ai_enabled : currentBusiness.ai_enabled;
+
     // Update business settings in database
     const updatedBusiness = await Business.update(req.businessId, updateData);
     if (!updatedBusiness) {
@@ -95,7 +100,58 @@ router.put("/settings", authenticate, async (req, res) => {
       website: updatedBusiness.website,
       public_phone_number: updatedBusiness.public_phone_number,
       timezone: updatedBusiness.timezone,
+      ai_enabled: updatedBusiness.ai_enabled,
     });
+
+    // CRITICAL: Unlink/link assistant from phone number when ai_enabled changes
+    // This prevents the infinite loop where calls go: VAPI → Transfer → Business Number → VAPI (repeat)
+    if (aiEnabledChanged && currentBusiness.vapi_assistant_id && currentBusiness.vapi_phone_number) {
+      console.log(`[Business Settings] 🔄 AI enabled status changed from ${currentBusiness.ai_enabled} to ${newAiEnabled}`);
+      (async () => {
+        try {
+          const { 
+            unlinkAssistantFromNumber, 
+            linkAssistantToNumber, 
+            checkIfNumberProvisionedInVAPI 
+          } = await import('../services/vapi.js');
+          
+          // Find the VAPI phone number ID
+          const phoneNumberE164 = currentBusiness.vapi_phone_number;
+          const vapiPhoneNumber = await checkIfNumberProvisionedInVAPI(phoneNumberE164);
+          
+          if (!vapiPhoneNumber || !vapiPhoneNumber.id) {
+            console.error(`[Business Settings] ❌ Could not find VAPI phone number for ${phoneNumberE164}`);
+            return;
+          }
+          
+          const phoneNumberId = vapiPhoneNumber.id || vapiPhoneNumber.phoneNumberId;
+          
+          if (newAiEnabled === false) {
+            // AI disabled: Unlink assistant so calls bypass VAPI
+            console.log(`[Business Settings] 🔗 Unlinking assistant from phone number (AI disabled)...`);
+            await unlinkAssistantFromNumber(phoneNumberId);
+            console.log(`[Business Settings] ✅ Assistant unlinked - calls will bypass VAPI`);
+            
+            // TODO: Configure Telnyx to forward calls directly to business number
+            // This requires Telnyx API calls to update the connection/application settings
+            console.log(`[Business Settings] ⚠️  NOTE: Telnyx forwarding must be configured manually in Telnyx dashboard`);
+            console.log(`[Business Settings] ⚠️  Configure phone number ${phoneNumberE164} to forward to ${currentBusiness.public_phone_number}`);
+          } else {
+            // AI enabled: Link assistant back
+            console.log(`[Business Settings] 🔗 Linking assistant back to phone number (AI enabled)...`);
+            await linkAssistantToNumber(currentBusiness.vapi_assistant_id, phoneNumberId);
+            console.log(`[Business Settings] ✅ Assistant linked - calls will go to VAPI`);
+          }
+        } catch (linkError) {
+          console.error("[Business Settings] ❌❌❌ ERROR linking/unlinking assistant (non-blocking):", {
+            message: linkError.message,
+            stack: linkError.stack,
+            response: linkError.response?.data,
+          });
+          // Don't fail the request if link/unlink fails
+        }
+      })();
+    }
 
     // ALWAYS rebuild VAPI assistant when business settings change
     // This ensures the assistant has the latest business info (name, address, timezone, etc.)
@@ -293,6 +349,7 @@ router.post("/phone-numbers/provision", authenticate, async (req, res) => {
         personality: agent?.personality || 'professional',
         voice_provider: agent?.voice_provider || '11labs',
         voice_id: agent?.voice_id || '21m00Tcm4TlvDq8ikWAM',
+        ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
         businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
       });
       
@@ -621,6 +678,7 @@ router.post("/retry-activation", authenticate, async (req, res) => {
       address: business.address || "",
       allow_call_transfer: business.allow_call_transfer ?? true,
       after_hours_behavior: business.after_hours_behavior || "take_message",
+      ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
       businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
     });
 
