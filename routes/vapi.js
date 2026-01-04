@@ -768,6 +768,33 @@ async function handleCallStart(event) {
     if (!business.ai_enabled) {
       console.log(`[VAPI Webhook] AI disabled for business ${business.id}, forwarding call to business`);
       
+      // CRITICAL: Immediately unlink assistant to prevent future calls from going through VAPI
+      // This prevents the infinite loop where VAPI answers even when disabled
+      if (business.vapi_phone_number) {
+        console.log(`[VAPI Webhook] 🔗 Unlinking assistant from phone number to prevent future VAPI answers...`);
+        (async () => {
+          try {
+            const { unlinkAssistantFromNumber, checkIfNumberProvisionedInVAPI } = await import('../services/vapi.js');
+            
+            // Find the VAPI phone number ID using the E.164 number
+            const phoneNumberE164 = business.vapi_phone_number;
+            const vapiPhoneNumber = await checkIfNumberProvisionedInVAPI(phoneNumberE164);
+            
+            if (!vapiPhoneNumber || !vapiPhoneNumber.id) {
+              console.warn(`[VAPI Webhook] ⚠️  Could not find VAPI phone number for ${phoneNumberE164}`);
+              return;
+            }
+            
+            const phoneNumberId = vapiPhoneNumber.id || vapiPhoneNumber.phoneNumberId;
+            await unlinkAssistantFromNumber(phoneNumberId);
+            console.log(`[VAPI Webhook] ✅ Assistant unlinked - future calls will bypass VAPI`);
+          } catch (unlinkError) {
+            console.error(`[VAPI Webhook] ❌ Error unlinking assistant (non-blocking):`, unlinkError.message);
+            // Don't fail the webhook if unlinking fails
+          }
+        })();
+      }
+      
       // Create call session record FIRST (always create, even if forward fails)
       let callSession = null;
       try {
