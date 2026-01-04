@@ -1,19 +1,86 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import DemoModal from '@/components/DemoModal';
 import PricingModal from '@/components/PricingModal';
-import { trackButtonClick, trackLinkClick, trackPageView } from '@/lib/analytics';
+import { trackButtonClick, trackLinkClick, trackPageView, trackScrollDepth, trackTimeOnPage, trackSectionView, trackExitIntent } from '@/lib/analytics';
 
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
+  const scrollDepthTracked = useRef(new Set());
+  const timeTracked = useRef(new Set());
+  const sectionsTracked = useRef(new Set());
+  const exitIntentTracked = useRef(false);
+  const pageStartTime = useRef(Date.now());
 
   // Track page view on mount
   useEffect(() => {
     trackPageView('homepage');
+    pageStartTime.current = Date.now();
+
+    // Track time on page at intervals
+    const timeInterval = setInterval(() => {
+      const seconds = Math.floor((Date.now() - pageStartTime.current) / 1000);
+      const milestones = [10, 30, 60, 120, 300];
+      if (milestones.includes(seconds) && !timeTracked.current.has(seconds)) {
+        trackTimeOnPage(seconds, 'homepage');
+        timeTracked.current.add(seconds);
+      }
+    }, 1000);
+
+    // Track scroll depth
+    const handleScroll = () => {
+      const scrollTop = window.scrollY || document.documentElement.scrollTop;
+      const documentHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const scrollPercentage = Math.round((scrollTop / documentHeight) * 100);
+      
+      const milestones = [25, 50, 75, 100];
+      milestones.forEach(milestone => {
+        if (scrollPercentage >= milestone && !scrollDepthTracked.current.has(milestone)) {
+          trackScrollDepth(milestone, 'homepage');
+          scrollDepthTracked.current.add(milestone);
+        }
+      });
+    };
+
+    // Track exit intent (mouse leaving viewport from top)
+    const handleMouseLeave = (e) => {
+      if (e.clientY <= 0 && !exitIntentTracked.current) {
+        trackExitIntent('homepage');
+        exitIntentTracked.current = true;
+      }
+    };
+
+    // Track section visibility using Intersection Observer
+    const observerOptions = { threshold: 0.5 }; // Trigger when 50% visible
+    const sectionObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          const sectionId = entry.target.id || entry.target.getAttribute('data-section');
+          if (sectionId && !sectionsTracked.current.has(sectionId)) {
+            trackSectionView(sectionId, 'homepage');
+            sectionsTracked.current.add(sectionId);
+          }
+        }
+      });
+    }, observerOptions);
+
+    // Observe all sections with data-section attribute
+    const sections = document.querySelectorAll('[data-section]');
+    sections.forEach(section => sectionObserver.observe(section));
+
+    window.addEventListener('scroll', handleScroll);
+    document.addEventListener('mouseleave', handleMouseLeave);
+
+    return () => {
+      clearInterval(timeInterval);
+      window.removeEventListener('scroll', handleScroll);
+      document.removeEventListener('mouseleave', handleMouseLeave);
+      sectionObserver.disconnect();
+    };
   }, []);
 
   const handleOpenModal = () => {
@@ -72,7 +139,7 @@ export default function Home() {
 
       <main className="container mx-auto px-4">
         {/* SECTION 1 — HERO */}
-        <section className="py-20 md:py-32 max-w-4xl mx-auto">
+        <section data-section="hero" className="py-20 md:py-32 max-w-4xl mx-auto">
           <div className="text-center">
             <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6 leading-tight">
               Who's answering your phone right now?
@@ -93,7 +160,7 @@ export default function Home() {
         </section>
 
         {/* SECTION 2 — CORE VALUE */}
-        <section className="py-20 bg-gray-50 rounded-2xl mb-16">
+        <section data-section="core_value" className="py-20 bg-gray-50 rounded-2xl mb-16">
           <div className="max-w-4xl mx-auto">
             <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-12 text-center">
               Never miss another call — even after hours
@@ -128,7 +195,7 @@ export default function Home() {
         </section>
 
         {/* SECTION 3 — SETUP DIFFERENTIATOR */}
-        <section className="py-20 bg-white mb-16">
+        <section data-section="setup" className="py-20 bg-white mb-16">
           <div className="max-w-6xl mx-auto">
             <h2 className="text-3xl font-bold text-gray-900 mb-4 text-center">
               Live in 10 Minutes. No Setup Calls.
@@ -160,7 +227,7 @@ export default function Home() {
         </section>
 
         {/* SECTION 4 — SOCIAL PROOF */}
-        <section className="py-16 bg-gray-100 rounded-2xl mb-16">
+        <section data-section="social_proof" className="py-16 bg-gray-100 rounded-2xl mb-16">
           <div className="max-w-4xl mx-auto text-center px-8">
             <h2 className="text-2xl md:text-3xl font-bold text-gray-900 mb-2">
               Trusted by real businesses
@@ -233,7 +300,7 @@ export default function Home() {
         </section>
 
         {/* SECTION 5 — SAFETY / TRUST */}
-        <section className="py-20 bg-blue-50 rounded-2xl mb-16">
+        <section data-section="safety_trust" className="py-20 bg-blue-50 rounded-2xl mb-16">
           <div className="max-w-4xl mx-auto text-center px-8">
             <h2 className="text-3xl font-bold text-gray-900 mb-4">
               If the assistant isn't sure, it never guesses
@@ -245,7 +312,7 @@ export default function Home() {
         </section>
 
         {/* SECTION 6 — FINAL CTA */}
-        <section className="py-20">
+        <section data-section="final_cta" className="py-20">
           <div className="max-w-4xl mx-auto text-center bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl p-12 text-white">
             <h2 className="text-3xl md:text-4xl font-bold mb-8">
               Stop missing calls today

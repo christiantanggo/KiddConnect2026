@@ -118,3 +118,68 @@ export function trackPageView(pageName) {
   });
 }
 
+/**
+ * Track scroll depth (how far user scrolled)
+ * @param {number} percentage - Scroll percentage (0-100)
+ * @param {string} pageName - Name of the page
+ */
+export function trackScrollDepth(percentage, pageName = 'homepage') {
+  // Only track milestone percentages to avoid spam
+  const milestones = [25, 50, 75, 100];
+  if (milestones.includes(percentage)) {
+    trackEvent('scroll_depth', {
+      category: 'engagement',
+      label: `${percentage}%`,
+      action: 'scroll',
+      value: percentage,
+      location: pageName,
+    });
+  }
+}
+
+/**
+ * Track time on page
+ * @param {number} seconds - Time spent on page in seconds
+ * @param {string} pageName - Name of the page
+ */
+export function trackTimeOnPage(seconds, pageName = 'homepage') {
+  // Only track milestones to avoid spam
+  const milestones = [10, 30, 60, 120, 300]; // 10s, 30s, 1m, 2m, 5m
+  if (milestones.includes(seconds)) {
+    trackEvent('time_on_page', {
+      category: 'engagement',
+      label: `${seconds}s`,
+      action: 'time',
+      value: seconds,
+      location: pageName,
+    });
+  }
+}
+
+/**
+ * Track section visibility (when a section comes into view)
+ * @param {string} sectionName - Name of the section
+ * @param {string} pageName - Name of the page
+ */
+export function trackSectionView(sectionName, pageName = 'homepage') {
+  trackEvent('section_view', {
+    category: 'engagement',
+    label: sectionName,
+    action: 'view',
+    location: pageName,
+  });
+}
+
+/**
+ * Track exit intent (user moving mouse toward top of screen to close tab)
+ * @param {string} pageName - Name of the page
+ */
+export function trackExitIntent(pageName = 'homepage') {
+  trackEvent('exit_intent', {
+    category: 'engagement',
+    label: 'mouse_leave_top',
+    action: 'exit',
+    location: pageName,
+  });
+}
+
