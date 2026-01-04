@@ -158,6 +158,9 @@ router.get('/export', authenticate, async (req, res) => {
 // POST /api/analytics/track
 router.post('/track', async (req, res) => {
   try {
+    console.log('[Analytics Track] ========== TRACKING REQUEST RECEIVED ==========');
+    console.log('[Analytics Track] Request body:', JSON.stringify(req.body, null, 2));
+    
     const {
       event_name,
       category,
@@ -175,11 +178,19 @@ router.post('/track', async (req, res) => {
 
     // Validate required fields
     if (!event_name) {
+      console.log('[Analytics Track] ❌ Missing event_name');
       return res.status(400).json({ error: 'event_name is required' });
     }
 
     // Extract location from custom_data if not provided directly (backwards compatibility)
     const finalLocation = location || custom_data.location || null;
+
+    console.log('[Analytics Track] Inserting into database:', {
+      event_name,
+      category,
+      label,
+      location: finalLocation,
+    });
 
     // Insert into database
     const { data, error } = await supabaseClient
@@ -202,17 +213,20 @@ router.post('/track', async (req, res) => {
       .single();
 
     if (error) {
+      console.error('[Analytics Track] ❌ Database error:', error);
       // If table doesn't exist, return success anyway (analytics should never break the app)
       if (error.message?.includes('does not exist')) {
-        console.warn('[Analytics] website_analytics table does not exist. Run migration: migrations/add_website_analytics_table.sql');
+        console.warn('[Analytics Track] ⚠️ website_analytics table does not exist. Run migration: migrations/add_website_analytics_table.sql');
         return res.status(200).json({ success: true, message: 'Table not found - run migration' });
       }
       throw error;
     }
 
+    console.log('[Analytics Track] ✅ Event tracked successfully:', data?.id);
     res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error('[Analytics] Error tracking event:', error);
+    console.error('[Analytics Track] ❌❌❌ ERROR tracking event:', error);
+    console.error('[Analytics Track] Error details:', error.message, error.stack);
     // Always return success - analytics should never break the app
     res.status(200).json({ success: false, error: error.message });
   }

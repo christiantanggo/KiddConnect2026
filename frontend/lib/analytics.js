@@ -37,32 +37,42 @@ export function trackEvent(eventName, eventData = {}) {
   // Also track with custom API (database) for redundancy
   try {
     const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+    const payload = {
+      event_name: eventName,
+      category,
+      label,
+      value,
+      action,
+      location,
+      custom_data: customData,
+      url: window.location.href,
+      path: window.location.pathname,
+      referrer: document.referrer,
+      user_agent: navigator.userAgent,
+      timestamp: new Date().toISOString(),
+    };
+    
+    console.log('[Analytics] Tracking event:', eventName, payload);
+    
     fetch(`${API_URL}/api/analytics/track`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        event_name: eventName,
-        category,
-        label,
-        value,
-        action,
-        location,
-        custom_data: customData,
-        url: window.location.href,
-        path: window.location.pathname,
-        referrer: document.referrer,
-        user_agent: navigator.userAgent,
-        timestamp: new Date().toISOString(),
-      }),
-    }).catch((error) => {
-      // Silently fail - analytics should never break the app
-      console.debug('[Analytics] Could not send to API:', error);
+      body: JSON.stringify(payload),
+    })
+    .then(response => {
+      console.log('[Analytics] Response status:', response.status);
+      return response.json();
+    })
+    .then(data => {
+      console.log('[Analytics] Response data:', data);
+    })
+    .catch((error) => {
+      console.error('[Analytics] Could not send to API:', error);
     });
   } catch (error) {
-    // Silently fail
-    console.debug('[Analytics] Error in trackEvent:', error);
+    console.error('[Analytics] Error in trackEvent:', error);
   }
 }
 
