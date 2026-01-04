@@ -1,15 +1,20 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import DemoModal from '@/components/DemoModal';
 import PricingModal from '@/components/PricingModal';
-import { trackButtonClick, trackLinkClick } from '@/lib/analytics';
+import { trackButtonClick, trackLinkClick, trackPageView } from '@/lib/analytics';
 
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
+
+  // Track page view on mount
+  useEffect(() => {
+    trackPageView('homepage');
+  }, []);
 
   const handleOpenModal = () => {
     setIsModalOpen(true);
