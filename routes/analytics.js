@@ -154,5 +154,69 @@ router.get('/export', authenticate, async (req, res) => {
   }
 });
 
+// Track website events (button clicks, page views, etc.)
+// POST /api/analytics/track
+router.post('/track', async (req, res) => {
+  try {
+    const {
+      event_name,
+      category,
+      label,
+      action,
+      value,
+      location,
+      custom_data = {},
+      url,
+      path,
+      referrer,
+      user_agent,
+      timestamp,
+    } = req.body;
+
+    // Validate required fields
+    if (!event_name) {
+      return res.status(400).json({ error: 'event_name is required' });
+    }
+
+    // Extract location from custom_data if not provided directly (backwards compatibility)
+    const finalLocation = location || custom_data.location || null;
+
+    // Insert into database
+    const { data, error } = await supabaseClient
+      .from('website_analytics')
+      .insert({
+        event_name,
+        category: category || null,
+        label: label || null,
+        action: action || null,
+        value: value || null,
+        location: finalLocation,
+        custom_data: Object.keys(custom_data).length > 0 ? custom_data : null,
+        url: url || null,
+        path: path || null,
+        referrer: referrer || null,
+        user_agent: user_agent || null,
+        created_at: timestamp || new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) {
+      // If table doesn't exist, return success anyway (analytics should never break the app)
+      if (error.message?.includes('does not exist')) {
+        console.warn('[Analytics] website_analytics table does not exist. Run migration: migrations/add_website_analytics_table.sql');
+        return res.status(200).json({ success: true, message: 'Table not found - run migration' });
+      }
+      throw error;
+    }
+
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    console.error('[Analytics] Error tracking event:', error);
+    // Always return success - analytics should never break the app
+    res.status(200).json({ success: false, error: error.message });
+  }
+});
+
 export default router;
 

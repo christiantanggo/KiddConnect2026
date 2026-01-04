@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import DemoModal from '@/components/DemoModal';
 import PricingModal from '@/components/PricingModal';
+import { trackButtonClick, trackLinkClick } from '@/lib/analytics';
 
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -12,16 +13,12 @@ export default function Home() {
 
   const handleOpenModal = () => {
     setIsModalOpen(true);
-    if (typeof window !== 'undefined' && window.gtag) {
-      window.gtag('event', 'modal_opened', {
-        event_category: 'demo',
-        event_label: 'homepage_cta',
-      });
-      window.gtag('event', 'hero_cta_clicked', {
-        event_category: 'homepage',
-        event_label: 'hero',
-      });
-    }
+    trackButtonClick('demo_modal_open', 'hero_section');
+  };
+
+  const handlePricingClick = () => {
+    setIsPricingModalOpen(true);
+    trackButtonClick('pricing_button', 'navigation');
   };
 
   return (
@@ -43,18 +40,23 @@ export default function Home() {
             </Link>
             <div className="flex items-center space-x-6">
               <button
-                onClick={() => setIsPricingModalOpen(true)}
+                onClick={handlePricingClick}
                 className="text-gray-700 hover:text-blue-600 font-medium transition-colors"
               >
                 Pricing
               </button>
               <span className="text-gray-300">|</span>
-              <Link href="/login" className="text-gray-700 hover:text-blue-600 font-medium transition-colors">
+              <Link 
+                href="/login" 
+                className="text-gray-700 hover:text-blue-600 font-medium transition-colors"
+                onClick={() => trackLinkClick('login', '/login', 'navigation')}
+              >
                 Login
               </Link>
               <Link
                 href="/signup"
                 className="bg-blue-600 text-white px-6 py-2.5 rounded-lg hover:bg-blue-700 font-semibold transition-all shadow-sm hover:shadow-md"
+                onClick={() => trackButtonClick('get_started', 'navigation')}
               >
                 Get Started
               </Link>
@@ -244,7 +246,10 @@ export default function Home() {
               Stop missing calls today
             </h2>
             <button
-              onClick={handleOpenModal}
+              onClick={() => {
+                handleOpenModal();
+                trackButtonClick('demo_cta', 'final_cta_section');
+              }}
               className="bg-white text-blue-600 px-10 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
             >
               Hear Tavari Answer Your Phone
@@ -270,13 +275,25 @@ export default function Home() {
               </Link>
             </div>
             <div className="flex space-x-6 text-sm text-gray-600">
-              <Link href="/legal/privacy" className="hover:text-blue-600 transition-colors">
+              <Link 
+                href="/legal/privacy" 
+                className="hover:text-blue-600 transition-colors"
+                onClick={() => trackLinkClick('privacy_policy', '/legal/privacy', 'footer')}
+              >
                 Privacy Policy
               </Link>
-              <Link href="/legal/terms" className="hover:text-blue-600 transition-colors">
+              <Link 
+                href="/legal/terms" 
+                className="hover:text-blue-600 transition-colors"
+                onClick={() => trackLinkClick('terms_of_service', '/legal/terms', 'footer')}
+              >
                 Terms of Service
               </Link>
-              <Link href="/affiliates" className="hover:text-blue-600 transition-colors">
+              <Link 
+                href="/affiliates" 
+                className="hover:text-blue-600 transition-colors"
+                onClick={() => trackLinkClick('affiliates', '/affiliates', 'footer')}
+              >
                 Affiliates
               </Link>
             </div>
