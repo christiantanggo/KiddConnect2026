@@ -784,11 +784,11 @@ async function handleCallStart(event) {
       }
       
       // Try to forward call to business
-      try {
-        await forwardCallToBusiness(callId, business.public_phone_number);
+      const forwardResult = await forwardCallToBusiness(callId, business.public_phone_number);
+      if (forwardResult.forwarded) {
         console.log(`[VAPI Webhook] ✅ Call forwarded successfully`);
-      } catch (error) {
-        console.error(`[VAPI Webhook] ⚠️ Error forwarding call to business:`, error.message);
+      } else {
+        console.error(`[VAPI Webhook] ⚠️ Call forwarding failed:`, forwardResult.reason, forwardResult.error);
         // Update session status to indicate forward failed
         if (callSession && callSession.id) {
           try {
@@ -829,11 +829,11 @@ async function handleCallStart(event) {
         }
         
         // Forward call to business
-        try {
-          await forwardCallToBusiness(callId, business.public_phone_number);
+        const forwardResult = await forwardCallToBusiness(callId, business.public_phone_number);
+        if (forwardResult.forwarded) {
           console.log(`[VAPI Webhook] ✅ Call forwarded successfully (no minutes)`);
-        } catch (error) {
-          console.error(`[VAPI Webhook] ⚠️ Error forwarding call:`, error.message);
+        } else {
+          console.error(`[VAPI Webhook] ⚠️ Call forwarding failed (no minutes):`, forwardResult.reason, forwardResult.error);
           if (callSession && callSession.id) {
             try {
               await CallSession.update(callSession.id, {
@@ -865,11 +865,11 @@ async function handleCallStart(event) {
             console.error(`[VAPI Webhook] ❌ Error creating call session:`, sessionError);
           }
           
-          try {
-            await forwardCallToBusiness(callId, business.public_phone_number);
+          const forwardResult = await forwardCallToBusiness(callId, business.public_phone_number);
+          if (forwardResult.forwarded) {
             console.log(`[VAPI Webhook] ✅ Call forwarded successfully (overage cap)`);
-          } catch (error) {
-            console.error(`[VAPI Webhook] ⚠️ Error forwarding call:`, error.message);
+          } else {
+            console.error(`[VAPI Webhook] ⚠️ Call forwarding failed (overage cap):`, forwardResult.reason, forwardResult.error);
             if (callSession && callSession.id) {
               try {
                 await CallSession.update(callSession.id, {
