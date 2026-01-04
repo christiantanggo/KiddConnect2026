@@ -1586,6 +1586,7 @@ export async function forwardCallToBusiness(callId, targetNumber) {
     }
     
     // STEP 2: Extract Telnyx call control ID from transport data
+    // NOTE: We use callControlId (not callLegId) because Telnyx requires call_control_id for transfers
     console.log(`[VAPI Forward] Step 2: Extracting Telnyx call control ID...`);
     // Try callControlId first (this is what Telnyx needs for transfers)
     // Priority: callControlId > call_control_id > callLegId > call_leg_id
