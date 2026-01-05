@@ -10,6 +10,7 @@ import { trackButtonClick, trackLinkClick, trackPageView, trackScrollDepth, trac
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
+  const [showStickyCTA, setShowStickyCTA] = useState(false);
   const scrollDepthTracked = useRef(new Set());
   const timeTracked = useRef(new Set());
   const sectionsTracked = useRef(new Set());
@@ -72,12 +73,23 @@ export default function Home() {
     const sections = document.querySelectorAll('[data-section]');
     sections.forEach(section => sectionObserver.observe(section));
 
+    // Show sticky CTA after scrolling 200px
+    const handleStickyCTA = () => {
+      if (window.scrollY > 200) {
+        setShowStickyCTA(true);
+      } else {
+        setShowStickyCTA(false);
+      }
+    };
+
     window.addEventListener('scroll', handleScroll);
+    window.addEventListener('scroll', handleStickyCTA);
     document.addEventListener('mouseleave', handleMouseLeave);
 
     return () => {
       clearInterval(timeInterval);
       window.removeEventListener('scroll', handleScroll);
+      window.removeEventListener('scroll', handleStickyCTA);
       document.removeEventListener('mouseleave', handleMouseLeave);
       sectionObserver.disconnect();
     };
@@ -141,21 +153,99 @@ export default function Home() {
         {/* SECTION 1 — HERO */}
         <section data-section="hero" className="py-20 md:py-32 max-w-4xl mx-auto">
           <div className="text-center">
+            {/* Real ROI Testimonial with Photo */}
+            <div className="max-w-6xl mx-auto mb-8">
+              <div className="relative rounded-lg overflow-hidden">
+                <Image
+                  src="/SMB-owner-photo.jpg"
+                  alt="Small Business Owner"
+                  width={1200}
+                  height={600}
+                  className="w-full h-[500px] md:h-[600px] object-cover"
+                  priority
+                />
+                
+                {/* Gradient Overlay for Text Readability - Stronger at bottom */}
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent"></div>
+                
+                {/* Quote Overlay - Bottom Left */}
+                <div className="absolute bottom-32 md:bottom-40 left-6 md:left-12 max-w-xl md:max-w-2xl text-left">
+                  <p className="text-2xl md:text-4xl lg:text-5xl font-bold text-white mb-3 italic leading-tight drop-shadow-lg text-left">
+                    "My AI Phone Agent saved $1,300 in bookings this week"
+                  </p>
+                  <p className="text-base md:text-lg text-white font-medium drop-shadow-md text-left">
+                    — Owner of The Fort Fun Center
+                  </p>
+                </div>
+                
+                {/* CTA Button on Photo - Bottom Right */}
+                <div className="absolute bottom-32 md:bottom-40 right-6 md:right-12 z-10">
+                  <button
+                    onClick={handleOpenModal}
+                    className="bg-blue-600 text-white px-6 md:px-10 py-3 md:py-4 rounded-lg text-base md:text-lg font-bold hover:bg-blue-700 transition-all shadow-2xl hover:shadow-blue-500/50 transform hover:scale-105"
+                  >
+                    Try Free Demo →
+                  </button>
+                </div>
+                
+                {/* Stats Cards Overlay - Very Bottom of Photo */}
+                <div className="absolute bottom-0 left-0 right-0 p-4 md:p-6">
+                  <div className="grid grid-cols-3 gap-2 md:gap-4 max-w-4xl mx-auto">
+                    <div className="bg-black/70 backdrop-blur-sm rounded-lg p-3 md:p-4 text-center border border-white/20">
+                      <p className="text-2xl md:text-3xl font-bold text-white mb-1">85%</p>
+                      <p className="text-xs md:text-sm text-white/90 font-medium leading-tight">don't call back</p>
+                    </div>
+                    <div className="bg-black/70 backdrop-blur-sm rounded-lg p-3 md:p-4 text-center border border-white/20">
+                      <p className="text-2xl md:text-3xl font-bold text-white mb-1">78%</p>
+                      <p className="text-xs md:text-sm text-white/90 font-medium leading-tight">call competitors</p>
+                    </div>
+                    <div className="bg-black/70 backdrop-blur-sm rounded-lg p-3 md:p-4 text-center border border-white/20">
+                      <p className="text-2xl md:text-3xl font-bold text-white mb-1">62%</p>
+                      <p className="text-xs md:text-sm text-white/90 font-medium leading-tight">go unanswered</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Trust Signal Badge */}
+            <div className="inline-flex items-center gap-2 px-4 py-2 bg-blue-50 border border-blue-200 rounded-full text-sm text-blue-700 font-medium mb-6">
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" />
+              </svg>
+              Trusted by real businesses • Answering calls 24/7
+            </div>
+            
             <h1 className="text-5xl md:text-6xl font-bold text-gray-900 mb-6 leading-tight">
-              Who's answering your phone right now?
+              Never Miss a Call. Never Lose a Sale.
             </h1>
             <p className="text-xl md:text-2xl text-gray-700 mb-4 leading-relaxed">
-              Hear our AI answer your phone — as your business — in 10 seconds.
+              AI that answers your phone — as your business — 24/7. Get started in 10 minutes.
             </p>
-            <p className="text-sm text-gray-500 mb-10">
-              No setup calls. No scripts. No credit card.
+            <p className="text-sm text-gray-500 mb-8">
+              No setup calls. No scripts. No credit card required.
             </p>
-            <button
-              onClick={handleOpenModal}
-              className="bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
-            >
-              Hear Tavari Answer Your Phone
-            </button>
+            
+            {/* CTA Buttons */}
+            <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-6">
+              <button
+                onClick={handleOpenModal}
+                className="bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 w-full sm:w-auto"
+              >
+                Try Free Demo
+              </button>
+              <button
+                onClick={handlePricingClick}
+                className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-50 transition-all w-full sm:w-auto"
+              >
+                See Pricing
+              </button>
+            </div>
+            
+            {/* Additional Trust Signal */}
+            <p className="text-xs text-gray-500">
+              ✓ No credit card required • ✓ Set up in 10 minutes • ✓ Cancel anytime
+            </p>
           </div>
         </section>
 
@@ -372,6 +462,18 @@ export default function Home() {
           </div>
         </div>
       </footer>
+
+      {/* Sticky/Floating CTA Button */}
+      {showStickyCTA && (
+        <div className="fixed bottom-6 left-1/2 transform -translate-x-1/2 z-50 animate-in fade-in slide-in-from-bottom-5 duration-300">
+          <button
+            onClick={handleOpenModal}
+            className="bg-blue-600 text-white px-8 py-4 rounded-full text-lg font-bold hover:bg-blue-700 transition-all shadow-2xl hover:shadow-blue-500/50 transform hover:scale-105 flex items-center gap-2"
+          >
+            Try Free Demo →
+          </button>
+        </div>
+      )}
 
       {/* Demo Modal */}
       <DemoModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
