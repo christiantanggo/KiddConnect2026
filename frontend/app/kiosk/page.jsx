@@ -64,6 +64,7 @@ function KioskPageContent() {
       try {
         const res = await kioskAPI.getSettings();
         if (isMounted) {
+          console.log('[Kiosk] Settings loaded:', res.data.settings);
           setSettings(res.data.settings);
         }
       } catch (error) {
@@ -392,19 +393,38 @@ function KioskPageContent() {
 
   // Format date/time in business timezone
   const formatDateTime = useCallback((dateString, options = {}) => {
-    if (!dateString || !settings?.timezone) {
-      // Fallback to browser timezone if settings not loaded
-      return new Date(dateString).toLocaleString();
+    if (!dateString) {
+      return 'Invalid date';
     }
 
     try {
-      const date = new Date(dateString);
+      // Parse date - handle timezone correctly
+      let date;
+      if (typeof dateString === 'string') {
+        // If it has timezone info (Z or +/-HH:MM), parse as-is
+        if (dateString.includes('Z') || dateString.match(/[+-]\d{2}:\d{2}$/)) {
+          date = new Date(dateString);
+        } else {
+          // No timezone info - database timestamps are in UTC
+          // Convert format like "2026-01-06 03:18:03.143437" to ISO format
+          const normalized = dateString.includes('T') 
+            ? dateString + 'Z'  // Already has T, just add Z
+            : dateString.replace(' ', 'T') + 'Z';  // Replace space with T, add Z
+          date = new Date(normalized);
+        }
+      } else {
+        date = new Date(dateString);
+      }
+
       if (isNaN(date.getTime())) {
         return 'Invalid date';
       }
 
+      // Use timezone from settings, or default to America/New_York
+      const timezone = settings?.timezone || 'America/New_York';
+
       const defaultOptions = {
-        timeZone: settings.timezone,
+        timeZone: timezone,
         year: 'numeric',
         month: 'short',
         day: 'numeric',
@@ -414,10 +434,28 @@ function KioskPageContent() {
         ...options,
       };
 
-      return new Intl.DateTimeFormat('en-US', defaultOptions).format(date);
+      const formatted = new Intl.DateTimeFormat('en-US', defaultOptions).format(date);
+      
+      // Debug logging (can be removed later)
+      if (!settings?.timezone) {
+        console.warn('[Kiosk] Formatting time without timezone in settings, using default:', timezone);
+      }
+      
+      return formatted;
     } catch (error) {
-      console.error('Error formatting date:', error);
-      return new Date(dateString).toLocaleString();
+      console.error('Error formatting date:', error, { dateString, timezone: settings?.timezone });
+      // Fallback with timezone if available
+      const timezone = settings?.timezone || 'America/New_York';
+      try {
+        return new Intl.DateTimeFormat('en-US', {
+          timeZone: timezone,
+          hour: 'numeric',
+          minute: '2-digit',
+          hour12: true,
+        }).format(new Date(dateString));
+      } catch (e) {
+        return new Date(dateString).toLocaleString();
+      }
     }
   }, [settings]);
 
