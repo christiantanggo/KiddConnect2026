@@ -198,7 +198,7 @@ import { initSentry } from "./config/sentry.js";
 initSentry();
 
 // Rate limiting - load synchronously
-import { apiLimiter, authLimiter, adminLimiter, webhookLimiter, contactLimiter } from "./middleware/rateLimiter.js";
+import { apiLimiter, authLimiter, adminLimiter, webhookLimiter, contactLimiter, kioskLimiter } from "./middleware/rateLimiter.js";
 app.use("/api", apiLimiter);
 
 // Load routes synchronously - they're all ES modules
@@ -223,6 +223,9 @@ import diagnosticsRoutes from "./routes/diagnostics.js";
 import demoRoutes from "./routes/demo.js";
 import demoTestEmailRoutes from "./routes/demo-test-email.js";
 import clickbankRoutes from "./routes/clickbank.js";
+import ordersRoutes from "./routes/orders.js";
+import menuRoutes from "./routes/menu.js";
+import kioskRoutes from "./routes/kiosk.js";
 
 // Apply specific rate limiters
 app.use("/api/auth/login", authLimiter);
@@ -230,6 +233,7 @@ app.use("/api/auth/signup", authLimiter);
 app.use("/api/admin/login", authLimiter); // Use auth limiter for admin login (must be before general admin limiter)
 app.use("/api/vapi/webhook", webhookLimiter);
 app.use("/api/support/contact", contactLimiter); // Stricter rate limiting for public contact form
+app.use("/api/kiosk", kioskLimiter); // More lenient rate limiting for kiosk (continuous polling)
 
 // Apply admin limiter to all admin routes EXCEPT login (which is handled above)
 app.use("/api/admin", (req, res, next) => {
@@ -265,6 +269,15 @@ app.use("/api/clickbank", clickbankRoutes);
 const demoFollowupRoutes = (await import("./routes/demo-followup.js")).default;
 app.use("/api/demo-followup", demoFollowupRoutes);
 app.use("/api/demo-followup", (await import("./routes/demo-followup.js")).default);
+
+// Orders routes
+app.use("/api/orders", (await import("./routes/orders.js")).default);
+
+// Menu routes
+app.use("/api/menu", menuRoutes);
+
+// Kiosk routes (token-based authentication)
+app.use("/api/kiosk", kioskRoutes);
 
 // Legacy Telnyx phone numbers endpoint (for backwards compatibility)
 app.get("/api/telnyx-phone-numbers/search", async (req, res, next) => {

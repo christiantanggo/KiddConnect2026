@@ -157,6 +157,85 @@ export async function createAssistant(businessData) {
       },
     };
     
+    // Add takeout orders function only if feature is enabled
+    if (businessData.takeout_orders_enabled) {
+      assistantConfig.functions = [
+        {
+          type: "serverless",
+          name: "submit_takeout_order",
+          description: "Submit a takeout order from a customer call. Use this when the customer wants to place a takeout order and you have collected all the necessary information: customer name, phone number, items ordered (using item numbers #1, #2, etc.), quantities, prices, and any special instructions.",
+          parameters: {
+            type: "object",
+            properties: {
+              customer_name: {
+                type: "string",
+                description: "The customer's name",
+              },
+              customer_phone: {
+                type: "string",
+                description: "The customer's phone number (required)",
+              },
+              customer_email: {
+                type: "string",
+                description: "The customer's email address (optional)",
+              },
+              items: {
+                type: "array",
+                description: "Array of items ordered (use item numbers like #1, #2 when referencing menu items)",
+                items: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                      description: "Item name (required)",
+                    },
+                    quantity: {
+                      type: "integer",
+                      description: "Quantity ordered (required)",
+                    },
+                    price: {
+                      type: "number",
+                      description: "Price per item (required)",
+                    },
+                    item_number: {
+                      type: "integer",
+                      description: "Menu item number (e.g., 1, 2, 3) if available",
+                    },
+                    modifications: {
+                      type: "string",
+                      description: "Modifications or customizations (e.g., 'no onions, extra cheese')",
+                    },
+                    special_instructions: {
+                      type: "string",
+                      description: "Special instructions for this item",
+                    },
+                  },
+                  required: ["name", "quantity", "price"],
+                },
+              },
+              subtotal: {
+                type: "number",
+                description: "Order subtotal before tax",
+              },
+              tax: {
+                type: "number",
+                description: "Tax amount",
+              },
+              total: {
+                type: "number",
+                description: "Total order amount including tax",
+              },
+              special_instructions: {
+                type: "string",
+                description: "Special instructions for the entire order",
+              },
+            },
+            required: ["customer_phone", "items"],
+          },
+        },
+      ];
+    }
+    
     // Add ending message if provided
     if (endingGreeting) {
       assistantConfig.endCallFunctionEnabled = true;
@@ -1197,6 +1276,10 @@ export async function rebuildAssistant(businessId) {
     const allowTransfer = businessRecord.allow_call_transfer ?? true;
     const afterHoursBehavior = businessRecord.after_hours_behavior || "take_message";
     const aiEnabled = businessRecord.ai_enabled ?? true; // Default to true if not set
+    const takeoutOrdersEnabled = businessRecord.takeout_orders_enabled ?? false;
+    const takeoutTaxRate = businessRecord.takeout_tax_rate ?? 0.13; // Default 13%
+    const takeoutTaxMethod = businessRecord.takeout_tax_calculation_method || 'exclusive';
+    const takeoutEstimatedReadyMinutes = businessRecord.takeout_estimated_ready_minutes ?? 30;
     
     // CRITICAL: Check if business_hours exists and has actual data
     // If it's null, undefined, or an empty object, we should NOT use defaults
@@ -1307,6 +1390,56 @@ export async function rebuildAssistant(businessId) {
     
     console.log(`[VAPI Rebuild] Preparing to generate prompt with holiday hours:`, JSON.stringify(holidayHours.map(h => ({ name: h?.name, date: h?.date })), null, 2));
     
+    // Fetch menu items if takeout orders are enabled
+    let menuItems = [];
+    let globalModifiers = [];
+    if (takeoutOrdersEnabled) {
+      try {
+        const { MenuItem } = await import("../models/MenuItem.js");
+        const { GlobalModifier } = await import("../models/GlobalModifier.js");
+        
+        // Load menu items
+        menuItems = await MenuItem.findByBusinessId(businessId, {
+          includeUnavailable: false,
+          activeOnly: true,
+        });
+        
+        // Load global modifiers
+        globalModifiers = await GlobalModifier.findByBusinessId(businessId, {
+          activeOnly: true,
+        });
+        
+        // Merge global modifiers into menu items
+        menuItems = menuItems.map(item => {
+          const mergedModifiers = { ...(item.modifiers || { free: [], paid: [] }) };
+          
+          // Add global modifiers to the item
+          if (item.global_modifier_ids && item.global_modifier_ids.length > 0) {
+            item.global_modifier_ids.forEach(modifierId => {
+              const globalMod = globalModifiers.find(gm => gm.id === modifierId);
+              if (globalMod && globalMod.is_active) {
+                if (globalMod.is_free) {
+                  mergedModifiers.free = [...(mergedModifiers.free || []), { name: globalMod.name, description: globalMod.description }];
+                } else {
+                  mergedModifiers.paid = [...(mergedModifiers.paid || []), { name: globalMod.name, price: parseFloat(globalMod.price || 0), description: globalMod.description }];
+                }
+              }
+            });
+          }
+          
+          return {
+            ...item,
+            modifiers: mergedModifiers,
+          };
+        });
+        
+        console.log(`[VAPI Rebuild] Loaded ${menuItems.length} menu items and ${globalModifiers.length} global modifiers for AI prompt`);
+      } catch (menuError) {
+        console.warn(`[VAPI Rebuild] Could not load menu items:`, menuError.message);
+        // Continue without menu items - AI can still take orders
+      }
+    }
+    
     // Generate system prompt
     const systemPrompt = await generateAssistantPrompt({
       name: businessName,
@@ -1322,6 +1455,11 @@ export async function rebuildAssistant(businessId) {
       opening_greeting: openingGreeting,
       ending_greeting: endingGreeting,
       personality: personality,
+      takeout_orders_enabled: takeoutOrdersEnabled,
+      takeout_tax_rate: takeoutTaxRate,
+      takeout_tax_calculation_method: takeoutTaxMethod,
+      takeout_estimated_ready_minutes: takeoutEstimatedReadyMinutes,
+      menu_items: menuItems,
     });
     
     // Build a clean payload with ONLY the fields VAPI accepts for updates
@@ -1367,34 +1505,98 @@ export async function rebuildAssistant(businessId) {
         console.log(`[VAPI Rebuild] Setting webhook URL: ${webhookUrl}`);
         return webhookUrl;
       })(),
-      serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
-      // CRITICAL: serverMessages tells VAPI which events to send to the webhook
-      // Without this, VAPI won't send any webhooks even if serverUrl is set
-      serverMessages: [
-        "status-update",      // Call status changes (call-start, call-end, etc.)
-        "end-of-call-report", // Final call summary with transcript, duration, etc.
-        "function-call",      // Function calls during the call
-        "hang",               // Call hangup events
-      ],
-      transcriber: {
-        provider: "deepgram",
-        model: "nova-2",
-        language: "en-US",
-      },
-      // Enable background denoising to filter out ambient noise
-      backgroundDenoisingEnabled: true,
-      // Allow users to interrupt AI speech - users can cut off the AI mid-response
-      interruptionsEnabled: true, // Enable interruptions - users can interrupt AI responses
-      firstMessageInterruptionsEnabled: false, // Keep first message protected - users cannot interrupt initial greeting
-      startSpeakingPlan: {
-        waitSeconds: 0.8,
-        smartEndpointingEnabled: false, // Keep disabled to prevent premature cutoffs
-      },
-      // CRITICAL: Add businessId to metadata so webhook can find the business
-      metadata: {
-        businessId: businessId,
-      },
+      // NOTE: The following fields are READ-ONLY in VAPI and cannot be updated via PATCH:
+      // - serverUrlSecret (set during creation)
+      // - serverMessages (set during creation)
+      // - transcriber (set during creation)
+      // - backgroundDenoisingEnabled (set during creation)
+      // - interruptionsEnabled (set during creation)
+      // - firstMessageInterruptionsEnabled (set during creation)
+      // - startSpeakingPlan (set during creation)
+      // - metadata (set during creation)
+      // These fields persist from the original assistant creation and don't need to be updated
     };
+    
+    // Add takeout orders function only if feature is enabled
+    if (takeoutOrdersEnabled) {
+      updatePayload.functions = [
+        {
+          name: "submit_takeout_order",
+          description: "Submit a takeout order from a customer call. Use this when the customer wants to place a takeout order and you have collected all the necessary information: customer name, phone number, items ordered (using item numbers #1, #2, etc.), quantities, prices, and any special instructions.",
+          parameters: {
+            type: "object",
+            properties: {
+              customer_name: {
+                type: "string",
+                description: "The customer's name",
+              },
+              customer_phone: {
+                type: "string",
+                description: "The customer's phone number (required)",
+              },
+              customer_email: {
+                type: "string",
+                description: "The customer's email address (optional)",
+              },
+              items: {
+                type: "array",
+                description: "Array of items ordered (use item numbers like #1, #2 when referencing menu items)",
+                items: {
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                      description: "Item name (required)",
+                    },
+                    quantity: {
+                      type: "integer",
+                      description: "Quantity ordered (required)",
+                    },
+                    price: {
+                      type: "number",
+                      description: "Price per item (required)",
+                    },
+                    item_number: {
+                      type: "integer",
+                      description: "Menu item number (e.g., 1, 2, 3) if available",
+                    },
+                    modifications: {
+                      type: "string",
+                      description: "Modifications or customizations (e.g., 'no onions, extra cheese')",
+                    },
+                    special_instructions: {
+                      type: "string",
+                      description: "Special instructions for this item",
+                    },
+                  },
+                  required: ["name", "quantity", "price"],
+                },
+              },
+              subtotal: {
+                type: "number",
+                description: "Order subtotal before tax",
+              },
+              tax: {
+                type: "number",
+                description: "Tax amount",
+              },
+              total: {
+                type: "number",
+                description: "Total order amount including tax",
+              },
+              special_instructions: {
+                type: "string",
+                description: "Special instructions for the entire order",
+              },
+            },
+            required: ["customer_phone", "items"],
+          },
+        },
+      ];
+    } else {
+      // Explicitly clear functions when takeout orders are disabled
+      updatePayload.functions = [];
+    }
     
     if (endingGreeting) {
       updatePayload.endCallFunctionEnabled = true;
@@ -1409,8 +1611,20 @@ export async function rebuildAssistant(businessId) {
     console.log(`[VAPI Rebuild] Voice provider being set: ${updatePayload.voice.provider}`);
     console.log(`[VAPI Rebuild] Voice ID being set: ${updatePayload.voice.voiceId}`);
     console.log(`[VAPI Rebuild] Clean update payload (no read-only fields):`, JSON.stringify(updatePayload, null, 2));
+    console.log(`[VAPI Rebuild] Payload keys:`, Object.keys(updatePayload));
     
-    const response = await getVapiClient().patch(`/assistant/${assistantId}`, updatePayload);
+    let response;
+    try {
+      response = await getVapiClient().patch(`/assistant/${assistantId}`, updatePayload);
+    } catch (error) {
+      console.error(`[VAPI Rebuild] ❌❌❌ PATCH ERROR DETAILS ❌❌❌`);
+      console.error(`[VAPI Rebuild] Error status:`, error.response?.status);
+      console.error(`[VAPI Rebuild] Error statusText:`, error.response?.statusText);
+      console.error(`[VAPI Rebuild] Error data:`, JSON.stringify(error.response?.data, null, 2));
+      console.error(`[VAPI Rebuild] Error message:`, error.message);
+      console.error(`[VAPI Rebuild] Full error:`, error);
+      throw error;
+    }
     console.log(`[VAPI Rebuild] ✅ PATCH successful! Status: ${response.status}`);
     console.log(`[VAPI Rebuild] PATCH response data:`, JSON.stringify(response.data, null, 2));
     

@@ -106,10 +106,90 @@ function SettingsPage() {
     sms_allowed_start_time: '09:00:00',
     sms_allowed_end_time: '21:00:00',
   });
+  
+  // Features state (for add-ons like takeout orders)
+  const [features, setFeatures] = useState({
+    takeout_orders_enabled: false,
+    takeout_tax_rate: 0.13, // Default 13% (Ontario HST)
+    takeout_tax_calculation_method: 'exclusive', // 'inclusive' or 'exclusive'
+    takeout_estimated_ready_minutes: 30, // Default 30 minutes
+  });
+
+  // Kiosk token state
+  const [kioskToken, setKioskToken] = useState(null);
+  const [kioskUrl, setKioskUrl] = useState(null);
+  const [loadingKioskToken, setLoadingKioskToken] = useState(false);
+  const [generatingToken, setGeneratingToken] = useState(false);
+
+  // Load kiosk token
+  const loadKioskToken = async () => {
+    try {
+      setLoadingKioskToken(true);
+      const res = await businessAPI.getKioskToken();
+      if (res.data?.token) {
+        setKioskToken(res.data.token);
+        setKioskUrl(res.data.kiosk_url);
+      }
+    } catch (error) {
+      console.error('Failed to load kiosk token:', error);
+    } finally {
+      setLoadingKioskToken(false);
+    }
+  };
+
+  // Generate kiosk token
+  const handleGenerateKioskToken = async () => {
+    try {
+      setGeneratingToken(true);
+      const res = await businessAPI.generateKioskToken();
+      if (res.data?.token) {
+        setKioskToken(res.data.token);
+        setKioskUrl(res.data.kiosk_url);
+        success('Kiosk token generated successfully! Share the URL with your kitchen staff.');
+      }
+    } catch (error) {
+      console.error('Failed to generate kiosk token:', error);
+      showError(error.response?.data?.error || 'Failed to generate kiosk token');
+    } finally {
+      setGeneratingToken(false);
+    }
+  };
+
+  // Regenerate kiosk token
+  const handleRegenerateKioskToken = async () => {
+    if (!confirm('Are you sure you want to regenerate the kiosk token? The old token will stop working.')) {
+      return;
+    }
+    await handleGenerateKioskToken();
+  };
+
+  // Revoke kiosk token
+  const handleRevokeKioskToken = async () => {
+    if (!confirm('Are you sure you want to revoke kiosk access? Kitchen staff will no longer be able to access the kiosk.')) {
+      return;
+    }
+    try {
+      await businessAPI.revokeKioskToken();
+      setKioskToken(null);
+      setKioskUrl(null);
+      success('Kiosk access revoked successfully');
+    } catch (error) {
+      console.error('Failed to revoke kiosk token:', error);
+      showError(error.response?.data?.error || 'Failed to revoke kiosk token');
+    }
+  };
 
   useEffect(() => {
     loadData();
   }, [pathname]);
+
+  // Load kiosk token when takeout orders are enabled
+  useEffect(() => {
+    if (features.takeout_orders_enabled && !loadingKioskToken) {
+      loadKioskToken();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [features.takeout_orders_enabled]);
 
   // Reload data when page becomes visible (user navigates back)
   useEffect(() => {
@@ -182,6 +262,15 @@ function SettingsPage() {
         };
         console.log('[Settings Load] Setting notifications:', loadedNotifications);
         setNotifications(loadedNotifications);
+        
+        const loadedFeatures = {
+          takeout_orders_enabled: business.takeout_orders_enabled ?? false,
+          takeout_tax_rate: business.takeout_tax_rate != null ? business.takeout_tax_rate : 0.13,
+          takeout_tax_calculation_method: business.takeout_tax_calculation_method || 'exclusive',
+          takeout_estimated_ready_minutes: business.takeout_estimated_ready_minutes != null ? business.takeout_estimated_ready_minutes : 30,
+        };
+        console.log('[Settings Load] Setting features:', loadedFeatures);
+        setFeatures(loadedFeatures);
       }
       
       if (agentRes.data?.agent) {
@@ -316,6 +405,7 @@ function SettingsPage() {
         public_phone_number: businessInfo.public_phone_number,
         ...aiSettings,
         ...notifications,
+        ...features,
         // Put website last to ensure it's never overwritten
         website: businessInfo.website,
       };
@@ -1196,6 +1286,174 @@ function SettingsPage() {
                             className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
                           />
                         </div>
+                      </div>
+
+                      <div className="border-t pt-4 mt-4">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex-1">
+                            <label className="block text-sm font-semibold text-gray-700 mb-1">
+                              Takeout Orders
+                            </label>
+                            <p className="text-xs text-gray-500">Enable phone ordering for takeout orders. Customers can call to place orders that will appear on your kitchen tablet.</p>
+                          </div>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={features.takeout_orders_enabled}
+                              onChange={(e) => setFeatures({ ...features, takeout_orders_enabled: e.target.checked })}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                          </label>
+                        </div>
+                        {features.takeout_orders_enabled && (
+                          <div className="mt-4 space-y-4">
+                            <div className="p-3 bg-blue-50 border border-blue-200 rounded-md">
+                              <p className="text-xs text-blue-800 mb-3">
+                                <strong>Note:</strong> After enabling, you'll need to rebuild your AI agent for the changes to take effect. 
+                                You'll also need to set up your menu with numbered items (#1, #2, etc.) for the AI to understand your menu.
+                              </p>
+                            </div>
+                            
+                            {/* Tax Settings */}
+                            <div className="border-t pt-4">
+                              <h3 className="text-sm font-semibold text-gray-700 mb-3">Tax Settings</h3>
+                              <div className="space-y-3">
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Tax Rate (%)
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    max="100"
+                                    value={features.takeout_tax_rate != null ? (features.takeout_tax_rate * 100).toFixed(2) : '13.00'}
+                                    onChange={(e) => {
+                                      const rate = parseFloat(e.target.value) / 100;
+                                      setFeatures({ ...features, takeout_tax_rate: isNaN(rate) ? 0.13 : rate });
+                                    }}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    placeholder="13.00"
+                                  />
+                                  <p className="text-xs text-gray-500 mt-1">Enter as percentage (e.g., 13 for 13%)</p>
+                                </div>
+                                <div>
+                                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                                    Tax Calculation Method
+                                  </label>
+                                  <select
+                                    value={features.takeout_tax_calculation_method}
+                                    onChange={(e) => setFeatures({ ...features, takeout_tax_calculation_method: e.target.value })}
+                                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  >
+                                    <option value="exclusive">Exclusive (Tax added to price)</option>
+                                    <option value="inclusive">Inclusive (Tax included in price)</option>
+                                  </select>
+                                  <p className="text-xs text-gray-500 mt-1">
+                                    {features.takeout_tax_calculation_method === 'exclusive' 
+                                      ? 'Tax will be added on top of menu item prices'
+                                      : 'Menu item prices already include tax'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Estimated Ready Time */}
+                            <div className="border-t pt-4">
+                              <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">
+                                  Estimated Ready Time (minutes)
+                                </label>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={features.takeout_estimated_ready_minutes != null ? features.takeout_estimated_ready_minutes : 30}
+                                  onChange={(e) => {
+                                    const minutes = parseInt(e.target.value);
+                                    setFeatures({ ...features, takeout_estimated_ready_minutes: isNaN(minutes) ? 30 : minutes });
+                                  }}
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                  placeholder="30"
+                                />
+                                <p className="text-xs text-gray-500 mt-1">
+                                  Default estimated time for takeout orders (e.g., "Your order will be ready in 30 minutes")
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Kiosk Access */}
+                            {features.takeout_orders_enabled && (
+                              <div className="border-t pt-4 mt-4">
+                                <h3 className="text-sm font-semibold text-gray-700 mb-3">Kitchen Kiosk Access</h3>
+                                <p className="text-xs text-gray-500 mb-4">
+                                  Generate a kiosk access token to allow kitchen staff to view and manage orders on tablets without logging in.
+                                </p>
+                                
+                                {kioskToken ? (
+                                  <div className="space-y-3">
+                                    <div className="p-4 bg-green-50 border border-green-200 rounded-md">
+                                      <p className="text-sm font-semibold text-green-800 mb-2">Kiosk Token Active</p>
+                                      <div className="space-y-2">
+                                        <div>
+                                          <label className="block text-xs font-medium text-gray-700 mb-1">Kiosk URL:</label>
+                                          <div className="flex gap-2">
+                                            <input
+                                              type="text"
+                                              value={kioskUrl || ''}
+                                              readOnly
+                                              className="flex-1 px-3 py-2 bg-white border border-gray-300 rounded-md text-sm font-mono"
+                                            />
+                                            <button
+                                              onClick={() => {
+                                                navigator.clipboard.writeText(kioskUrl);
+                                                success('Kiosk URL copied to clipboard');
+                                              }}
+                                              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-medium"
+                                            >
+                                              Copy URL
+                                            </button>
+                                          </div>
+                                        </div>
+                                        <p className="text-xs text-gray-600">
+                                          Share this URL with your kitchen staff. They can open it on any tablet or device to access the kiosk.
+                                        </p>
+                                      </div>
+                                    </div>
+                                    <div className="flex gap-2">
+                                      <button
+                                        onClick={handleRegenerateKioskToken}
+                                        disabled={generatingToken}
+                                        className="px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 disabled:bg-gray-400 text-sm font-medium"
+                                      >
+                                        {generatingToken ? 'Regenerating...' : 'Regenerate Token'}
+                                      </button>
+                                      <button
+                                        onClick={handleRevokeKioskToken}
+                                        className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 text-sm font-medium"
+                                      >
+                                        Revoke Access
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div>
+                                    <button
+                                      onClick={handleGenerateKioskToken}
+                                      disabled={generatingToken}
+                                      className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400 text-sm font-medium"
+                                    >
+                                      {generatingToken ? 'Generating...' : 'Generate Kiosk Token'}
+                                    </button>
+                                    <p className="text-xs text-gray-500 mt-2">
+                                      Generate a secure token that kitchen staff can use to access the kiosk without logging in.
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       <div className="border-t pt-4 mt-4">

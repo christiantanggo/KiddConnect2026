@@ -81,6 +81,7 @@ export class Business {
       id: business.id,
       name: business.name,
       website: business.website,
+      takeout_orders_enabled: business.takeout_orders_enabled,
     });
     
     return business;

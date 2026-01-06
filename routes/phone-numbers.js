@@ -127,6 +127,7 @@ router.post('/auto-assign', authenticate, async (req, res) => {
           opening_greeting: agent?.greeting_text,
           voice_settings: agent?.voice_settings || {},
           ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
+          takeout_orders_enabled: business.takeout_orders_enabled ?? false,
           businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
         });
       }
@@ -318,6 +319,7 @@ router.post('/assign', authenticate, async (req, res) => {
           opening_greeting: agent?.greeting_text,
           voice_settings: agent?.voice_settings || {},
           ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
+          takeout_orders_enabled: business.takeout_orders_enabled ?? false,
           businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
         });
       }
@@ -444,6 +446,7 @@ router.post('/admin/assign/:businessId', authenticateAdmin, async (req, res) => 
           opening_greeting: agent?.greeting_text,
           voice_settings: agent?.voice_settings || {},
           ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
+          takeout_orders_enabled: business.takeout_orders_enabled ?? false,
           businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
         });
       }
@@ -599,6 +602,7 @@ router.post('/admin/change/:businessId', authenticateAdmin, async (req, res) => 
           opening_greeting: agent?.greeting_text,
           voice_settings: agent?.voice_settings || {},
           ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
+          takeout_orders_enabled: business.takeout_orders_enabled ?? false,
           businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
         });
       }

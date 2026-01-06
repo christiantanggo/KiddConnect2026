@@ -81,6 +81,22 @@ export const diagnosticsAPI = {
   getRecentActivity: () => api.get('/diagnostics/recent-activity'),
 };
 
+// Menu API
+export const menuAPI = {
+  getAll: (params) => api.get('/menu', { params }),
+  getFormatted: (params) => api.get('/menu/formatted', { params }),
+  getById: (itemId) => api.get(`/menu/${itemId}`),
+  create: (data) => api.post('/menu', data),
+  update: (itemId, data) => api.put(`/menu/${itemId}`, data),
+  delete: (itemId) => api.delete(`/menu/${itemId}`),
+  // Global Modifiers
+  getGlobalModifiers: (params) => api.get('/menu/global-modifiers', { params }),
+  getGlobalModifierById: (modifierId) => api.get(`/menu/global-modifiers/${modifierId}`),
+  createGlobalModifier: (data) => api.post('/menu/global-modifiers', data),
+  updateGlobalModifier: (modifierId, data) => api.put(`/menu/global-modifiers/${modifierId}`, data),
+  deleteGlobalModifier: (modifierId) => api.delete(`/menu/global-modifiers/${modifierId}`),
+};
+
 export default api;
 
 // Auth API
@@ -179,6 +195,10 @@ export const businessAPI = {
   sendTestEmail: () => api.post('/business/test-email'),
   sendTestSMS: (data) => api.post('/business/test-sms', data),
   sendTestMissedCall: (data) => api.post('/business/test-missed-call', data),
+  // Kiosk token management
+  generateKioskToken: () => api.post('/business/kiosk-token'),
+  getKioskToken: () => api.get('/business/kiosk-token'),
+  revokeKioskToken: () => api.delete('/business/kiosk-token'),
 };
 
 // Analytics API
@@ -342,4 +362,39 @@ export const contactsAPI = {
   toggleOptOut: (contactId, optedOut) => api.post(`/contacts/${contactId}/opt-out`, { opted_out: optedOut }),
   syncOptOuts: () => api.post('/contacts/sync-opt-outs'),
 };
+
+// Kiosk API - uses token from URL query parameter
+export const createKioskAPI = (token) => {
+  const kioskApi = axios.create({
+    baseURL: `${API_URL}/api/kiosk`,
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    timeout: 30000,
+    params: {
+      token, // Add token as query parameter
+    },
+  });
+
+  // Also add token to Authorization header as fallback
+  kioskApi.interceptors.request.use((config) => {
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+      // Also ensure token is in query params
+      config.params = { ...config.params, token };
+    }
+    return config;
+  });
+
+  return {
+    getActiveOrders: () => kioskApi.get('/orders/active'),
+    getOrderHistory: (params) => kioskApi.get('/orders/history', { params }),
+    getOrder: (orderId) => kioskApi.get(`/orders/${orderId}`),
+    updateOrderStatus: (orderId, status, estimated_ready_time) => 
+      kioskApi.patch(`/orders/${orderId}/status`, { status, estimated_ready_time }),
+    getReceipt: (orderId) => kioskApi.get(`/orders/${orderId}/receipt`),
+    getSettings: () => kioskApi.get('/settings'),
+  };
+};
+
 

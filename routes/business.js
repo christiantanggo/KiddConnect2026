@@ -32,6 +32,10 @@ router.put("/settings", authenticate, async (req, res) => {
       overage_cap_minutes,
       max_call_duration_minutes,
       detect_conversation_end,
+      takeout_orders_enabled,
+      takeout_tax_rate,
+      takeout_tax_calculation_method,
+      takeout_estimated_ready_minutes,
       // Business info fields
       name,
       phone,
@@ -48,6 +52,7 @@ router.put("/settings", authenticate, async (req, res) => {
       timezone,
       public_phone_number,
       website,
+      takeout_orders_enabled,
     });
 
     updateData = {};
@@ -68,6 +73,13 @@ router.put("/settings", authenticate, async (req, res) => {
     if (overage_cap_minutes !== undefined) updateData.overage_cap_minutes = overage_cap_minutes;
     if (max_call_duration_minutes !== undefined) updateData.max_call_duration_minutes = max_call_duration_minutes;
     if (detect_conversation_end !== undefined) updateData.detect_conversation_end = detect_conversation_end;
+    if (takeout_orders_enabled !== undefined) {
+      updateData.takeout_orders_enabled = takeout_orders_enabled;
+      console.log('[Business Settings] ✅ Adding takeout_orders_enabled to updateData:', takeout_orders_enabled);
+    }
+    if (takeout_tax_rate !== undefined) updateData.takeout_tax_rate = parseFloat(takeout_tax_rate);
+    if (takeout_tax_calculation_method !== undefined) updateData.takeout_tax_calculation_method = takeout_tax_calculation_method;
+    if (takeout_estimated_ready_minutes !== undefined) updateData.takeout_estimated_ready_minutes = parseInt(takeout_estimated_ready_minutes) || 30;
     // Business info fields
     if (name !== undefined) updateData.name = name;
     if (phone !== undefined) updateData.phone = phone;
@@ -88,6 +100,7 @@ router.put("/settings", authenticate, async (req, res) => {
     const newAiEnabled = ai_enabled !== undefined ? ai_enabled : currentBusiness.ai_enabled;
 
     // Update business settings in database
+    console.log('[Business Settings] updateData being sent to Business.update:', JSON.stringify(updateData, null, 2));
     const updatedBusiness = await Business.update(req.businessId, updateData);
     if (!updatedBusiness) {
       return res.status(404).json({ error: "Business not found" });
@@ -101,6 +114,7 @@ router.put("/settings", authenticate, async (req, res) => {
       public_phone_number: updatedBusiness.public_phone_number,
       timezone: updatedBusiness.timezone,
       ai_enabled: updatedBusiness.ai_enabled,
+      takeout_orders_enabled: updatedBusiness.takeout_orders_enabled,
     });
 
     // CRITICAL: Unlink/link assistant from phone number when ai_enabled changes
@@ -350,6 +364,7 @@ router.post("/phone-numbers/provision", authenticate, async (req, res) => {
         voice_provider: agent?.voice_provider || '11labs',
         voice_id: agent?.voice_id || '21m00Tcm4TlvDq8ikWAM',
         ai_enabled: business.ai_enabled ?? true, // Include ai_enabled to set greeting delay
+        takeout_orders_enabled: business.takeout_orders_enabled ?? false,
         businessId: business.id, // CRITICAL: Include businessId in metadata for webhook lookup
       });
       
@@ -954,6 +969,106 @@ router.post("/test-missed-call", authenticate, async (req, res) => {
       error: error.message || "Failed to send test missed call email",
       details: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
+  }
+});
+
+/**
+ * Generate or regenerate kiosk access token
+ * POST /api/business/kiosk-token
+ */
+router.post("/kiosk-token", authenticate, async (req, res) => {
+  try {
+    const business = await Business.findById(req.businessId);
+    
+    if (!business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+    
+    // Generate new token: kiosk_<business_id>_<random_64_chars>
+    const crypto = await import('crypto');
+    const randomString = crypto.randomBytes(32).toString('hex');
+    const kioskToken = `kiosk_${req.businessId}_${randomString}`;
+    
+    // Update business with new token
+    const updatedBusiness = await Business.update(req.businessId, {
+      kiosk_access_token: kioskToken,
+      kiosk_token_created_at: new Date().toISOString(),
+    });
+    
+    console.log(`[Business] ✅ Generated kiosk token for business: ${business.name}`);
+    
+    res.json({
+      success: true,
+      token: kioskToken,
+      kiosk_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/kiosk?token=${kioskToken}`,
+      created_at: updatedBusiness.kiosk_token_created_at,
+    });
+  } catch (error) {
+    console.error('[Business] Error generating kiosk token:', error);
+    res.status(500).json({ error: error.message || 'Failed to generate kiosk token' });
+  }
+});
+
+/**
+ * Get current kiosk token (if exists)
+ * GET /api/business/kiosk-token
+ */
+router.get("/kiosk-token", authenticate, async (req, res) => {
+  try {
+    const business = await Business.findById(req.businessId);
+    
+    if (!business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+    
+    if (!business.kiosk_access_token) {
+      return res.json({
+        success: true,
+        token: null,
+        kiosk_url: null,
+        message: 'No kiosk token generated yet. Generate one to enable kiosk access.',
+      });
+    }
+    
+    res.json({
+      success: true,
+      token: business.kiosk_access_token,
+      kiosk_url: `${process.env.FRONTEND_URL || 'http://localhost:3000'}/kiosk?token=${business.kiosk_access_token}`,
+      created_at: business.kiosk_token_created_at,
+    });
+  } catch (error) {
+    console.error('[Business] Error fetching kiosk token:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch kiosk token' });
+  }
+});
+
+/**
+ * Revoke kiosk token
+ * DELETE /api/business/kiosk-token
+ */
+router.delete("/kiosk-token", authenticate, async (req, res) => {
+  try {
+    const business = await Business.findById(req.businessId);
+    
+    if (!business) {
+      return res.status(404).json({ error: 'Business not found' });
+    }
+    
+    // Remove token
+    await Business.update(req.businessId, {
+      kiosk_access_token: null,
+      kiosk_token_created_at: null,
+    });
+    
+    console.log(`[Business] ✅ Revoked kiosk token for business: ${business.name}`);
+    
+    res.json({
+      success: true,
+      message: 'Kiosk token revoked successfully',
+    });
+  } catch (error) {
+    console.error('[Business] Error revoking kiosk token:', error);
+    res.status(500).json({ error: error.message || 'Failed to revoke kiosk token' });
   }
 });
 

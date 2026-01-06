@@ -1437,9 +1437,246 @@ async function handleCallReturned(event) {
 /**
  * Handle function-call event (if needed)
  */
+/**
+ * Handle function calls from VAPI assistant
+ * This handles the submit_takeout_order function call
+ */
 async function handleFunctionCall(event) {
-  // Handle any function calls from VAPI assistant
-  console.log(`[VAPI Webhook] Function call:`, event);
+  console.log(`[VAPI Webhook] ⚙️ Processing function-call event`);
+  console.log(`[VAPI Webhook] Function call event:`, JSON.stringify(event, null, 2));
+  
+  try {
+    // Extract function call data from event
+    // VAPI sends function calls in different formats, handle all of them
+    const functionCall = event.functionCall || event.message?.functionCall || event.message?.function_call || event;
+    const functionName = functionCall.name || functionCall.functionName || functionCall.function_name;
+    const functionArguments = functionCall.arguments || functionCall.args || functionCall.parameters || {};
+    
+    console.log(`[VAPI Webhook] Function name: ${functionName}`);
+    console.log(`[VAPI Webhook] Function arguments:`, JSON.stringify(functionArguments, null, 2));
+    
+    // Handle submit_takeout_order function
+    if (functionName === 'submit_takeout_order') {
+      await handleSubmitTakeoutOrder(functionArguments, event);
+    } else {
+      console.log(`[VAPI Webhook] ⚠️ Unhandled function: ${functionName}`);
+    }
+  } catch (error) {
+    console.error(`[VAPI Webhook] ❌ Error handling function call:`, error);
+    // Don't throw - function calls are non-blocking
+  }
+}
+
+/**
+ * Handle submit_takeout_order function call
+ */
+async function handleSubmitTakeoutOrder(args, event) {
+  console.log(`[VAPI Webhook] 📦 Processing takeout order submission`);
+  console.log(`[VAPI Webhook] Order data:`, JSON.stringify(args, null, 2));
+  
+  try {
+    // Extract call ID and assistant ID to find business
+    const call = event.call || event.message?.call || event.message?.artifact?.call || {};
+    const callId = call.id || call.callId;
+    const assistantId = event.call?.assistant?.id 
+      || event.message?.assistant?.id
+      || call.assistant?.id
+      || event.message?.call?.assistant?.id;
+    
+    console.log(`[VAPI Webhook] Call ID: ${callId}, Assistant ID: ${assistantId}`);
+    
+    if (!assistantId) {
+      console.error(`[VAPI Webhook] ❌ No assistant ID found in function call event`);
+      return;
+    }
+    
+    // Find business by assistant ID
+    const business = await Business.findByVapiAssistantId(assistantId);
+    
+    if (!business) {
+      console.error(`[VAPI Webhook] ❌ Business not found for assistant ${assistantId}`);
+      return;
+    }
+    
+    console.log(`[VAPI Webhook] ✅ Found business: ${business.id}`);
+    
+    // Find call session
+    let callSession = null;
+    if (callId) {
+      try {
+        callSession = await CallSession.findByVapiCallId(callId);
+      } catch (error) {
+        console.warn(`[VAPI Webhook] ⚠️ Could not find call session for call ${callId}:`, error.message);
+      }
+    }
+    
+    // Parse function arguments (they might be a string or object)
+    let orderData = args;
+    if (typeof args === 'string') {
+      try {
+        orderData = JSON.parse(args);
+      } catch (parseError) {
+        console.error(`[VAPI Webhook] ❌ Failed to parse function arguments as JSON:`, parseError);
+        return;
+      }
+    }
+    
+    // Extract order data
+    const {
+      customer_name,
+      customer_phone,
+      customer_email,
+      items = [], // Array of items: [{name, quantity, price, modifications}]
+      special_instructions,
+      subtotal = 0,
+      tax = 0,
+      total = 0,
+    } = orderData;
+    
+    // Validate required fields
+    if (!customer_phone) {
+      console.error(`[VAPI Webhook] ❌ Customer phone number is required`);
+      return;
+    }
+    
+    if (!items || items.length === 0) {
+      console.error(`[VAPI Webhook] ❌ Order must have at least one item`);
+      return;
+    }
+    
+    // Create order via API (using TakeoutOrder model directly)
+    const { TakeoutOrder } = await import("../models/TakeoutOrder.js");
+    
+    // Process items and try to match with menu items if item_number is provided
+    const processedItems = await Promise.all(items.map(async (item) => {
+      let menuItemId = null;
+      
+      // Try to find menu item by item_number if provided
+      if (item.item_number) {
+        try {
+          const { MenuItem } = await import("../models/MenuItem.js");
+          const menuItem = await MenuItem.findByBusinessIdAndNumber(business.id, item.item_number);
+          if (menuItem) {
+            menuItemId = menuItem.id;
+            // Use menu item data if available
+            return {
+              menu_item_id: menuItemId,
+              item_number: item.item_number,
+              name: menuItem.name || item.name || item.item_name || 'Unknown Item',
+              description: menuItem.description || item.description || item.item_description || null,
+              quantity: parseInt(item.quantity) || 1,
+              unit_price: parseFloat(item.price || item.unit_price || item.unitPrice || menuItem.price) || 0,
+              modifications: item.modifications || item.modification || null,
+              special_instructions: item.special_instructions || null,
+            };
+          }
+        } catch (error) {
+          console.warn(`[VAPI Webhook] Could not find menu item #${item.item_number}:`, error.message);
+        }
+      }
+      
+      // Fallback to item data as provided
+      return {
+        menu_item_id: menuItemId,
+        item_number: item.item_number || null,
+        name: item.name || item.item_name || 'Unknown Item',
+        description: item.description || item.item_description || null,
+        quantity: parseInt(item.quantity) || 1,
+        unit_price: parseFloat(item.price || item.unit_price || item.unitPrice) || 0,
+        modifications: item.modifications || item.modification || null,
+        special_instructions: item.special_instructions || null,
+      };
+    }));
+    
+    // Recalculate totals based on business tax settings
+    const taxRate = business.takeout_tax_rate ?? 0.13;
+    const taxMethod = business.takeout_tax_calculation_method || 'exclusive';
+    
+    // Calculate subtotal from items and modifiers
+    let calculatedSubtotal = processedItems.reduce((sum, item) => {
+      let itemTotal = item.unit_price * item.quantity;
+      
+      // Add modifier prices if they exist
+      // Modifiers are stored in item.modifications as a string, but we need to parse them
+      // For now, the AI calculates the total including modifiers, so we trust the provided subtotal
+      // But we'll validate it matches our calculation
+      
+      return sum + itemTotal;
+    }, 0);
+    
+    // Note: Modifier prices are included in the AI's calculation
+    // The modifications field contains the text description, but prices are in the subtotal
+    
+    // Use provided subtotal if it's close to calculated, otherwise use calculated
+    const finalSubtotal = Math.abs(calculatedSubtotal - parseFloat(subtotal || 0)) < 0.01 
+      ? parseFloat(subtotal || 0) 
+      : calculatedSubtotal;
+    
+    // Calculate tax based on method
+    let calculatedTax = 0;
+    if (taxMethod === 'exclusive') {
+      // Tax is added on top
+      calculatedTax = finalSubtotal * taxRate;
+    } else {
+      // Tax is included in prices - extract it
+      calculatedTax = finalSubtotal - (finalSubtotal / (1 + taxRate));
+    }
+    
+    // Use provided tax if it's close to calculated, otherwise use calculated
+    const finalTax = Math.abs(calculatedTax - parseFloat(tax || 0)) < 0.01
+      ? parseFloat(tax || 0)
+      : calculatedTax;
+    
+    // Calculate total
+    const finalTotal = taxMethod === 'exclusive' 
+      ? finalSubtotal + finalTax
+      : finalSubtotal; // Tax already included
+    
+    // Use provided total if it's close to calculated, otherwise use calculated
+    const orderTotal = Math.abs(finalTotal - parseFloat(total || 0)) < 0.01
+      ? parseFloat(total || 0)
+      : finalTotal;
+    
+    console.log(`[VAPI Webhook] Tax calculation:`, {
+      method: taxMethod,
+      rate: `${(taxRate * 100).toFixed(2)}%`,
+      subtotal: finalSubtotal,
+      tax: finalTax,
+      total: orderTotal,
+    });
+    
+    const order = await TakeoutOrder.create({
+      business_id: business.id,
+      call_session_id: callSession?.id || null,
+      vapi_call_id: callId || null,
+      customer_name: customer_name || null,
+      customer_phone,
+      customer_email: customer_email || null,
+      order_type: 'takeout',
+      status: 'pending',
+      special_instructions: special_instructions || null,
+      subtotal: finalSubtotal,
+      tax: finalTax,
+      total: orderTotal,
+      items: processedItems,
+    });
+    
+    console.log(`[VAPI Webhook] ✅ Takeout order created: ${order.order_number} (${order.id})`);
+    console.log(`[VAPI Webhook] Order details:`, {
+      order_number: order.order_number,
+      customer_name: order.customer_name,
+      customer_phone: order.customer_phone,
+      items_count: order.items?.length || 0,
+      total: order.total,
+    });
+    
+    // TODO: Send notification to kitchen (tablet interface will poll for new orders)
+    // For now, the tablet interface will refresh and show the new order
+    
+  } catch (error) {
+    console.error(`[VAPI Webhook] ❌ Error creating takeout order:`, error);
+    console.error(`[VAPI Webhook] Error stack:`, error.stack);
+  }
 }
 
 /**

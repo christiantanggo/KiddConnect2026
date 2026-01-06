@@ -1,16 +1,47 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { logout } from '@/lib/auth';
-import { agentsAPI } from '@/lib/api';
+import { agentsAPI, authAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 
 export default function DashboardHeader() {
   const router = useRouter();
   const [rebuilding, setRebuilding] = useState(false);
+  const [takeoutOrdersEnabled, setTakeoutOrdersEnabled] = useState(false);
   const { success, error: showError } = useToast();
+
+  useEffect(() => {
+    // Fetch business data to check if takeout orders is enabled
+    const fetchBusinessData = async () => {
+      try {
+        const response = await authAPI.getMe();
+        if (response.data?.business?.takeout_orders_enabled) {
+          setTakeoutOrdersEnabled(true);
+        } else {
+          setTakeoutOrdersEnabled(false);
+        }
+      } catch (error) {
+        console.error('Failed to fetch business data:', error);
+      }
+    };
+    
+    fetchBusinessData();
+    
+    // Reload when page becomes visible (user navigates back from settings)
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchBusinessData();
+      }
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
 
   const handleRebuildAgent = async () => {
     if (!confirm('This will rebuild your AI agent with the latest settings. Continue?')) {
@@ -46,6 +77,14 @@ export default function DashboardHeader() {
           <Link href="/dashboard/faqs" className="text-gray-700 hover:text-blue-600">
             FAQ's
           </Link>
+          {takeoutOrdersEnabled && (
+            <>
+              <span className="text-gray-300">|</span>
+              <Link href="/dashboard/menu" className="text-gray-700 hover:text-blue-600">
+                Menu
+              </Link>
+            </>
+          )}
           <span className="text-gray-300">|</span>
           <Link href="/dashboard/sms" className="text-gray-700 hover:text-blue-600">
             SMS

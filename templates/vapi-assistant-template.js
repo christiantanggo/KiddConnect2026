@@ -23,6 +23,11 @@ export async function generateAssistantPrompt(businessData) {
     ending_greeting,
     max_call_duration_minutes = null,
     detect_conversation_end = true,
+    takeout_orders_enabled = false,
+    takeout_tax_rate = 0.13,
+    takeout_tax_calculation_method = 'exclusive',
+    takeout_estimated_ready_minutes = 30,
+    menu_items = [],
   } = businessData;
 
   // Format business hours
@@ -110,14 +115,15 @@ INSTRUCTIONS:
 ${ending_greeting ? `2. When ending the call, always use this closing ONCE: "${ending_greeting}" - DO NOT repeat it or add additional closing phrases.` : ''}
 ${ending_greeting ? '3. ' : '2. '}Answer questions using ONLY the information provided above. Do NOT make up information.
 ${ending_greeting ? '4. ' : '3. '}Be concise - keep responses to 1-2 sentences when possible.
-${ending_greeting ? '5. ' : '4. '}After you finish speaking, IMMEDIATELY STOP and wait for the caller to respond.
-${ending_greeting ? '6. ' : '5. '}Do not continue talking. Do not repeat yourself.
-${ending_greeting ? '7. ' : '6. '}Only speak when the caller has finished speaking.
-${ending_greeting ? '8. ' : '7. '}Listen carefully to what the caller says and respond ONLY to what they asked.
-${ending_greeting ? '9. ' : '8. '}Do not talk about topics the caller did not bring up.
-${ending_greeting ? '10. ' : '9. '}If you don't know something, say: "I don't have that information, but I can take a message and have someone call you back."
-${ending_greeting ? '11. ' : '10. '}REMEMBER: ONLY ENGLISH. NO OTHER LANGUAGE.
-${ending_greeting ? '12. ' : '11. '}ALWAYS answer FAQs and questions about hours, location, or contact info - this applies at ALL times, including after hours.
+${ending_greeting ? '5. ' : '4. '}⚠️ CRITICAL - RESPONSE TIMING: Respond IMMEDIATELY when it's your turn to speak. Do NOT pause before responding. Think and respond quickly without long silences.
+${ending_greeting ? '6. ' : '5. '}After you finish speaking, IMMEDIATELY STOP and wait for the caller to respond.
+${ending_greeting ? '7. ' : '6. '}Do not continue talking. Do not repeat yourself.
+${ending_greeting ? '8. ' : '7. '}Only speak when the caller has finished speaking.
+${ending_greeting ? '9. ' : '8. '}Listen carefully to what the caller says and respond ONLY to what they asked.
+${ending_greeting ? '10. ' : '9. '}Do not talk about topics the caller did not bring up.
+${ending_greeting ? '11. ' : '10. '}If you don't know something, say: "I don't have that information, but I can take a message and have someone call you back."
+${ending_greeting ? '12. ' : '11. '}REMEMBER: ONLY ENGLISH. NO OTHER LANGUAGE.
+${ending_greeting ? '13. ' : '12. '}ALWAYS answer FAQs and questions about hours, location, or contact info - this applies at ALL times, including after hours.
 
 CALL HANDLING:
 - ALWAYS answer FAQs and questions about hours, location, or contact info - this applies at ALL times, including after hours.
@@ -294,6 +300,108 @@ ${max_call_duration_minutes ? `CALL DURATION LIMIT:
 - Say something like: "I want to make sure we've covered everything. Is there anything else I can help you with today?"
 - If they say no, move to your closing message and end the call.
 - If they have more questions, answer them but be mindful of the time limit.
+` : ''}
+
+${takeout_orders_enabled ? `
+TAKEOUT ORDERING:
+- You CAN take takeout orders when customers call to place an order
+- ⚠️ CRITICAL: DO NOT read the entire menu to customers. Customers should know what they want to order.
+- When a customer wants to place an order, you should:
+  1. Greet them warmly and confirm they want to place a takeout order
+  2. ⚠️ CRITICAL - PHONE NUMBER: You have access to the caller's phone number from the call metadata. 
+     - DO NOT ask them to provide their phone number - this wastes time and AI minutes
+     - Instead, confirm the number you have: "I have your number as [read the phone number from the call]. Is this the best number to reach you at?"
+     - Format the number clearly and naturally when speaking (e.g., "5-1-9-8-7-2-2-7-3-6" or "519-872-2736")
+     - If they say yes or confirm, proceed with the order using that number
+     - If they say no or provide a different number, use the number they provide
+     - Still ask for their name: "May I have your name for the order?"
+     - This saves time and makes the ordering process faster
+  3. Wait for the customer to tell you what they want - DO NOT list the entire menu
+  4. If the customer asks a specific question (e.g., "What kind of burgers do you have?"), answer with ONLY the relevant items:
+     - List the item numbers and names (e.g., "We have number 1, Cheeseburger, number 2, Bacon Burger, and number 3, Veggie Burger")
+     - DO NOT read descriptions unless they specifically ask "What's on the [item name]?" or "What comes with [item name]?"
+  5. When the customer orders, use the item NUMBER (e.g., "Number 1" or "#1") to help identify the item
+  6. Ask about quantity for each item (e.g., "How many of number 1 would you like?")
+  7. ⚠️ CRITICAL - MODIFICATIONS: DO NOT proactively ask about modifications. Only mention or offer modifications if:
+     - The customer asks about customization (e.g., "Can I add...", "Can I get...", "Do you have...")
+     - The customer asks what modifications are available
+     - After confirming the order, if the customer seems unsure or asks "Is that all?"
+     When the customer asks about modifications:
+     - You can ONLY offer modifications that are listed in the item's modifiers
+     - For free modifiers: List them as available options (e.g., "Yes, we can do [list free modifiers]")
+     - For paid modifiers: List them with prices (e.g., "We can add [list paid modifiers with prices]")
+     - If customer requests a modification NOT in the list, politely say: "I'm sorry, we don't offer that modification. We can do [list available modifiers]"
+  8. Calculate the order total (do this mentally/internally):
+     ${takeout_tax_calculation_method === 'exclusive' 
+       ? `- Subtotal = Sum of all (item prices × quantities) + modifier prices
+     - Tax = Subtotal × ${(takeout_tax_rate * 100).toFixed(2)}%
+     - Total = Subtotal + Tax`
+       : `- Prices already include tax
+     - Subtotal = Sum of all (item prices × quantities) + modifier prices
+     - Tax is already included in the prices
+     - Total = Subtotal (tax included)`}
+  9. ⚠️ CRITICAL - ORDER CONFIRMATION: When confirming the order, you MUST tell the customer:
+     - The items ordered (with quantities and item numbers)
+     - The FULL pricing breakdown:
+       ${takeout_tax_calculation_method === 'exclusive' 
+         ? `* Subtotal: $[amount]
+       * Tax: $[amount] (${(takeout_tax_rate * 100).toFixed(2)}%)
+       * Total: $[total amount]`
+         : `* Subtotal: $[amount] (tax included)
+       * Total: $[total amount]`}
+     - Estimated ready time: ${takeout_estimated_ready_minutes} minutes
+     Example: "To confirm, you ordered 1 cheeseburger (number 1) for $14.99. With tax of $1.95, your total is $16.94. Your order will be ready in 30 minutes."
+  10. Ask if there's anything else they'd like to add
+  11. Once you have all the information and confirmed the order with pricing, use the submit_takeout_order function to submit the order
+  12. ⚠️ CRITICAL - AFTER SUBMITTING ORDER: After successfully submitting the order:
+     - If the customer says "that's everything" or "that's all", respond with your ending greeting: "${ending_greeting || `Thank you for calling ${name}. Have a great day!`}"
+     - Do NOT just say "Goodbye" - use the proper ending greeting
+     - Wait for the call to end naturally after your greeting
+- IMPORTANT: Always use item NUMBERS when referring to menu items (e.g., "Number 1" or "#1 Cheeseburger")
+- IMPORTANT: Only mention prices when confirming orders or when customer asks about price
+- IMPORTANT: DO NOT read the full menu - wait for customers to tell you what they want
+- IMPORTANT: DO NOT proactively ask about modifications - only mention them if the customer asks
+- IMPORTANT: Always provide the FULL pricing breakdown (subtotal, tax, total) when confirming orders
+- IMPORTANT: Only offer modifications that are listed in the item's modifiers - do not make up modifications
+- IMPORTANT: Respond promptly without long pauses - if you need to calculate, do it quickly and respond immediately
+- IMPORTANT: After submitting an order, use your ending greeting when the customer indicates they're done
+- If the customer says "I'll have a cheeseburger", you should confirm by saying "That's number 1, the Cheeseburger, correct?"
+
+${menu_items && menu_items.length > 0 ? `
+MENU ITEMS (Reference Only - DO NOT read this to customers):
+${menu_items.map(item => {
+  const price = parseFloat(item.price || 0).toFixed(2);
+  const displayPrice = takeout_tax_calculation_method === 'inclusive' 
+    ? `$${price} (tax included)`
+    : `$${price}`;
+  let itemText = `#${item.item_number}: ${item.name} - ${displayPrice}`;
+  
+  // Add modifiers if they exist
+  if (item.modifiers) {
+    const freeMods = item.modifiers.free || [];
+    const paidMods = item.modifiers.paid || [];
+    if (freeMods.length > 0 || paidMods.length > 0) {
+      itemText += '\n  Available Modifiers:';
+      if (freeMods.length > 0) {
+        itemText += `\n    Free: ${freeMods.map(m => m.name).join(', ')}`;
+      }
+      if (paidMods.length > 0) {
+        itemText += `\n    Paid: ${paidMods.map(m => `${m.name} (+$${parseFloat(m.price || 0).toFixed(2)})`).join(', ')}`;
+      }
+    }
+  }
+  
+  return itemText;
+}).join('\n\n')}
+
+When customers ask specific questions:
+- "What kind of [category] do you have?" → List only the item numbers and names in that category
+- "What's on the [item name]?" or "What comes with [item name]?" → Provide the description
+- "What's in the [item name]?" → Provide the description
+- DO NOT proactively read the menu - wait for them to tell you what they want
+` : `
+NOTE: Menu items have not been set up yet. You can still take orders, but you'll need to ask the customer what they want and confirm the price with them.
+`}
 ` : ''}
 
 REMEMBER:

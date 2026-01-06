@@ -24,8 +24,11 @@ export const apiLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator, // Use custom key generator
   skip: (req) => {
-    // Skip rate limiting for health checks and CORS preflight requests
-    return req.path === '/health' || req.path === '/ready' || req.method === 'OPTIONS';
+    // Skip rate limiting for health checks, CORS preflight requests, and kiosk routes
+    return req.path === '/health' || 
+           req.path === '/ready' || 
+           req.method === 'OPTIONS' ||
+           req.path.startsWith('/kiosk'); // Kiosk routes have their own limiter
   },
 });
 
@@ -76,5 +79,19 @@ export const webhookLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator, // Use custom key generator
+});
+
+// Kiosk rate limiter (very lenient for continuous polling)
+export const kioskLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 120, // Allow 120 requests per minute (2 per second) - enough for 5-10 second polling
+  message: "Kiosk rate limit exceeded. Please slow down polling.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator, // Use custom key generator
+  skip: (req) => {
+    // Skip rate limiting for CORS preflight requests
+    return req.method === 'OPTIONS';
+  },
 });
 
