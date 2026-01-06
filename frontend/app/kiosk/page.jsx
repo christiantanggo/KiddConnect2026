@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { createKioskAPI } from '@/lib/api';
 
-function KioskPage() {
+function KioskPageContent() {
   const searchParams = useSearchParams();
   const token = searchParams.get('token');
   
@@ -846,6 +846,20 @@ function KioskPage() {
         }
       `}</style>
     </div>
+  );
+}
+
+function KioskPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center min-h-screen bg-gray-100">
+        <div className="text-center">
+          <div className="text-xl">Loading kiosk...</div>
+        </div>
+      </div>
+    }>
+      <KioskPageContent />
+    </Suspense>
   );
 }
 
