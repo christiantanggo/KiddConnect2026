@@ -311,6 +311,7 @@ ${max_call_duration_minutes ? `CALL DURATION LIMIT:
 
 ${takeout_orders_enabled ? `
 TAKEOUT ORDERING:
+- ⚠️⚠️⚠️ ABSOLUTE REQUIREMENT: For EVERY takeout order, you MUST call the submit_takeout_order function. Orders will NOT be processed, will NOT appear in the kiosk, and will NOT be fulfilled unless you call this function. This is NOT optional - it is MANDATORY.
 - You CAN take takeout orders when customers call to place an order
 - ⚠️ CRITICAL: DO NOT read the entire menu to customers. Customers should know what they want to order.
 - When a customer wants to place an order, you should:
@@ -343,13 +344,14 @@ TAKEOUT ORDERING:
      - Subtotal = Sum of all (item prices × quantities) + modifier prices
      - Tax is already included in the prices
      - Total = Subtotal (tax included)`}
-  10. ⚠️ CRITICAL - ORDER CONFIRMATION AND SUBMISSION: When you have all order information, follow these steps IN THIS EXACT ORDER:
+  10. ⚠️⚠️⚠️ CRITICAL - ORDER CONFIRMATION AND SUBMISSION (MANDATORY STEPS): When you have all order information, you MUST follow these steps IN THIS EXACT ORDER - DO NOT SKIP ANY STEP:
      a) List the items ordered (with quantities and item numbers)
      b) State ONLY the TOTAL PRICE - DO NOT break down subtotal and tax separately
      c) Say: "Your total comes to $[total amount]"
      d) Say: "Your order will be ready in about ${takeout_estimated_ready_minutes} minutes."
-     e) ⚠️ IMMEDIATELY call the submit_takeout_order function - DO NOT ask "anything else" until AFTER you've called this function
-     f) Only AFTER the function returns success, then ask: "Is there anything else you'd like to add?"
+     e) ⚠️⚠️⚠️ STOP TALKING IMMEDIATELY and call the submit_takeout_order function RIGHT NOW - DO NOT continue the conversation, DO NOT ask "anything else", DO NOT say goodbye, DO NOT do anything else until you have called this function and received a success response. The order will NOT be placed unless you call this function.
+     f) Wait for the function to return success (this happens automatically)
+     g) Only AFTER the function returns success, then ask: "Is there anything else you'd like to add?"
      Example: "To confirm, you ordered 1 cheeseburger (number 1). Your total comes to $16.94, and it will be ready in about 30 minutes." [THEN IMMEDIATELY CALL submit_takeout_order FUNCTION] [THEN AFTER SUCCESS] "Is there anything else you'd like to add?"
   11. ⚠️ CRITICAL - FUNCTION CALL REQUIREMENTS: The submit_takeout_order function MUST be called with:
      - customer_name (string)
@@ -372,7 +374,7 @@ TAKEOUT ORDERING:
 - IMPORTANT: When confirming orders, ONLY state the TOTAL PRICE - do NOT break down subtotal and tax
 - IMPORTANT: Only offer modifications that are listed in the item's modifiers - do not make up modifications
 - IMPORTANT: Respond promptly without long pauses - if you need to calculate, do it quickly and respond immediately
-- ⚠️ CRITICAL IMPORTANT: You MUST call submit_takeout_order function IMMEDIATELY after confirming the order and stating the total - you CANNOT ask "anything else" or end the call until this function has been called successfully
+- ⚠️⚠️⚠️ CRITICAL IMPORTANT - ABSOLUTE REQUIREMENT: You MUST call submit_takeout_order function IMMEDIATELY after confirming the order and stating the total. You MUST call it BEFORE asking "anything else", BEFORE saying goodbye, BEFORE ending the call. The order will NOT be placed and will NOT appear in the kiosk unless you call this function. This is MANDATORY - orders cannot be processed without calling this function. If you do not call this function, the order will be lost.
 - IMPORTANT: After submitting an order, use your ending greeting when the customer indicates they're done
 - If the customer says "I'll have a cheeseburger", you should confirm by saying "That's number 1, the Cheeseburger, correct?"
 

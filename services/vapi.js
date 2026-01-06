@@ -167,7 +167,7 @@ export async function createAssistant(businessData) {
         {
           type: "serverless",
           name: "submit_takeout_order",
-          description: "Submit a takeout order from a customer call. Use this when the customer wants to place a takeout order and you have collected all the necessary information: customer name, phone number, items ordered (using item numbers #1, #2, etc.), quantities, prices, and any special instructions.",
+          description: "⚠️ MANDATORY FUNCTION: You MUST call this function to submit every takeout order. The order will NOT be placed and will NOT appear in the kiosk unless you call this function. You MUST call this immediately after confirming the order total - DO NOT ask 'anything else' until after calling this function. This function is REQUIRED for all orders - orders cannot be processed without it. Required fields: customer_name, customer_phone, items array (with name, quantity, price, item_number), subtotal, tax, total.",
           parameters: {
             type: "object",
             properties: {
