@@ -142,10 +142,14 @@ export async function createAssistant(businessData) {
       // Transcriber settings - reduce sensitivity to background noise
       transcriber: {
         provider: "deepgram",
-        model: "nova-2",
+        model: "nova-2", // Best model for noise reduction
         language: "en-US",
+        // Additional Deepgram settings for better noise handling
+        smartFormat: true, // Better formatting helps with accuracy
+        endpointing: 300, // Milliseconds of silence before considering speech ended (helps with noisy environments)
+        punctuate: true, // Better punctuation improves understanding
       },
-      // Enable background denoising to filter out ambient noise
+      // Enable background denoising to filter out ambient noise (TV, traffic, etc.)
       backgroundDenoisingEnabled: true,
       // Allow users to interrupt AI speech - users can cut off the AI mid-response
       interruptionsEnabled: true, // Enable interruptions - users can interrupt AI responses
