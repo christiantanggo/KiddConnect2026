@@ -1484,7 +1484,7 @@ export async function rebuildAssistant(businessId) {
         provider: "openai",
         model: "gpt-4o-mini", // Using mini for lower cost (~80% cheaper than gpt-4o)
         temperature: temperature,
-        maxTokens: 150,
+        maxTokens: 1000, // Increased from 150 to allow function calls (function call JSON needs more tokens)
         messages: [{ role: "system", content: systemPrompt }],
       },
       // Use voice settings from agent record (defaults to OpenAI/alloy if not set)
