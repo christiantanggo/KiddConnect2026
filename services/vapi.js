@@ -401,7 +401,6 @@ export async function createAssistant(businessData) {
             },
           },
         ];
-      }
     }
     
     // Add ending message if provided
