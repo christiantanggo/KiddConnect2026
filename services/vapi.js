@@ -92,7 +92,7 @@ export async function createAssistant(businessData) {
         provider: "openai",
         model: "gpt-4o-mini", // Using mini for lower cost (~80% cheaper than gpt-4o)
         temperature: temperature,
-        maxTokens: 150,
+        maxTokens: 1000, // Increased from 150 to allow function calls (function call JSON needs more tokens)
         messages: [
           {
             role: "system",
