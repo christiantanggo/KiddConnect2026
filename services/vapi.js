@@ -305,7 +305,7 @@ export async function createAssistant(businessData) {
         language: "en-US",
         // Additional Deepgram settings for better noise handling
         smartFormat: true, // Better formatting helps with accuracy
-        endpointing: 2000, // Increased to 2000ms (2 seconds) - longer silence before considering speech ended (prevents premature endpointing and call drops)
+        endpointing: 1000, // Increased from 300ms to 1000ms - longer silence before considering speech ended (prevents premature endpointing)
         punctuate: true, // Better punctuation improves understanding
       },
       // Enable background denoising to filter out ambient noise (TV, traffic, etc.)
@@ -403,11 +403,10 @@ export async function createAssistant(businessData) {
         ];
     }
     
-    // Add ending message if provided
-    if (endingGreeting) {
-      assistantConfig.endCallFunctionEnabled = true;
-      // Note: VAPI may handle ending messages differently - check their API docs
-    }
+    // Ending message handling:
+    // Disable VAPI's auto end-call function to prevent premature hangups.
+    // We enforce the ending greeting via the system prompt and conversation flow instead.
+    assistantConfig.endCallFunctionEnabled = false;
 
     console.log("[VAPI] Creating assistant with config:", {
       name: assistantConfig.name,
@@ -1773,11 +1772,8 @@ export async function rebuildAssistant(businessId) {
       delete updatePayload.functions;
     }
     
-    if (endingGreeting) {
-      updatePayload.endCallFunctionEnabled = true;
-    } else {
-      updatePayload.endCallFunctionEnabled = false;
-    }
+    // Disable VAPI's auto end-call function in updates as well to avoid premature hangups.
+    updatePayload.endCallFunctionEnabled = false;
     
     // Make API call - Use PATCH (VAPI standard for updates)
     console.log(`[VAPI Rebuild] ========== UPDATING ASSISTANT ==========`);
@@ -1845,6 +1841,15 @@ export async function rebuildAssistant(businessId) {
     if (!updatedAssistant.serverUrl || updatedAssistant.serverUrl !== updatePayload.serverUrl) {
       console.error(`[VAPI Rebuild] ❌❌❌ CRITICAL WARNING: Webhook URL not set correctly!`);
       console.error(`[VAPI Rebuild] This will prevent call tracking, usage recording, and message creation!`);
+    }
+    // CRITICAL: Check if endCallFunctionEnabled was actually disabled
+    if (updatedAssistant.endCallFunctionEnabled === true) {
+      console.error(`[VAPI Rebuild] ❌❌❌ CRITICAL WARNING: endCallFunctionEnabled is still TRUE!`);
+      console.error(`[VAPI Rebuild] This will cause premature call hangups during order flow!`);
+      console.error(`[VAPI Rebuild] VAPI may not accept this field in PATCH updates - it may be read-only.`);
+      console.error(`[VAPI Rebuild] The assistant prompt must be very explicit about NOT ending calls until orders are submitted.`);
+    } else {
+      console.log(`[VAPI Rebuild] ✅ endCallFunctionEnabled is correctly set to false`);
     }
     
     // Update the business record with the rebuild timestamp
