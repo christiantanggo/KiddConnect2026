@@ -327,6 +327,8 @@ export async function createAssistant(businessData) {
       try {
         const toolId = await getOrCreateTakeoutOrderTool();
         assistantConfig.tools = [{ toolId }];
+        // Don't set functions field if using tools
+        delete assistantConfig.functions;
         toolCreated = true;
         console.log(`[VAPI] ✅ Added tool ${toolId} to assistant`);
       } catch (toolError) {
@@ -338,8 +340,8 @@ export async function createAssistant(businessData) {
           stack: toolError.stack,
         });
         // Fallback to inline function if tool creation fails
-        // Clear tools array and use functions instead
-        assistantConfig.tools = [];
+        // Don't set tools field if using functions
+        delete assistantConfig.tools;
         toolCreated = false;
       }
       
@@ -1713,7 +1715,8 @@ export async function rebuildAssistant(businessId) {
         const toolId = await getOrCreateTakeoutOrderTool();
         updatePayload.tools = [{ toolId }];
         // Clear functions if they exist (we're using tools now)
-        updatePayload.functions = [];
+        // Don't set functions field at all if using tools
+        delete updatePayload.functions;
         toolCreated = true;
         console.log(`[VAPI Rebuild] ✅ Added tool ${toolId} to assistant`);
       } catch (toolError) {
@@ -1725,8 +1728,8 @@ export async function rebuildAssistant(businessId) {
           stack: toolError.stack,
         });
         // Fallback to inline function if tool creation fails
-        // Clear tools array and use functions instead
-        updatePayload.tools = [];
+        // Don't set tools field at all if using functions
+        delete updatePayload.tools;
         toolCreated = false;
       }
       
@@ -1808,10 +1811,12 @@ export async function rebuildAssistant(businessId) {
             },
           },
         ];
-        updatePayload.tools = [];
+        // Don't set tools field when using functions
+        delete updatePayload.tools;
       }
     } else {
       // Explicitly clear tools and functions when takeout orders are disabled
+      // Use empty arrays to clear them from VAPI
       updatePayload.tools = [];
       updatePayload.functions = [];
     }
