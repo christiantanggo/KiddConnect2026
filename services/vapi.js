@@ -305,7 +305,7 @@ export async function createAssistant(businessData) {
         language: "en-US",
         // Additional Deepgram settings for better noise handling
         smartFormat: true, // Better formatting helps with accuracy
-        endpointing: 1000, // Increased from 300ms to 1000ms - longer silence before considering speech ended (prevents premature endpointing)
+        endpointing: 2000, // Increased to 2000ms (2 seconds) - longer silence before considering speech ended (prevents premature endpointing and call drops)
         punctuate: true, // Better punctuation improves understanding
       },
       // Enable background denoising to filter out ambient noise (TV, traffic, etc.)
