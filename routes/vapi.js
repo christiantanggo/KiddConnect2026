@@ -1608,7 +1608,7 @@ async function handleSubmitTakeoutOrder(args, event) {
     
     if (!assistantId) {
       console.error(`[VAPI Webhook] ❌ No assistant ID found in function call event`);
-      return;
+      return { success: false, error: "No assistant ID found in function call event" };
     }
     
     // Find business by assistant ID
@@ -1616,7 +1616,7 @@ async function handleSubmitTakeoutOrder(args, event) {
     
     if (!business) {
       console.error(`[VAPI Webhook] ❌ Business not found for assistant ${assistantId}`);
-      return;
+      return { success: false, error: `Business not found for assistant ${assistantId}` };
     }
     
     console.log(`[VAPI Webhook] ✅ Found business: ${business.id}`);
@@ -1638,7 +1638,7 @@ async function handleSubmitTakeoutOrder(args, event) {
         orderData = JSON.parse(args);
       } catch (parseError) {
         console.error(`[VAPI Webhook] ❌ Failed to parse function arguments as JSON:`, parseError);
-        return;
+        return { success: false, error: "Failed to parse function arguments as JSON" };
       }
     }
     
