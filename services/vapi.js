@@ -165,6 +165,7 @@ export async function createAssistant(businessData) {
     if (businessData.takeout_orders_enabled) {
       assistantConfig.functions = [
         {
+          type: "serverless",
           name: "submit_takeout_order",
           description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS IMMEDIATELY: This function MUST be invoked (called/executed) to submit every takeout order. This is a FUNCTION TOOL that you have access to - you MUST actively call it. Simply saying words like 'I will submit' or 'I'm submitting' does NOTHING - you must actually use the function calling capability to execute this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you actually invoke (call/execute) this function. You MUST invoke this IMMEDIATELY after stating the total price - DO NOT wait, DO NOT ask 'anything else', DO NOT say anything else. Just invoke the function right away. This function is REQUIRED for all orders - orders cannot be processed without it. To invoke this function, you must use your function calling capability to generate a function call with all required parameters. Required fields: customer_name (string), customer_phone (string, required), items (array with name, quantity, price, item_number), subtotal (number), tax (number), total (number). Example: {customer_name: 'John', customer_phone: '5198722736', items: [{name: 'Cheeseburger', quantity: 1, price: 14.99, item_number: 1}], subtotal: 14.99, tax: 1.95, total: 16.94}",
           strict: true,
@@ -1525,8 +1526,10 @@ export async function rebuildAssistant(businessId) {
     if (takeoutOrdersEnabled) {
       updatePayload.functions = [
         {
+          type: "serverless",
           name: "submit_takeout_order",
-          description: "Submit a takeout order from a customer call. Use this when the customer wants to place a takeout order and you have collected all the necessary information: customer name, phone number, items ordered (using item numbers #1, #2, etc.), quantities, prices, and any special instructions.",
+          description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS IMMEDIATELY: This function MUST be invoked (called/executed) to submit every takeout order. This is a FUNCTION TOOL that you have access to - you MUST actively call it. Simply saying words like 'I will submit' or 'I'm submitting' does NOTHING - you must actually use the function calling capability to execute this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you actually invoke (call/execute) this function. You MUST invoke this IMMEDIATELY after stating the total price - DO NOT wait, DO NOT ask 'anything else', DO NOT say anything else. Just invoke the function right away. This function is REQUIRED for all orders - orders cannot be processed without it. To invoke this function, you must use your function calling capability to generate a function call with all required parameters. Required fields: customer_name (string), customer_phone (string, required), items (array with name, quantity, price, item_number), subtotal (number), tax (number), total (number). Example: {customer_name: 'John', customer_phone: '5198722736', items: [{name: 'Cheeseburger', quantity: 1, price: 14.99, item_number: 1}], subtotal: 14.99, tax: 1.95, total: 16.94}",
+          strict: true,
           parameters: {
             type: "object",
             properties: {
@@ -1593,7 +1596,7 @@ export async function rebuildAssistant(businessId) {
                 description: "Special instructions for the entire order",
               },
             },
-            required: ["customer_phone", "items"],
+            required: ["customer_name", "customer_phone", "items", "subtotal", "tax", "total"],
           },
         },
       ];
