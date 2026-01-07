@@ -1767,7 +1767,6 @@ export async function rebuildAssistant(businessId) {
         ];
         // Don't set tools field when using functions
         delete updatePayload.tools;
-      }
     } else {
       // Explicitly clear tools and functions when takeout orders are disabled
       // Use empty arrays to clear them from VAPI
