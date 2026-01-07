@@ -322,13 +322,29 @@ export async function createAssistant(businessData) {
     
     // Add takeout orders tool only if feature is enabled
     if (businessData.takeout_orders_enabled) {
+      // Try to create/get tool, but don't fail if it doesn't work
+      let toolCreated = false;
       try {
         const toolId = await getOrCreateTakeoutOrderTool();
         assistantConfig.tools = [{ toolId }];
+        toolCreated = true;
         console.log(`[VAPI] ✅ Added tool ${toolId} to assistant`);
       } catch (toolError) {
         console.warn(`[VAPI] ⚠️ Could not create/get tool, falling back to inline function:`, toolError.message);
+        console.warn(`[VAPI] Tool error details:`, {
+          message: toolError.message,
+          status: toolError.response?.status,
+          data: toolError.response?.data,
+          stack: toolError.stack,
+        });
         // Fallback to inline function if tool creation fails
+        // Clear tools array and use functions instead
+        assistantConfig.tools = [];
+        toolCreated = false;
+      }
+      
+      // If tool creation failed, use inline function
+      if (!toolCreated) {
         assistantConfig.functions = [
           {
             type: "serverless",
@@ -1691,15 +1707,31 @@ export async function rebuildAssistant(businessId) {
     
     // Add takeout orders tool only if feature is enabled
     if (takeoutOrdersEnabled) {
+      // Try to create/get tool, but don't fail if it doesn't work
+      let toolCreated = false;
       try {
         const toolId = await getOrCreateTakeoutOrderTool();
         updatePayload.tools = [{ toolId }];
         // Clear functions if they exist (we're using tools now)
         updatePayload.functions = [];
+        toolCreated = true;
         console.log(`[VAPI Rebuild] ✅ Added tool ${toolId} to assistant`);
       } catch (toolError) {
         console.warn(`[VAPI Rebuild] ⚠️ Could not create/get tool, falling back to inline function:`, toolError.message);
+        console.warn(`[VAPI Rebuild] Tool error details:`, {
+          message: toolError.message,
+          status: toolError.response?.status,
+          data: toolError.response?.data,
+          stack: toolError.stack,
+        });
         // Fallback to inline function if tool creation fails
+        // Clear tools array and use functions instead
+        updatePayload.tools = [];
+        toolCreated = false;
+      }
+      
+      // If tool creation failed, use inline function
+      if (!toolCreated) {
         updatePayload.functions = [
           {
             type: "serverless",
