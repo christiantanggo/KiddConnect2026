@@ -185,9 +185,11 @@ router.put('/', authenticate, async (req, res) => {
 // Rebuild VAPI assistant (manual trigger)
 router.post('/rebuild', authenticate, async (req, res) => {
   try {
-    console.log('[Agent Rebuild] Rebuild request for business:', req.businessId);
+    console.log('[Agent Rebuild] ========== REBUILD REQUEST START ==========');
+    console.log('[Agent Rebuild] Business ID:', req.businessId);
     
     if (!process.env.VAPI_API_KEY) {
+      console.error('[Agent Rebuild] ❌ VAPI_API_KEY not configured');
       return res.status(500).json({ 
         success: false, 
         error: 'VAPI API key not configured' 
@@ -195,14 +197,30 @@ router.post('/rebuild', authenticate, async (req, res) => {
     }
     
     const { rebuildAssistant } = await import('../services/vapi.js');
+    console.log('[Agent Rebuild] Calling rebuildAssistant...');
     await rebuildAssistant(req.businessId);
+    console.log('[Agent Rebuild] ✅ Rebuild completed successfully');
     
     res.json({ success: true, message: 'AI agent rebuilt successfully' });
   } catch (error) {
-    console.error('[Agent Rebuild] Error:', error.message);
+    console.error('[Agent Rebuild] ❌❌❌ REBUILD ERROR ❌❌❌');
+    console.error('[Agent Rebuild] Error message:', error.message);
+    console.error('[Agent Rebuild] Error stack:', error.stack);
+    console.error('[Agent Rebuild] Error name:', error.name);
+    if (error.response) {
+      console.error('[Agent Rebuild] Error response status:', error.response.status);
+      console.error('[Agent Rebuild] Error response data:', JSON.stringify(error.response.data, null, 2));
+    }
+    console.error('[Agent Rebuild] Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2));
+    
     res.status(500).json({ 
       success: false, 
-      error: error.message || 'Failed to rebuild agent' 
+      error: error.message || 'Failed to rebuild agent',
+      details: process.env.NODE_ENV === 'development' ? {
+        stack: error.stack,
+        name: error.name,
+        response: error.response?.data,
+      } : undefined
     });
   }
 });
