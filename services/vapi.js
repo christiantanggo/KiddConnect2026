@@ -1690,7 +1690,7 @@ export async function rebuildAssistant(businessId) {
     if (takeoutOrdersEnabled) {
       // Use inline function (this always works)
       updatePayload.functions = [
-          {
+        {
             type: "serverless",
             name: "submit_takeout_order",
             description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS IMMEDIATELY: This function MUST be invoked (called/executed) to submit every takeout order. This is a FUNCTION TOOL that you have access to - you MUST actively call it. Simply saying words like 'I will submit' or 'I'm submitting' does NOTHING - you must actually use the function calling capability to execute this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you actually invoke (call/execute) this function. You MUST invoke this IMMEDIATELY after stating the total price - DO NOT wait, DO NOT ask 'anything else', DO NOT say anything else. Just invoke the function right away. This function is REQUIRED for all orders - orders cannot be processed without it. To invoke this function, you must use your function calling capability to generate a function call with all required parameters. Required fields: customer_name (string), customer_phone (string, required), items (array with name, quantity, price, item_number), subtotal (number), tax (number), total (number). Example: {customer_name: 'John', customer_phone: '5198722736', items: [{name: 'Cheeseburger', quantity: 1, price: 14.99, item_number: 1}], subtotal: 14.99, tax: 1.95, total: 16.94}",
@@ -1769,9 +1769,9 @@ export async function rebuildAssistant(businessId) {
         delete updatePayload.tools;
     } else {
       // Explicitly clear tools and functions when takeout orders are disabled
-      // Use empty arrays to clear them from VAPI
-      updatePayload.tools = [];
-      updatePayload.functions = [];
+      // Don't set these fields at all - let VAPI keep existing values
+      delete updatePayload.tools;
+      delete updatePayload.functions;
     }
     
     if (endingGreeting) {
