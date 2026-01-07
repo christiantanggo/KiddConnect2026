@@ -40,165 +40,6 @@ export function getVapiClient() {
 }
 
 /**
- * Create or get the submit_takeout_order tool (account-scoped)
- * This tool will appear in the Tools tab in VAPI dashboard
- * @returns {Promise<string>} Tool ID
- */
-export async function getOrCreateTakeoutOrderTool() {
-  try {
-    const client = getVapiClient();
-    
-    // First, try to find existing tool
-    // Try both /tool and /tools endpoints
-    let existingTool = null;
-    for (const endpoint of ['/tool', '/tools']) {
-      try {
-        const listResponse = await client.get(endpoint);
-        const tools = Array.isArray(listResponse.data) ? listResponse.data : (listResponse.data?.data || []);
-        existingTool = tools.find(tool => tool.name === 'submit_takeout_order');
-        
-        if (existingTool) {
-          console.log(`[VAPI Tool] Found existing tool: ${existingTool.id} (via ${endpoint})`);
-          return existingTool.id;
-        }
-      } catch (listError) {
-        console.log(`[VAPI Tool] Could not list tools via ${endpoint}:`, listError.message);
-        if (listError.response) {
-          console.log(`[VAPI Tool] Status: ${listError.response.status}, Data:`, JSON.stringify(listError.response.data));
-        }
-      }
-    }
-    
-    // Create new tool if not found
-    const backendUrl = process.env.BACKEND_URL || 
-                      process.env.RAILWAY_PUBLIC_DOMAIN || 
-                      process.env.VERCEL_URL || 
-                      process.env.SERVER_URL ||
-                      "https://api.tavarios.com";
-    
-    const webhookUrl = `${backendUrl.startsWith('http') ? backendUrl : `https://${backendUrl}`}/api/vapi/webhook`;
-    
-    const toolConfig = {
-      type: "function",
-      name: "submit_takeout_order",
-      description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS IMMEDIATELY: This function MUST be invoked (called/executed) to submit every takeout order. This is a FUNCTION TOOL that you have access to - you MUST actively call it. Simply saying words like 'I will submit' or 'I'm submitting' does NOTHING - you must actually use the function calling capability to execute this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you actually invoke (call/execute) this function. You MUST invoke this IMMEDIATELY after stating the total price - DO NOT wait, DO NOT ask 'anything else', DO NOT say anything else. Just invoke the function right away. This function is REQUIRED for all orders - orders cannot be processed without it.",
-      parameters: {
-        type: "object",
-        properties: {
-          customer_name: {
-            type: "string",
-            description: "The customer's name",
-          },
-          customer_phone: {
-            type: "string",
-            description: "The customer's phone number (required)",
-          },
-          customer_email: {
-            type: "string",
-            description: "The customer's email address (optional)",
-          },
-          items: {
-            type: "array",
-            description: "Array of items ordered (use item numbers like #1, #2 when referencing menu items)",
-            items: {
-              type: "object",
-              properties: {
-                name: {
-                  type: "string",
-                  description: "Item name (required)",
-                },
-                quantity: {
-                  type: "integer",
-                  description: "Quantity ordered (required)",
-                },
-                price: {
-                  type: "number",
-                  description: "Price per item (required)",
-                },
-                item_number: {
-                  type: "integer",
-                  description: "Menu item number (e.g., 1, 2, 3) if available",
-                },
-                modifications: {
-                  type: "string",
-                  description: "Modifications or customizations (e.g., 'no onions, extra cheese')",
-                },
-                special_instructions: {
-                  type: "string",
-                  description: "Special instructions for this item",
-                },
-              },
-              required: ["name", "quantity", "price"],
-            },
-          },
-          subtotal: {
-            type: "number",
-            description: "Order subtotal before tax",
-          },
-          tax: {
-            type: "number",
-            description: "Tax amount",
-          },
-          total: {
-            type: "number",
-            description: "Total order amount including tax",
-          },
-          special_instructions: {
-            type: "string",
-            description: "Special instructions for the entire order",
-          },
-        },
-        required: ["customer_name", "customer_phone", "items", "subtotal", "tax", "total"],
-      },
-      serverUrl: webhookUrl,
-      serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
-    };
-    
-    console.log(`[VAPI Tool] Creating new tool: submit_takeout_order`);
-    console.log(`[VAPI Tool] Webhook URL: ${webhookUrl}`);
-    console.log(`[VAPI Tool] Tool config:`, JSON.stringify(toolConfig, null, 2));
-    
-    // Try both /tool and /tools endpoints for creation
-    let createResponse;
-    let toolId = null;
-    for (const endpoint of ['/tool', '/tools']) {
-      try {
-        createResponse = await client.post(endpoint, toolConfig);
-        console.log(`[VAPI Tool] Create response from ${endpoint}:`, JSON.stringify(createResponse.data, null, 2));
-        
-        toolId = createResponse.data?.id || createResponse.data?.tool?.id || createResponse.data?.data?.id;
-        
-        if (toolId) {
-          console.log(`[VAPI Tool] ✅ Created tool with ID: ${toolId} (via ${endpoint})`);
-          return toolId;
-        }
-      } catch (createError) {
-        console.log(`[VAPI Tool] Failed to create tool via ${endpoint}:`, createError.message);
-        if (createError.response) {
-          console.log(`[VAPI Tool] Status: ${createError.response.status}, Data:`, JSON.stringify(createError.response.data));
-        }
-        // Continue to next endpoint
-      }
-    }
-    
-    // If we get here, both endpoints failed
-    if (!toolId) {
-      console.error(`[VAPI Tool] ❌ Tool creation failed on all endpoints. Last response:`, createResponse?.data);
-      throw new Error(`Tool creation failed. VAPI may not support tool creation via API, or endpoint/format is incorrect. Last response: ${JSON.stringify(createResponse?.data || 'No response')}`);
-    }
-    
-  } catch (error) {
-    console.error(`[VAPI Tool] ❌ Error creating/getting tool:`);
-    console.error(`[VAPI Tool] Error message:`, error.message);
-    console.error(`[VAPI Tool] Error status:`, error.response?.status);
-    console.error(`[VAPI Tool] Error data:`, JSON.stringify(error.response?.data, null, 2));
-    console.error(`[VAPI Tool] Full error:`, error);
-    // If tool creation fails, we'll fall back to inline functions
-    throw error;
-  }
-}
-
-/**
  * Create a VAPI assistant for a business
  * @param {Object} businessData - Business information
  * @param {string} businessData.name - Business name
@@ -251,7 +92,7 @@ export async function createAssistant(businessData) {
         provider: "openai",
         model: "gpt-4o-mini", // Using mini for lower cost (~80% cheaper than gpt-4o)
         temperature: temperature,
-        maxTokens: 1000, // Increased from 150 to allow function calls (function call JSON needs more tokens)
+        maxTokens: 500, // Increased from 150 to allow function calls (function calls require JSON output with parameters)
         messages: [
           {
             role: "system",
@@ -305,7 +146,7 @@ export async function createAssistant(businessData) {
         language: "en-US",
         // Additional Deepgram settings for better noise handling
         smartFormat: true, // Better formatting helps with accuracy
-        endpointing: 1000, // Increased from 300ms to 1000ms - longer silence before considering speech ended (prevents premature endpointing)
+        endpointing: 300, // Milliseconds of silence before considering speech ended (helps with noisy environments)
         punctuate: true, // Better punctuation improves understanding
       },
       // Enable background denoising to filter out ambient noise (TV, traffic, etc.)
@@ -316,97 +157,94 @@ export async function createAssistant(businessData) {
       // Start speaking plan - wait a bit before speaking to avoid interrupting caller
       startSpeakingPlan: {
         waitSeconds: 0.8,
-        smartEndpointingEnabled: true, // Enable to better detect when user starts speaking again after silence
+        smartEndpointingEnabled: false, // Disable to prevent premature responses
       },
     };
     
     // Add takeout orders function only if feature is enabled
-    // NOTE: Temporarily using inline functions instead of tools
-    // Tool creation via API may not be supported by VAPI
     if (businessData.takeout_orders_enabled) {
-      // Use inline function (this always works)
       assistantConfig.functions = [
-          {
-            type: "serverless",
-            name: "submit_takeout_order",
-            description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS IMMEDIATELY: This function MUST be invoked (called/executed) to submit every takeout order. This is a FUNCTION TOOL that you have access to - you MUST actively call it. Simply saying words like 'I will submit' or 'I'm submitting' does NOTHING - you must actually use the function calling capability to execute this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you actually invoke (call/execute) this function. You MUST invoke this IMMEDIATELY after stating the total price - DO NOT wait, DO NOT ask 'anything else', DO NOT say anything else. Just invoke the function right away. This function is REQUIRED for all orders - orders cannot be processed without it. To invoke this function, you must use your function calling capability to generate a function call with all required parameters. Required fields: customer_name (string), customer_phone (string, required), items (array with name, quantity, price, item_number), subtotal (number), tax (number), total (number). Example: {customer_name: 'John', customer_phone: '5198722736', items: [{name: 'Cheeseburger', quantity: 1, price: 14.99, item_number: 1}], subtotal: 14.99, tax: 1.95, total: 16.94}",
-            strict: true,
-            parameters: {
-              type: "object",
-              properties: {
-                customer_name: {
-                  type: "string",
-                  description: "The customer's name",
-                },
-                customer_phone: {
-                  type: "string",
-                  description: "The customer's phone number (required)",
-                },
-                customer_email: {
-                  type: "string",
-                  description: "The customer's email address (optional)",
-                },
+        {
+          type: "serverless",
+          name: "submit_takeout_order",
+          description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS: This function MUST be invoked (called/executed) to submit every takeout order. Simply saying 'I will submit' or 'I'm submitting' is NOT enough - you must actually invoke this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you invoke this function. You MUST invoke this immediately after saying 'please hold for one moment' - DO NOT ask 'anything else' until after invoking this function. This function is REQUIRED for all orders - orders cannot be processed without it. To invoke this function, you must use the function tool available to you. Required fields: customer_name, customer_phone, items array (with name, quantity, price, item_number), subtotal, tax, total.",
+          parameters: {
+            type: "object",
+            properties: {
+              customer_name: {
+                type: "string",
+                description: "The customer's name",
+              },
+              customer_phone: {
+                type: "string",
+                description: "The customer's phone number (required)",
+              },
+              customer_email: {
+                type: "string",
+                description: "The customer's email address (optional)",
+              },
+              items: {
+                type: "array",
+                description: "Array of items ordered (use item numbers like #1, #2 when referencing menu items)",
                 items: {
-                  type: "array",
-                  description: "Array of items ordered (use item numbers like #1, #2 when referencing menu items)",
-                  items: {
-                    type: "object",
-                    properties: {
-                      name: {
-                        type: "string",
-                        description: "Item name (required)",
-                      },
-                      quantity: {
-                        type: "integer",
-                        description: "Quantity ordered (required)",
-                      },
-                      price: {
-                        type: "number",
-                        description: "Price per item (required)",
-                      },
-                      item_number: {
-                        type: "integer",
-                        description: "Menu item number (e.g., 1, 2, 3) if available",
-                      },
-                      modifications: {
-                        type: "string",
-                        description: "Modifications or customizations (e.g., 'no onions, extra cheese')",
-                      },
-                      special_instructions: {
-                        type: "string",
-                        description: "Special instructions for this item",
-                      },
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                      description: "Item name (required)",
                     },
-                    required: ["name", "quantity", "price"],
+                    quantity: {
+                      type: "integer",
+                      description: "Quantity ordered (required)",
+                    },
+                    price: {
+                      type: "number",
+                      description: "Price per item (required)",
+                    },
+                    item_number: {
+                      type: "integer",
+                      description: "Menu item number (e.g., 1, 2, 3) if available",
+                    },
+                    modifications: {
+                      type: "string",
+                      description: "Modifications or customizations (e.g., 'no onions, extra cheese')",
+                    },
+                    special_instructions: {
+                      type: "string",
+                      description: "Special instructions for this item",
+                    },
                   },
-                },
-                subtotal: {
-                  type: "number",
-                  description: "Order subtotal before tax",
-                },
-                tax: {
-                  type: "number",
-                  description: "Tax amount",
-                },
-                total: {
-                  type: "number",
-                  description: "Total order amount including tax",
-                },
-                special_instructions: {
-                  type: "string",
-                  description: "Special instructions for the entire order",
+                  required: ["name", "quantity", "price"],
                 },
               },
-              required: ["customer_name", "customer_phone", "items", "subtotal", "tax", "total"],
+              subtotal: {
+                type: "number",
+                description: "Order subtotal before tax",
+              },
+              tax: {
+                type: "number",
+                description: "Tax amount",
+              },
+              total: {
+                type: "number",
+                description: "Total order amount including tax",
+              },
+              special_instructions: {
+                type: "string",
+                description: "Special instructions for the entire order",
+              },
             },
+            required: ["customer_phone", "items"],
           },
-        ];
+        },
+      ];
     }
     
-    // Ending message handling:
-    // Disable VAPI's auto end-call function to prevent premature hangups.
-    // We enforce the ending greeting via the system prompt and conversation flow instead.
-    assistantConfig.endCallFunctionEnabled = false;
+    // Add ending message if provided
+    if (endingGreeting) {
+      assistantConfig.endCallFunctionEnabled = true;
+      // Note: VAPI may handle ending messages differently - check their API docs
+    }
 
     console.log("[VAPI] Creating assistant with config:", {
       name: assistantConfig.name,
@@ -1646,7 +1484,7 @@ export async function rebuildAssistant(businessId) {
         provider: "openai",
         model: "gpt-4o-mini", // Using mini for lower cost (~80% cheaper than gpt-4o)
         temperature: temperature,
-        maxTokens: 1000, // Increased from 150 to allow function calls (function call JSON needs more tokens)
+        maxTokens: 150,
         messages: [{ role: "system", content: systemPrompt }],
       },
       // Use voice settings from agent record (defaults to OpenAI/alloy if not set)
@@ -1684,96 +1522,91 @@ export async function rebuildAssistant(businessId) {
     };
     
     // Add takeout orders function only if feature is enabled
-    // NOTE: Temporarily using inline functions instead of tools
-    // Tool creation via API may not be supported by VAPI
     if (takeoutOrdersEnabled) {
-      // Use inline function (this always works)
       updatePayload.functions = [
         {
-            name: "submit_takeout_order",
-            description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS IMMEDIATELY: This function MUST be invoked (called/executed) to submit every takeout order. This is a FUNCTION TOOL that you have access to - you MUST actively call it. Simply saying words like 'I will submit' or 'I'm submitting' does NOTHING - you must actually use the function calling capability to execute this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you actually invoke (call/execute) this function. You MUST invoke this IMMEDIATELY after stating the total price - DO NOT wait, DO NOT ask 'anything else', DO NOT say anything else. Just invoke the function right away. This function is REQUIRED for all orders - orders cannot be processed without it. To invoke this function, you must use your function calling capability to generate a function call with all required parameters. Required fields: customer_name (string), customer_phone (string, required), items (array with name, quantity, price, item_number), subtotal (number), tax (number), total (number). Example: {customer_name: 'John', customer_phone: '5198722736', items: [{name: 'Cheeseburger', quantity: 1, price: 14.99, item_number: 1}], subtotal: 14.99, tax: 1.95, total: 16.94}",
-            strict: true,
-            parameters: {
-              type: "object",
-              properties: {
-                customer_name: {
-                  type: "string",
-                  description: "The customer's name",
-                },
-                customer_phone: {
-                  type: "string",
-                  description: "The customer's phone number (required)",
-                },
-                customer_email: {
-                  type: "string",
-                  description: "The customer's email address (optional)",
-                },
+          name: "submit_takeout_order",
+          description: "Submit a takeout order from a customer call. Use this when the customer wants to place a takeout order and you have collected all the necessary information: customer name, phone number, items ordered (using item numbers #1, #2, etc.), quantities, prices, and any special instructions.",
+          parameters: {
+            type: "object",
+            properties: {
+              customer_name: {
+                type: "string",
+                description: "The customer's name",
+              },
+              customer_phone: {
+                type: "string",
+                description: "The customer's phone number (required)",
+              },
+              customer_email: {
+                type: "string",
+                description: "The customer's email address (optional)",
+              },
+              items: {
+                type: "array",
+                description: "Array of items ordered (use item numbers like #1, #2 when referencing menu items)",
                 items: {
-                  type: "array",
-                  description: "Array of items ordered (use item numbers like #1, #2 when referencing menu items)",
-                  items: {
-                    type: "object",
-                    properties: {
-                      name: {
-                        type: "string",
-                        description: "Item name (required)",
-                      },
-                      quantity: {
-                        type: "integer",
-                        description: "Quantity ordered (required)",
-                      },
-                      price: {
-                        type: "number",
-                        description: "Price per item (required)",
-                      },
-                      item_number: {
-                        type: "integer",
-                        description: "Menu item number (e.g., 1, 2, 3) if available",
-                      },
-                      modifications: {
-                        type: "string",
-                        description: "Modifications or customizations (e.g., 'no onions, extra cheese')",
-                      },
-                      special_instructions: {
-                        type: "string",
-                        description: "Special instructions for this item",
-                      },
+                  type: "object",
+                  properties: {
+                    name: {
+                      type: "string",
+                      description: "Item name (required)",
                     },
-                    required: ["name", "quantity", "price"],
+                    quantity: {
+                      type: "integer",
+                      description: "Quantity ordered (required)",
+                    },
+                    price: {
+                      type: "number",
+                      description: "Price per item (required)",
+                    },
+                    item_number: {
+                      type: "integer",
+                      description: "Menu item number (e.g., 1, 2, 3) if available",
+                    },
+                    modifications: {
+                      type: "string",
+                      description: "Modifications or customizations (e.g., 'no onions, extra cheese')",
+                    },
+                    special_instructions: {
+                      type: "string",
+                      description: "Special instructions for this item",
+                    },
                   },
-                },
-                subtotal: {
-                  type: "number",
-                  description: "Order subtotal before tax",
-                },
-                tax: {
-                  type: "number",
-                  description: "Tax amount",
-                },
-                total: {
-                  type: "number",
-                  description: "Total order amount including tax",
-                },
-                special_instructions: {
-                  type: "string",
-                  description: "Special instructions for the entire order",
+                  required: ["name", "quantity", "price"],
                 },
               },
-              required: ["customer_name", "customer_phone", "items", "subtotal", "tax", "total"],
+              subtotal: {
+                type: "number",
+                description: "Order subtotal before tax",
+              },
+              tax: {
+                type: "number",
+                description: "Tax amount",
+              },
+              total: {
+                type: "number",
+                description: "Total order amount including tax",
+              },
+              special_instructions: {
+                type: "string",
+                description: "Special instructions for the entire order",
+              },
             },
+            required: ["customer_phone", "items"],
           },
-        ];
-        // Don't set tools field when using functions
-        delete updatePayload.tools;
+        },
+      ];
     } else {
-      // Explicitly clear tools and functions when takeout orders are disabled
-      // Don't set these fields at all - let VAPI keep existing values
-      delete updatePayload.tools;
-      delete updatePayload.functions;
+      // Explicitly clear functions when takeout orders are disabled
+      updatePayload.functions = [];
     }
     
-    // Disable VAPI's auto end-call function in updates as well to avoid premature hangups.
-    updatePayload.endCallFunctionEnabled = false;
+    if (endingGreeting) {
+      updatePayload.endCallFunctionEnabled = true;
+    } else {
+      updatePayload.endCallFunctionEnabled = false;
+    }
     
     // Make API call - Use PATCH (VAPI standard for updates)
     console.log(`[VAPI Rebuild] ========== UPDATING ASSISTANT ==========`);
@@ -1842,15 +1675,6 @@ export async function rebuildAssistant(businessId) {
       console.error(`[VAPI Rebuild] ❌❌❌ CRITICAL WARNING: Webhook URL not set correctly!`);
       console.error(`[VAPI Rebuild] This will prevent call tracking, usage recording, and message creation!`);
     }
-    // CRITICAL: Check if endCallFunctionEnabled was actually disabled
-    if (updatedAssistant.endCallFunctionEnabled === true) {
-      console.error(`[VAPI Rebuild] ❌❌❌ CRITICAL WARNING: endCallFunctionEnabled is still TRUE!`);
-      console.error(`[VAPI Rebuild] This will cause premature call hangups during order flow!`);
-      console.error(`[VAPI Rebuild] VAPI may not accept this field in PATCH updates - it may be read-only.`);
-      console.error(`[VAPI Rebuild] The assistant prompt must be very explicit about NOT ending calls until orders are submitted.`);
-    } else {
-      console.log(`[VAPI Rebuild] ✅ endCallFunctionEnabled is correctly set to false`);
-    }
     
     // Update the business record with the rebuild timestamp
     try {
@@ -1879,15 +1703,8 @@ export async function rebuildAssistant(businessId) {
     // Wrap error to ensure we never reference undefined variables
     const errorMessage = err?.message || 'Unknown error';
     const errorStack = err?.stack || 'No stack trace';
-    console.error(`[VAPI Rebuild] ❌❌❌ CRITICAL ERROR ❌❌❌`);
-    console.error(`[VAPI Rebuild] Error message: ${errorMessage}`);
-    console.error(`[VAPI Rebuild] Error name: ${err?.name || 'Unknown'}`);
-    console.error(`[VAPI Rebuild] Error stack: ${errorStack}`);
-    if (err?.response) {
-      console.error(`[VAPI Rebuild] Error response status: ${err.response.status}`);
-      console.error(`[VAPI Rebuild] Error response data:`, JSON.stringify(err.response.data, null, 2));
-    }
-    console.error(`[VAPI Rebuild] Full error:`, JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
+    console.error(`[VAPI Rebuild] ERROR: ${errorMessage}`);
+    console.error(`[VAPI Rebuild] Stack: ${errorStack}`);
     throw new Error(`Failed to rebuild assistant: ${errorMessage}`);
   }
 }
