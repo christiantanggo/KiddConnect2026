@@ -49,17 +49,24 @@ export async function getOrCreateTakeoutOrderTool() {
     const client = getVapiClient();
     
     // First, try to find existing tool
-    try {
-      const listResponse = await client.get('/tool');
-      const tools = Array.isArray(listResponse.data) ? listResponse.data : (listResponse.data?.data || []);
-      const existingTool = tools.find(tool => tool.name === 'submit_takeout_order');
-      
-      if (existingTool) {
-        console.log(`[VAPI Tool] Found existing tool: ${existingTool.id}`);
-        return existingTool.id;
+    // Try both /tool and /tools endpoints
+    let existingTool = null;
+    for (const endpoint of ['/tool', '/tools']) {
+      try {
+        const listResponse = await client.get(endpoint);
+        const tools = Array.isArray(listResponse.data) ? listResponse.data : (listResponse.data?.data || []);
+        existingTool = tools.find(tool => tool.name === 'submit_takeout_order');
+        
+        if (existingTool) {
+          console.log(`[VAPI Tool] Found existing tool: ${existingTool.id} (via ${endpoint})`);
+          return existingTool.id;
+        }
+      } catch (listError) {
+        console.log(`[VAPI Tool] Could not list tools via ${endpoint}:`, listError.message);
+        if (listError.response) {
+          console.log(`[VAPI Tool] Status: ${listError.response.status}, Data:`, JSON.stringify(listError.response.data));
+        }
       }
-    } catch (listError) {
-      console.log(`[VAPI Tool] Could not list tools (may not have permission or endpoint may differ):`, listError.message);
     }
     
     // Create new tool if not found
@@ -149,19 +156,43 @@ export async function getOrCreateTakeoutOrderTool() {
     
     console.log(`[VAPI Tool] Creating new tool: submit_takeout_order`);
     console.log(`[VAPI Tool] Webhook URL: ${webhookUrl}`);
+    console.log(`[VAPI Tool] Tool config:`, JSON.stringify(toolConfig, null, 2));
     
-    const createResponse = await client.post('/tool', toolConfig);
-    const toolId = createResponse.data?.id || createResponse.data?.tool?.id;
-    
-    if (!toolId) {
-      throw new Error('Tool created but no ID returned');
+    // Try both /tool and /tools endpoints for creation
+    let createResponse;
+    let toolId = null;
+    for (const endpoint of ['/tool', '/tools']) {
+      try {
+        createResponse = await client.post(endpoint, toolConfig);
+        console.log(`[VAPI Tool] Create response from ${endpoint}:`, JSON.stringify(createResponse.data, null, 2));
+        
+        toolId = createResponse.data?.id || createResponse.data?.tool?.id || createResponse.data?.data?.id;
+        
+        if (toolId) {
+          console.log(`[VAPI Tool] ✅ Created tool with ID: ${toolId} (via ${endpoint})`);
+          return toolId;
+        }
+      } catch (createError) {
+        console.log(`[VAPI Tool] Failed to create tool via ${endpoint}:`, createError.message);
+        if (createError.response) {
+          console.log(`[VAPI Tool] Status: ${createError.response.status}, Data:`, JSON.stringify(createError.response.data));
+        }
+        // Continue to next endpoint
+      }
     }
     
-    console.log(`[VAPI Tool] ✅ Created tool with ID: ${toolId}`);
-    return toolId;
+    // If we get here, both endpoints failed
+    if (!toolId) {
+      console.error(`[VAPI Tool] ❌ Tool creation failed on all endpoints. Last response:`, createResponse?.data);
+      throw new Error(`Tool creation failed. VAPI may not support tool creation via API, or endpoint/format is incorrect. Last response: ${JSON.stringify(createResponse?.data || 'No response')}`);
+    }
     
   } catch (error) {
-    console.error(`[VAPI Tool] ❌ Error creating/getting tool:`, error.response?.data || error.message);
+    console.error(`[VAPI Tool] ❌ Error creating/getting tool:`);
+    console.error(`[VAPI Tool] Error message:`, error.message);
+    console.error(`[VAPI Tool] Error status:`, error.response?.status);
+    console.error(`[VAPI Tool] Error data:`, JSON.stringify(error.response?.data, null, 2));
+    console.error(`[VAPI Tool] Full error:`, error);
     // If tool creation fails, we'll fall back to inline functions
     throw error;
   }
