@@ -320,34 +320,12 @@ export async function createAssistant(businessData) {
       },
     };
     
-    // Add takeout orders tool only if feature is enabled
+    // Add takeout orders function only if feature is enabled
+    // NOTE: Temporarily using inline functions instead of tools
+    // Tool creation via API may not be supported by VAPI
     if (businessData.takeout_orders_enabled) {
-      // Try to create/get tool, but don't fail if it doesn't work
-      let toolCreated = false;
-      try {
-        const toolId = await getOrCreateTakeoutOrderTool();
-        assistantConfig.tools = [{ toolId }];
-        // Don't set functions field if using tools
-        delete assistantConfig.functions;
-        toolCreated = true;
-        console.log(`[VAPI] ✅ Added tool ${toolId} to assistant`);
-      } catch (toolError) {
-        console.warn(`[VAPI] ⚠️ Could not create/get tool, falling back to inline function:`, toolError.message);
-        console.warn(`[VAPI] Tool error details:`, {
-          message: toolError.message,
-          status: toolError.response?.status,
-          data: toolError.response?.data,
-          stack: toolError.stack,
-        });
-        // Fallback to inline function if tool creation fails
-        // Don't set tools field if using functions
-        delete assistantConfig.tools;
-        toolCreated = false;
-      }
-      
-      // If tool creation failed, use inline function
-      if (!toolCreated) {
-        assistantConfig.functions = [
+      // Use inline function (this always works)
+      assistantConfig.functions = [
           {
             type: "serverless",
             name: "submit_takeout_order",
@@ -1707,35 +1685,12 @@ export async function rebuildAssistant(businessId) {
       // These fields persist from the original assistant creation and don't need to be updated
     };
     
-    // Add takeout orders tool only if feature is enabled
+    // Add takeout orders function only if feature is enabled
+    // NOTE: Temporarily using inline functions instead of tools
+    // Tool creation via API may not be supported by VAPI
     if (takeoutOrdersEnabled) {
-      // Try to create/get tool, but don't fail if it doesn't work
-      let toolCreated = false;
-      try {
-        const toolId = await getOrCreateTakeoutOrderTool();
-        updatePayload.tools = [{ toolId }];
-        // Clear functions if they exist (we're using tools now)
-        // Don't set functions field at all if using tools
-        delete updatePayload.functions;
-        toolCreated = true;
-        console.log(`[VAPI Rebuild] ✅ Added tool ${toolId} to assistant`);
-      } catch (toolError) {
-        console.warn(`[VAPI Rebuild] ⚠️ Could not create/get tool, falling back to inline function:`, toolError.message);
-        console.warn(`[VAPI Rebuild] Tool error details:`, {
-          message: toolError.message,
-          status: toolError.response?.status,
-          data: toolError.response?.data,
-          stack: toolError.stack,
-        });
-        // Fallback to inline function if tool creation fails
-        // Don't set tools field at all if using functions
-        delete updatePayload.tools;
-        toolCreated = false;
-      }
-      
-      // If tool creation failed, use inline function
-      if (!toolCreated) {
-        updatePayload.functions = [
+      // Use inline function (this always works)
+      updatePayload.functions = [
           {
             type: "serverless",
             name: "submit_takeout_order",
