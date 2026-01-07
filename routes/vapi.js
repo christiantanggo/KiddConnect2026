@@ -582,11 +582,45 @@ router.post("/webhook", async (req, res) => {
   console.log(`🔥 Assistant ID: ${assistantId || 'N/A'}`);
   console.log(`🔥 Business ID: ${businessId || 'N/A'}`);
   console.log(`🔥 Timestamp: ${new Date().toISOString()}`);
-  
+
+  // IMPORTANT:
+  // - Call lifecycle events should be ACKed immediately (non-blocking)
+  // - Tool/function execution requests may REQUIRE a synchronous response containing toolCallId + result
+  //   Otherwise the assistant can "hang" waiting for the tool resolution.
+  const normalizedType = String(eventType || "").toLowerCase();
+  const isPotentialToolOrFunctionRequest =
+    normalizedType.includes("tool") ||
+    normalizedType === "function-call" ||
+    !!req.body?.toolCallId ||
+    !!req.body?.message?.toolCallId ||
+    !!req.body?.toolCalls ||
+    !!req.body?.message?.toolCalls ||
+    !!req.body?.message?.tool_calls ||
+    !!req.body?.functionCall ||
+    !!req.body?.message?.functionCall ||
+    !!req.body?.message?.function_call;
+
+  if (isPotentialToolOrFunctionRequest) {
+    try {
+      const toolResponse = await handleVapiToolOrFunctionRequest(req.body);
+      return res.status(200).json(toolResponse);
+    } catch (err) {
+      console.error(`[VAPI Webhook] ❌ Error handling tool/function request:`, err);
+      return res.status(200).json({
+        results: [
+          {
+            toolCallId: req.body?.toolCallId || req.body?.message?.toolCallId || "unknown",
+            result: { success: false, error: "Tool execution failed" },
+          },
+        ],
+      });
+    }
+  }
+
   // RESPOND IMMEDIATELY - Don't wait for anything
-  // This tells VAPI we received the webhook
+  // This tells VAPI we received the webhook (call lifecycle events)
   res.status(200).json({ received: true });
-  
+
   // Now process asynchronously (don't await - let it run in background)
   // Use setImmediate to ensure response is sent first
   setImmediate(async () => {
@@ -687,6 +721,93 @@ router.post("/webhook", async (req, res) => {
     }
   });
 });
+
+/**
+ * Handle synchronous tool/function execution requests from VAPI.
+ * Returns toolCallId + result (and results[] for multiple calls) so the assistant can continue.
+ */
+async function handleVapiToolOrFunctionRequest(body) {
+  const calls = [];
+
+  const toolCalls =
+    body?.toolCalls ||
+    body?.message?.toolCalls ||
+    body?.message?.tool_calls ||
+    body?.tool_calls ||
+    null;
+
+  if (Array.isArray(toolCalls)) {
+    calls.push(...toolCalls);
+  } else if (toolCalls && typeof toolCalls === "object") {
+    calls.push(toolCalls);
+  }
+
+  if (calls.length === 0 && (body?.toolCallId || body?.message?.toolCallId)) {
+    calls.push(body?.message || body);
+  }
+
+  if (
+    calls.length === 0 &&
+    (body?.functionCall || body?.message?.functionCall || body?.message?.function_call)
+  ) {
+    calls.push(body);
+  }
+
+  if (calls.length === 0) {
+    return { results: [] };
+  }
+
+  const results = [];
+  for (const rawCall of calls) {
+    const toolCallId =
+      rawCall?.toolCallId ||
+      rawCall?.id ||
+      rawCall?.tool_call_id ||
+      body?.toolCallId ||
+      body?.message?.toolCallId ||
+      "unknown";
+
+    const name =
+      rawCall?.name ||
+      rawCall?.toolName ||
+      rawCall?.tool_name ||
+      rawCall?.functionName ||
+      rawCall?.function_name ||
+      rawCall?.functionCall?.name ||
+      body?.functionCall?.name ||
+      body?.message?.functionCall?.name ||
+      body?.message?.function_call?.name;
+
+    const args =
+      rawCall?.arguments ||
+      rawCall?.args ||
+      rawCall?.parameters ||
+      rawCall?.toolInput ||
+      rawCall?.input ||
+      rawCall?.functionCall?.arguments ||
+      body?.functionCall?.arguments ||
+      body?.message?.functionCall?.arguments ||
+      body?.message?.function_call?.arguments ||
+      {};
+
+    if (name === "submit_takeout_order") {
+      const submission = await handleSubmitTakeoutOrder(args, body);
+      results.push({ toolCallId, result: submission });
+    } else {
+      results.push({
+        toolCallId,
+        result: { success: false, error: `Unhandled tool/function: ${name || "unknown"}` },
+      });
+    }
+  }
+
+  // Provide both formats (some integrations expect results[], some expect top-level)
+  return {
+    results,
+    toolCallId: results[0]?.toolCallId,
+    result: results[0]?.result,
+  };
+}
 
 /**
  * Handle call-start event
@@ -1536,12 +1657,12 @@ async function handleSubmitTakeoutOrder(args, event) {
     // Validate required fields
     if (!customer_phone) {
       console.error(`[VAPI Webhook] ❌ Customer phone number is required`);
-      return;
+      return { success: false, error: "customer_phone is required" };
     }
     
     if (!items || items.length === 0) {
       console.error(`[VAPI Webhook] ❌ Order must have at least one item`);
-      return;
+      return { success: false, error: "items is required (must contain at least one item)" };
     }
     
     // Create order via API (using TakeoutOrder model directly)
@@ -1669,6 +1790,14 @@ async function handleSubmitTakeoutOrder(args, event) {
       items_count: order.items?.length || 0,
       total: order.total,
     });
+
+    return {
+      success: true,
+      order_id: order.id,
+      order_number: order.order_number,
+      total: order.total,
+      estimated_ready_minutes: business.takeout_estimated_ready_minutes ?? 30,
+    };
     
     // TODO: Send notification to kitchen (tablet interface will poll for new orders)
     // For now, the tablet interface will refresh and show the new order
@@ -1676,6 +1805,7 @@ async function handleSubmitTakeoutOrder(args, event) {
   } catch (error) {
     console.error(`[VAPI Webhook] ❌ Error creating takeout order:`, error);
     console.error(`[VAPI Webhook] Error stack:`, error.stack);
+    return { success: false, error: "Error creating takeout order" };
   }
 }
 
