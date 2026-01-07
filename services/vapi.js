@@ -167,7 +167,7 @@ export async function createAssistant(businessData) {
         {
           type: "serverless",
           name: "submit_takeout_order",
-          description: "⚠️ MANDATORY FUNCTION: You MUST call this function to submit every takeout order. The order will NOT be placed and will NOT appear in the kiosk unless you call this function. You MUST call this immediately after confirming the order total - DO NOT ask 'anything else' until after calling this function. This function is REQUIRED for all orders - orders cannot be processed without it. Required fields: customer_name, customer_phone, items array (with name, quantity, price, item_number), subtotal, tax, total.",
+          description: "⚠️⚠️⚠️ MANDATORY FUNCTION - YOU MUST INVOKE THIS: This function MUST be invoked (called/executed) to submit every takeout order. Simply saying 'I will submit' or 'I'm submitting' is NOT enough - you must actually invoke this function. The order will NOT be placed, will NOT appear in the kiosk, and will NOT be fulfilled unless you invoke this function. You MUST invoke this immediately after saying 'please hold for one moment' - DO NOT ask 'anything else' until after invoking this function. This function is REQUIRED for all orders - orders cannot be processed without it. To invoke this function, you must use the function tool available to you. Required fields: customer_name, customer_phone, items array (with name, quantity, price, item_number), subtotal, tax, total.",
           parameters: {
             type: "object",
             properties: {
