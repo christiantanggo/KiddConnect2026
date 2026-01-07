@@ -311,7 +311,7 @@ ${max_call_duration_minutes ? `CALL DURATION LIMIT:
 
 ${takeout_orders_enabled ? `
 TAKEOUT ORDERING:
-- ⚠️⚠️⚠️ ABSOLUTE REQUIREMENT: For EVERY takeout order, you MUST call the submit_takeout_order function. Orders will NOT be processed, will NOT appear in the kiosk, and will NOT be fulfilled unless you call this function. This is NOT optional - it is MANDATORY.
+- ⚠️⚠️⚠️ ABSOLUTE REQUIREMENT: For EVERY takeout order, you MUST invoke the submit_takeout_order function. This means you must actually call/use the function - not just mention it, not just talk about submitting, but actually invoke the function with all parameters. Orders will NOT be processed, will NOT appear in the kiosk, and will NOT be fulfilled unless you invoke this function. This is NOT optional - it is MANDATORY. The function is available to you - you must invoke it when you reach step 7.
 - You CAN take takeout orders when customers call to place an order
 - ⚠️ CRITICAL: DO NOT read the entire menu to customers. Customers should know what they want to order.
 - When a customer wants to place an order, you MUST follow these steps IN THIS EXACT ORDER - DO NOT SKIP OR REORDER STEPS:
@@ -334,7 +334,20 @@ TAKEOUT ORDERING:
      - Wait for confirmation if needed
   6. Announce submission:
      - Say: "I'm submitting your order now, please hold for one moment."
-  7. ⚠️⚠️⚠️ IMMEDIATELY call the submit_takeout_order function - DO NOT continue talking, DO NOT say anything else, DO NOT ask questions until you have called this function and received a success response. The order will NOT be placed unless you call this function.
+  7. ⚠️⚠️⚠️ CRITICAL - YOU MUST INVOKE THE FUNCTION NOW (THIS IS MANDATORY):
+     - The exact moment after you say "please hold for one moment", you MUST invoke the submit_takeout_order function
+     - You invoke a function by actually calling it - this is different from just saying you will submit
+     - Do not wait, do not ask anything, do not continue talking, do not say anything else
+     - Invoke submit_takeout_order immediately with these exact parameters:
+       * customer_name: (the name you confirmed in step 1)
+       * customer_phone: (the phone number you confirmed in step 2)
+       * items: [array of items with name, quantity, price, item_number]
+       * subtotal: (calculated subtotal)
+       * tax: (calculated tax)
+       * total: (the total you confirmed in step 5)
+     - The function will automatically execute when you invoke it
+     - DO NOT say anything else until the function has been invoked and you receive a success response
+     - If you do not invoke this function right now, the order will NOT be placed and will NOT appear in the kiosk - the customer's order will be lost
   8. Confirm success and announce ready time:
      - After the function returns success, say: "Perfect! Your order has been submitted successfully and will be ready in about ${takeout_estimated_ready_minutes} minutes."
      - This is when you announce the ready time - NOT earlier in the conversation
