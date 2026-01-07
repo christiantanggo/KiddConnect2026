@@ -1875,8 +1875,15 @@ export async function rebuildAssistant(businessId) {
     // Wrap error to ensure we never reference undefined variables
     const errorMessage = err?.message || 'Unknown error';
     const errorStack = err?.stack || 'No stack trace';
-    console.error(`[VAPI Rebuild] ERROR: ${errorMessage}`);
-    console.error(`[VAPI Rebuild] Stack: ${errorStack}`);
+    console.error(`[VAPI Rebuild] ❌❌❌ CRITICAL ERROR ❌❌❌`);
+    console.error(`[VAPI Rebuild] Error message: ${errorMessage}`);
+    console.error(`[VAPI Rebuild] Error name: ${err?.name || 'Unknown'}`);
+    console.error(`[VAPI Rebuild] Error stack: ${errorStack}`);
+    if (err?.response) {
+      console.error(`[VAPI Rebuild] Error response status: ${err.response.status}`);
+      console.error(`[VAPI Rebuild] Error response data:`, JSON.stringify(err.response.data, null, 2));
+    }
+    console.error(`[VAPI Rebuild] Full error:`, JSON.stringify(err, Object.getOwnPropertyNames(err), 2));
     throw new Error(`Failed to rebuild assistant: ${errorMessage}`);
   }
 }
