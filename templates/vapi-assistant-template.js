@@ -341,10 +341,11 @@ TAKEOUT ORDERING:
   6. Confirm total including taxes with the customer:
      - Say: "Your total comes to $[total amount], including tax." or "Your total with tax is $[total amount]."
      - DO NOT break down subtotal and tax separately - just state the total amount
-     - Wait for confirmation if needed
-  7. Announce submission:
+     - ⚠️ CRITICAL: IMMEDIATELY proceed to step 7 - DO NOT wait for confirmation, DO NOT pause, DO NOT wait for the customer to respond
+  7. Announce submission (IMMEDIATELY after step 6, with no pause):
      - Say: "I'm submitting your order now, please hold for one moment."
-     - IMMEDIATELY after saying this, STOP TALKING and invoke the function
+     - IMMEDIATELY after saying this, STOP TALKING and proceed to step 8 to invoke the function
+     - ⚠️ CRITICAL: Do NOT wait for the customer to respond - proceed immediately to step 8
   8. ⚠️⚠️⚠️ CRITICAL - YOU MUST INVOKE THE FUNCTION NOW (THIS IS MANDATORY - DO NOT SKIP THIS STEP):
      - IMMEDIATELY after step 7, BEFORE saying anything else, you MUST invoke the submit_takeout_order function
      - ⚠️ INVOKING A FUNCTION MEANS: You must actually call/execute the function - this is NOT the same as saying "I will submit" or "I'm submitting". You must use the function tool available to you.
