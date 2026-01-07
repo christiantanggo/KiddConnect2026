@@ -146,7 +146,7 @@ export async function createAssistant(businessData) {
         language: "en-US",
         // Additional Deepgram settings for better noise handling
         smartFormat: true, // Better formatting helps with accuracy
-        endpointing: 300, // Milliseconds of silence before considering speech ended (helps with noisy environments)
+        endpointing: 1000, // Increased from 300ms to 1000ms - longer silence before considering speech ended (prevents premature endpointing)
         punctuate: true, // Better punctuation improves understanding
       },
       // Enable background denoising to filter out ambient noise (TV, traffic, etc.)
@@ -157,7 +157,7 @@ export async function createAssistant(businessData) {
       // Start speaking plan - wait a bit before speaking to avoid interrupting caller
       startSpeakingPlan: {
         waitSeconds: 0.8,
-        smartEndpointingEnabled: false, // Disable to prevent premature responses
+        smartEndpointingEnabled: true, // Enable to better detect when user starts speaking again after silence
       },
     };
     
