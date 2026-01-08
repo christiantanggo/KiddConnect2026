@@ -19,6 +19,7 @@ function KioskPageContent() {
   const [refreshInterval, setRefreshInterval] = useState(10000); // 10 seconds (default)
   const [lastRefreshTime, setLastRefreshTime] = useState(null);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [transcriptModal, setTranscriptModal] = useState({ open: false, orderId: null, transcript: null, loading: false });
   
   // Memoize kioskAPI to prevent recreation on every render
   const kioskAPI = useMemo(() => {
@@ -209,6 +210,31 @@ function KioskPageContent() {
     } catch (error) {
       console.error('Failed to update status:', error);
       alert('Failed to update order status');
+    }
+  };
+
+  // View transcript
+  const viewTranscript = async (orderId) => {
+    if (!kioskAPI) return;
+
+    setTranscriptModal({ open: true, orderId, transcript: null, loading: true });
+
+    try {
+      const res = await kioskAPI.getTranscript(orderId);
+      setTranscriptModal({ 
+        open: true, 
+        orderId, 
+        transcript: res.data.transcript || 'No transcript available for this order.',
+        loading: false 
+      });
+    } catch (error) {
+      console.error('Failed to load transcript:', error);
+      setTranscriptModal({ 
+        open: true, 
+        orderId, 
+        transcript: 'Failed to load transcript. Please try again.',
+        loading: false 
+      });
     }
   };
 
@@ -435,12 +461,7 @@ function KioskPageContent() {
       };
 
       const formatted = new Intl.DateTimeFormat('en-US', defaultOptions).format(date);
-      
-      // Debug logging (can be removed later)
-      if (!settings?.timezone) {
-        console.warn('[Kiosk] Formatting time without timezone in settings, using default:', timezone);
-      }
-      
+
       return formatted;
     } catch (error) {
       console.error('Error formatting date:', error, { dateString, timezone: settings?.timezone });
@@ -728,6 +749,15 @@ function KioskPageContent() {
                         >
                           Print
                         </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            viewTranscript(order.id);
+                          }}
+                          className="px-4 py-2 bg-blue-200 text-blue-700 rounded-lg hover:bg-blue-300 font-semibold"
+                        >
+                          Transcription
+                        </button>
                       </div>
                     </div>
                   );
@@ -797,12 +827,20 @@ function KioskPageContent() {
                         <p><strong>Items:</strong> {order.items?.length || 0}</p>
                       </div>
                     </div>
-                    <button
-                      onClick={() => printReceipt(order.id)}
-                      className="mt-4 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-                    >
-                      Print Receipt
-                    </button>
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        onClick={() => printReceipt(order.id)}
+                        className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+                      >
+                        Print Receipt
+                      </button>
+                      <button
+                        onClick={() => viewTranscript(order.id)}
+                        className="px-4 py-2 bg-blue-200 text-blue-700 rounded-lg hover:bg-blue-300"
+                      >
+                        Transcription
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -858,6 +896,42 @@ function KioskPageContent() {
           </div>
         )}
       </div>
+
+      {/* Transcript Modal */}
+      {transcriptModal.open && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50" onClick={() => setTranscriptModal({ open: false, orderId: null, transcript: null, loading: false })}>
+          <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-2xl font-bold text-gray-900">Call Transcription</h2>
+              <button
+                onClick={() => setTranscriptModal({ open: false, orderId: null, transcript: null, loading: false })}
+                className="text-gray-400 hover:text-gray-600 text-2xl font-bold"
+              >
+                ×
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto flex-1">
+              {transcriptModal.loading ? (
+                <div className="text-center py-8">
+                  <div className="text-gray-500">Loading transcript...</div>
+                </div>
+              ) : (
+                <div className="whitespace-pre-wrap text-gray-700 font-mono text-sm leading-relaxed">
+                  {transcriptModal.transcript}
+                </div>
+              )}
+            </div>
+            <div className="p-6 border-t border-gray-200 flex justify-end">
+              <button
+                onClick={() => setTranscriptModal({ open: false, orderId: null, transcript: null, loading: false })}
+                className="px-6 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-semibold"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx global>{`
         @keyframes pulse-border {

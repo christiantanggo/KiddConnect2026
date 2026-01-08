@@ -1729,7 +1729,7 @@ async function handleSubmitTakeoutOrder(args, event) {
     }
     
     // Extract order data
-    const {
+    let {
       customer_name,
       customer_phone,
       customer_email,
@@ -1739,6 +1739,73 @@ async function handleSubmitTakeoutOrder(args, event) {
       tax = 0,
       total = 0,
     } = orderData;
+    
+    // Validate and clean customer name
+    // The AI should have collected the name in Step 1, so it should be in the function call
+    // But if it's missing or looks invalid, try to get it from call session
+    if (!customer_name || customer_name.trim() === '' || customer_name === 'Unknown' || customer_name === 'N/A') {
+      console.log(`[VAPI Webhook] ⚠️ Customer name missing or invalid in function call: "${customer_name}"`);
+      
+      // Try to get from call session
+      if (callSession && callSession.caller_name) {
+        customer_name = callSession.caller_name;
+        console.log(`[VAPI Webhook] ✅ Using customer name from call session: "${customer_name}"`);
+      } else {
+        // Try to extract from transcript if available
+        try {
+          const { getCallSummary } = await import("../services/vapi.js");
+          if (callId) {
+            const callSummary = await getCallSummary(callId);
+            if (callSummary && callSummary.transcript) {
+              // Extract name from transcript using improved patterns
+              const namePatterns = [
+                /(?:my name is|this is|i'm|i am|name is|it's|it is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+                /(?:customer|caller|name)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+                /(?:^|\n)(?:User|Caller):\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/m,
+              ];
+              
+              for (const pattern of namePatterns) {
+                const match = callSummary.transcript.match(pattern);
+                if (match && match[1]) {
+                  const candidate = match[1].trim();
+                  // Validate: must be 2-30 chars, no digits, no common words
+                  const invalidWords = ['order', 'pickup', 'takeout', 'delivery', 'phone', 'number', 'yes', 'no', 'ok', 'okay', 'thanks', 'thank'];
+                  if (candidate.length >= 2 && 
+                      candidate.length <= 30 && 
+                      !/\d/.test(candidate) && 
+                      !invalidWords.includes(candidate.toLowerCase())) {
+                    customer_name = candidate;
+                    console.log(`[VAPI Webhook] ✅ Extracted customer name from transcript: "${customer_name}"`);
+                    break;
+                  }
+                }
+              }
+            }
+          }
+        } catch (extractError) {
+          console.warn(`[VAPI Webhook] ⚠️ Could not extract name from transcript:`, extractError.message);
+        }
+      }
+    }
+    
+    // Final validation - if still invalid, set to null (don't use random words)
+    if (!customer_name || 
+        customer_name.trim() === '' || 
+        customer_name === 'Unknown' || 
+        customer_name === 'N/A' ||
+        customer_name.length < 2 ||
+        customer_name.length > 50 ||
+        /\d/.test(customer_name)) {
+      console.warn(`[VAPI Webhook] ⚠️ Customer name still invalid after all attempts: "${customer_name}", setting to null`);
+      customer_name = null;
+    } else {
+      // Clean the name: capitalize properly, remove extra spaces
+      customer_name = customer_name.trim()
+        .split(/\s+/)
+        .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+      console.log(`[VAPI Webhook] ✅ Using validated customer name: "${customer_name}"`);
+    }
     
     // Validate required fields
     if (!customer_phone) {
@@ -1994,19 +2061,42 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
   }
   
   // Extract name from transcript (similar to message extraction)
-  if (!orderData.customer_name || orderData.customer_name === "Unknown") {
+  // Only extract if name is missing or invalid - prefer the name from function call
+  if (!orderData.customer_name || 
+      orderData.customer_name === "Unknown" || 
+      orderData.customer_name === "N/A" ||
+      orderData.customer_name.trim() === '') {
     const namePatterns = [
-      /(?:my name is|this is|i'm|i am|name is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+      /(?:my name is|this is|i'm|i am|name is|it's|it is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
       /(?:customer|caller|name)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+      /(?:^|\n)(?:User|Caller):\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/m,
     ];
+    
+    // Blacklist common words that shouldn't be names
+    const invalidWords = new Set([
+      'order', 'pickup', 'takeout', 'delivery', 'phone', 'number', 'yes', 'no', 'ok', 'okay', 
+      'thanks', 'thank', 'please', 'sure', 'that', 'this', 'would', 'could', 'should',
+      'total', 'subtotal', 'tax', 'price', 'amount', 'dollar', 'cents', 'ready', 'minutes',
+      'cheeseburger', 'burger', 'pizza', 'fries', 'item', 'items', 'menu', 'special',
+    ]);
     
     for (const pattern of namePatterns) {
       const match = fullText.match(pattern);
       if (match && match[1]) {
         const candidate = match[1].trim();
-        if (candidate.length >= 2 && candidate.length <= 30) {
+        const candidateLower = candidate.toLowerCase();
+        
+        // Validate: must be 2-30 chars, no digits, not in blacklist, looks like a name
+        if (candidate.length >= 2 && 
+            candidate.length <= 30 && 
+            !/\d/.test(candidate) &&
+            !invalidWords.has(candidateLower) &&
+            /^[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?$/.test(candidate)) {
           orderData.customer_name = candidate;
+          console.log(`[Order Extraction] ✅ Extracted customer name from transcript: "${candidate}"`);
           break;
+        } else {
+          console.log(`[Order Extraction] ⚠️ Rejected candidate name: "${candidate}" (invalid format or blacklisted)`);
         }
       }
     }
@@ -2168,7 +2258,20 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
     }
   }
   
-  // Extract special instructions
+  // Extract special instructions - ONLY food-related instructions
+  // Blacklist phrases that should NOT be included in special instructions
+  const instructionBlacklist = [
+    /confirming\s+(his|her|their|my|the)\s+(name|phone|number|email|contact)/i,
+    /(name|phone|number|email|contact)\s+(is|was|will be|confirmed|provided)/i,
+    /(caller|customer|person)\s+(name|phone|number|email|contact)/i,
+    /(placed|placing|order|ordered|ordering)\s+(a|an|the|pickup|takeout|delivery)/i,
+    /(ready|will be ready|estimated|minutes|time)/i,
+    /(total|subtotal|tax|price|cost|amount|dollar|cents?)/i,
+    /(submitted|submitting|submission|confirmed|confirmation)/i,
+    /(inquiry|inquired|asking|asked|question|questions)/i,
+    /(hours?|operating|open|closed|tomorrow|today)/i,
+  ];
+  
   const instructionPatterns = [
     /(?:special\s+instructions?|notes?|comments?)[:\s]+(.+?)(?:\.|$|total|subtotal)/i,
     /(?:with|add|extra|no|without)\s+(.+?)(?:\.|$|total|subtotal)/i,
@@ -2177,8 +2280,26 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
   for (const pattern of instructionPatterns) {
     const match = fullText.match(pattern);
     if (match && match[1]) {
-      orderData.special_instructions = match[1].trim();
-      break;
+      const candidate = match[1].trim();
+      
+      // Filter out non-food related content
+      const isBlacklisted = instructionBlacklist.some(blacklistPattern => 
+        blacklistPattern.test(candidate)
+      );
+      
+      // Only include if it's not blacklisted and seems food-related
+      // Food-related keywords: extra, no, without, add, substitute, sauce, cheese, etc.
+      const foodKeywords = /\b(extra|no|without|add|substitute|sauce|cheese|onion|pickle|lettuce|tomato|mayo|mustard|ketchup|bacon|pepper|salt|spicy|mild|well done|medium|rare|crispy|soft|gluten|dairy|allergy|allergic|substitution|modification|modify|change|different|instead|preference|prefer)\b/i;
+      const hasFoodKeyword = foodKeywords.test(candidate);
+      
+      if (!isBlacklisted && (hasFoodKeyword || candidate.length < 50)) {
+        // If it's short and not blacklisted, it's likely food-related
+        // If it's longer, require food keywords
+        if (candidate.length < 50 || hasFoodKeyword) {
+          orderData.special_instructions = candidate;
+          break;
+        }
+      }
     }
   }
   

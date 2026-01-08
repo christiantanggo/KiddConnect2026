@@ -371,28 +371,29 @@ export const createKioskAPI = (token) => {
       'Content-Type': 'application/json',
     },
     timeout: 30000,
-    params: {
-      token, // Add token as query parameter
-    },
+    // Do not rely on axios default params merging across calls; always add token per-request.
+    params: {},
   });
 
   // Also add token to Authorization header as fallback
   kioskApi.interceptors.request.use((config) => {
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
-      // Also ensure token is in query params
-      config.params = { ...config.params, token };
+      // Ensure token is ALWAYS present in query params (some calls pass { params } and can override defaults)
+      config.params = { ...(config.params || {}), token };
     }
     return config;
   });
 
   return {
     getActiveOrders: () => kioskApi.get('/orders/active'),
-    getOrderHistory: (params) => kioskApi.get('/orders/history', { params }),
+    // Force token into params at the callsite too (extra safety vs any weird merge/override)
+    getOrderHistory: (params = {}) => kioskApi.get('/orders/history', { params: { ...params, token } }),
     getOrder: (orderId) => kioskApi.get(`/orders/${orderId}`),
     updateOrderStatus: (orderId, status, estimated_ready_time) => 
       kioskApi.patch(`/orders/${orderId}/status`, { status, estimated_ready_time }),
     getReceipt: (orderId) => kioskApi.get(`/orders/${orderId}/receipt`),
+    getTranscript: (orderId) => kioskApi.get(`/orders/${orderId}/transcript`),
     getSettings: () => kioskApi.get('/settings'),
   };
 };
