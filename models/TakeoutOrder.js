@@ -90,7 +90,6 @@ export class TakeoutOrder {
       const orderItems = items.map(item => {
         const itemData = {
           order_id: order.id,
-          menu_item_id: item.menu_item_id || null,
           item_name: item.name || item.item_name,
           item_description: item.description || item.item_description || null,
           quantity: item.quantity || 1,
@@ -99,6 +98,11 @@ export class TakeoutOrder {
           modifications: item.modifications || null,
           special_instructions: item.special_instructions || null,
         };
+        
+        // Only include menu_item_id if it exists (column may not exist in schema)
+        if (item.menu_item_id !== null && item.menu_item_id !== undefined) {
+          itemData.menu_item_id = item.menu_item_id;
+        }
         
         // Only include item_number if it's a valid number (column may not exist in schema)
         if (item.item_number !== null && item.item_number !== undefined) {
@@ -115,23 +119,29 @@ export class TakeoutOrder {
       if (itemsError) {
         console.error('[TakeoutOrder] Error creating order items:', itemsError);
         
-        // If error is about missing column, try without item_number
-        if (itemsError.code === 'PGRST204' && itemsError.message?.includes('item_number')) {
-          console.warn('[TakeoutOrder] item_number column not found, retrying without it...');
-          const itemsWithoutItemNumber = orderItems.map(item => {
-            const { item_number, ...rest } = item;
-            return rest;
+        // If error is about missing column, try without that column
+        if (itemsError.code === 'PGRST204') {
+          console.warn('[TakeoutOrder] Schema error - missing column detected, retrying without optional columns...');
+          
+          // Remove optional columns that might not exist
+          const itemsMinimal = orderItems.map(item => {
+            const { menu_item_id, item_number, ...required } = item;
+            const minimal = { ...required };
+            
+            // Only add columns if they exist in the error message hint, otherwise skip
+            // For now, just use required columns only
+            return minimal;
           });
           
           const { error: retryError } = await supabaseClient
             .from('takeout_order_items')
-            .insert(itemsWithoutItemNumber);
+            .insert(itemsMinimal);
           
           if (retryError) {
             console.error('[TakeoutOrder] Error creating order items (retry):', retryError);
             throw retryError;
           } else {
-            console.log('[TakeoutOrder] Order items created successfully without item_number column');
+            console.log('[TakeoutOrder] Order items created successfully with minimal columns');
           }
         } else {
           // Other error - throw it
