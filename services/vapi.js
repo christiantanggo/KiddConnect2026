@@ -1234,6 +1234,29 @@ export async function rebuildAssistant(businessId) {
       throw new Error(`No VAPI assistant ID. Please provision a phone number first.`);
     }
     
+    // CRITICAL: Re-enable AI if minutes are available and AI was disabled due to exhaustion
+    if (!businessRecord.ai_enabled) {
+      try {
+        const { checkMinutesAvailable } = await import("./usage.js");
+        const minutesCheck = await checkMinutesAvailable(businessId, 0);
+        if (minutesCheck.available) {
+          console.log(`[VAPI Rebuild] ✅ Minutes available (${minutesCheck.minutesRemaining} remaining), re-enabling AI for business ${businessId}`);
+          await Business.update(businessId, { ai_enabled: true });
+          // Refresh business record to get updated ai_enabled value
+          const updatedBusiness = await Business.findById(businessId);
+          if (updatedBusiness) {
+            businessRecord.ai_enabled = true;
+            console.log(`[VAPI Rebuild] ✅ AI re-enabled successfully`);
+          }
+        } else {
+          console.log(`[VAPI Rebuild] ⚠️ Minutes not available (${minutesCheck.reason || 'exhausted'}), AI will remain disabled`);
+        }
+      } catch (minutesCheckError) {
+        console.warn(`[VAPI Rebuild] ⚠️ Could not check minutes availability (non-blocking):`, minutesCheckError.message);
+        // Don't fail rebuild if minutes check fails - continue with rebuild
+      }
+    }
+    
     const assistantId = businessRecord.vapi_assistant_id;
     
     // CRITICAL: Fetch current assistant config from VAPI first
