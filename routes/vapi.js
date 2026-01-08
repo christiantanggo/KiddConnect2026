@@ -1890,9 +1890,12 @@ async function handleSubmitTakeoutOrder(args, event) {
 function extractOrderFromTranscript(transcript, summary, vapiCallData = null, callSession = null) {
   console.log(`[Order Extraction] Starting order extraction from transcript/summary`);
   
-  // Combine all text for analysis
+  // Prioritize summary first (more structured), then transcript
+  // Summary typically has better formatted information like "came to $16.94"
   const fullText = `${summary || ""} ${transcript || ""}`;
   const fullTextLower = fullText.toLowerCase();
+  
+  console.log(`[Order Extraction] Summary length: ${(summary || "").length}, Transcript length: ${(transcript || "").length}`);
   
   // Initialize order data
   const orderData = {
@@ -2162,41 +2165,61 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
   // Extract totals from transcript
   // Look for "total", "subtotal", "tax" mentions with dollar amounts
   // Also handle "came to", "comes to", "is", "will be" etc.
+  // IMPORTANT: Order matters - check for specific patterns first, then generic
   const totalPatterns = [
-    /(?:total|grand\s+total|comes?\s+to|will\s+be|is)[:\s]+(?:.*?)?\$?(\d+\.?\d*)/i,
+    // Pattern 1: "$16.94" or "16.94" with decimal (highest priority - most specific)
+    /\$?(\d+\.\d{2})/g,
+    // Pattern 2: "16 dollars and 94 cents" (specific phrase)
+    /(\d+)\s+dollars?\s+and\s+(\d+)\s+cents?/i,
+    // Pattern 3: "total comes to $16.94" or "total is $16.94" (with context)
+    /(?:total|grand\s+total|comes?\s+to|will\s+be)[:\s]+(?:.*?)?\$?(\d+\.?\d{2,})/i,
+    // Pattern 4: "subtotal" or "tax" mentions
     /(?:subtotal|sub\s+total)[:\s]*\$?(\d+\.?\d*)/i,
     /(?:tax)[:\s]*\$?(\d+\.?\d*)/i,
-    // Pattern for "16 dollars and 94 cents" or "$16.94"
-    /\$?(\d+)\s*(?:dollars?\s+and\s+)?(\d+)?\s*(?:cents?)?/i,
   ];
   
-  for (let i = 0; i < totalPatterns.length; i++) {
+  // First, try to find decimal amounts (most specific - like "$16.94")
+  const decimalMatches = fullText.matchAll(/\$?(\d+\.\d{2})/g);
+  const decimalAmounts = Array.from(decimalMatches).map(m => parseFloat(m[1]));
+  // Look for amounts that appear after "total", "comes to", etc. context
+  const totalContextPattern = /(?:total|grand\s+total|comes?\s+to|will\s+be|is)[:\s]+(?:.*?)?\$?(\d+\.\d{2})/i;
+  const totalContextMatch = fullText.match(totalContextPattern);
+  if (totalContextMatch && totalContextMatch[1]) {
+    orderData.total = parseFloat(totalContextMatch[1]);
+    console.log(`[Order Extraction] Found total from context: $${orderData.total}`);
+  }
+  
+  // Second, try "16 dollars and 94 cents" pattern
+  const dollarsCentsPattern = /(\d+)\s+dollars?\s+and\s+(\d+)\s+cents?/i;
+  const dollarsCentsMatch = fullText.match(dollarsCentsPattern);
+  if (dollarsCentsMatch && dollarsCentsMatch[1] && dollarsCentsMatch[2]) {
+    const dollars = parseFloat(dollarsCentsMatch[1]);
+    const cents = parseFloat(dollarsCentsMatch[2]) / 100;
+    const value = dollars + cents;
+    // Only use if we don't already have a better total
+    if (orderData.total === 0 || Math.abs(value - orderData.total) < 0.01) {
+      orderData.total = value;
+      console.log(`[Order Extraction] Found total from dollars/cents: $${orderData.total}`);
+    }
+  }
+  
+  // Third, try other patterns as fallback
+  for (let i = 2; i < totalPatterns.length; i++) {
     const pattern = totalPatterns[i];
     const match = fullText.match(pattern);
-    if (match) {
-      let value = 0;
+    if (match && match[1]) {
+      const value = parseFloat(match[1]);
       
-      // Handle "16 dollars and 94 cents" pattern (last pattern)
-      if (i === totalPatterns.length - 1 && match[1] && match[2]) {
-        const dollars = parseFloat(match[1]);
-        const cents = parseFloat(match[2]) / 100;
-        value = dollars + cents;
-      } else if (match[1]) {
-        value = parseFloat(match[1]);
-      }
-      
-      if (value > 0) {
+      if (value > 0 && value < 1000) { // Reasonable range check (avoid matching "1" from "1 cheeseburger")
         if (pattern.source.includes("total") && !pattern.source.includes("sub")) {
-          orderData.total = value;
+          // Only set if we don't have a better total already
+          if (orderData.total === 0 || value > orderData.total * 0.5) {
+            orderData.total = value;
+          }
         } else if (pattern.source.includes("sub")) {
           orderData.subtotal = value;
         } else if (pattern.source.includes("tax")) {
           orderData.tax = value;
-        } else if (i === totalPatterns.length - 1) {
-          // Last pattern is the dollars/cents pattern - use as total if we don't have one
-          if (orderData.total === 0) {
-            orderData.total = value;
-          }
         }
       }
     }

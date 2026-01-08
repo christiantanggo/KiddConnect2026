@@ -87,18 +87,26 @@ export class TakeoutOrder {
     
     // Create order items if provided
     if (items && items.length > 0) {
-      const orderItems = items.map(item => ({
-        order_id: order.id,
-        menu_item_id: item.menu_item_id || null,
-        item_number: item.item_number || null,
-        item_name: item.name || item.item_name,
-        item_description: item.description || item.item_description,
-        quantity: item.quantity || 1,
-        unit_price: item.unit_price || item.price || 0,
-        item_total: (item.quantity || 1) * (item.unit_price || item.price || 0),
-        modifications: item.modifications,
-        special_instructions: item.special_instructions,
-      }));
+      const orderItems = items.map(item => {
+        const itemData = {
+          order_id: order.id,
+          menu_item_id: item.menu_item_id || null,
+          item_name: item.name || item.item_name,
+          item_description: item.description || item.item_description || null,
+          quantity: item.quantity || 1,
+          unit_price: item.unit_price || item.price || 0,
+          item_total: (item.quantity || 1) * (item.unit_price || item.price || 0),
+          modifications: item.modifications || null,
+          special_instructions: item.special_instructions || null,
+        };
+        
+        // Only include item_number if it's a valid number (column may not exist in schema)
+        if (item.item_number !== null && item.item_number !== undefined) {
+          itemData.item_number = item.item_number;
+        }
+        
+        return itemData;
+      });
       
       const { error: itemsError } = await supabaseClient
         .from('takeout_order_items')
@@ -106,8 +114,29 @@ export class TakeoutOrder {
       
       if (itemsError) {
         console.error('[TakeoutOrder] Error creating order items:', itemsError);
-        // Order was created but items failed - this is a problem
-        // For now, just log it - in production you might want to rollback
+        
+        // If error is about missing column, try without item_number
+        if (itemsError.code === 'PGRST204' && itemsError.message?.includes('item_number')) {
+          console.warn('[TakeoutOrder] item_number column not found, retrying without it...');
+          const itemsWithoutItemNumber = orderItems.map(item => {
+            const { item_number, ...rest } = item;
+            return rest;
+          });
+          
+          const { error: retryError } = await supabaseClient
+            .from('takeout_order_items')
+            .insert(itemsWithoutItemNumber);
+          
+          if (retryError) {
+            console.error('[TakeoutOrder] Error creating order items (retry):', retryError);
+            throw retryError;
+          } else {
+            console.log('[TakeoutOrder] Order items created successfully without item_number column');
+          }
+        } else {
+          // Other error - throw it
+          throw itemsError;
+        }
       }
     }
     
