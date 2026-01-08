@@ -1868,41 +1868,7 @@ async function handleSubmitTakeoutOrder(args, event) {
       }
     });
     
-    // SAFEGUARD: If we have multiple items with the same item_number and no modifications, 
-    // and the total quantity seems wrong (e.g., 2 items with quantity 1 each when customer said "2"),
-    // check if we should consolidate further
-    let consolidatedItems = Array.from(itemMap.values());
-    if (consolidatedItems.length > 1) {
-      // Check for items that might be duplicates that weren't caught (e.g., different names but same item_number)
-      const itemNumberMap = new Map();
-      consolidatedItems.forEach(item => {
-        if (item.item_number) {
-          const numKey = `${item.item_number}_${JSON.stringify(item.modifications || item.modification || [])}`;
-          if (itemNumberMap.has(numKey)) {
-            const existing = itemNumberMap.get(numKey);
-            const existingQty = typeof existing.quantity === 'number' ? existing.quantity : (parseInt(String(existing.quantity), 10) || 1);
-            const newQty = typeof item.quantity === 'number' ? item.quantity : (parseInt(String(item.quantity), 10) || 1);
-            existing.quantity = existingQty + newQty;
-            console.log(`[VAPI Webhook] 🔄 SAFEGUARD: Further consolidated by item_number "${numKey}": ${existingQty} + ${newQty} = ${existing.quantity}`);
-          } else {
-            itemNumberMap.set(numKey, { ...item });
-          }
-        }
-      });
-      
-      // If itemNumberMap has fewer items, use it instead
-      if (itemNumberMap.size < consolidatedItems.length) {
-        console.log(`[VAPI Webhook] 🔄 SAFEGUARD: Further consolidated ${consolidatedItems.length} items into ${itemNumberMap.size} items by item_number`);
-        // Merge back any items that weren't in itemNumberMap (items without item_number)
-        consolidatedItems.forEach(item => {
-          if (!item.item_number) {
-            itemNumberMap.set(`${item.name || 'unknown'}_${JSON.stringify(item.modifications || [])}`, item);
-          }
-        });
-        // Replace consolidatedItems with the further consolidated version
-        consolidatedItems = Array.from(itemNumberMap.values());
-      }
-    }
+    const consolidatedItems = Array.from(itemMap.values());
     
     console.log(`[VAPI Webhook] 📦 After consolidation: ${items.length} items -> ${consolidatedItems.length} items`);
     consolidatedItems.forEach((item, idx) => {
