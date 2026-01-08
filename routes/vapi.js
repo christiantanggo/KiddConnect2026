@@ -582,45 +582,11 @@ router.post("/webhook", async (req, res) => {
   console.log(`🔥 Assistant ID: ${assistantId || 'N/A'}`);
   console.log(`🔥 Business ID: ${businessId || 'N/A'}`);
   console.log(`🔥 Timestamp: ${new Date().toISOString()}`);
-
-  // IMPORTANT:
-  // - Call lifecycle events should be ACKed immediately (non-blocking)
-  // - Tool/function execution requests may REQUIRE a synchronous response containing toolCallId + result
-  //   Otherwise the assistant can "hang" waiting for the tool resolution.
-  const normalizedType = String(eventType || "").toLowerCase();
-  const isPotentialToolOrFunctionRequest =
-    normalizedType.includes("tool") ||
-    normalizedType === "function-call" ||
-    !!req.body?.toolCallId ||
-    !!req.body?.message?.toolCallId ||
-    !!req.body?.toolCalls ||
-    !!req.body?.message?.toolCalls ||
-    !!req.body?.message?.tool_calls ||
-    !!req.body?.functionCall ||
-    !!req.body?.message?.functionCall ||
-    !!req.body?.message?.function_call;
-
-  if (isPotentialToolOrFunctionRequest) {
-    try {
-      const toolResponse = await handleVapiToolOrFunctionRequest(req.body);
-      return res.status(200).json(toolResponse);
-    } catch (err) {
-      console.error(`[VAPI Webhook] ❌ Error handling tool/function request:`, err);
-      return res.status(200).json({
-        results: [
-          {
-            toolCallId: req.body?.toolCallId || req.body?.message?.toolCallId || "unknown",
-            result: { success: false, error: "Tool execution failed" },
-          },
-        ],
-      });
-    }
-  }
-
+  
   // RESPOND IMMEDIATELY - Don't wait for anything
-  // This tells VAPI we received the webhook (call lifecycle events)
+  // This tells VAPI we received the webhook
   res.status(200).json({ received: true });
-
+  
   // Now process asynchronously (don't await - let it run in background)
   // Use setImmediate to ensure response is sent first
   setImmediate(async () => {
@@ -721,93 +687,6 @@ router.post("/webhook", async (req, res) => {
     }
   });
 });
-
-/**
- * Handle synchronous tool/function execution requests from VAPI.
- * Returns toolCallId + result (and results[] for multiple calls) so the assistant can continue.
- */
-async function handleVapiToolOrFunctionRequest(body) {
-  const calls = [];
-
-  const toolCalls =
-    body?.toolCalls ||
-    body?.message?.toolCalls ||
-    body?.message?.tool_calls ||
-    body?.tool_calls ||
-    null;
-
-  if (Array.isArray(toolCalls)) {
-    calls.push(...toolCalls);
-  } else if (toolCalls && typeof toolCalls === "object") {
-    calls.push(toolCalls);
-  }
-
-  if (calls.length === 0 && (body?.toolCallId || body?.message?.toolCallId)) {
-    calls.push(body?.message || body);
-  }
-
-  if (
-    calls.length === 0 &&
-    (body?.functionCall || body?.message?.functionCall || body?.message?.function_call)
-  ) {
-    calls.push(body);
-  }
-
-  if (calls.length === 0) {
-    return { results: [] };
-  }
-
-  const results = [];
-  for (const rawCall of calls) {
-    const toolCallId =
-      rawCall?.toolCallId ||
-      rawCall?.id ||
-      rawCall?.tool_call_id ||
-      body?.toolCallId ||
-      body?.message?.toolCallId ||
-      "unknown";
-
-    const name =
-      rawCall?.name ||
-      rawCall?.toolName ||
-      rawCall?.tool_name ||
-      rawCall?.functionName ||
-      rawCall?.function_name ||
-      rawCall?.functionCall?.name ||
-      body?.functionCall?.name ||
-      body?.message?.functionCall?.name ||
-      body?.message?.function_call?.name;
-
-    const args =
-      rawCall?.arguments ||
-      rawCall?.args ||
-      rawCall?.parameters ||
-      rawCall?.toolInput ||
-      rawCall?.input ||
-      rawCall?.functionCall?.arguments ||
-      body?.functionCall?.arguments ||
-      body?.message?.functionCall?.arguments ||
-      body?.message?.function_call?.arguments ||
-      {};
-
-    if (name === "submit_takeout_order") {
-      const submission = await handleSubmitTakeoutOrder(args, body);
-      results.push({ toolCallId, result: submission });
-    } else {
-      results.push({
-        toolCallId,
-        result: { success: false, error: `Unhandled tool/function: ${name || "unknown"}` },
-      });
-    }
-  }
-
-  // Provide both formats (some integrations expect results[], some expect top-level)
-  return {
-    results,
-    toolCallId: results[0]?.toolCallId,
-    result: results[0]?.result,
-  };
-}
 
 /**
  * Handle call-start event
@@ -1273,10 +1152,36 @@ async function handleCallEnd(event) {
   let intent = "general";
   let vapiCallData = null;
 
+  // First, try to get summary/transcript from the event itself (end-of-call-report has it)
+  if (event.message?.analysis?.summary) {
+    summary = event.message.analysis.summary;
+    console.log(`[VAPI Webhook] ✅ Got summary from event.message.analysis.summary (${summary.length} chars)`);
+  }
+  
+  // Try multiple locations for transcript
+  if (event.message?.artifact?.transcript) {
+    transcript = event.message.artifact.transcript;
+    console.log(`[VAPI Webhook] ✅ Got transcript from event.message.artifact.transcript (${transcript.length} chars)`);
+  } else if (event.message?.artifact?.messages) {
+    // Build transcript from messages
+    const messages = event.message.artifact.messages || [];
+    transcript = messages
+      .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+      .map(msg => `${msg.role === 'user' ? 'User' : 'AI'}: ${msg.message || msg.content || ''}`)
+      .join('\n');
+    console.log(`[VAPI Webhook] ✅ Built transcript from event.message.artifact.messages (${messages.length} messages, ${transcript.length} chars)`);
+  } else if (event.transcript) {
+    transcript = event.transcript;
+    console.log(`[VAPI Webhook] ✅ Got transcript from event.transcript (${transcript.length} chars)`);
+  }
+
   try {
-    const callSummary = await getCallSummary(callId);
-    transcript = callSummary.transcript || "";
-    summary = callSummary.summary || "";
+    // If we don't have summary/transcript from event, try to get from API
+    if (!summary || !transcript) {
+      const callSummary = await getCallSummary(callId);
+      transcript = transcript || callSummary.transcript || "";
+      summary = summary || callSummary.summary || "";
+    }
     
     // Get full call data for better message extraction
     const { getVapiClient } = await import("../services/vapi.js");
@@ -1288,21 +1193,38 @@ async function handleCallEnd(event) {
         const callResponse = await vapiClient.get(`/call/${callId}`);
         vapiCallData = callResponse.data;
         
+        // Use transcript from API if we have it and don't have one yet
+        if (!transcript && vapiCallData.transcript) {
+          transcript = vapiCallData.transcript;
+        }
+        
+        // Use summary from API if we have it and don't have one yet
+        if (!summary && vapiCallData.analysis?.summary) {
+          summary = vapiCallData.analysis.summary;
+        }
+        
         // Include messages from callSummary if available
-        if (callSummary.messages) {
-          vapiCallData.messages = callSummary.messages;
+        if (vapiCallData.messages) {
+          // Build transcript from messages if we still don't have one
+          if (!transcript) {
+            transcript = vapiCallData.messages
+              .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+              .map(msg => `${msg.role === 'user' ? 'User' : 'AI'}: ${msg.message || msg.content || ''}`)
+              .join('\n');
+          }
         }
         
         console.log(`[VAPI Webhook] Full call data:`, JSON.stringify(vapiCallData, null, 2).substring(0, 1000));
       } catch (error) {
         console.error(`[VAPI Webhook] Error fetching full call data:`, error.message);
-        // Continue with callSummary data only
+        // Continue with what we have
       }
     }
     
     // Determine intent from summary
     intent = determineIntent(summary, transcript);
     console.log(`[VAPI Webhook] Detected intent: ${intent}`);
+    console.log(`[VAPI Webhook] Summary length: ${summary.length}, Transcript length: ${transcript.length}`);
   } catch (error) {
     console.error(`[VAPI Webhook] Error getting call summary:`, error);
   }
@@ -1348,10 +1270,171 @@ async function handleCallEnd(event) {
     console.warn(`[VAPI Webhook] ⚠️ Skipping usage recording - duration is 0 or invalid (duration=${duration}, durationMinutes=${durationMinutes})`);
   }
 
-  // Extract message if callback/message intent OR if summary/transcript indicates a message was taken
-  // Be more lenient - if transcript mentions taking a message, callback, interview, or contact info, create message
+  // Check if this call was about placing an order (takeout/delivery)
+  // Extract order information from transcript/summary
   const summaryLower = (summary || "").toLowerCase();
   const transcriptLower = (transcript || "").toLowerCase();
+  
+  console.log(`[VAPI Webhook] 🔍 Checking for order keywords...`);
+  console.log(`[VAPI Webhook] Summary preview: ${(summary || "").substring(0, 200)}`);
+  console.log(`[VAPI Webhook] Transcript preview: ${(transcript || "").substring(0, 200)}`);
+  
+  // Check for order-related keywords
+  const hasOrderKeywords = summaryLower.includes("order") || 
+                          summaryLower.includes("takeout") ||
+                          summaryLower.includes("delivery") ||
+                          summaryLower.includes("pickup") ||
+                          summaryLower.includes("placed an order") ||
+                          summaryLower.includes("want to order") ||
+                          summaryLower.includes("would like to order") ||
+                          transcriptLower.includes("order") ||
+                          transcriptLower.includes("takeout") ||
+                          transcriptLower.includes("delivery");
+  
+  console.log(`[VAPI Webhook] Has order keywords: ${hasOrderKeywords}`);
+  
+  let createdOrder = null;
+  
+  // Try to extract and create order if order keywords are present
+  if (hasOrderKeywords) {
+    try {
+      console.log(`[VAPI Webhook] 📦 Detected order-related call, attempting to extract order data`);
+      const orderData = extractOrderFromTranscript(transcript, summary, vapiCallData, callSession);
+      
+      if (orderData && (orderData.items && orderData.items.length > 0 || orderData.item_numbers && orderData.item_numbers.length > 0)) {
+        console.log(`[VAPI Webhook] ✅ Extracted order data:`, {
+          customer_name: orderData.customer_name || 'N/A',
+          customer_phone: orderData.customer_phone ? '***' : 'N/A',
+          items_count: orderData.items?.length || 0,
+          item_numbers_count: orderData.item_numbers?.length || 0,
+          total: orderData.total,
+        });
+        
+        // Create the order using TakeoutOrder model
+        const { TakeoutOrder } = await import("../models/TakeoutOrder.js");
+        
+        // Ensure we have a phone number (required field)
+        const customerPhone = orderData.customer_phone || callSession.caller_number;
+        
+        if (!customerPhone) {
+          console.error(`[VAPI Webhook] ❌ Cannot create order - no customer phone number available`);
+          throw new Error("Customer phone number is required for order creation");
+        }
+        
+        // If we have item numbers, try to look them up from the menu
+        let finalItems = orderData.items || [];
+        
+        if (orderData.item_numbers && orderData.item_numbers.length > 0) {
+          try {
+            const { MenuItem } = await import("../models/MenuItem.js");
+            
+            for (const itemNumber of orderData.item_numbers) {
+              try {
+                const menuItem = await MenuItem.findByBusinessIdAndNumber(business.id, itemNumber);
+                if (menuItem) {
+                  // Check if we already have this item by name
+                  const existingItem = finalItems.find(item => 
+                    item.menu_item_id === menuItem.id || 
+                    item.item_number === itemNumber ||
+                    item.name?.toLowerCase() === menuItem.name?.toLowerCase()
+                  );
+                  
+                  if (existingItem) {
+                    // Update existing item with menu data
+                    existingItem.menu_item_id = menuItem.id;
+                    existingItem.item_number = itemNumber;
+                    existingItem.name = menuItem.name;
+                    existingItem.description = menuItem.description;
+                    if (!existingItem.unit_price || existingItem.unit_price === 0) {
+                      existingItem.unit_price = menuItem.price || 0;
+                    }
+                  } else {
+                    // Add new item from menu
+                    finalItems.push({
+                      menu_item_id: menuItem.id,
+                      item_number: itemNumber,
+                      name: menuItem.name,
+                      description: menuItem.description,
+                      quantity: 1, // Default to 1 if not specified
+                      unit_price: menuItem.price || 0,
+                      modifications: null,
+                    });
+                  }
+                } else {
+                  console.warn(`[VAPI Webhook] ⚠️ Menu item #${itemNumber} not found for business ${business.id}`);
+                }
+              } catch (menuError) {
+                console.warn(`[VAPI Webhook] ⚠️ Error looking up menu item #${itemNumber}:`, menuError.message);
+              }
+            }
+          } catch (importError) {
+            console.warn(`[VAPI Webhook] ⚠️ Could not import MenuItem model:`, importError.message);
+          }
+        }
+        
+        // Recalculate totals if we updated items from menu
+        if (finalItems.length > 0 && finalItems.some(item => item.unit_price > 0)) {
+          const calculatedSubtotal = finalItems.reduce((sum, item) => {
+            return sum + (item.unit_price * (item.quantity || 1));
+          }, 0);
+          
+          // Use calculated subtotal if it's more accurate
+          if (calculatedSubtotal > 0 && (orderData.subtotal === 0 || Math.abs(calculatedSubtotal - orderData.subtotal) < 5)) {
+            orderData.subtotal = calculatedSubtotal;
+            // Recalculate tax and total
+            const taxRate = business.takeout_tax_rate ?? 0.13;
+            const taxMethod = business.takeout_tax_calculation_method || 'exclusive';
+            
+            if (taxMethod === 'exclusive') {
+              orderData.tax = orderData.subtotal * taxRate;
+              orderData.total = orderData.subtotal + orderData.tax;
+            } else {
+              orderData.tax = orderData.subtotal - (orderData.subtotal / (1 + taxRate));
+              orderData.total = orderData.subtotal;
+            }
+          }
+        }
+        
+        createdOrder = await TakeoutOrder.create({
+          business_id: business.id,
+          call_session_id: callSession.id,
+          vapi_call_id: callId || null,
+          customer_name: orderData.customer_name || null,
+          customer_phone: customerPhone,
+          customer_email: orderData.customer_email || null,
+          order_type: 'takeout',
+          status: 'pending',
+          special_instructions: orderData.special_instructions || null,
+          subtotal: orderData.subtotal || 0,
+          tax: orderData.tax || 0,
+          total: orderData.total || 0,
+          items: finalItems,
+        });
+        
+        console.log(`[VAPI Webhook] ✅✅✅ Order created successfully:`, {
+          order_number: createdOrder.order_number,
+          order_id: createdOrder.id,
+          total: createdOrder.total,
+        });
+      } else {
+        console.log(`[VAPI Webhook] ⚠️ Order keywords detected but insufficient order data extracted`);
+        console.log(`[VAPI Webhook] Order data check:`, {
+          hasOrderData: !!orderData,
+          itemsCount: orderData?.items?.length || 0,
+        });
+      }
+    } catch (orderError) {
+      console.error(`[VAPI Webhook] ❌ Error creating order from transcript:`, orderError);
+      console.error(`[VAPI Webhook] Error details:`, {
+        message: orderError.message,
+        stack: orderError.stack,
+      });
+      // Don't throw - continue with message extraction
+    }
+  }
+
+  // Extract message if callback/message intent OR if summary/transcript indicates a message was taken
+  // Be more lenient - if transcript mentions taking a message, callback, interview, or contact info, create message
   const shouldCreateMessage = intent === "callback" || 
                               intent === "message" || 
                               summaryLower.includes("message") ||
@@ -1608,7 +1691,7 @@ async function handleSubmitTakeoutOrder(args, event) {
     
     if (!assistantId) {
       console.error(`[VAPI Webhook] ❌ No assistant ID found in function call event`);
-      return { success: false, error: "No assistant ID found in function call event" };
+      return;
     }
     
     // Find business by assistant ID
@@ -1616,7 +1699,7 @@ async function handleSubmitTakeoutOrder(args, event) {
     
     if (!business) {
       console.error(`[VAPI Webhook] ❌ Business not found for assistant ${assistantId}`);
-      return { success: false, error: `Business not found for assistant ${assistantId}` };
+      return;
     }
     
     console.log(`[VAPI Webhook] ✅ Found business: ${business.id}`);
@@ -1638,7 +1721,7 @@ async function handleSubmitTakeoutOrder(args, event) {
         orderData = JSON.parse(args);
       } catch (parseError) {
         console.error(`[VAPI Webhook] ❌ Failed to parse function arguments as JSON:`, parseError);
-        return { success: false, error: "Failed to parse function arguments as JSON" };
+        return;
       }
     }
     
@@ -1657,12 +1740,12 @@ async function handleSubmitTakeoutOrder(args, event) {
     // Validate required fields
     if (!customer_phone) {
       console.error(`[VAPI Webhook] ❌ Customer phone number is required`);
-      return { success: false, error: "customer_phone is required" };
+      return;
     }
     
     if (!items || items.length === 0) {
       console.error(`[VAPI Webhook] ❌ Order must have at least one item`);
-      return { success: false, error: "items is required (must contain at least one item)" };
+      return;
     }
     
     // Create order via API (using TakeoutOrder model directly)
@@ -1790,14 +1873,6 @@ async function handleSubmitTakeoutOrder(args, event) {
       items_count: order.items?.length || 0,
       total: order.total,
     });
-
-    return {
-      success: true,
-      order_id: order.id,
-      order_number: order.order_number,
-      total: order.total,
-      estimated_ready_minutes: business.takeout_estimated_ready_minutes ?? 30,
-    };
     
     // TODO: Send notification to kitchen (tablet interface will poll for new orders)
     // For now, the tablet interface will refresh and show the new order
@@ -1805,8 +1880,359 @@ async function handleSubmitTakeoutOrder(args, event) {
   } catch (error) {
     console.error(`[VAPI Webhook] ❌ Error creating takeout order:`, error);
     console.error(`[VAPI Webhook] Error stack:`, error.stack);
-    return { success: false, error: "Error creating takeout order" };
   }
+}
+
+/**
+ * Extract order information from transcript and summary
+ * This function parses the conversation to find order details when VAPI functions aren't available
+ */
+function extractOrderFromTranscript(transcript, summary, vapiCallData = null, callSession = null) {
+  console.log(`[Order Extraction] Starting order extraction from transcript/summary`);
+  
+  // Combine all text for analysis
+  const fullText = `${summary || ""} ${transcript || ""}`;
+  const fullTextLower = fullText.toLowerCase();
+  
+  // Initialize order data
+  const orderData = {
+    customer_name: null,
+    customer_phone: null,
+    customer_email: null,
+    items: [],
+    special_instructions: null,
+    subtotal: 0,
+    tax: 0,
+    total: 0,
+  };
+  
+  // Extract customer information
+  // Try to get from call session first
+  if (callSession) {
+    orderData.customer_phone = callSession.caller_number || null;
+    orderData.customer_name = callSession.caller_name || null;
+  }
+  
+  // Extract name from transcript (similar to message extraction)
+  if (!orderData.customer_name || orderData.customer_name === "Unknown") {
+    const namePatterns = [
+      /(?:my name is|this is|i'm|i am|name is)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+      /(?:customer|caller|name)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i,
+    ];
+    
+    for (const pattern of namePatterns) {
+      const match = fullText.match(pattern);
+      if (match && match[1]) {
+        const candidate = match[1].trim();
+        if (candidate.length >= 2 && candidate.length <= 30) {
+          orderData.customer_name = candidate;
+          break;
+        }
+      }
+    }
+  }
+  
+  // Extract phone number
+  if (!orderData.customer_phone) {
+    const phonePatterns = [
+      /(?:phone|number|call me at|reach me at)[:\s]*([+]?1?[-.\s]?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4})/i,
+      /(\d{3}[-.\s]?\d{3}[-.\s]?\d{4})/,
+    ];
+    
+    for (const pattern of phonePatterns) {
+      const match = fullText.match(pattern);
+      if (match && match[1]) {
+        let phone = match[1].replace(/[-.\s()]/g, "");
+        if (phone.length === 10 && !phone.startsWith("+")) {
+          phone = "+1" + phone;
+        } else if (phone.length === 11 && phone.startsWith("1")) {
+          phone = "+" + phone;
+        }
+        orderData.customer_phone = phone;
+        break;
+      }
+    }
+  }
+  
+  // Extract email
+  const emailPattern = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
+  const emailMatch = fullText.match(emailPattern);
+  if (emailMatch) {
+    orderData.customer_email = emailMatch[1];
+  }
+  
+  // Extract order items - look for patterns like:
+  // - "1 pizza", "2 burgers", "3 fries"
+  // - "I'd like a pizza", "I want 2 burgers"
+  // - Item names with quantities
+  // - Menu item numbers (e.g., "item #5", "number 5", "#5")
+  const itemPatterns = [
+    // Pattern: menu item number with item name (e.g., "number 1, the cheeseburger", "item #5 pizza")
+    /(?:item\s*#?|number\s*|#)\s*(\d+)(?:,\s*(?:the\s+)?([a-z]+(?:\s+[a-z]+)*?)|(?:\s+([a-z]+(?:\s+[a-z]+)*?)))/gi,
+    // Pattern: menu item number alone (e.g., "item #5", "number 5", "#5")
+    /(?:item\s*#?|number\s*|#)\s*(\d+)/gi,
+    // Pattern: quantity + item name (e.g., "2 pizzas", "1 burger", "3 large fries")
+    /(\d+)\s+(?:x\s*)?(?:large\s+|small\s+|medium\s+)?([a-z]+(?:\s+[a-z]+)*?)(?:\s|$|,|\.|and|with)/gi,
+    // Pattern: "I'd like" or "I want" + quantity + item
+    /(?:i'd\s+like|i\s+want|i'll\s+have|can\s+i\s+get|give\s+me|i\s+need)\s+(\d+)?\s*(?:x\s*)?(?:large\s+|small\s+|medium\s+)?([a-z]+(?:\s+[a-z]+)*?)(?:\s|$|,|\.|and|with)/gi,
+    // Pattern: item name with price (e.g., "pizza $15", "burger $10")
+    /([a-z]+(?:\s+[a-z]+)*?)\s+\$?(\d+\.?\d*)/gi,
+    // Pattern: "a" or "an" + item name (e.g., "a pizza", "an order of fries")
+    /(?:^|\s)(?:a|an)\s+([a-z]+(?:\s+[a-z]+)*?)(?:\s|$|,|\.|and|with)/gi,
+  ];
+  
+  const foundItems = new Map(); // Use Map to avoid duplicates
+  const foundItemNumbers = new Set(); // Track item numbers separately
+  
+  // Try to extract items using patterns
+  for (let i = 0; i < itemPatterns.length; i++) {
+    const pattern = itemPatterns[i];
+    let match;
+    
+    // Reset regex lastIndex for global patterns
+    pattern.lastIndex = 0;
+    
+    while ((match = pattern.exec(fullText)) !== null) {
+      // Handle menu item numbers with item names (first pattern)
+      if (i === 0 && match[1]) {
+        const itemNumber = parseInt(match[1], 10);
+        if (itemNumber > 0) {
+          foundItemNumbers.add(itemNumber);
+          // Also extract the item name if provided (e.g., "number 1, the cheeseburger")
+          const itemName = (match[2] || match[3] || "").trim();
+          if (itemName && itemName.length > 2) {
+            const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1).toLowerCase();
+            // Check if we already have this item
+            const existingItem = foundItems.get(normalizedName);
+            if (existingItem) {
+              existingItem.item_number = itemNumber;
+              existingItem.quantity = existingItem.quantity || 1;
+            } else {
+              foundItems.set(normalizedName, {
+                name: normalizedName,
+                quantity: 1, // Default to 1, will be updated if we find quantity
+                unit_price: 0,
+                item_number: itemNumber,
+                modifications: null,
+              });
+            }
+          }
+        }
+        continue;
+      }
+      
+      // Handle menu item numbers alone (second pattern)
+      if (i === 1 && match[1]) {
+        const itemNumber = parseInt(match[1], 10);
+        if (itemNumber > 0) {
+          foundItemNumbers.add(itemNumber);
+        }
+        continue;
+      }
+      
+      const quantity = parseInt(match[1] || "1", 10);
+      const itemName = (match[2] || match[1] || "").trim();
+      const price = parseFloat(match[3] || "0");
+      
+      if (itemName && itemName.length > 2) {
+        // Normalize item name (capitalize first letter)
+        const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1).toLowerCase();
+        
+        // Skip common non-item words
+        const skipWords = ["the", "a", "an", "and", "or", "with", "for", "to", "of", "in", "on", "at", "is", "are", "was", "were"];
+        if (skipWords.includes(itemName.toLowerCase())) continue;
+        
+        // Skip if it's just a number
+        if (/^\d+$/.test(itemName)) continue;
+        
+        // Check if we already have this item
+        const existingItem = foundItems.get(normalizedName);
+        if (existingItem) {
+          existingItem.quantity += quantity;
+        } else {
+          foundItems.set(normalizedName, {
+            name: normalizedName,
+            quantity: quantity,
+            unit_price: price || 0, // Will need to look up from menu if price is 0
+            item_number: null, // Will be set if we find matching menu item
+            modifications: null,
+          });
+        }
+      }
+    }
+  }
+  
+  // If we found item numbers, try to look them up from the menu
+  // Note: This requires business context, which we'll handle when creating the order
+  if (foundItemNumbers.size > 0) {
+    console.log(`[Order Extraction] Found menu item numbers:`, Array.from(foundItemNumbers));
+    // Store item numbers for later lookup during order creation
+    orderData.item_numbers = Array.from(foundItemNumbers);
+  }
+  
+  // Also try to extract from structured patterns in summary
+  // Summary might say "Customer ordered: 2 pizzas, 1 burger, 3 fries" or "place a takeout order for one cheeseburger"
+  const summaryOrderPattern = /(?:ordered|order|wants|wanted|place.*?order\s+for)[:\s]+(.+?)(?:\.|$|total|subtotal|,|and)/i;
+  const summaryMatch = summary.match(summaryOrderPattern);
+  if (summaryMatch) {
+    const orderText = summaryMatch[1];
+    console.log(`[Order Extraction] Found order text in summary: ${orderText}`);
+    
+    // Handle "one cheeseburger", "two pizzas" etc.
+    const numberWords = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+    const wordNumberPattern = new RegExp(`(${Object.keys(numberWords).join('|')})\\s+([a-z]+(?:\\s+[a-z]+)*?)(?:\\s|$|,|\\.|and|with)`, 'gi');
+    let wordMatch;
+    while ((wordMatch = wordNumberPattern.exec(orderText)) !== null) {
+      const quantity = numberWords[wordMatch[1].toLowerCase()] || 1;
+      const itemName = wordMatch[2].trim();
+      if (itemName && itemName.length > 2) {
+        const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1);
+        const existingItem = foundItems.get(normalizedName);
+        if (existingItem) {
+          existingItem.quantity = Math.max(existingItem.quantity, quantity);
+        } else {
+          foundItems.set(normalizedName, {
+            name: normalizedName,
+            quantity: quantity,
+            unit_price: 0,
+            modifications: null,
+          });
+        }
+      }
+    }
+    
+    // Split by commas and extract items with numeric quantities
+    const orderParts = orderText.split(',').map(part => part.trim());
+    for (const part of orderParts) {
+      const itemMatch = part.match(/(\d+)\s+(.+)/i);
+      if (itemMatch) {
+        const quantity = parseInt(itemMatch[1], 10);
+        const itemName = itemMatch[2].trim();
+        if (itemName && itemName.length > 2) {
+          const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1);
+          const existingItem = foundItems.get(normalizedName);
+          if (existingItem) {
+            existingItem.quantity = Math.max(existingItem.quantity, quantity);
+          } else {
+            foundItems.set(normalizedName, {
+              name: normalizedName,
+              quantity: quantity,
+              unit_price: 0,
+              modifications: null,
+            });
+          }
+        }
+      }
+    }
+  }
+  
+  // Convert Map to array
+  orderData.items = Array.from(foundItems.values());
+  
+  // Try to extract prices from transcript if not found
+  // Look for price patterns near item names
+  if (orderData.items.length > 0) {
+    for (const item of orderData.items) {
+      if (item.unit_price === 0) {
+        // Try to find price for this item
+        const itemNameLower = item.name.toLowerCase();
+        const pricePattern = new RegExp(`${itemNameLower}[^\\d]*\\$?(\\d+\\.?\\d*)`, 'i');
+        const priceMatch = fullText.match(pricePattern);
+        if (priceMatch) {
+          item.unit_price = parseFloat(priceMatch[1]);
+        }
+      }
+    }
+  }
+  
+  // Extract special instructions
+  const instructionPatterns = [
+    /(?:special\s+instructions?|notes?|comments?)[:\s]+(.+?)(?:\.|$|total|subtotal)/i,
+    /(?:with|add|extra|no|without)\s+(.+?)(?:\.|$|total|subtotal)/i,
+  ];
+  
+  for (const pattern of instructionPatterns) {
+    const match = fullText.match(pattern);
+    if (match && match[1]) {
+      orderData.special_instructions = match[1].trim();
+      break;
+    }
+  }
+  
+  // Extract totals from transcript
+  // Look for "total", "subtotal", "tax" mentions with dollar amounts
+  // Also handle "came to", "comes to", "is", "will be" etc.
+  const totalPatterns = [
+    /(?:total|grand\s+total|comes?\s+to|will\s+be|is)[:\s]+(?:.*?)?\$?(\d+\.?\d*)/i,
+    /(?:subtotal|sub\s+total)[:\s]*\$?(\d+\.?\d*)/i,
+    /(?:tax)[:\s]*\$?(\d+\.?\d*)/i,
+    // Pattern for "16 dollars and 94 cents" or "$16.94"
+    /\$?(\d+)\s*(?:dollars?\s+and\s+)?(\d+)?\s*(?:cents?)?/i,
+  ];
+  
+  for (let i = 0; i < totalPatterns.length; i++) {
+    const pattern = totalPatterns[i];
+    const match = fullText.match(pattern);
+    if (match) {
+      let value = 0;
+      
+      // Handle "16 dollars and 94 cents" pattern (last pattern)
+      if (i === totalPatterns.length - 1 && match[1] && match[2]) {
+        const dollars = parseFloat(match[1]);
+        const cents = parseFloat(match[2]) / 100;
+        value = dollars + cents;
+      } else if (match[1]) {
+        value = parseFloat(match[1]);
+      }
+      
+      if (value > 0) {
+        if (pattern.source.includes("total") && !pattern.source.includes("sub")) {
+          orderData.total = value;
+        } else if (pattern.source.includes("sub")) {
+          orderData.subtotal = value;
+        } else if (pattern.source.includes("tax")) {
+          orderData.tax = value;
+        } else if (i === totalPatterns.length - 1) {
+          // Last pattern is the dollars/cents pattern - use as total if we don't have one
+          if (orderData.total === 0) {
+            orderData.total = value;
+          }
+        }
+      }
+    }
+  }
+  
+  // Calculate totals if not found
+  if (orderData.items.length > 0) {
+    // Calculate subtotal from items
+    if (orderData.subtotal === 0) {
+      orderData.subtotal = orderData.items.reduce((sum, item) => {
+        return sum + (item.unit_price * item.quantity);
+      }, 0);
+    }
+    
+    // Calculate tax if not found (assume 13% if business tax rate not available)
+    // Note: We'll recalculate with business tax rate when creating the order
+    if (orderData.tax === 0 && orderData.subtotal > 0) {
+      orderData.tax = orderData.subtotal * 0.13; // Default 13% tax
+    }
+    
+    // Calculate total if not found
+    if (orderData.total === 0) {
+      orderData.total = orderData.subtotal + orderData.tax;
+    }
+  }
+  
+  console.log(`[Order Extraction] Extracted order:`, {
+    customer_name: orderData.customer_name || 'N/A',
+    customer_phone: orderData.customer_phone ? '***' : 'N/A',
+    items_count: orderData.items.length,
+    subtotal: orderData.subtotal,
+    tax: orderData.tax,
+    total: orderData.total,
+  });
+  
+  return orderData;
 }
 
 /**
