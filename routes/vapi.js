@@ -1824,13 +1824,18 @@ async function handleSubmitTakeoutOrder(args, event) {
     // Log received items for debugging
     console.log(`[VAPI Webhook] 📦 Received items from function call:`, JSON.stringify(items, null, 2));
     
-    // Consolidate duplicate items (same item_number) before processing
-    // Sometimes the AI might create separate items instead of using quantity
+    // Consolidate duplicate items (same item_number AND same modifications) before processing
+    // CRITICAL: Items with different modifications should NOT be consolidated
+    // Example: "2 cheeseburgers, 1 with cheese, 1 with bacon" = 2 separate items, NOT 1 item with quantity 2
     const itemMap = new Map();
     items.forEach((item) => {
-      const key = item.item_number || item.name || item.item_name || 'unknown';
+      // Create a unique key that includes item_number AND modifications
+      // This ensures items with different modifications are kept separate
+      const modsKey = JSON.stringify(item.modifications || item.modification || []);
+      const key = `${item.item_number || item.name || item.item_name || 'unknown'}_${modsKey}`;
+      
       if (itemMap.has(key)) {
-        // Item already exists - add to quantity
+        // Item already exists with same modifications - add to quantity
         const existing = itemMap.get(key);
         const existingQty = typeof existing.quantity === 'number' ? existing.quantity : (parseInt(existing.quantity, 10) || 1);
         const newQty = typeof item.quantity === 'number' ? item.quantity : (parseInt(item.quantity, 10) || 1);
@@ -1874,12 +1879,98 @@ async function handleSubmitTakeoutOrder(args, event) {
       }
       
       // Try to find menu item by item_number if provided
+      let menuItem = null;
+      let modifierPrice = 0;
+      let validatedModifications = null;
+      
       if (item.item_number) {
         try {
           const { MenuItem } = await import("../models/MenuItem.js");
-          const menuItem = await MenuItem.findByBusinessIdAndNumber(business.id, item.item_number);
+          menuItem = await MenuItem.findByBusinessIdAndNumber(business.id, item.item_number);
           if (menuItem) {
             menuItemId = menuItem.id;
+            
+            // Validate and process modifications
+            const requestedMods = item.modifications || item.modification;
+            if (requestedMods) {
+              // Parse modifications - could be string, array, or object
+              let modsArray = [];
+              if (typeof requestedMods === 'string') {
+                // Try to parse as JSON, or treat as comma-separated list
+                try {
+                  modsArray = JSON.parse(requestedMods);
+                } catch {
+                  modsArray = requestedMods.split(',').map(m => m.trim()).filter(m => m.length > 0);
+                }
+              } else if (Array.isArray(requestedMods)) {
+                modsArray = requestedMods.filter(m => m !== null && m !== undefined);
+              } else if (typeof requestedMods === 'object') {
+                modsArray = Object.values(requestedMods).flat().filter(m => m !== null && m !== undefined);
+              }
+              
+              // Get available modifiers from menu item
+              const availableMods = {
+                free: (menuItem.modifiers?.free || []).map(m => {
+                  const name = typeof m === 'string' ? m : (m.name || m);
+                  return name?.toLowerCase() || name;
+                }),
+                paid: (menuItem.modifiers?.paid || []).map(m => ({
+                  name: (typeof m === 'string' ? m : (m.name || m))?.toLowerCase(),
+                  price: parseFloat(typeof m === 'object' ? (m.price || 0) : 0),
+                })),
+              };
+              
+              // Also allow standard ingredient modifications (add/remove existing ingredients)
+              // These are common like "extra cheese", "no lettuce", "double pickles", etc.
+              const standardIngredientMods = ['extra', 'no', 'double', 'without', 'add', 'remove'];
+              
+              // Validate each requested modifier
+              const validMods = [];
+              const invalidMods = [];
+              let modifierPricePerUnit = 0; // Price per unit (not total)
+              
+              modsArray.forEach(mod => {
+                const modName = typeof mod === 'string' ? mod.toLowerCase().trim() : (mod.name || mod).toLowerCase().trim();
+                
+                // Check if it's a standard ingredient modification (extra, no, double, etc.)
+                const isStandardMod = standardIngredientMods.some(prefix => modName.startsWith(prefix));
+                
+                // Check if it's a free modifier
+                if (availableMods.free.includes(modName)) {
+                  validMods.push(modName);
+                } 
+                // Check if it's a paid modifier
+                else {
+                  const paidMod = availableMods.paid.find(p => p.name === modName);
+                  if (paidMod) {
+                    validMods.push(modName);
+                    modifierPricePerUnit += paidMod.price; // Add modifier price per unit
+                  } 
+                  // Check if it's a standard ingredient mod (allow it)
+                  else if (isStandardMod) {
+                    validMods.push(modName);
+                    // Standard ingredient mods are free (no price)
+                  } 
+                  else {
+                    invalidMods.push(modName);
+                  }
+                }
+              });
+              
+              if (invalidMods.length > 0) {
+                console.warn(`[VAPI Webhook] ⚠️ Invalid modifiers requested for item #${item.item_number}: ${invalidMods.join(', ')}`);
+                console.warn(`[VAPI Webhook] Available modifiers: Free: ${availableMods.free.join(', ')}, Paid: ${availableMods.paid.map(p => `${p.name} ($${p.price.toFixed(2)})`).join(', ')}`);
+                // Still include valid mods, but log the invalid ones
+              }
+              
+              validatedModifications = validMods.length > 0 ? validMods.join(', ') : null;
+              modifierPrice = modifierPricePerUnit; // This is per unit, will be multiplied by quantity later
+            }
+            
+            // Calculate base price + modifier prices per unit
+            const basePrice = parseFloat(item.price || item.unit_price || item.unitPrice || menuItem.price) || 0;
+            const unitPriceWithMods = basePrice + modifierPrice; // modifierPrice is already per unit
+            
             // Use menu item data if available
             const processedItem = {
               menu_item_id: menuItemId,
@@ -1887,14 +1978,17 @@ async function handleSubmitTakeoutOrder(args, event) {
               name: menuItem.name || item.name || item.item_name || 'Unknown Item',
               description: menuItem.description || item.description || item.item_description || null,
               quantity: quantity,
-              unit_price: parseFloat(item.price || item.unit_price || item.unitPrice || menuItem.price) || 0,
-              modifications: item.modifications || item.modification || null,
+              unit_price: unitPriceWithMods,
+              modifications: validatedModifications,
               special_instructions: item.special_instructions || null,
             };
             console.log(`[VAPI Webhook] ✅ Processed item ${index + 1} (with menu match):`, {
               name: processedItem.name,
               quantity: processedItem.quantity,
               item_number: processedItem.item_number,
+              unit_price: processedItem.unit_price,
+              modifications: processedItem.modifications,
+              modifier_price_added: modifierPrice,
             });
             return processedItem;
           }
@@ -1935,19 +2029,12 @@ async function handleSubmitTakeoutOrder(args, event) {
     const taxMethod = business.takeout_tax_calculation_method || 'exclusive';
     
     // Calculate subtotal from items and modifiers
+    // Note: item.unit_price already includes modifier prices (calculated during processing above)
     let calculatedSubtotal = processedItems.reduce((sum, item) => {
       let itemTotal = item.unit_price * item.quantity;
-      
-      // Add modifier prices if they exist
-      // Modifiers are stored in item.modifications as a string, but we need to parse them
-      // For now, the AI calculates the total including modifiers, so we trust the provided subtotal
-      // But we'll validate it matches our calculation
-      
+      // item.unit_price already includes base price + modifier prices per unit
       return sum + itemTotal;
     }, 0);
-    
-    // Note: Modifier prices are included in the AI's calculation
-    // The modifications field contains the text description, but prices are in the subtotal
     
     // Use provided subtotal if it's close to calculated, otherwise use calculated
     const finalSubtotal = Math.abs(calculatedSubtotal - parseFloat(subtotal || 0)) < 0.01 
