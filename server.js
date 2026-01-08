@@ -71,6 +71,7 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
+  preflightContinue: false, // Let cors handle preflight, don't pass to next middleware
 }));
 
 // Body parsing - EXCLUDE webhook endpoints that need raw body
@@ -113,31 +114,17 @@ app.get("/health", (_req, res) => {
   });
 });
 
-// Handle all OPTIONS requests for CORS preflight (must be before rate limiters)
-app.options('*', (req, res) => {
-  const origin = req.headers.origin;
-  
-  // Check if origin is allowed
-  let allowOrigin = '*';
-  if (origin) {
-    if (allowedOrigins.includes(origin) || 
-        process.env.FRONTEND_URL === "*" ||
-        process.env.NODE_ENV !== 'production') {
-      allowOrigin = origin;
-    } else if (process.env.NODE_ENV === 'production') {
-      // In production, only allow from allowed list
-      console.warn(`[CORS OPTIONS] Blocked preflight from origin: ${origin}`);
-      return res.status(403).end();
-    }
-  }
-  
-  res.header('Access-Control-Allow-Origin', allowOrigin);
-  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
-  res.header('Access-Control-Allow-Credentials', 'true');
-  res.header('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
-  res.status(200).end();
-});
+// Explicit OPTIONS handler for all routes (CORS preflight)
+// This ensures preflight requests are handled even if CORS middleware has issues
+app.options('*', cors({
+  origin: true,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+}));
+
+// Note: CORS middleware handles OPTIONS preflight requests automatically
+// The explicit handler above is a fallback
 
 // Direct environment variable check - shows what server actually sees
 app.get("/env-check", (_req, res) => {
