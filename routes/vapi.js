@@ -1900,11 +1900,8 @@ async function handleSubmitTakeoutOrder(args, event) {
           }
         });
         // Replace consolidatedItems with the further consolidated version
-        consolidatedItems.splice(0, consolidatedItems.length, ...Array.from(itemNumberMap.values()));
+        consolidatedItems = Array.from(itemNumberMap.values());
       }
-    } else {
-      // If safeguard didn't run, get from itemMap
-      consolidatedItems = Array.from(itemMap.values());
     }
     
     console.log(`[VAPI Webhook] 📦 After consolidation: ${items.length} items -> ${consolidatedItems.length} items`);
