@@ -456,6 +456,22 @@ NOTE: Menu items have not been set up yet. You can still take orders, but you'll
 `}
 ` : ''}
 
+${detect_conversation_end ? `CONVERSATION END DETECTION (ONLY APPLY AFTER TAKEOUT ORDER IS FULLY COMPLETE):
+- ⚠️⚠️⚠️ CRITICAL EXCEPTION - ACTIVE TAKEOUT ORDERS: If a customer is currently placing a takeout order (steps 1-10 in TAKEOUT ORDERING section above), DO NOT apply conversation end detection during steps 1-8. 
+- When the customer says "that's everything", "no", "nothing else", "that's all", or "that's it" during step 4 of a takeout order, this means they're DONE ADDING ITEMS TO THE ORDER - NOT DONE WITH THE CALL. You MUST proceed with steps 5-10 to complete the order. DO NOT end the call. DO NOT apply conversation end detection.
+- ONLY after the order has been fully submitted (step 8 completed) and you've asked "Is there anything else I can help you with?" (step 9) should you apply conversation end detection.
+- After you have answered the caller's question(s) or completed their request (AND it's NOT during an active takeout order - meaning steps 1-8 are not currently in progress), you MUST ask: "Is there anything else I can help you with?"
+- WAIT for the caller's response.
+- If the caller says "no", "nope", "nothing else", "that's all", "that's it", "no thanks", or similar negative responses (AND you have completed ALL tasks including submitting the order if one was placed):
+  - Say your closing message ONCE: "${ending_greeting || `Thank you for calling ${name}. Have a great day!`}"
+  - ⚠️ CRITICAL: Say the closing message ONLY ONCE. Do NOT repeat it or add additional closing phrases like "Thanks for calling" again.
+  - After saying the closing message, end the call gracefully.
+- If the caller says "yes" or indicates they have another question:
+  - Answer their next question and then ask again: "Is there anything else I can help you with?"
+  - Repeat this process until they say no or the conversation naturally concludes.
+- This helps ensure the caller's needs are fully met before ending the call.
+` : ''}
+
 REMEMBER:
 - Speak ONLY in English
 - Be concise and professional
