@@ -393,12 +393,13 @@ STEPS (MUST FOLLOW IN ORDER - DO NOT SKIP OR REORDER):
    - Read back their name and confirm: "Is that correct?" or "Did I get that right?"
    - Wait for confirmation before proceeding
 
-2. Confirm customer's phone number:
+2. Confirm customer's phone number (ASK ONCE ONLY):
    - Ask: "What's the best phone number to reach you?"
    - Wait for their response
-   - Read the complete number back to them clearly (e.g., "Just to confirm, I have [phone number]. Is that correct?")
+   - Read the complete number back to them clearly ONCE (e.g., "Just to confirm, I have [phone number]. Is that correct?")
    - Format the number clearly when reading it back (e.g., "5-1-9-8-7-2-2-7-3-6")
-   - Wait for confirmation before proceeding
+   - ⚠️ CRITICAL: Wait for confirmation, but DO NOT ask for the phone number again. If they say "yes" or "correct", proceed to step 3. If they correct you, update the number and read it back ONCE more, then proceed.
+   - ⚠️ DO NOT repeat this step multiple times - collect the number once, confirm once, then move on
 
 3. Take order items:
    - Listen as the customer tells you what they want
@@ -412,9 +413,10 @@ STEPS (MUST FOLLOW IN ORDER - DO NOT SKIP OR REORDER):
 4. Confirm order items (DO NOT mention time or total yet):
    - List the items ordered with quantities and item numbers (e.g., "So you ordered 1 cheeseburger (number 1)")
    - If there are modifications, mention them (e.g., "with extra cheese")
-   - Ask: "Does that look correct?" or "Is that everything?"
-   - Wait for their confirmation
-   - If they want to add items → Go back to step 3
+   - ⚠️ CRITICAL: Say: "Does that look correct?" - Wait for their response
+   - If they say "yes", "correct", "looks good", or similar → Proceed to step 5
+   - If they say "no" or want to change/add items → Go back to step 3 to update
+   - ⚠️ DO NOT proceed to step 5 (ask if anything else) until they confirm the order looks correct
 
 5. Ask if there's anything else to add:
    - Say: "Is there anything else you'd like to add to your order?" or "Would you like to add anything else?"
@@ -466,6 +468,9 @@ STEPS (MUST FOLLOW IN ORDER - DO NOT SKIP OR REORDER):
 
 9. Confirm success and announce ready time:
    - After the function returns success, say: "Perfect! Your order has been submitted successfully and will be ready in about ${takeout_estimated_ready_minutes} minutes."
+   - ⚠️ CRITICAL: You MUST say this confirmation - the customer needs to know the order went through
+   - ⚠️ CRITICAL: DO NOT skip this step - the customer MUST hear confirmation that the order was submitted
+   - ⚠️ CRITICAL: DO NOT proceed to step 10 or end the call until you have confirmed the order submission
    - This is when you announce the ready time - NOT earlier in the conversation
 
   10. Flow 3 is now complete - PROCEED TO ENDING SECTION (Section 6):

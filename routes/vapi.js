@@ -1964,24 +1964,33 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
     orderData.customer_email = emailMatch[1];
   }
   
-  // Extract order items - look for patterns like:
-  // - "1 pizza", "2 burgers", "3 fries"
-  // - "I'd like a pizza", "I want 2 burgers"
-  // - Item names with quantities
-  // - Menu item numbers (e.g., "item #5", "number 5", "#5")
+  // BLACKLIST: Words that should NEVER be extracted as menu items
+  const itemBlacklist = new Set([
+    // Common words
+    "the", "a", "an", "and", "or", "with", "for", "to", "of", "in", "on", "at", "is", "are", "was", "were", "been", "be", "have", "has", "had",
+    "will", "would", "could", "should", "may", "might", "can", "must", "do", "does", "did", "done",
+    "this", "that", "these", "those", "it", "its", "they", "them", "their", "there", "their",
+    "i", "you", "he", "she", "we", "your", "my", "his", "her", "our", "me", "him", "us",
+    "all", "some", "any", "each", "every", "other", "another", "one", "two", "three", "first", "second", "third",
+    "moment", "minute", "second", "time", "times", "today", "tomorrow", "yesterday", "now", "then", "when", "where",
+    "order", "orders", "ordering", "ordered", "total", "totals", "subtotal", "tax", "price", "prices", "cost", "costs",
+    "dollar", "dollars", "cent", "cents", "digit", "digits", "number", "numbers", "item", "items",
+    "takeout", "take", "put", "place", "placed", "placing", "get", "got", "getting", "give", "gave", "giving",
+    "correct", "looks", "look", "see", "seeing", "want", "wants", "wanted", "need", "needs", "needed",
+    "everything", "something", "nothing", "anything", "else", "more", "please", "thank", "thanks", "yes", "no", "ok", "okay",
+    "cheeseburger", "burger", "pizza", "fries", // These might be actual items, but we only extract with item numbers
+  ]);
+  
+  // Extract order items - ONLY extract items with explicit menu item numbers
+  // DO NOT extract generic item names - they're too ambiguous and create false matches
+  // We rely on the AI calling submit_takeout_order function for proper item extraction
   const itemPatterns = [
-    // Pattern: menu item number with item name (e.g., "number 1, the cheeseburger", "item #5 pizza")
-    /(?:item\s*#?|number\s*|#)\s*(\d+)(?:,\s*(?:the\s+)?([a-z]+(?:\s+[a-z]+)*?)|(?:\s+([a-z]+(?:\s+[a-z]+)*?)))/gi,
-    // Pattern: menu item number alone (e.g., "item #5", "number 5", "#5")
+    // Pattern 1: menu item number with optional item name (e.g., "number 1, the cheeseburger", "item #5 pizza")
+    // ONLY extract if we have a menu item number
+    /(?:item\s*#?|number\s*|#)\s*(\d+)(?:,\s*(?:the\s+)?([a-z]+(?:\s+[a-z]+)*?)|(?:\s+(?:the\s+)?([a-z]+(?:\s+[a-z]+)*?)))/gi,
+    // Pattern 2: menu item number alone (e.g., "item #5", "number 5", "#5")
+    // This is the most reliable - explicit item numbers
     /(?:item\s*#?|number\s*|#)\s*(\d+)/gi,
-    // Pattern: quantity + item name (e.g., "2 pizzas", "1 burger", "3 large fries")
-    /(\d+)\s+(?:x\s*)?(?:large\s+|small\s+|medium\s+)?([a-z]+(?:\s+[a-z]+)*?)(?:\s|$|,|\.|and|with)/gi,
-    // Pattern: "I'd like" or "I want" + quantity + item
-    /(?:i'd\s+like|i\s+want|i'll\s+have|can\s+i\s+get|give\s+me|i\s+need)\s+(\d+)?\s*(?:x\s*)?(?:large\s+|small\s+|medium\s+)?([a-z]+(?:\s+[a-z]+)*?)(?:\s|$|,|\.|and|with)/gi,
-    // Pattern: item name with price (e.g., "pizza $15", "burger $10")
-    /([a-z]+(?:\s+[a-z]+)*?)\s+\$?(\d+\.?\d*)/gi,
-    // Pattern: "a" or "an" + item name (e.g., "a pizza", "an order of fries")
-    /(?:^|\s)(?:a|an)\s+([a-z]+(?:\s+[a-z]+)*?)(?:\s|$|,|\.|and|with)/gi,
   ];
   
   const foundItems = new Map(); // Use Map to avoid duplicates
@@ -2040,27 +2049,30 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
       if (itemName && itemName.length > 2) {
         // Normalize item name (capitalize first letter)
         const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1).toLowerCase();
+        const itemNameLower = itemName.toLowerCase();
         
-        // Skip common non-item words
-        const skipWords = ["the", "a", "an", "and", "or", "with", "for", "to", "of", "in", "on", "at", "is", "are", "was", "were"];
-        if (skipWords.includes(itemName.toLowerCase())) continue;
+        // Skip blacklisted words
+        if (itemBlacklist.has(itemNameLower)) {
+          console.log(`[Order Extraction] Skipping blacklisted word: ${itemNameLower}`);
+          continue;
+        }
         
         // Skip if it's just a number
         if (/^\d+$/.test(itemName)) continue;
         
-        // Check if we already have this item
-        const existingItem = foundItems.get(normalizedName);
-        if (existingItem) {
-          existingItem.quantity += quantity;
-        } else {
-          foundItems.set(normalizedName, {
-            name: normalizedName,
-            quantity: quantity,
-            unit_price: price || 0, // Will need to look up from menu if price is 0
-            item_number: null, // Will be set if we find matching menu item
-            modifications: null,
-          });
+        // Skip if it contains digits (like "14.99" being extracted as an item)
+        if (/\d/.test(itemName)) {
+          console.log(`[Order Extraction] Skipping item name with digits: ${itemNameLower}`);
+          continue;
         }
+        
+        // Skip short words (less than 3 chars) or very long words (likely not items)
+        if (itemName.length < 3 || itemName.length > 30) continue;
+        
+        // Only extract if we have an item number - don't extract generic names
+        // This prevents extracting random words from the transcript
+        // We rely on the AI function call for proper item extraction
+        continue; // Skip extraction of generic item names without menu item numbers
       }
     }
   }
@@ -2073,61 +2085,11 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
     orderData.item_numbers = Array.from(foundItemNumbers);
   }
   
-  // Also try to extract from structured patterns in summary
-  // Summary might say "Customer ordered: 2 pizzas, 1 burger, 3 fries" or "place a takeout order for one cheeseburger"
-  const summaryOrderPattern = /(?:ordered|order|wants|wanted|place.*?order\s+for)[:\s]+(.+?)(?:\.|$|total|subtotal|,|and)/i;
-  const summaryMatch = summary.match(summaryOrderPattern);
-  if (summaryMatch) {
-    const orderText = summaryMatch[1];
-    console.log(`[Order Extraction] Found order text in summary: ${orderText}`);
-    
-    // Handle "one cheeseburger", "two pizzas" etc.
-    const numberWords = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
-    const wordNumberPattern = new RegExp(`(${Object.keys(numberWords).join('|')})\\s+([a-z]+(?:\\s+[a-z]+)*?)(?:\\s|$|,|\\.|and|with)`, 'gi');
-    let wordMatch;
-    while ((wordMatch = wordNumberPattern.exec(orderText)) !== null) {
-      const quantity = numberWords[wordMatch[1].toLowerCase()] || 1;
-      const itemName = wordMatch[2].trim();
-      if (itemName && itemName.length > 2) {
-        const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1);
-        const existingItem = foundItems.get(normalizedName);
-        if (existingItem) {
-          existingItem.quantity = Math.max(existingItem.quantity, quantity);
-        } else {
-          foundItems.set(normalizedName, {
-            name: normalizedName,
-            quantity: quantity,
-            unit_price: 0,
-            modifications: null,
-          });
-        }
-      }
-    }
-    
-    // Split by commas and extract items with numeric quantities
-    const orderParts = orderText.split(',').map(part => part.trim());
-    for (const part of orderParts) {
-      const itemMatch = part.match(/(\d+)\s+(.+)/i);
-      if (itemMatch) {
-        const quantity = parseInt(itemMatch[1], 10);
-        const itemName = itemMatch[2].trim();
-        if (itemName && itemName.length > 2) {
-          const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1);
-          const existingItem = foundItems.get(normalizedName);
-          if (existingItem) {
-            existingItem.quantity = Math.max(existingItem.quantity, quantity);
-          } else {
-            foundItems.set(normalizedName, {
-              name: normalizedName,
-              quantity: quantity,
-              unit_price: 0,
-              modifications: null,
-            });
-          }
-        }
-      }
-    }
-  }
+  // NOTE: We DO NOT extract generic item names from summary text anymore
+  // This was causing false positives (extracting words like "digits", "dollars", "cents", etc.)
+  // We ONLY extract items with explicit menu item numbers (handled above)
+  // The AI should be calling submit_takeout_order function with proper item data
+  console.log(`[Order Extraction] Skipping summary text extraction - only extracting explicit menu item numbers`);
   
   // Convert Map to array
   orderData.items = Array.from(foundItems.values());
