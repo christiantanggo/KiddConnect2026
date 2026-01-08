@@ -1689,6 +1689,20 @@ async function handleSubmitTakeoutOrder(args, event) {
     }
   }
   
+  // CRITICAL: Log the raw items array immediately
+  const rawItems = orderData?.items || [];
+  console.log(`[VAPI Webhook] 🔥🔥🔥 RAW ITEMS FROM AI (before any processing):`, JSON.stringify(rawItems, null, 2));
+  console.log(`[VAPI Webhook] 🔥🔥🔥 RAW ITEMS COUNT: ${rawItems.length}`);
+  rawItems.forEach((item, idx) => {
+    console.log(`[VAPI Webhook] 🔥🔥🔥 RAW Item ${idx + 1}:`, {
+      name: item.name || item.item_name,
+      quantity: item.quantity,
+      quantity_type: typeof item.quantity,
+      item_number: item.item_number,
+      modifications: item.modifications || item.modification,
+    });
+  });
+  
   let business = null;
   let assistantId = null;
   
@@ -2051,9 +2065,14 @@ async function handleSubmitTakeoutOrder(args, event) {
     console.log(`[VAPI Webhook] 📦 Final processed items:`, JSON.stringify(processedItems.map(item => ({
       name: item.name,
       quantity: item.quantity,
+      quantity_type: typeof item.quantity,
       item_number: item.item_number,
       unit_price: item.unit_price,
     })), null, 2));
+    console.log(`[VAPI Webhook] 📦 Final processed items COUNT: ${processedItems.length}`);
+    processedItems.forEach((item, idx) => {
+      console.log(`[VAPI Webhook] 📦 Final item ${idx + 1}: quantity=${item.quantity} (type: ${typeof item.quantity}), name="${item.name}"`);
+    });
     
     // Recalculate totals based on business tax settings
     const taxRate = business.takeout_tax_rate ?? 0.13;
@@ -2103,6 +2122,18 @@ async function handleSubmitTakeoutOrder(args, event) {
       subtotal: finalSubtotal,
       tax: finalTax,
       total: orderTotal,
+    });
+    
+    // Log items being passed to TakeoutOrder.create
+    console.log(`[VAPI Webhook] 📦 About to create order with ${processedItems.length} items:`);
+    processedItems.forEach((item, idx) => {
+      console.log(`[VAPI Webhook] 📦 Item ${idx + 1} for DB:`, {
+        name: item.name,
+        quantity: item.quantity,
+        quantity_type: typeof item.quantity,
+        item_number: item.item_number,
+        unit_price: item.unit_price,
+      });
     });
     
     const order = await TakeoutOrder.create({
