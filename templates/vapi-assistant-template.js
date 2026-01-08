@@ -508,6 +508,9 @@ The submit_takeout_order function MUST be called with:
 - total (number)
 - special_instructions (string, optional)
 Example items format: [{"name": "Cheeseburger", "quantity": 1, "price": 14.99, "item_number": 1, "modifications": []}]
+- ⚠️ CRITICAL: The quantity field MUST be a NUMBER (not a string). If the customer orders 2 cheeseburgers, use quantity: 2 (not "2" or "two")
+- ⚠️ CRITICAL: If the customer orders multiple of the same item, you MUST include the quantity in the item object. For example, if they order 2 cheeseburgers, the items array should have ONE item with quantity: 2, NOT two separate items with quantity: 1 each
+- ⚠️ CRITICAL: The quantity MUST match what the customer ordered. If they said "2 cheeseburgers", the quantity MUST be 2
 - You CANNOT end the call or say goodbye until this function has been successfully called
 
 ${menu_items && menu_items.length > 0 ? `

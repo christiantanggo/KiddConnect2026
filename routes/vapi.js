@@ -1821,9 +1821,57 @@ async function handleSubmitTakeoutOrder(args, event) {
     // Create order via API (using TakeoutOrder model directly)
     const { TakeoutOrder } = await import("../models/TakeoutOrder.js");
     
+    // Log received items for debugging
+    console.log(`[VAPI Webhook] 📦 Received items from function call:`, JSON.stringify(items, null, 2));
+    
+    // Consolidate duplicate items (same item_number) before processing
+    // Sometimes the AI might create separate items instead of using quantity
+    const itemMap = new Map();
+    items.forEach((item) => {
+      const key = item.item_number || item.name || item.item_name || 'unknown';
+      if (itemMap.has(key)) {
+        // Item already exists - add to quantity
+        const existing = itemMap.get(key);
+        const existingQty = typeof existing.quantity === 'number' ? existing.quantity : (parseInt(existing.quantity, 10) || 1);
+        const newQty = typeof item.quantity === 'number' ? item.quantity : (parseInt(item.quantity, 10) || 1);
+        existing.quantity = existingQty + newQty;
+        console.log(`[VAPI Webhook] 🔄 Consolidated duplicate item "${key}": ${existingQty} + ${newQty} = ${existing.quantity}`);
+      } else {
+        itemMap.set(key, { ...item });
+      }
+    });
+    
+    // Convert map back to array
+    const consolidatedItems = Array.from(itemMap.values());
+    if (consolidatedItems.length !== items.length) {
+      console.log(`[VAPI Webhook] 📦 Consolidated ${items.length} items into ${consolidatedItems.length} items`);
+      console.log(`[VAPI Webhook] 📦 Consolidated items:`, JSON.stringify(consolidatedItems, null, 2));
+    }
+    
     // Process items and try to match with menu items if item_number is provided
-    const processedItems = await Promise.all(items.map(async (item) => {
+    const processedItems = await Promise.all(consolidatedItems.map(async (item, index) => {
+      // Log each item being processed
+      console.log(`[VAPI Webhook] Processing item ${index + 1}:`, {
+        item_number: item.item_number,
+        name: item.name || item.item_name,
+        quantity: item.quantity,
+        quantity_type: typeof item.quantity,
+        price: item.price || item.unit_price || item.unitPrice,
+      });
+      
       let menuItemId = null;
+      
+      // Extract quantity - handle various formats
+      let quantity = 1;
+      if (item.quantity !== undefined && item.quantity !== null) {
+        if (typeof item.quantity === 'string') {
+          quantity = parseInt(item.quantity, 10) || 1;
+        } else if (typeof item.quantity === 'number') {
+          quantity = Math.max(1, Math.floor(item.quantity)); // Ensure at least 1 and is an integer
+        } else {
+          quantity = parseInt(item.quantity, 10) || 1;
+        }
+      }
       
       // Try to find menu item by item_number if provided
       if (item.item_number) {
@@ -1833,16 +1881,22 @@ async function handleSubmitTakeoutOrder(args, event) {
           if (menuItem) {
             menuItemId = menuItem.id;
             // Use menu item data if available
-            return {
+            const processedItem = {
               menu_item_id: menuItemId,
               item_number: item.item_number,
               name: menuItem.name || item.name || item.item_name || 'Unknown Item',
               description: menuItem.description || item.description || item.item_description || null,
-              quantity: parseInt(item.quantity) || 1,
+              quantity: quantity,
               unit_price: parseFloat(item.price || item.unit_price || item.unitPrice || menuItem.price) || 0,
               modifications: item.modifications || item.modification || null,
               special_instructions: item.special_instructions || null,
             };
+            console.log(`[VAPI Webhook] ✅ Processed item ${index + 1} (with menu match):`, {
+              name: processedItem.name,
+              quantity: processedItem.quantity,
+              item_number: processedItem.item_number,
+            });
+            return processedItem;
           }
         } catch (error) {
           console.warn(`[VAPI Webhook] Could not find menu item #${item.item_number}:`, error.message);
@@ -1850,17 +1904,31 @@ async function handleSubmitTakeoutOrder(args, event) {
       }
       
       // Fallback to item data as provided
-      return {
+      const processedItem = {
         menu_item_id: menuItemId,
         item_number: item.item_number || null,
         name: item.name || item.item_name || 'Unknown Item',
         description: item.description || item.item_description || null,
-        quantity: parseInt(item.quantity) || 1,
+        quantity: quantity,
         unit_price: parseFloat(item.price || item.unit_price || item.unitPrice) || 0,
         modifications: item.modifications || item.modification || null,
         special_instructions: item.special_instructions || null,
       };
+      console.log(`[VAPI Webhook] ✅ Processed item ${index + 1} (fallback):`, {
+        name: processedItem.name,
+        quantity: processedItem.quantity,
+        item_number: processedItem.item_number,
+      });
+      return processedItem;
     }));
+    
+    // Log final processed items
+    console.log(`[VAPI Webhook] 📦 Final processed items:`, JSON.stringify(processedItems.map(item => ({
+      name: item.name,
+      quantity: item.quantity,
+      item_number: item.item_number,
+      unit_price: item.unit_price,
+    })), null, 2));
     
     // Recalculate totals based on business tax settings
     const taxRate = business.takeout_tax_rate ?? 0.13;
