@@ -2013,12 +2013,26 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
           // Also extract the item name if provided (e.g., "number 1, the cheeseburger")
           const itemName = (match[2] || match[3] || "").trim();
           if (itemName && itemName.length > 2) {
+            const itemNameLower = itemName.toLowerCase();
+            
+            // Skip blacklisted words
+            if (itemBlacklist.has(itemNameLower)) {
+              console.log(`[Order Extraction] Skipping blacklisted word: ${itemNameLower}`);
+              continue;
+            }
+            
+            // Skip if it contains digits (like "14.99" being extracted as an item)
+            if (/\d/.test(itemName)) {
+              console.log(`[Order Extraction] Skipping item name with digits: ${itemNameLower}`);
+              continue;
+            }
+            
             const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1).toLowerCase();
             // Check if we already have this item
             const existingItem = foundItems.get(normalizedName);
             if (existingItem) {
               existingItem.item_number = itemNumber;
-              existingItem.quantity = existingItem.quantity || 1;
+              existingItem.quantity = (existingItem.quantity || 0) + 1; // Increment quantity if item name already found
             } else {
               foundItems.set(normalizedName, {
                 name: normalizedName,
@@ -2040,39 +2054,6 @@ function extractOrderFromTranscript(transcript, summary, vapiCallData = null, ca
           foundItemNumbers.add(itemNumber);
         }
         continue;
-      }
-      
-      const quantity = parseInt(match[1] || "1", 10);
-      const itemName = (match[2] || match[1] || "").trim();
-      const price = parseFloat(match[3] || "0");
-      
-      if (itemName && itemName.length > 2) {
-        // Normalize item name (capitalize first letter)
-        const normalizedName = itemName.charAt(0).toUpperCase() + itemName.slice(1).toLowerCase();
-        const itemNameLower = itemName.toLowerCase();
-        
-        // Skip blacklisted words
-        if (itemBlacklist.has(itemNameLower)) {
-          console.log(`[Order Extraction] Skipping blacklisted word: ${itemNameLower}`);
-          continue;
-        }
-        
-        // Skip if it's just a number
-        if (/^\d+$/.test(itemName)) continue;
-        
-        // Skip if it contains digits (like "14.99" being extracted as an item)
-        if (/\d/.test(itemName)) {
-          console.log(`[Order Extraction] Skipping item name with digits: ${itemNameLower}`);
-          continue;
-        }
-        
-        // Skip short words (less than 3 chars) or very long words (likely not items)
-        if (itemName.length < 3 || itemName.length > 30) continue;
-        
-        // Only extract if we have an item number - don't extract generic names
-        // This prevents extracting random words from the transcript
-        // We rely on the AI function call for proper item extraction
-        continue; // Skip extraction of generic item names without menu item numbers
       }
     }
   }
