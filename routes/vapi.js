@@ -1871,7 +1871,7 @@ async function handleSubmitTakeoutOrder(args, event) {
     // SAFEGUARD: If we have multiple items with the same item_number and no modifications, 
     // and the total quantity seems wrong (e.g., 2 items with quantity 1 each when customer said "2"),
     // check if we should consolidate further
-    const consolidatedItems = Array.from(itemMap.values());
+    let consolidatedItems = Array.from(itemMap.values());
     if (consolidatedItems.length > 1) {
       // Check for items that might be duplicates that weren't caught (e.g., different names but same item_number)
       const itemNumberMap = new Map();
@@ -1902,10 +1902,11 @@ async function handleSubmitTakeoutOrder(args, event) {
         // Replace consolidatedItems with the further consolidated version
         consolidatedItems.splice(0, consolidatedItems.length, ...Array.from(itemNumberMap.values()));
       }
+    } else {
+      // If safeguard didn't run, get from itemMap
+      consolidatedItems = Array.from(itemMap.values());
     }
     
-    // Convert map back to array
-    const consolidatedItems = Array.from(itemMap.values());
     console.log(`[VAPI Webhook] 📦 After consolidation: ${items.length} items -> ${consolidatedItems.length} items`);
     consolidatedItems.forEach((item, idx) => {
       console.log(`[VAPI Webhook] 📦 Consolidated item ${idx + 1}:`, {
