@@ -1178,7 +1178,7 @@ async function handleCallEnd(event) {
   try {
     // If we don't have summary/transcript from event, try to get from API
     if (!summary || !transcript) {
-      const callSummary = await getCallSummary(callId);
+    const callSummary = await getCallSummary(callId);
       transcript = transcript || callSummary.transcript || "";
       summary = summary || callSummary.summary || "";
     }
@@ -1823,6 +1823,18 @@ async function handleSubmitTakeoutOrder(args, event) {
     
     // Log received items for debugging
     console.log(`[VAPI Webhook] 📦 Received items from function call:`, JSON.stringify(items, null, 2));
+    console.log(`[VAPI Webhook] 📦 Items count: ${items.length}`);
+    items.forEach((item, idx) => {
+      console.log(`[VAPI Webhook] 📦 Item ${idx + 1}:`, {
+        name: item.name || item.item_name,
+        item_number: item.item_number,
+        quantity: item.quantity,
+        quantity_type: typeof item.quantity,
+        quantity_value: item.quantity,
+        modifications: item.modifications || item.modification,
+        price: item.price || item.unit_price,
+      });
+    });
     
     // Consolidate duplicate items (same item_number AND same modifications) before processing
     // CRITICAL: Items with different modifications should NOT be consolidated
@@ -1837,20 +1849,38 @@ async function handleSubmitTakeoutOrder(args, event) {
       if (itemMap.has(key)) {
         // Item already exists with same modifications - add to quantity
         const existing = itemMap.get(key);
-        const existingQty = typeof existing.quantity === 'number' ? existing.quantity : (parseInt(existing.quantity, 10) || 1);
-        const newQty = typeof item.quantity === 'number' ? item.quantity : (parseInt(item.quantity, 10) || 1);
+        const existingQty = typeof existing.quantity === 'number' ? existing.quantity : (parseInt(String(existing.quantity), 10) || 1);
+        const newQty = typeof item.quantity === 'number' ? item.quantity : (parseInt(String(item.quantity), 10) || 1);
         existing.quantity = existingQty + newQty;
-        console.log(`[VAPI Webhook] 🔄 Consolidated duplicate item "${key}": ${existingQty} + ${newQty} = ${existing.quantity}`);
+        console.log(`[VAPI Webhook] 🔄 Consolidated duplicate item "${key}": ${existingQty} (type: ${typeof existing.quantity}) + ${newQty} (type: ${typeof item.quantity}) = ${existing.quantity} (type: ${typeof existing.quantity})`);
       } else {
-        itemMap.set(key, { ...item });
+        // Ensure quantity is a number when adding to map
+        const itemWithQty = { ...item };
+        if (itemWithQty.quantity === undefined || itemWithQty.quantity === null) {
+          itemWithQty.quantity = 1;
+          console.log(`[VAPI Webhook] ⚠️ Item "${key}" missing quantity, defaulting to 1`);
+        } else if (typeof itemWithQty.quantity !== 'number') {
+          itemWithQty.quantity = parseInt(String(itemWithQty.quantity), 10) || 1;
+          console.log(`[VAPI Webhook] ⚠️ Item "${key}" quantity was ${typeof item.quantity}, converted to ${itemWithQty.quantity}`);
+        }
+        itemMap.set(key, itemWithQty);
       }
     });
     
     // Convert map back to array
     const consolidatedItems = Array.from(itemMap.values());
+    console.log(`[VAPI Webhook] 📦 After consolidation: ${items.length} items -> ${consolidatedItems.length} items`);
+    consolidatedItems.forEach((item, idx) => {
+      console.log(`[VAPI Webhook] 📦 Consolidated item ${idx + 1}:`, {
+        name: item.name || item.item_name,
+        item_number: item.item_number,
+        quantity: item.quantity,
+        quantity_type: typeof item.quantity,
+        modifications: item.modifications || item.modification,
+      });
+    });
     if (consolidatedItems.length !== items.length) {
-      console.log(`[VAPI Webhook] 📦 Consolidated ${items.length} items into ${consolidatedItems.length} items`);
-      console.log(`[VAPI Webhook] 📦 Consolidated items:`, JSON.stringify(consolidatedItems, null, 2));
+      console.log(`[VAPI Webhook] 📦 Consolidated items (full):`, JSON.stringify(consolidatedItems, null, 2));
     }
     
     // Process items and try to match with menu items if item_number is provided

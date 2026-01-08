@@ -517,9 +517,13 @@ The submit_takeout_order function MUST be called with:
 - special_instructions (string, optional)
 Example items format: [{"name": "Cheeseburger", "quantity": 1, "price": 14.99, "item_number": 1, "modifications": "extra cheese"}]
 - ⚠️ CRITICAL: The quantity field MUST be a NUMBER (not a string). If the customer orders 2 cheeseburgers, use quantity: 2 (not "2" or "two")
-- ⚠️ CRITICAL: If the customer orders multiple of the same item WITH THE SAME MODIFICATIONS, you MUST include the quantity in the item object. For example, if they order "2 cheeseburgers with extra cheese", the items array should have ONE item with quantity: 2
+- ⚠️ CRITICAL: If the customer orders multiple of the same item WITH THE SAME MODIFICATIONS (or no modifications), you MUST include the quantity in the item object. 
+  * Example: Customer says "2 cheeseburgers" → items: [{"name": "Cheeseburger", "quantity": 2, "price": 14.99, "item_number": 1, "modifications": null}]
+  * Example: Customer says "2 cheeseburgers with extra cheese" → items: [{"name": "Cheeseburger", "quantity": 2, "price": 14.99, "item_number": 1, "modifications": "extra cheese"}]
+  * ⚠️ DO NOT create 2 separate items with quantity: 1 each - use ONE item with quantity: 2
 - ⚠️ CRITICAL: If the customer orders multiple of the same item WITH DIFFERENT MODIFICATIONS, you MUST create separate items. For example, "2 cheeseburgers, 1 with extra cheese, 1 with bacon" = TWO items, each with quantity: 1
-- ⚠️ CRITICAL: The quantity MUST match what the customer ordered. If they said "2 cheeseburgers", the quantity MUST be 2
+- ⚠️ CRITICAL: The quantity MUST match what the customer ordered. If they said "2 cheeseburgers", the quantity MUST be 2, NOT 1
+- ⚠️ CRITICAL: When the customer says a number (like "2 cheeseburgers"), that number MUST be in the quantity field. Do NOT create multiple items with quantity: 1 - use quantity: 2 in a single item
 - ⚠️ CRITICAL: The price field MUST include the base item price PLUS any paid modifier prices. For example, if a cheeseburger is $14.99 and "bacon" modifier costs $2.00, the price should be $16.99
 - ⚠️ CRITICAL: Only include modifications that are in the item's modifiers list (or standard ingredient add/remove like "extra cheese", "no lettuce")
 - ⚠️ CRITICAL: The modifications field should be a string (comma-separated) or array of modifier names
