@@ -288,19 +288,9 @@ MESSAGE TAKING:
 - Confirm ALL information (name, phone number, and message details) before ending the call
 - Be clear that someone will call them back.
 
-${detect_conversation_end ? `CONVERSATION END DETECTION:
-- ⚠️⚠️⚠️ CRITICAL EXCEPTION - TAKEOUT ORDERS: During a takeout order, if the customer says "that's everything", "nothing else", "no", or "that's all" when asked "Is there anything else you'd like to add to your order?", this means they're DONE ADDING ITEMS TO THE ORDER - NOT DONE WITH THE CALL. You MUST proceed to give the total and submit the order. DO NOT end the call. Only after the order is fully submitted and you've asked "Is there anything else I can help you with?" should you consider ending the call.
-- After you have answered the caller's question(s) or completed their request (AND if it's NOT during an active takeout order), you MUST ask: "Is there anything else I can help you with?"
-- WAIT for the caller's response.
-- If the caller says "no", "nope", "nothing else", "that's all", "that's it", "no thanks", or similar negative responses (AND you have completed ALL tasks including submitting the order if one was placed):
-  - Say your closing message ONCE: "${ending_greeting || `Thank you for calling ${name}. Have a great day!`}"
-  - ⚠️ CRITICAL: Say the closing message ONLY ONCE. Do NOT repeat it or add additional closing phrases like "Thanks for calling" again.
-  - After saying the closing message, end the call gracefully.
-- If the caller says "yes" or indicates they have another question:
-  - Answer their next question and then ask again: "Is there anything else I can help you with?"
-  - Repeat this process until they say no or the conversation naturally concludes.
-- This helps ensure the caller's needs are fully met before ending the call.
-` : ''}
+${takeout_orders_enabled ? `
+⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️⚠️ CRITICAL - READ THIS FIRST - TAKEOUT ORDERING SECTION (THIS MUST BE CHECKED BEFORE ANY CONVERSATION END DETECTION):
+TAKEOUT ORDERING:
 
 ${max_call_duration_minutes ? `CALL DURATION LIMIT:
 - This call has a maximum duration of ${max_call_duration_minutes} minutes.
