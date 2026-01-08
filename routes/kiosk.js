@@ -69,6 +69,46 @@ router.get('/orders/history', async (req, res) => {
 });
 
 /**
+ * Get call transcript for an order
+ * GET /api/kiosk/orders/:orderId/transcript
+ * NOTE: This route must come BEFORE /orders/:orderId to ensure proper matching
+ */
+router.get('/orders/:orderId/transcript', async (req, res) => {
+  try {
+    const { orderId } = req.params;
+    
+    const order = await TakeoutOrder.findById(orderId);
+    
+    if (!order) {
+      return res.status(404).json({ error: 'Order not found' });
+    }
+    
+    // Verify order belongs to business
+    if (order.business_id !== req.businessId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    // Get call session transcript if available
+    let transcript = null;
+    if (order.call_session_id) {
+      const callSession = await CallSession.findById(order.call_session_id);
+      if (callSession && callSession.transcript) {
+        transcript = callSession.transcript;
+      }
+    }
+    
+    res.json({
+      success: true,
+      transcript: transcript || 'No transcript available for this order.',
+      hasTranscript: !!transcript,
+    });
+  } catch (error) {
+    console.error('[Kiosk API] Error fetching transcript:', error);
+    res.status(500).json({ error: error.message || 'Failed to fetch transcript' });
+  }
+});
+
+/**
  * Get single order by ID
  * GET /api/kiosk/orders/:orderId
  */
@@ -215,45 +255,6 @@ router.get('/settings', async (req, res) => {
   } catch (error) {
     console.error('[Kiosk API] Error fetching settings:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch settings' });
-  }
-});
-
-/**
- * Get call transcript for an order
- * GET /api/kiosk/orders/:orderId/transcript
- */
-router.get('/orders/:orderId/transcript', async (req, res) => {
-  try {
-    const { orderId } = req.params;
-    
-    const order = await TakeoutOrder.findById(orderId);
-    
-    if (!order) {
-      return res.status(404).json({ error: 'Order not found' });
-    }
-    
-    // Verify order belongs to business
-    if (order.business_id !== req.businessId) {
-      return res.status(403).json({ error: 'Access denied' });
-    }
-    
-    // Get call session transcript if available
-    let transcript = null;
-    if (order.call_session_id) {
-      const callSession = await CallSession.findById(order.call_session_id);
-      if (callSession && callSession.transcript) {
-        transcript = callSession.transcript;
-      }
-    }
-    
-    res.json({
-      success: true,
-      transcript: transcript || 'No transcript available for this order.',
-      hasTranscript: !!transcript,
-    });
-  } catch (error) {
-    console.error('[Kiosk API] Error fetching transcript:', error);
-    res.status(500).json({ error: error.message || 'Failed to fetch transcript' });
   }
 });
 
