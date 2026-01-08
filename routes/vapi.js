@@ -1678,11 +1678,25 @@ async function handleSubmitTakeoutOrder(args, event) {
   console.log(`[VAPI Webhook] 📦 Processing takeout order submission`);
   console.log(`[VAPI Webhook] Order data:`, JSON.stringify(args, null, 2));
   
+  // Extract order data early for error handling
+  let orderData = args;
+  if (typeof args === 'string') {
+    try {
+      orderData = JSON.parse(args);
+    } catch (parseError) {
+      console.error(`[VAPI Webhook] ❌ Failed to parse function arguments as JSON:`, parseError);
+      return;
+    }
+  }
+  
+  let business = null;
+  let assistantId = null;
+  
   try {
     // Extract call ID and assistant ID to find business
     const call = event.call || event.message?.call || event.message?.artifact?.call || {};
     const callId = call.id || call.callId;
-    const assistantId = event.call?.assistant?.id 
+    assistantId = event.call?.assistant?.id 
       || event.message?.assistant?.id
       || call.assistant?.id
       || event.message?.call?.assistant?.id;
@@ -1695,7 +1709,7 @@ async function handleSubmitTakeoutOrder(args, event) {
     }
     
     // Find business by assistant ID
-    const business = await Business.findByVapiAssistantId(assistantId);
+    business = await Business.findByVapiAssistantId(assistantId);
     
     if (!business) {
       console.error(`[VAPI Webhook] ❌ Business not found for assistant ${assistantId}`);
@@ -1711,17 +1725,6 @@ async function handleSubmitTakeoutOrder(args, event) {
         callSession = await CallSession.findByVapiCallId(callId);
       } catch (error) {
         console.warn(`[VAPI Webhook] ⚠️ Could not find call session for call ${callId}:`, error.message);
-      }
-    }
-    
-    // Parse function arguments (they might be a string or object)
-    let orderData = args;
-    if (typeof args === 'string') {
-      try {
-        orderData = JSON.parse(args);
-      } catch (parseError) {
-        console.error(`[VAPI Webhook] ❌ Failed to parse function arguments as JSON:`, parseError);
-        return;
       }
     }
     
@@ -1881,40 +1884,41 @@ async function handleSubmitTakeoutOrder(args, event) {
     console.error(`[VAPI Webhook] ❌ Error creating takeout order:`, error);
     console.error(`[VAPI Webhook] Error stack:`, error.stack);
     
-    // Send email notification to business about failed order
-    try {
-      const { sendCallSummaryEmail } = await import("../services/notifications.js");
-      
-      const customerName = orderData?.customer_name || 'Unknown';
-      const customerPhone = orderData?.customer_phone || 'Unknown';
-      const itemsSummary = (orderData?.items || []).map(item => 
-        `${item.quantity || 1}x ${item.name || item.item_name || 'Unknown Item'}`
-      ).join(', ') || 'No items listed';
-      const total = orderData?.total || 0;
-      
-      const errorEmailSubject = `⚠️ Failed Takeout Order - Follow Up Required`;
-      const errorEmailHtml = `
-        <h2>⚠️ Failed Takeout Order - Follow Up Required</h2>
-        <p>A customer attempted to place a takeout order through the AI phone system, but the order submission failed.</p>
-        <p><strong>Please follow up with the customer immediately.</strong></p>
-        <hr>
-        <h3>Customer Information:</h3>
-        <ul>
-          <li><strong>Name:</strong> ${customerName}</li>
-          <li><strong>Phone:</strong> ${customerPhone}</li>
-        </ul>
-        <h3>Order Details:</h3>
-        <ul>
-          <li><strong>Items:</strong> ${itemsSummary}</li>
-          <li><strong>Total:</strong> $${total.toFixed(2)}</li>
-        </ul>
-        <h3>Error Details:</h3>
-        <pre>${error.message}</pre>
-        <hr>
-        <p><em>This is an automated notification. Please contact the customer to complete their order.</em></p>
-      `;
-      
-      const errorEmailText = `
+    // Send email notification to business about failed order (only if we have business info)
+    if (business && (business.email || business.contact_email)) {
+      try {
+        const { sendCallSummaryEmail } = await import("../services/notifications.js");
+        
+        const customerName = orderData?.customer_name || 'Unknown';
+        const customerPhone = orderData?.customer_phone || 'Unknown';
+        const itemsSummary = (orderData?.items || []).map(item => 
+          `${item.quantity || 1}x ${item.name || item.item_name || 'Unknown Item'}`
+        ).join(', ') || 'No items listed';
+        const total = orderData?.total || 0;
+        
+        const errorEmailSubject = `⚠️ Failed Takeout Order - Follow Up Required`;
+        const errorEmailHtml = `
+          <h2>⚠️ Failed Takeout Order - Follow Up Required</h2>
+          <p>A customer attempted to place a takeout order through the AI phone system, but the order submission failed.</p>
+          <p><strong>Please follow up with the customer immediately.</strong></p>
+          <hr>
+          <h3>Customer Information:</h3>
+          <ul>
+            <li><strong>Name:</strong> ${customerName}</li>
+            <li><strong>Phone:</strong> ${customerPhone}</li>
+          </ul>
+          <h3>Order Details:</h3>
+          <ul>
+            <li><strong>Items:</strong> ${itemsSummary}</li>
+            <li><strong>Total:</strong> $${total.toFixed(2)}</li>
+          </ul>
+          <h3>Error Details:</h3>
+          <pre>${error.message}</pre>
+          <hr>
+          <p><em>This is an automated notification. Please contact the customer to complete their order.</em></p>
+        `;
+        
+        const errorEmailText = `
 Failed Takeout Order - Follow Up Required
 
 A customer attempted to place a takeout order through the AI phone system, but the order submission failed. Please follow up with the customer immediately.
@@ -1930,25 +1934,28 @@ Order Details:
 Error: ${error.message}
 
 Please contact the customer to complete their order.
-      `;
-      
-      // Send email using the notification service
-      await sendCallSummaryEmail({
-        business: {
-          id: business.id,
-          name: business.name,
-          email: business.email || business.contact_email,
-        },
-        subject: errorEmailSubject,
-        html: errorEmailHtml,
-        text: errorEmailText,
-        forceEmail: true, // Force send even if email_ai_answered is false
-      });
-      
-      console.log(`[VAPI Webhook] ✅ Error notification email sent to ${business.email || business.contact_email}`);
-    } catch (emailError) {
-      console.error(`[VAPI Webhook] ❌ Failed to send error notification email:`, emailError);
-      // Don't throw - we've already logged the error
+        `;
+        
+        // Send email using the notification service
+        await sendCallSummaryEmail({
+          business: {
+            id: business.id,
+            name: business.name,
+            email: business.email || business.contact_email,
+          },
+          subject: errorEmailSubject,
+          html: errorEmailHtml,
+          text: errorEmailText,
+          forceEmail: true, // Force send even if email_ai_answered is false
+        });
+        
+        console.log(`[VAPI Webhook] ✅ Error notification email sent to ${business.email || business.contact_email}`);
+      } catch (emailError) {
+        console.error(`[VAPI Webhook] ❌ Failed to send error notification email:`, emailError);
+        // Don't throw - we've already logged the error
+      }
+    } else {
+      console.warn(`[VAPI Webhook] ⚠️ Cannot send error notification email - business not found or no email address`);
     }
   }
 }
