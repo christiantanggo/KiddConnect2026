@@ -69,7 +69,7 @@ app.use(cors({
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Active-Business-Id'],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
   preflightContinue: false, // Let cors handle preflight, don't pass to next middleware
 }));
@@ -120,7 +120,7 @@ app.options('*', cors({
   origin: true,
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Active-Business-Id'],
 }));
 
 // Note: CORS middleware handles OPTIONS preflight requests automatically
@@ -266,6 +266,91 @@ app.use("/api/menu", menuRoutes);
 // Kiosk routes (token-based authentication)
 app.use("/api/kiosk", kioskRoutes);
 
+// ========== TAVARI AI CORE v2 ROUTES ==========
+// Mount v2 routes (built in parallel, does not touch Phone Agent)
+try {
+  const v2OrganizationsRoutes = (await import("./routes/v2/organizations.js")).default;
+  const v2ModulesRoutes = (await import("./routes/v2/modules.js")).default;
+  const v2SettingsRoutes = (await import("./routes/v2/settings.js")).default;
+  const v2MarketplaceRoutes = (await import("./routes/v2/marketplace.js")).default;
+  const v2StripeWebhookRoutes = (await import("./routes/v2/webhooks/stripe.js")).default;
+  const v2ClickBankWebhookRoutes = (await import("./routes/v2/webhooks/clickbank.js")).default;
+  const v2AuthRoutes = (await import("./routes/v2/auth.js")).default;
+  const v2AdminRoutes = (await import("./routes/v2/admin.js")).default;
+  const v2NotificationsRoutes = (await import("./routes/v2/notifications.js")).default;
+
+  app.use("/api/v2/organizations", v2OrganizationsRoutes);
+  app.use("/api/v2/modules", v2ModulesRoutes);
+  app.use("/api/v2/settings", v2SettingsRoutes);
+  app.use("/api/v2/marketplace", v2MarketplaceRoutes);
+  app.use("/api/v2/webhooks/stripe", v2StripeWebhookRoutes);
+  app.use("/api/v2/webhooks/clickbank", v2ClickBankWebhookRoutes);
+  app.use("/api/v2/auth", v2AuthRoutes);
+  app.use("/api/v2/admin", v2AdminRoutes);
+  app.use("/api/v2/notifications", v2NotificationsRoutes);
+  
+  // Load reviews setup routes first (doesn't require openai)
+  try {
+    const v2ReviewsSetupRoutes = (await import("./routes/v2/reviews-setup.js")).default;
+    app.use("/api/v2/reviews", v2ReviewsSetupRoutes);
+    console.log('✅ Reviews setup routes loaded');
+  } catch (setupError) {
+    console.warn('⚠️  Reviews setup routes not loaded:', setupError.message);
+  }
+  
+  // Load reviews main routes separately (requires openai package)
+  try {
+    const v2ReviewsRoutes = (await import("./routes/v2/reviews.js")).default;
+    if (!v2ReviewsRoutes) {
+      throw new Error('Router export is undefined');
+    }
+    app.use("/api/v2/reviews", v2ReviewsRoutes);
+    console.log('✅ Reviews module routes loaded');
+    console.log('✅ Reviews routes registered at /api/v2/reviews');
+  } catch (reviewsError) {
+    console.error('❌ Reviews module routes FAILED to load:', reviewsError.message);
+    console.error('❌ Full error:', reviewsError);
+    console.error('❌ Stack trace:', reviewsError.stack);
+    console.warn('⚠️  The reviews module will not be available until this is fixed.');
+  }
+  
+  // V2 routes health check
+  app.get("/api/v2/health", (_req, res) => {
+    res.json({
+      status: "ok",
+      version: "v2",
+      routes: {
+        organizations: "/api/v2/organizations",
+        modules: "/api/v2/modules",
+        settings: "/api/v2/settings",
+        marketplace: "/api/v2/marketplace",
+        auth: "/api/v2/auth",
+        admin: "/api/v2/admin",
+        notifications: "/api/v2/notifications",
+        reviews: "/api/v2/reviews (optional - requires openai package)",
+        webhooks: {
+          stripe: "/api/v2/webhooks/stripe",
+          clickbank: "/api/v2/webhooks/clickbank"
+        }
+      }
+    });
+  });
+  
+  console.log('✅ Tavari AI Core v2 routes loaded');
+} catch (error) {
+  console.error('❌ Failed to load v2 routes:', error);
+  console.error('Stack:', error.stack);
+  // Add error endpoint so we can see what went wrong
+  app.get("/api/v2/health", (_req, res) => {
+    res.status(500).json({
+      status: "error",
+      error: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
+  });
+}
+// ========== END TAVARI AI CORE v2 ROUTES ==========
+
 // Legacy Telnyx phone numbers endpoint (for backwards compatibility)
 app.get("/api/telnyx-phone-numbers/search", async (req, res, next) => {
   // Import and use authenticate middleware
@@ -391,6 +476,55 @@ try {
   console.log('✅ Expired sale prices checker started (runs daily at 2 AM)');
 } catch (error) {
   console.warn('⚠️  Could not start expired sale prices checker:', error.message);
+}
+
+// Start scheduled job to rebuild all VAPI assistants (daily at 3 AM)
+let rebuildAssistantsInterval = null;
+try {
+  const { rebuildAllAssistants } = await import('./services/vapi.js');
+  
+  // Calculate milliseconds until next 3 AM
+  const getMsUntil3AM = () => {
+    const now = new Date();
+    const next3AM = new Date();
+    next3AM.setHours(3, 0, 0, 0); // 3 AM today
+    
+    // If it's already past 3 AM today, set for tomorrow
+    if (now >= next3AM) {
+      next3AM.setDate(next3AM.getDate() + 1);
+    }
+    
+    return next3AM.getTime() - now.getTime();
+  };
+  
+  // Rebuild all assistants job
+  const rebuildAllAssistantsJob = async () => {
+    try {
+      console.log('[Server] Running daily assistant rebuild...');
+      const result = await rebuildAllAssistants();
+      console.log(`[Server] Daily rebuild completed: ${result.successful}/${result.total} successful`);
+    } catch (error) {
+      console.error('[Server] Error in assistant rebuild job:', error.message);
+    }
+  };
+  
+  // Schedule to run daily at 3 AM
+  const scheduleNextRebuild = () => {
+    const msUntilNext = getMsUntil3AM();
+    console.log(`[Server] Next assistant rebuild scheduled in ${Math.round(msUntilNext / 1000 / 60)} minutes (at 3 AM)`);
+    
+    setTimeout(() => {
+      rebuildAllAssistantsJob();
+      // After first run, schedule to run every 24 hours
+      rebuildAssistantsInterval = setInterval(rebuildAllAssistantsJob, 24 * 60 * 60 * 1000); // 24 hours
+    }, msUntilNext);
+  };
+  
+  scheduleNextRebuild();
+  
+  console.log('✅ Daily assistant rebuild scheduled (runs daily at 3 AM)');
+} catch (error) {
+  console.warn('⚠️  Could not start daily assistant rebuild:', error.message);
 }
 
 // Start server

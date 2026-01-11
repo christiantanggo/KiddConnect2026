@@ -1733,6 +1733,86 @@ export async function rebuildAssistant(businessId) {
 }
 
 /**
+ * Rebuild all VAPI assistants for all businesses
+ * Used for daily maintenance to ensure all assistants have latest configuration
+ * @returns {Promise<Object>} Summary of rebuild results
+ */
+export async function rebuildAllAssistants() {
+  try {
+    console.log('[VAPI Rebuild All] Starting daily rebuild of all assistants...');
+    
+    const { supabaseClient } = await import('../config/database.js');
+    const { Business } = await import('../models/Business.js');
+    
+    // Get all businesses with VAPI assistants
+    const { data: businesses, error } = await supabaseClient
+      .from('businesses')
+      .select('id, name, vapi_assistant_id')
+      .is('deleted_at', null)
+      .not('vapi_assistant_id', 'is', null);
+    
+    if (error) {
+      console.error('[VAPI Rebuild All] Error fetching businesses:', error);
+      throw error;
+    }
+    
+    if (!businesses || businesses.length === 0) {
+      console.log('[VAPI Rebuild All] No businesses with assistants found');
+      return {
+        total: 0,
+        successful: 0,
+        failed: 0,
+        results: [],
+      };
+    }
+    
+    console.log(`[VAPI Rebuild All] Found ${businesses.length} assistants to rebuild`);
+    
+    const results = [];
+    let successful = 0;
+    let failed = 0;
+    
+    // Rebuild assistants sequentially to avoid rate limits
+    for (const business of businesses) {
+      try {
+        console.log(`[VAPI Rebuild All] Rebuilding assistant for: ${business.name} (${business.id})`);
+        await rebuildAssistant(business.id);
+        results.push({
+          business_id: business.id,
+          business_name: business.name,
+          status: 'success',
+        });
+        successful++;
+        
+        // Small delay between rebuilds to avoid rate limits
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+      } catch (error) {
+        console.error(`[VAPI Rebuild All] Failed to rebuild assistant for ${business.name}:`, error.message);
+        results.push({
+          business_id: business.id,
+          business_name: business.name,
+          status: 'failed',
+          error: error.message,
+        });
+        failed++;
+      }
+    }
+    
+    console.log(`[VAPI Rebuild All] ✅ Completed: ${successful} successful, ${failed} failed out of ${businesses.length} total`);
+    
+    return {
+      total: businesses.length,
+      successful,
+      failed,
+      results,
+    };
+  } catch (error) {
+    console.error('[VAPI Rebuild All] ❌ Error in rebuild all assistants:', error);
+    throw error;
+  }
+}
+
+/**
  * Get call summary from VAPI
  * @param {string} callId - VAPI call ID
  * @returns {Promise<Object>} Call summary with transcript and metadata
