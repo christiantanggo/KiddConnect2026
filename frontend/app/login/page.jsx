@@ -18,8 +18,47 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      await login(email, password);
-      router.push('/dashboard');
+      const loginResponse = await login(email, password);
+      const onboardingComplete = loginResponse?.business?.onboarding_complete;
+      
+      // If onboarding is not complete, redirect to setup wizard
+      if (!onboardingComplete) {
+        // Check which module they have to determine which setup wizard to use
+        const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+        const token = document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1];
+        
+        try {
+          const modulesRes = await fetch(`${API_URL}/api/v2/modules`, {
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+          
+          if (modulesRes.ok) {
+            const modulesData = await modulesRes.json();
+            const modules = modulesData.modules || [];
+            
+            // Check if they have an active reviews module
+            const reviewsModule = modules.find(m => m.key === 'reviews' && m.subscription?.status === 'active');
+            
+            if (reviewsModule) {
+              // Redirect to Review Reply setup wizard
+              router.push('/modules/reviews/setup');
+              return;
+            }
+          }
+        } catch (modulesError) {
+          console.error('Error fetching modules:', modulesError);
+          // Fall through to phone agent setup if we can't determine module
+        }
+        
+        // Default to phone agent setup wizard
+        router.push('/dashboard/setup');
+      } else {
+        // Onboarding complete, go to dashboard
+        router.push('/dashboard');
+      }
     } catch (err) {
       console.error('Login error:', err);
       console.error('Login error response:', err.response);

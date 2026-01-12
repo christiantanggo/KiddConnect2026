@@ -2,56 +2,73 @@
 // ClickBank INS (Instant Notification Service) webhook handler
 
 import express from 'express';
-import { processClickBankOrder, verifyClickBankSignature } from '../services/clickbank.js';
+import { processClickBankOrder, decryptClickBankNotification } from '../services/clickbank.js';
 
 const router = express.Router();
 
 /**
  * ClickBank INS Webhook Endpoint
  * 
- * ClickBank sends order notifications via POST with form-encoded data.
- * This endpoint receives these notifications and automatically creates accounts.
+ * ClickBank v6.0 sends encrypted JSON notifications.
+ * Older versions may send form-encoded data (not currently supported).
  * 
  * URL to configure in ClickBank: https://api.tavarios.com/api/clickbank/webhook
  */
-router.post('/webhook', express.urlencoded({ extended: true }), async (req, res) => {
+router.post('/webhook', async (req, res) => {
   console.log('[ClickBank Webhook] ========== WEBHOOK REQUEST RECEIVED ==========');
   console.log('[ClickBank Webhook] Method:', req.method);
-  console.log('[ClickBank Webhook] Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('[ClickBank Webhook] Body:', JSON.stringify(req.body, null, 2));
+  console.log('[ClickBank Webhook] Content-Type:', req.headers['content-type']);
+  console.log('[ClickBank Webhook] Body keys:', Object.keys(req.body || {}));
   
   try {
-    // ClickBank sends data as form-encoded parameters
-    const params = req.body;
-    
-    // Verify signature if CLICKBANK_CLIENT_SECRET is configured
     const secretKey = process.env.CLICKBANK_CLIENT_SECRET;
-    if (secretKey && !verifyClickBankSignature(params, secretKey)) {
-      console.error('[ClickBank Webhook] ❌ Invalid signature');
-      return res.status(401).send('Invalid signature');
-    }
     
-    // Log transaction details
-    const receipt = params.receipt || 'unknown';
-    const transactionType = params.transactionType || 'unknown';
-    const customerEmail = params.customerEmail || 'unknown';
-    
-    console.log(`[ClickBank Webhook] Processing transaction: ${transactionType} | Receipt: ${receipt} | Email: ${customerEmail}`);
-    
-    // Process the order
-    const result = await processClickBankOrder(params);
-    
-    if (result.skipped) {
-      console.log(`[ClickBank Webhook] ⚠️  Order skipped: ${result.reason}`);
-      return res.status(200).send(`OK - ${result.reason}`);
-    }
-    
-    if (result.success) {
-      console.log(`[ClickBank Webhook] ✅ Account created successfully for ${result.email}`);
-      return res.status(200).send('OK');
+    // Check if this is an encrypted v6.0 notification (JSON with notification and iv fields)
+    if (req.body && req.body.notification && req.body.iv) {
+      console.log('[ClickBank Webhook] Detected encrypted v6.0 notification format');
+      
+      if (!secretKey) {
+        console.error('[ClickBank Webhook] ❌ CLICKBANK_CLIENT_SECRET not configured, cannot decrypt notification');
+        return res.status(500).send('Secret key not configured');
+      }
+      
+      // Decrypt the notification
+      const params = decryptClickBankNotification(req.body.notification, req.body.iv, secretKey);
+      
+      if (!params) {
+        console.error('[ClickBank Webhook] ❌ Failed to decrypt notification');
+        return res.status(400).send('Failed to decrypt notification');
+      }
+      
+      console.log('[ClickBank Webhook] Decrypted params keys:', Object.keys(params));
+      
+      // Log transaction details
+      const receipt = params.receipt || params.receiptNumber || 'unknown';
+      const transactionType = params.transactionType || params.transactionType || 'unknown';
+      const customerEmail = params.customerEmail || params.email || 'unknown';
+      
+      console.log(`[ClickBank Webhook] Processing transaction: ${transactionType} | Receipt: ${receipt} | Email: ${customerEmail}`);
+      
+      // Process the order
+      const result = await processClickBankOrder(params);
+      
+      if (result.skipped) {
+        console.log(`[ClickBank Webhook] ⚠️  Order skipped: ${result.reason}`);
+        return res.status(200).send(`OK - ${result.reason}`);
+      }
+      
+      if (result.success) {
+        console.log(`[ClickBank Webhook] ✅ Account created successfully for ${result.email}`);
+        return res.status(200).send('OK');
+      } else {
+        console.error('[ClickBank Webhook] ❌ Failed to process order:', result);
+        return res.status(500).send('Failed to process order');
+      }
     } else {
-      console.error('[ClickBank Webhook] ❌ Failed to process order:', result);
-      return res.status(500).send('Failed to process order');
+      // Legacy format (form-encoded) - not currently supported for v6.0
+      console.error('[ClickBank Webhook] ❌ Unsupported notification format. Expected encrypted v6.0 format with notification and iv fields.');
+      console.error('[ClickBank Webhook] Body:', JSON.stringify(req.body, null, 2));
+      return res.status(400).send('Unsupported notification format');
     }
   } catch (error) {
     console.error('[ClickBank Webhook] ❌ Error processing webhook:', error);

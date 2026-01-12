@@ -33,7 +33,79 @@ export function generateSecurePassword() {
 }
 
 /**
- * Verify ClickBank INS notification signature
+ * Map ClickBank item numbers to module keys
+ * @param {string|number} itemNumber - ClickBank item number
+ * @returns {string|null} Module key or null if not found
+ */
+function getModuleKeyFromItemNumber(itemNumber) {
+  if (!itemNumber) return null;
+  
+  const itemNum = parseInt(itemNumber, 10);
+  
+  // Map ClickBank item numbers to module keys
+  // Item 1 = Phone Agent (old system)
+  // Item 2 = Review Reply (v2 system)
+  const moduleMap = {
+    1: 'phone-agent',
+    2: 'reviews',
+  };
+  
+  return moduleMap[itemNum] || null;
+}
+
+/**
+ * Decrypt ClickBank v6.0 encrypted notification
+ * @param {string} encryptedNotification - Base64-encoded encrypted notification
+ * @param {string} iv - Base64-encoded initialization vector
+ * @param {string} secretKey - ClickBank secret key (CLICKBANK_CLIENT_SECRET)
+ * @returns {Object|null} Decrypted notification parameters or null if decryption fails
+ */
+export function decryptClickBankNotification(encryptedNotification, iv, secretKey) {
+  if (!secretKey) {
+    console.warn('[ClickBank] ⚠️  CLICKBANK_CLIENT_SECRET not configured, cannot decrypt notification');
+    return null;
+  }
+  
+  try {
+    // Decode base64 strings
+    const encryptedBuffer = Buffer.from(encryptedNotification, 'base64');
+    const ivBuffer = Buffer.from(iv, 'base64');
+    
+    // Create a key from the secret (ClickBank uses the secret key directly)
+    // For AES-256, we need a 32-byte key. If secret is shorter, pad it. If longer, hash it.
+    let key;
+    if (secretKey.length === 32) {
+      key = Buffer.from(secretKey, 'utf8');
+    } else if (secretKey.length < 32) {
+      key = Buffer.concat([Buffer.from(secretKey, 'utf8'), Buffer.alloc(32 - secretKey.length, 0)]);
+    } else {
+      // If secret is longer than 32 bytes, use SHA-256 hash
+      key = crypto.createHash('sha256').update(secretKey).digest();
+    }
+    
+    // Decrypt using AES-256-CBC
+    const decipher = crypto.createDecipheriv('aes-256-cbc', key, ivBuffer);
+    let decrypted = decipher.update(encryptedBuffer);
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    
+    // Parse the decrypted JSON
+    const decryptedText = decrypted.toString('utf8');
+    const params = JSON.parse(decryptedText);
+    
+    console.log('[ClickBank] ✅ Notification decrypted successfully');
+    return params;
+  } catch (error) {
+    console.error('[ClickBank] ❌ Error decrypting notification:', error);
+    console.error('[ClickBank] Error details:', {
+      message: error.message,
+      stack: error.stack,
+    });
+    return null;
+  }
+}
+
+/**
+ * Verify ClickBank INS notification signature (for older versions that use signatures)
  * @param {Object} params - Notification parameters
  * @param {string} secretKey - ClickBank secret key (CLICKBANK_CLIENT_SECRET)
  * @returns {boolean} True if signature is valid
@@ -70,6 +142,8 @@ export async function processClickBankOrder(params) {
   console.log('[ClickBank] Transaction Type:', params.transactionType);
   console.log('[ClickBank] Receipt:', params.receipt);
   console.log('[ClickBank] Customer Email:', params.customerEmail);
+  console.log('[ClickBank] All params keys:', Object.keys(params));
+  console.log('[ClickBank] Item Number:', params.itemNumber || params.item || params.cbitems || 'not provided');
   
   // Only process SALES transactions (ignore refunds, chargebacks, etc. for account creation)
   if (params.transactionType !== 'SALE' && params.transactionType !== 'TEST') {
@@ -83,39 +157,79 @@ export async function processClickBankOrder(params) {
   const receipt = params.receipt;
   const saleId = params.saleId;
   const amount = parseFloat(params.amount) || 0;
+  const itemNumber = params.itemNumber || params.item || params.cbitems; // ClickBank sends item number
   
   if (!customerEmail) {
     throw new Error('Customer email is required');
   }
   
+  // Determine which module was purchased
+  const moduleKey = getModuleKeyFromItemNumber(itemNumber);
+  if (!moduleKey) {
+    throw new Error(`Unknown item number: ${itemNumber}. Supported items: 1 (Phone Agent), 2 (Review Reply)`);
+  }
+  
+  console.log(`[ClickBank] Module detected: ${moduleKey} (item number: ${itemNumber})`);
+  
   // Check if account already exists
   const existingUser = await User.findByEmail(customerEmail);
   if (existingUser) {
     console.log(`[ClickBank] ⚠️  Account already exists for ${customerEmail}`);
+    
+    // If account exists but this is a new module purchase (v2 system), activate the module
+    if (moduleKey === 'reviews') {
+      const { Subscription } = await import('../models/v2/Subscription.js');
+      const { ExternalPurchase } = await import('../models/v2/ExternalPurchase.js');
+      const { Business } = await import('../models/Business.js');
+      const { calculateBillingCycle } = await import('./billing.js');
+      
+      const business = await Business.findById(existingUser.business_id);
+      
+      // Check if subscription already exists
+      const existingSubscription = await Subscription.findByBusinessAndModule(existingUser.business_id, 'reviews');
+      if (!existingSubscription || !['active', 'trialing', 'past_due'].includes(existingSubscription.status)) {
+        // Create subscription for existing user
+        const billingCycle = calculateBillingCycle(business);
+        const resetDate = new Date(billingCycle.end);
+        resetDate.setDate(resetDate.getDate() + 1);
+        
+        await Subscription.create({
+          business_id: existingUser.business_id,
+          module_key: 'reviews',
+          plan: 'clickbank',
+          status: 'active',
+          stripe_subscription_item_id: `clickbank_${existingUser.business_id}_reviews_${Date.now()}`,
+          usage_limit: 100,
+          usage_limit_reset_date: resetDate.toISOString().split('T')[0],
+          started_at: new Date().toISOString(),
+        });
+        
+        // Record external purchase
+        await ExternalPurchase.create({
+          provider: 'clickbank',
+          external_order_id: saleId || receipt,
+          business_id: existingUser.business_id,
+          user_id: existingUser.id,
+          module_key: 'reviews',
+          email: customerEmail,
+          amount,
+          currency: 'USD',
+          status: 'active',
+          purchase_data: { receipt, saleId, itemNumber },
+        });
+        
+        console.log(`[ClickBank] ✅ Review Reply module activated for existing account`);
+      }
+    }
+    
     return { 
       skipped: true, 
       reason: 'Account already exists',
       userId: existingUser.id,
-      businessId: existingUser.business_id 
+      businessId: existingUser.business_id,
+      moduleActivated: moduleKey === 'reviews'
     };
   }
-  
-  // Find the default package (Founder's Plan at $119/month)
-  // Look for the package with monthly_price of 119
-  const packages = await PricingPackage.findAll({ includeInactive: false, includePrivate: true });
-  let defaultPackage = packages.find(p => parseFloat(p.monthly_price) === 119);
-  
-  // If not found, try to find any active package
-  if (!defaultPackage && packages.length > 0) {
-    defaultPackage = packages[0];
-    console.log(`[ClickBank] ⚠️  Founder's plan not found, using first available package: ${defaultPackage.name}`);
-  }
-  
-  if (!defaultPackage) {
-    throw new Error('No active pricing package found. Please create a pricing package first.');
-  }
-  
-  console.log(`[ClickBank] Using package: ${defaultPackage.name} (${defaultPackage.id})`);
   
   // Generate business name from customer name or use email
   const businessName = customerFirstName && customerLastName 
@@ -132,18 +246,6 @@ export async function processClickBankOrder(params) {
   });
   
   console.log(`[ClickBank] ✅ Business created: ${business.id}`);
-  
-  // Set package and subscription info
-  await Business.update(business.id, {
-    package_id: defaultPackage.id,
-    plan_tier: 'founder', // Or use package name
-    usage_limit_minutes: defaultPackage.minutes_included || 1000,
-    clickbank_receipt: receipt, // Store ClickBank receipt for reference
-    clickbank_sale_id: saleId,
-    purchased_at_sale_price: defaultPackage.sale_price || defaultPackage.monthly_price, // Store price they paid
-    // Note: ClickBank customers don't have stripe_subscription_status since they pay through ClickBank
-    // The presence of package_id and clickbank_receipt indicates an active subscription
-  });
   
   // Generate secure password
   const tempPassword = generateSecurePassword();
@@ -170,41 +272,113 @@ export async function processClickBankOrder(params) {
   
   console.log(`[ClickBank] ✅ User created: ${user.id}`);
   
-  // Create default AI agent
-  const agent = await AIAgent.create({
-    business_id: business.id,
-    greeting_text: `Hello! Thank you for calling ${businessName}. How can I help you today?`,
-    business_hours: {
-      monday: { open: '09:00', close: '17:00', closed: false },
-      tuesday: { open: '09:00', close: '17:00', closed: false },
-      wednesday: { open: '09:00', close: '17:00', closed: false },
-      thursday: { open: '09:00', close: '17:00', closed: false },
-      friday: { open: '09:00', close: '17:00', closed: false },
-      saturday: { closed: true },
-      sunday: { closed: true },
-    },
-    faqs: [],
-    message_settings: {
-      ask_name: true,
-      ask_phone: true,
-      ask_email: false,
-      ask_reason: true,
-    },
-    system_instructions: `You are a helpful AI assistant for ${businessName}. Answer questions politely and take messages when needed.`,
-  });
-  
-  console.log(`[ClickBank] ✅ AI Agent created: ${agent.id}`);
+  // Handle module-specific setup
+  if (moduleKey === 'phone-agent') {
+    // OLD SYSTEM: Phone Agent (uses packages)
+    const { PricingPackage } = await import('../models/PricingPackage.js');
+    
+    // Find the default package (Founder's Plan at $119/month)
+    const packages = await PricingPackage.findAll({ includeInactive: false, includePrivate: true });
+    let defaultPackage = packages.find(p => parseFloat(p.monthly_price) === 119);
+    
+    if (!defaultPackage && packages.length > 0) {
+      defaultPackage = packages[0];
+      console.log(`[ClickBank] ⚠️  Founder's plan not found, using first available package: ${defaultPackage.name}`);
+    }
+    
+    if (!defaultPackage) {
+      throw new Error('No active pricing package found. Please create a pricing package first.');
+    }
+    
+    console.log(`[ClickBank] Using package: ${defaultPackage.name} (${defaultPackage.id})`);
+    
+    // Set package and subscription info
+    await Business.update(business.id, {
+      package_id: defaultPackage.id,
+      plan_tier: 'founder',
+      usage_limit_minutes: defaultPackage.minutes_included || 1000,
+      clickbank_receipt: receipt,
+      clickbank_sale_id: saleId,
+      purchased_at_sale_price: defaultPackage.sale_price || defaultPackage.monthly_price,
+    });
+    
+    // Create default AI agent
+    const agent = await AIAgent.create({
+      business_id: business.id,
+      greeting_text: `Hello! Thank you for calling ${businessName}. How can I help you today?`,
+      business_hours: {
+        monday: { open: '09:00', close: '17:00', closed: false },
+        tuesday: { open: '09:00', close: '17:00', closed: false },
+        wednesday: { open: '09:00', close: '17:00', closed: false },
+        thursday: { open: '09:00', close: '17:00', closed: false },
+        friday: { open: '09:00', close: '17:00', closed: false },
+        saturday: { closed: true },
+        sunday: { closed: true },
+      },
+      faqs: [],
+      message_settings: {
+        ask_name: true,
+        ask_phone: true,
+        ask_email: false,
+        ask_reason: true,
+      },
+      system_instructions: `You are a helpful AI assistant for ${businessName}. Answer questions politely and take messages when needed.`,
+    });
+    
+    console.log(`[ClickBank] ✅ AI Agent created: ${agent.id}`);
+    
+  } else if (moduleKey === 'reviews') {
+    // V2 SYSTEM: Review Reply (uses v2 subscriptions)
+    const { Subscription } = await import('../models/v2/Subscription.js');
+    const { ExternalPurchase } = await import('../models/v2/ExternalPurchase.js');
+    const { calculateBillingCycle } = await import('./billing.js');
+    
+    // Create v2 subscription for Review Reply module
+    const billingCycle = calculateBillingCycle(business);
+    const resetDate = new Date(billingCycle.end);
+    resetDate.setDate(resetDate.getDate() + 1);
+    
+    const subscription = await Subscription.create({
+      business_id: business.id,
+      module_key: 'reviews',
+      plan: 'clickbank',
+      status: 'active',
+      stripe_subscription_item_id: `clickbank_${business.id}_reviews_${Date.now()}`,
+      usage_limit: 100, // Default usage limit
+      usage_limit_reset_date: resetDate.toISOString().split('T')[0],
+      started_at: new Date().toISOString(),
+    });
+    
+    console.log(`[ClickBank] ✅ Review Reply subscription created: ${subscription.id}`);
+    
+    // Record external purchase
+    await ExternalPurchase.create({
+      provider: 'clickbank',
+      external_order_id: saleId || receipt,
+      business_id: business.id,
+      user_id: user.id,
+      module_key: 'reviews',
+      email: customerEmail,
+      amount,
+      currency: 'USD',
+      status: 'active',
+      purchase_data: { receipt, saleId, itemNumber },
+    });
+    
+    console.log(`[ClickBank] ✅ External purchase recorded`);
+  }
   
   // Send welcome email with login credentials
   const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'https://tavarios.com';
   const loginUrl = `${frontendUrl}/login`;
   
-  const welcomeSubject = 'Welcome to Tavari AI - Your Account is Ready!';
+  const moduleName = moduleKey === 'reviews' ? 'Review Reply' : 'Phone Agent';
+  const welcomeSubject = `Welcome to Tavari AI ${moduleName} - Your Account is Ready!`;
   const welcomeBodyHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-      <h2 style="color: #2563eb;">Welcome to Tavari AI!</h2>
+      <h2 style="color: #2563eb;">Welcome to Tavari AI ${moduleName}!</h2>
       <p>Hi ${customerFirstName || 'there'},</p>
-      <p>Thank you for purchasing Tavari AI! Your account has been created and is ready to use.</p>
+      <p>Thank you for purchasing Tavari AI ${moduleName}! Your account has been created and is ready to use.</p>
       
       <div style="background-color: #f9fafb; padding: 20px; border-radius: 8px; margin: 20px 0;">
         <h3 style="color: #111827; margin-top: 0;">Your Login Credentials:</h3>
@@ -219,9 +393,10 @@ export async function processClickBankOrder(params) {
         <h3 style="color: #1e40af; margin-top: 0;">Next Steps:</h3>
         <ol style="color: #374151; line-height: 1.8;">
           <li>Log in to your dashboard: <a href="${loginUrl}" style="color: #2563eb;">${loginUrl}</a></li>
-          <li>Complete the setup wizard to configure your AI agent</li>
-          <li>Add your business information, hours, and FAQs</li>
-          <li>Go live and start receiving calls!</li>
+          ${moduleKey === 'reviews' 
+            ? '<li>Complete the setup wizard to configure your Review Reply settings</li><li>Start generating professional review responses instantly!</li>'
+            : '<li>Complete the setup wizard to configure your AI agent</li><li>Add your business information, hours, and FAQs</li><li>Go live and start receiving calls!</li>'
+          }
         </ol>
       </div>
       
@@ -238,11 +413,11 @@ export async function processClickBankOrder(params) {
   `;
   
   const welcomeBodyText = `
-Welcome to Tavari AI!
+Welcome to Tavari AI ${moduleName}!
 
 Hi ${customerFirstName || 'there'},
 
-Thank you for purchasing Tavari AI! Your account has been created and is ready to use.
+Thank you for purchasing Tavari AI ${moduleName}! Your account has been created and is ready to use.
 
 Your Login Credentials:
 Email: ${customerEmail}
@@ -252,9 +427,10 @@ Password: ${tempPassword}
 
 Next Steps:
 1. Log in to your dashboard: ${loginUrl}
-2. Complete the setup wizard to configure your AI agent
-3. Add your business information, hours, and FAQs
-4. Go live and start receiving calls!
+${moduleKey === 'reviews' 
+  ? '2. Complete the setup wizard to configure your Review Reply settings\n3. Start generating professional review responses instantly!'
+  : '2. Complete the setup wizard to configure your AI agent\n3. Add your business information, hours, and FAQs\n4. Go live and start receiving calls!'
+}
 
 If you have any questions, please contact us at info@tanggo.ca.
 
@@ -278,6 +454,7 @@ The Tavari Team
     businessId: business.id,
     email: customerEmail,
     password: tempPassword, // Return password (will be sent in email)
+    moduleKey,
   };
 }
 
