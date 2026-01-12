@@ -54,103 +54,42 @@ function getModuleKeyFromItemNumber(itemNumber) {
 }
 
 /**
- * Unpad PKCS7 padding from decrypted data
- * @param {Buffer} buf - Buffer with PKCS7 padding
- * @returns {Buffer} Buffer without padding
+ * Decrypt ClickBank INS v6.0 encrypted notification
+ * ClickBank v6 uses AES-256-CBC with PKCS7 padding
+ * Key derivation: SHA1(secret_key).hexdigest()[0:32] (first 32 hex chars = 16 bytes)
+ * 
+ * @param {Object} body - JSON body with 'notification' and 'iv' fields
+ * @param {string} secret - ClickBank INS secret key (16 chars, CLICKBANK_CLIENT_SECRET)
+ * @returns {Object} Decrypted notification parameters
  */
-function unpadPKCS7(buf) {
-  const pad = buf[buf.length - 1];
-  if (pad < 1 || pad > 16) {
-    throw new Error('Invalid PKCS7 padding');
-  }
-  return buf.slice(0, buf.length - pad);
+export function decryptClickBankV6(body, secret) {
+  const encrypted = Buffer.from(body.notification, 'base64');
+  const iv = Buffer.from(body.iv, 'base64');
+
+  // Step 1: SHA-1 hash of the 16-char secret
+  const sha1 = crypto
+    .createHash('sha1')
+    .update(secret, 'utf8')
+    .digest('hex');
+
+  // Step 2: Use first 32 hex chars (16 bytes)
+  const key = Buffer.from(sha1.substring(0, 32), 'hex');
+
+  // Step 3: AES-256-CBC decrypt
+  const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
+
+  let decrypted = decipher.update(encrypted);
+  decrypted = Buffer.concat([decrypted, decipher.final()]);
+
+  return JSON.parse(decrypted.toString('utf8'));
 }
 
 /**
- * Decrypt ClickBank v6.0 encrypted notification
- * ClickBank uses AES-128-CBC with PKCS7 padding
- * Key derivation: SHA1(secret_key).hexdigest()[0:32] (first 32 hex chars = 16 bytes)
- * 
- * @param {string} encryptedNotification - Base64-encoded encrypted notification
- * @param {string} iv - Base64-encoded initialization vector
- * @param {string} secretKey - ClickBank INS secret key (CLICKBANK_CLIENT_SECRET, max 16 chars)
- * @returns {Object|null} Decrypted notification parameters or null if decryption fails
+ * Legacy function name for backwards compatibility
+ * @deprecated Use decryptClickBankV6 instead
  */
 export function decryptClickBankNotification(encryptedNotification, iv, secretKey) {
-  if (!secretKey) {
-    console.warn('[ClickBank] ⚠️  CLICKBANK_CLIENT_SECRET not configured, cannot decrypt notification');
-    return null;
-  }
-  
-  try {
-    // Decode base64-encoded IV and encrypted notification
-    const ivBuffer = Buffer.from(iv, 'base64');
-    const encryptedBuffer = Buffer.from(encryptedNotification, 'base64');
-    
-    // ClickBank key derivation: Try both methods found in research
-    // Method 1: Direct bytes from SHA1 digest (most common in Node.js examples)
-    const sha1Digest = crypto.createHash('sha1').update(secretKey, 'utf8').digest();
-    const keyMethod1 = sha1Digest.slice(0, 16); // First 16 bytes directly from digest
-    
-    // Method 2: Hex string derivation (first 32 hex chars = 16 bytes) - matches Python example
-    const sha1hex = sha1Digest.toString('hex');
-    const keyHex = sha1hex.slice(0, 32);
-    const keyMethod2 = Buffer.from(keyHex, 'hex');
-    
-    console.log('[ClickBank] Decrypting with:');
-    console.log('[ClickBank] - Algorithm: AES-128-CBC');
-    console.log('[ClickBank] - Secret key length:', secretKey.length, 'chars');
-    console.log('[ClickBank] - SHA1 digest (first 16 bytes):', sha1Digest.slice(0, 16).toString('hex'));
-    console.log('[ClickBank] - Method 1 key (direct bytes):', keyMethod1.toString('hex'));
-    console.log('[ClickBank] - Method 2 key (hex string):', keyMethod2.toString('hex'));
-    console.log('[ClickBank] - IV length:', ivBuffer.length, 'bytes');
-    console.log('[ClickBank] - Encrypted data length:', encryptedBuffer.length, 'bytes');
-    
-    // Try Method 1: Direct bytes from SHA1 digest
-    try {
-      console.log('[ClickBank] Trying Method 1: Direct bytes from SHA1 digest');
-      const decipher1 = crypto.createDecipheriv('aes-128-cbc', keyMethod1, ivBuffer);
-      let decrypted1 = decipher1.update(encryptedBuffer);
-      decrypted1 = Buffer.concat([decrypted1, decipher1.final()]);
-      const plaintext1 = decrypted1.toString('utf8');
-      const params1 = JSON.parse(plaintext1);
-      console.log('[ClickBank] ✅ Notification decrypted successfully (Method 1: Direct bytes)');
-      console.log('[ClickBank] Decrypted params keys:', Object.keys(params1));
-      return params1;
-    } catch (method1Error) {
-      console.log('[ClickBank] Method 1 failed:', method1Error.message);
-      console.log('[ClickBank] Trying Method 2: Hex string derivation');
-      
-      // Try Method 2: Hex string derivation
-      try {
-        const decipher2 = crypto.createDecipheriv('aes-128-cbc', keyMethod2, ivBuffer);
-        let decrypted2 = decipher2.update(encryptedBuffer);
-        decrypted2 = Buffer.concat([decrypted2, decipher2.final()]);
-        const plaintext2 = decrypted2.toString('utf8');
-        const params2 = JSON.parse(plaintext2);
-        console.log('[ClickBank] ✅ Notification decrypted successfully (Method 2: Hex string)');
-        console.log('[ClickBank] Decrypted params keys:', Object.keys(params2));
-        return params2;
-      } catch (method2Error) {
-        console.error('[ClickBank] ❌ Both decryption methods failed');
-        console.error('[ClickBank] Method 1 error:', method1Error.message);
-        console.error('[ClickBank] Method 2 error:', method2Error.message);
-        console.error('[ClickBank]');
-        console.error('[ClickBank] ⚠️  Verify that CLICKBANK_CLIENT_SECRET matches your ClickBank INS Secret Key exactly');
-        console.error('[ClickBank] ⚠️  The secret key is case-sensitive and should be max 16 characters');
-        console.error('[ClickBank] ⚠️  Check for any leading/trailing spaces in the environment variable');
-        throw method2Error;
-      }
-    }
-  } catch (error) {
-    console.error('[ClickBank] ❌ Error decrypting notification:', error);
-    console.error('[ClickBank] Error details:', {
-      message: error.message,
-      stack: error.stack,
-    });
-    console.error('[ClickBank] Make sure CLICKBANK_CLIENT_SECRET matches your ClickBank INS Secret Key (max 16 chars)');
-    return null;
-  }
+  return decryptClickBankV6({ notification: encryptedNotification, iv }, secretKey);
 }
 
 /**

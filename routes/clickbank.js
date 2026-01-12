@@ -2,7 +2,7 @@
 // ClickBank INS (Instant Notification Service) webhook handler
 
 import express from 'express';
-import { processClickBankOrder, verifyClickBankSignature, decryptClickBankNotification } from '../services/clickbank.js';
+import { processClickBankOrder, verifyClickBankSignature, decryptClickBankV6 } from '../services/clickbank.js';
 
 const router = express.Router();
 
@@ -18,7 +18,6 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
   console.log('[ClickBank Webhook] ========== WEBHOOK REQUEST RECEIVED ==========');
   console.log('[ClickBank Webhook] Method:', req.method);
   console.log('[ClickBank Webhook] Content-Type:', req.headers['content-type']);
-  console.log('[ClickBank Webhook] Headers:', Object.keys(req.headers));
   console.log('[ClickBank Webhook] Body type:', typeof req.body);
   console.log('[ClickBank Webhook] Body is Buffer:', Buffer.isBuffer(req.body));
   console.log('[ClickBank Webhook] Body length:', req.body?.length || 0);
@@ -26,74 +25,40 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
   try {
     const secretKey = process.env.CLICKBANK_CLIENT_SECRET;
     
-    // Get raw body as string for HMAC verification
-    let rawBodyString = '';
-    if (Buffer.isBuffer(req.body)) {
-      rawBodyString = req.body.toString('utf8');
-    } else if (typeof req.body === 'string') {
-      rawBodyString = req.body;
-    } else {
-      rawBodyString = JSON.stringify(req.body);
+    if (!secretKey) {
+      console.error('[ClickBank Webhook] ❌ CLICKBANK_CLIENT_SECRET not configured');
+      return res.status(500).send('Secret key not configured');
     }
     
-    console.log('[ClickBank Webhook] Raw body (first 500 chars):', rawBodyString.substring(0, 500));
-    
-    // Check for HMAC signature in headers (ClickBank might use different header names)
-    const signatureHeader = req.headers['x-clickbank-signature'] || 
-                           req.headers['clickbank-signature'] || 
-                           req.headers['signature'] ||
-                           null;
-    
-    console.log('[ClickBank Webhook] Signature header:', signatureHeader ? 'Found' : 'Not found');
-    
-    // Verify HMAC signature if provided
-    if (signatureHeader && secretKey) {
-      const isValid = verifyClickBankSignature(rawBodyString, signatureHeader, secretKey);
-      if (!isValid) {
-        console.error('[ClickBank Webhook] ❌ HMAC signature verification failed');
-        return res.status(401).send('Invalid signature');
-      }
-    } else if (!secretKey) {
-      console.warn('[ClickBank Webhook] ⚠️  CLICKBANK_CLIENT_SECRET not configured, skipping signature verification');
-    } else {
-      console.warn('[ClickBank Webhook] ⚠️  No signature header found, proceeding without verification');
-    }
-    
-    // Parse the payload - ClickBank sends plain JSON
-    let params = {};
+    // Parse JSON from raw body (express.raw() gives us Buffer)
+    let body;
     try {
-      params = JSON.parse(rawBodyString);
+      body = JSON.parse(req.body.toString('utf8'));
       console.log('[ClickBank Webhook] ✅ Parsed JSON body successfully');
-      console.log('[ClickBank Webhook] Body keys:', Object.keys(params));
+      console.log('[ClickBank Webhook] Body keys:', Object.keys(body));
     } catch (parseError) {
       console.error('[ClickBank Webhook] ❌ Failed to parse JSON body:', parseError.message);
-      console.error('[ClickBank Webhook] Raw body:', rawBodyString);
       return res.status(400).send('Invalid JSON payload');
     }
     
-    // Handle ClickBank v6.0 encrypted notifications
-    // ClickBank v6.0 sends: {"notification":"<base64-encrypted>","iv":"<base64-iv>"}
-    if (params && params.notification && typeof params.notification === 'string' && params.iv) {
+    // Check for ClickBank v6.0 encrypted notification format
+    if (body && body.notification && typeof body.notification === 'string' && body.iv) {
       console.log('[ClickBank Webhook] Detected ClickBank v6.0 encrypted notification format');
       
-      const secretKey = process.env.CLICKBANK_CLIENT_SECRET;
-      if (!secretKey) {
-        console.error('[ClickBank Webhook] ❌ CLICKBANK_CLIENT_SECRET not configured, cannot decrypt notification');
-        return res.status(500).send('Secret key not configured');
-      }
-      
-      // Decrypt the notification
-      const decryptedParams = decryptClickBankNotification(params.notification, params.iv, secretKey);
-      
-      if (!decryptedParams) {
-        console.error('[ClickBank Webhook] ❌ Failed to decrypt notification');
-        console.error('[ClickBank Webhook] Make sure CLICKBANK_CLIENT_SECRET matches your ClickBank INS Secret Key');
+      // Decrypt using the correct method
+      let params;
+      try {
+        params = decryptClickBankV6(body, secretKey);
+        console.log('[ClickBank Webhook] ✅ Successfully decrypted v6.0 notification');
+        console.log('[ClickBank Webhook] Decrypted params keys:', Object.keys(params));
+      } catch (decryptError) {
+        console.error('[ClickBank Webhook] ❌ Failed to decrypt notification:', decryptError.message);
+        console.error('[ClickBank Webhook] Make sure CLICKBANK_CLIENT_SECRET matches your ClickBank INS Secret Key exactly (16 chars, case-sensitive)');
         return res.status(200).send('OK - Decryption failed, logged for manual review');
       }
       
       // Use decrypted params for processing
-      params = decryptedParams;
-      console.log('[ClickBank Webhook] ✅ Successfully decrypted v6.0 notification');
+      body = params;
     }
     
     // If notification field exists but no IV, try parsing it as base64-encoded JSON
