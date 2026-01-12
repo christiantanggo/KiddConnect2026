@@ -96,25 +96,35 @@ export function decryptClickBankNotification(encryptedNotification, iv, secretKe
     console.log('[ClickBank] Decrypting with:');
     console.log('[ClickBank] - Algorithm: AES-128-CBC');
     console.log('[ClickBank] - Key derivation: SHA1(secret_key).hexdigest()[0:32]');
+    console.log('[ClickBank] - Secret key length:', secretKey.length, 'chars');
+    console.log('[ClickBank] - SHA1 hex:', sha1hex);
+    console.log('[ClickBank] - Key hex (first 32 chars):', keyHex);
     console.log('[ClickBank] - Key length:', key.length, 'bytes');
     console.log('[ClickBank] - IV length:', ivBuffer.length, 'bytes');
     console.log('[ClickBank] - Encrypted data length:', encryptedBuffer.length, 'bytes');
     
     // Decrypt using AES-128-CBC
+    // Note: decipher.final() automatically removes PKCS7 padding in Node.js
     const decipher = crypto.createDecipheriv('aes-128-cbc', key, ivBuffer);
     let decrypted = decipher.update(encryptedBuffer);
-    decrypted = Buffer.concat([decrypted, decipher.final()]);
     
-    // Remove PKCS7 padding
-    const unpadded = unpadPKCS7(decrypted);
-    const plaintext = unpadded.toString('utf8');
-    
-    // Parse JSON
-    const params = JSON.parse(plaintext);
-    console.log('[ClickBank] ✅ Notification decrypted successfully');
-    console.log('[ClickBank] Decrypted params keys:', Object.keys(params));
-    
-    return params;
+    try {
+      decrypted = Buffer.concat([decrypted, decipher.final()]);
+      // decipher.final() already removes PKCS7 padding, so we can use the result directly
+      const plaintext = decrypted.toString('utf8');
+      
+      // Parse JSON
+      const params = JSON.parse(plaintext);
+      console.log('[ClickBank] ✅ Notification decrypted successfully');
+      console.log('[ClickBank] Decrypted params keys:', Object.keys(params));
+      
+      return params;
+    } catch (finalError) {
+      // If decipher.final() fails, the key is likely wrong
+      console.error('[ClickBank] ❌ decipher.final() failed - this usually means the secret key is incorrect');
+      console.error('[ClickBank] Verify that CLICKBANK_CLIENT_SECRET matches your ClickBank INS Secret Key exactly');
+      throw finalError;
+    }
   } catch (error) {
     console.error('[ClickBank] ❌ Error decrypting notification:', error);
     console.error('[ClickBank] Error details:', {
