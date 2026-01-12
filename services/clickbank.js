@@ -63,9 +63,17 @@ function getModuleKeyFromItemNumber(itemNumber) {
  * @returns {Object} Decrypted notification parameters
  */
 export function decryptClickBankV6(body, secret) {
+  console.log('[ClickBank Decrypt] Starting decryption...');
+  console.log('[ClickBank Decrypt] Secret key length:', secret.length);
+  console.log('[ClickBank Decrypt] Secret key (first 4, last 4):', secret.substring(0, 4) + '...' + secret.substring(secret.length - 4));
+  
   // Base64 decode payload
   const encrypted = Buffer.from(body.notification, 'base64');
   const iv = Buffer.from(body.iv, 'base64');
+  
+  console.log('[ClickBank Decrypt] Encrypted data length:', encrypted.length, 'bytes');
+  console.log('[ClickBank Decrypt] IV length:', iv.length, 'bytes');
+  console.log('[ClickBank Decrypt] IV (hex):', iv.toString('hex'));
 
   // SHA1 hash → RAW BYTES (20 bytes)
   const sha1 = crypto
@@ -73,16 +81,37 @@ export function decryptClickBankV6(body, secret) {
     .update(secret, 'utf8')
     .digest(); // <-- THIS IS A BUFFER, NOT HEX
 
+  console.log('[ClickBank Decrypt] SHA1 digest length:', sha1.length, 'bytes');
+  console.log('[ClickBank Decrypt] SHA1 digest (hex):', sha1.toString('hex'));
+
   // FIRST 16 BYTES ONLY
   const key = sha1.slice(0, 16);
+  
+  console.log('[ClickBank Decrypt] Derived key length:', key.length, 'bytes');
+  console.log('[ClickBank Decrypt] Derived key (hex):', key.toString('hex'));
 
   // AES-128-CBC (THIS IS CORRECT FOR v6)
   const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
 
   let decrypted = decipher.update(encrypted);
-  decrypted = Buffer.concat([decrypted, decipher.final()]);
-
-  return JSON.parse(decrypted.toString('utf8'));
+  console.log('[ClickBank Decrypt] After update, decrypted length:', decrypted.length, 'bytes');
+  
+  try {
+    decrypted = Buffer.concat([decrypted, decipher.final()]);
+    console.log('[ClickBank Decrypt] After final, total decrypted length:', decrypted.length, 'bytes');
+    console.log('[ClickBank Decrypt] Decrypted text (first 200 chars):', decrypted.toString('utf8').substring(0, 200));
+    
+    const result = JSON.parse(decrypted.toString('utf8'));
+    console.log('[ClickBank Decrypt] ✅ Successfully decrypted and parsed JSON');
+    return result;
+  } catch (error) {
+    console.error('[ClickBank Decrypt] ❌ Error during decryption/final:', error.message);
+    console.error('[ClickBank Decrypt] Error type:', error.constructor.name);
+    if (error.code) {
+      console.error('[ClickBank Decrypt] Error code:', error.code);
+    }
+    throw error;
+  }
 }
 
 /**
