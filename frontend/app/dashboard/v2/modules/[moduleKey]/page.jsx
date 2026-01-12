@@ -56,49 +56,26 @@ export default function ModuleDetailPage() {
       const headers = getAuthHeaders();
       let businessId = getActiveBusinessId();
 
-      // If no business ID, try to load current organization
+      // If no business ID in localStorage, get it from the user's session
       if (!businessId) {
         try {
-          const currentRes = await fetch(`${API_URL}/api/v2/organizations/current`, { headers });
-          if (currentRes.ok) {
-            const currentData = await currentRes.json();
-            if (currentData.organization?.id) {
-              businessId = currentData.organization.id;
+          const meRes = await fetch(`${API_URL}/api/auth/me`, { headers });
+          if (meRes.ok) {
+            const meData = await meRes.json();
+            if (meData.business?.id) {
+              businessId = meData.business.id;
               if (typeof window !== 'undefined') {
                 localStorage.setItem('activeBusinessId', businessId);
               }
             }
-          } else {
-            // Try to get organizations list and use the first one
-            const orgsRes = await fetch(`${API_URL}/api/v2/organizations`, { headers });
-            if (orgsRes.ok) {
-              const orgsData = await orgsRes.json();
-              const orgs = orgsData.organizations || [];
-              if (orgs.length > 0) {
-                businessId = orgs[0].id;
-                if (typeof window !== 'undefined') {
-                  localStorage.setItem('activeBusinessId', businessId);
-                }
-                // Try to select it on the backend
-                try {
-                  await fetch(`${API_URL}/api/v2/organizations/select`, {
-                    method: 'POST',
-                    headers,
-                    body: JSON.stringify({ business_id: businessId }),
-                  });
-                } catch (err) {
-                  console.warn('[Module Detail] Failed to select organization:', err);
-                }
-              }
-            }
           }
-        } catch (orgErr) {
-          console.warn('[Module Detail] Failed to load organization:', orgErr);
+        } catch (meErr) {
+          console.warn('[Module Detail] Failed to load user info:', meErr);
         }
       }
 
       if (!businessId) {
-        setError('Please select an organization first. Please visit /dashboard/v2 to select an organization.');
+        setError('Unable to determine your organization. Please refresh the page or contact support.');
         setLoading(false);
         return;
       }
