@@ -72,8 +72,27 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
     }
     
     // Handle case where ClickBank might wrap data in a notification field
-    // The notification field might be base64-encoded JSON (not encrypted, just encoded)
-    if (params && params.notification && typeof params.notification === 'string') {
+    // ClickBank v6.0 sends encrypted notifications, but we need unencrypted JSON
+    if (params && params.notification && typeof params.notification === 'string' && params.iv) {
+      console.error('[ClickBank Webhook] ❌ ClickBank is sending ENCRYPTED v6.0 notifications');
+      console.error('[ClickBank Webhook] ⚠️  ACTION REQUIRED: Configure ClickBank to send UNENCRYPTED notifications');
+      console.error('[ClickBank Webhook]');
+      console.error('[ClickBank Webhook] To fix this:');
+      console.error('[ClickBank Webhook] 1. Log into ClickBank Vendor Account');
+      console.error('[ClickBank Webhook] 2. Go to: My Site → Instant Notification Service (INS)');
+      console.error('[ClickBank Webhook] 3. Check INS version settings - upgrade to v7.0 if available (sends unencrypted JSON)');
+      console.error('[ClickBank Webhook] 4. OR disable encryption/use older INS version that sends plain JSON');
+      console.error('[ClickBank Webhook] 5. OR contact ClickBank support to configure unencrypted notifications');
+      console.error('[ClickBank Webhook]');
+      console.error('[ClickBank Webhook] Current format: Encrypted v6.0 (notification + iv fields)');
+      console.error('[ClickBank Webhook] Required format: Plain JSON with transaction fields (receipt, transactionType, email, etc.)');
+      console.error('[ClickBank Webhook]');
+      console.error('[ClickBank Webhook] Returning 200 OK to prevent ClickBank retries, but order NOT processed');
+      return res.status(200).send('OK - Encrypted notifications not supported. Please configure ClickBank to send unencrypted JSON.');
+    }
+    
+    // If notification field exists but no IV, try parsing it as base64-encoded JSON
+    if (params && params.notification && typeof params.notification === 'string' && !params.iv) {
       try {
         // Try decoding as base64 first
         const decoded = Buffer.from(params.notification, 'base64').toString('utf8');
@@ -87,9 +106,7 @@ router.post('/webhook', express.raw({ type: 'application/json' }), async (req, r
           params = parsed;
           console.log('[ClickBank Webhook] ✅ Parsed notification field as direct JSON');
         } catch (jsonError) {
-          // If both fail, notification might actually be encrypted or have a different format
-          console.log('[ClickBank Webhook] ⚠️  Notification field could not be parsed as JSON or base64-encoded JSON');
-          console.log('[ClickBank Webhook] First 100 chars of notification:', params.notification.substring(0, 100));
+          console.log('[ClickBank Webhook] ⚠️  Notification field could not be parsed as JSON');
           // Continue with original body - maybe the data is elsewhere
         }
       }
