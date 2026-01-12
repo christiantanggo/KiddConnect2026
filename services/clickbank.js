@@ -87,21 +87,24 @@ export function decryptClickBankNotification(encryptedNotification, iv, secretKe
     const ivBuffer = Buffer.from(iv, 'base64');
     const encryptedBuffer = Buffer.from(encryptedNotification, 'base64');
     
-    // ClickBank key derivation: SHA1(secret_key).hexdigest()[0:32]
-    // This gives us 16 bytes (32 hex characters = 16 bytes)
-    const sha1hex = crypto.createHash('sha1').update(secretKey, 'utf8').digest('hex');
-    const keyHex = sha1hex.slice(0, 32); // First 32 hex characters
-    const key = Buffer.from(keyHex, 'hex'); // Convert to 16-byte buffer
+    // ClickBank key derivation: SHA1(secret_key), take first 16 bytes directly
+    // Method 1: Direct bytes from SHA1 digest (most common approach)
+    const sha1Digest = crypto.createHash('sha1').update(secretKey, 'utf8').digest();
+    const key = sha1Digest.slice(0, 16); // First 16 bytes directly from digest
+    
+    // Also try hex method for comparison
+    const sha1hex = sha1Digest.toString('hex');
+    const keyHex = sha1hex.slice(0, 32);
+    const keyFromHex = Buffer.from(keyHex, 'hex');
     
     console.log('[ClickBank] Decrypting with:');
     console.log('[ClickBank] - Algorithm: AES-128-CBC');
-    console.log('[ClickBank] - Key derivation: SHA1(secret_key).hexdigest()[0:32]');
     console.log('[ClickBank] - Secret key length:', secretKey.length, 'chars');
-    console.log('[ClickBank] - SHA1 hex:', sha1hex);
-    console.log('[ClickBank] - Key hex (first 32 chars):', keyHex);
+    console.log('[ClickBank] - SHA1 digest (first 16 bytes):', sha1Digest.slice(0, 16).toString('hex'));
     console.log('[ClickBank] - Key length:', key.length, 'bytes');
     console.log('[ClickBank] - IV length:', ivBuffer.length, 'bytes');
     console.log('[ClickBank] - Encrypted data length:', encryptedBuffer.length, 'bytes');
+    console.log('[ClickBank] - Trying method 1: Direct bytes from SHA1 digest');
     
     // Decrypt using AES-128-CBC
     // Note: decipher.final() automatically removes PKCS7 padding in Node.js
