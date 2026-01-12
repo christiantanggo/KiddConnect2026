@@ -80,8 +80,9 @@ const jsonParser = express.json({ limit: "10mb" });
 const urlencodedParser = express.urlencoded({ extended: true });
 
 app.use((req, res, next) => {
-  // Skip body parsing for webhooks that need raw body for signature verification
-  if (req.path.includes('/api/billing/webhook') || req.path.includes('/api/clickbank/webhook')) {
+  // Skip body parsing for Stripe webhooks (they need raw body for signature verification)
+  // ClickBank v8 uses express.json() in the route itself, so we don't skip it here
+  if (req.path.includes('/api/billing/webhook')) {
     return next();
   }
   // Apply JSON parsing for all other routes
