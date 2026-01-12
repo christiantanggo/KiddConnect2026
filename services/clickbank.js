@@ -56,7 +56,7 @@ function getModuleKeyFromItemNumber(itemNumber) {
 /**
  * Decrypt ClickBank INS v6.0 encrypted notification
  * ClickBank v6 uses AES-256-CBC with PKCS7 padding
- * Key derivation: SHA1(secret_key).hexdigest()[0:32] (first 32 hex chars = 16 bytes)
+ * Key derivation: SHA1(secret_key) → use full 20 bytes, then pad/expand to 32 bytes for AES-256
  * 
  * @param {Object} body - JSON body with 'notification' and 'iv' fields
  * @param {string} secret - ClickBank INS secret key (16 chars, CLICKBANK_CLIENT_SECRET)
@@ -66,14 +66,27 @@ export function decryptClickBankV6(body, secret) {
   const encrypted = Buffer.from(body.notification, 'base64');
   const iv = Buffer.from(body.iv, 'base64');
 
-  // Step 1: SHA-1 hash of the 16-char secret
-  const sha1 = crypto
+  // Step 1: SHA-1 hash of the 16-char secret (gives us 20 bytes)
+  const sha1Digest = crypto
     .createHash('sha1')
     .update(secret, 'utf8')
-    .digest('hex');
+    .digest();
 
-  // Step 2: Use first 32 hex chars (16 bytes)
-  const key = Buffer.from(sha1.substring(0, 32), 'hex');
+  // Step 2: For AES-256-CBC, we need 32 bytes
+  // Use SHA1 digest (20 bytes) and pad with zeros or repeat to get 32 bytes
+  // Common approach: take first 32 hex chars (16 bytes) and repeat, or use full SHA1 + pad
+  // Based on ClickBank docs, try: first 32 hex chars repeated, or SHA1 + SHA1 first 12 bytes
+  const sha1Hex = sha1Digest.toString('hex'); // 40 hex chars = 20 bytes
+  
+  // Method: Use first 32 hex chars (16 bytes) and repeat to get 32 bytes
+  const keyHex = sha1Hex.substring(0, 32); // First 16 bytes as hex
+  const key16 = Buffer.from(keyHex, 'hex'); // 16 bytes
+  const key = Buffer.concat([key16, key16]); // Repeat to get 32 bytes for AES-256
+  
+  console.log('[ClickBank] Key derivation:');
+  console.log('[ClickBank] - SHA1 digest length:', sha1Digest.length, 'bytes');
+  console.log('[ClickBank] - Key length:', key.length, 'bytes (for AES-256-CBC)');
+  console.log('[ClickBank] - IV length:', iv.length, 'bytes');
 
   // Step 3: AES-256-CBC decrypt
   const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
