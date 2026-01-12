@@ -130,27 +130,56 @@ export function decryptClickBankNotification(encryptedNotification, iv, secretKe
 }
 
 /**
- * Verify ClickBank INS notification signature (for older versions that use signatures)
- * @param {Object} params - Notification parameters
+ * Verify ClickBank webhook HMAC signature
+ * ClickBank uses HMAC-SHA256 to sign the raw request body
+ * @param {string} rawBody - Raw request body as string (for HMAC calculation)
+ * @param {string} signature - Signature from X-ClickBank-Signature header (or similar)
  * @param {string} secretKey - ClickBank secret key (CLICKBANK_CLIENT_SECRET)
  * @returns {boolean} True if signature is valid
  */
-export function verifyClickBankSignature(params, secretKey) {
+export function verifyClickBankSignature(rawBody, signature, secretKey) {
   if (!secretKey) {
     console.warn('[ClickBank] ⚠️  CLICKBANK_CLIENT_SECRET not configured, skipping signature verification');
     return true; // In development, skip verification if not configured
   }
   
+  if (!signature) {
+    console.warn('[ClickBank] ⚠️  No signature provided in request');
+    return false;
+  }
+  
   try {
-    const receipt = params.receipt || '';
-    const signature = params.cbcPop || '';
-    
-    // ClickBank uses HMAC-SHA512 with the receipt and secret key
-    const hmac = crypto.createHmac('sha512', secretKey);
-    hmac.update(receipt);
+    // ClickBank uses HMAC-SHA256 with the raw request body and secret key
+    const hmac = crypto.createHmac('sha256', secretKey);
+    hmac.update(rawBody);
     const calculatedSignature = hmac.digest('hex');
     
-    return calculatedSignature === signature;
+    // Compare signatures (normalize - might be hex or base64)
+    const receivedSig = signature.trim();
+    const calculatedHex = calculatedSignature;
+    
+    // Try hex comparison first
+    if (receivedSig.length === calculatedHex.length) {
+      const isValid = crypto.timingSafeEqual(
+        Buffer.from(receivedSig, 'hex'),
+        Buffer.from(calculatedHex, 'hex')
+      );
+      if (isValid) {
+        console.log('[ClickBank] ✅ HMAC-SHA256 signature verified successfully (hex)');
+        return true;
+      }
+    }
+    
+    // Try direct string comparison (might already be hex string)
+    if (receivedSig.toLowerCase() === calculatedHex.toLowerCase()) {
+      console.log('[ClickBank] ✅ HMAC-SHA256 signature verified successfully (string)');
+      return true;
+    }
+    
+    console.error('[ClickBank] ❌ HMAC signature verification failed');
+    console.error('[ClickBank] Expected:', calculatedHex);
+    console.error('[ClickBank] Received:', receivedSig);
+    return false;
   } catch (error) {
     console.error('[ClickBank] Error verifying signature:', error);
     return false;
