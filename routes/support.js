@@ -153,7 +153,7 @@ The Tavari Support Team
 // Create support ticket
 router.post("/tickets", authenticate, async (req, res) => {
   try {
-    const { issue_type, description, urgency = "normal" } = req.body;
+    const { issue_type, description, urgency = "normal", module_key } = req.body;
 
     if (!issue_type || !description) {
       return res.status(400).json({ error: "Issue type and description are required" });
@@ -164,16 +164,23 @@ router.post("/tickets", authenticate, async (req, res) => {
       return res.status(404).json({ error: "Business not found" });
     }
 
+    const ticketData = {
+      business_id: req.businessId,
+      user_id: req.user.id,
+      issue_type,
+      description,
+      urgency,
+      status: "open",
+    };
+
+    // Add module_key if provided
+    if (module_key) {
+      ticketData.module_key = module_key;
+    }
+
     const { data: ticket, error } = await supabaseClient
       .from("support_tickets")
-      .insert({
-        business_id: req.businessId,
-        user_id: req.user.id,
-        issue_type,
-        description,
-        urgency,
-        status: "open",
-      })
+      .insert(ticketData)
       .select()
       .single();
 

@@ -1,591 +1,335 @@
 'use client';
 
-import { useEffect, useState, useRef, Suspense } from 'react';
-import { useRouter, usePathname, useSearchParams } from 'next/navigation';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
-import DashboardHeader from '@/components/DashboardHeader';
-import { authAPI, usageAPI, callsAPI, messagesAPI } from '@/lib/api';
+import V2DashboardHeader from '@/components/V2DashboardHeader';
+import V2Sidebar from '@/components/V2Sidebar';
+import { ArrowLeft, ArrowRight, CheckCircle2, Lock } from 'lucide-react';
 
-function DashboardContent() {
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+
+export default function ModulesMarketplacePage() {
   const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const [user, setUser] = useState(null);
-  const [usage, setUsage] = useState({ minutes_used: 0, minutes_total: 0, minutes_remaining: 0, usage_percent: 0 });
-  const [calls, setCalls] = useState([]);
-  const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showSmsBanner, setShowSmsBanner] = useState(false);
-  const [apiError, setApiError] = useState(null);
-  const prevPathnameRef = useRef(pathname);
-  const isLoadingRef = useRef(false);
-  const lastLoadTimeRef = useRef(0);
+  const [modules, setModules] = useState([]);
+  const [error, setError] = useState(null);
 
-  const loadData = async () => {
-    // Prevent concurrent calls
-    if (isLoadingRef.current) {
-      console.log('[Dashboard] Load already in progress, skipping...');
-      return;
-    }
+  useEffect(() => {
+    loadModules();
+  }, []);
 
-    // Debounce: Don't load if called within last 2 seconds
-    const now = Date.now();
-    if (now - lastLoadTimeRef.current < 2000) {
-      console.log('[Dashboard] Load called too soon, skipping...');
-      return;
-    }
+  const getAuthHeaders = () => {
+    if (typeof document === 'undefined') return {};
+    const cookies = document.cookie.split(';');
+    const tokenCookie = cookies.find(c => c.trim().startsWith('token='));
+    const token = tokenCookie ? tokenCookie.split('=')[1] : null;
+    
+    return {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    };
+  };
 
-    isLoadingRef.current = true;
-    lastLoadTimeRef.current = now;
-
+  const loadModules = async () => {
     try {
-      console.log('[Dashboard] ========== LOADING DATA START ==========');
+      setError(null);
+      const headers = getAuthHeaders();
       
-      // Load user data first (required)
-      let userRes;
-      try {
-        userRes = await authAPI.getMe();
-        console.log('[Dashboard] ✅ User data loaded:', userRes.data);
-        console.log('[Dashboard] User structure:', {
-          hasUser: !!userRes.data?.user,
-          hasBusiness: !!userRes.data?.business,
-          userKeys: Object.keys(userRes.data?.user || {}),
-          businessKeys: Object.keys(userRes.data?.business || {}),
-        });
-        setUser(userRes.data);
-      } catch (error) {
-        console.error('[Dashboard] ❌ Failed to load user data:', error);
-        console.error('[Dashboard] Error details:', error.response?.data || error.message);
-        // User data is critical, so we should still show loading or error
-        throw error;
-      }
-
-      // Load other data in parallel (non-critical)
-      const [usageRes, callsRes, messagesRes] = await Promise.allSettled([
-        usageAPI.getStatus(),
-        callsAPI.list({ limit: 10 }),
-        messagesAPI.list({ limit: 10 }),
-      ]);
-
-      // Handle usage
-      if (usageRes.status === 'fulfilled') {
-        console.log('[Dashboard] ✅ Usage data loaded:', usageRes.value.data);
-        setUsage(usageRes.value.data || { minutes_used: 0, minutes_total: 0, minutes_remaining: 0, usage_percent: 0 });
-        setApiError(null);
+      const res = await fetch(`${API_URL}/api/v2/modules`, { headers });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setModules(data.modules || []);
+      } else if (res.status === 429) {
+        const errorData = await res.json().catch(() => ({ error: 'Too many requests' }));
+        setError(errorData.error || 'Too many requests. Please wait a moment and refresh.');
       } else {
-        console.error('[Dashboard] ❌ Failed to load usage:', usageRes.reason);
-        setUsage({ minutes_used: 0, minutes_total: 0, minutes_remaining: 0, usage_percent: 0 });
-        setApiError('Some data failed to load. Please refresh the page.');
+        const errorData = await res.json().catch(() => ({ error: 'Failed to load modules' }));
+        setError(errorData.error || 'Failed to load modules');
       }
-
-      // Handle calls
-      if (callsRes.status === 'fulfilled') {
-        console.log('[Dashboard] ✅ Calls data loaded:', callsRes.value.data?.calls?.length || 0, 'calls');
-        setCalls(callsRes.value.data?.calls || []);
+    } catch (err) {
+      console.error('[Modules Marketplace] Error:', err);
+      if (err.message?.includes('JSON') || err.message?.includes('429')) {
+        setError('Rate limit exceeded. Please wait a moment and refresh the page.');
       } else {
-        console.error('[Dashboard] ❌ Failed to load calls:', callsRes.reason);
-        setCalls([]);
+        setError('Failed to load modules. Please refresh the page.');
       }
-
-      // Handle messages
-      if (messagesRes.status === 'fulfilled') {
-        console.log('[Dashboard] ✅ Messages data loaded:', messagesRes.value.data?.messages?.length || 0, 'messages');
-        setMessages(messagesRes.value.data?.messages || []);
-      } else {
-        console.error('[Dashboard] ❌ Failed to load messages:', messagesRes.reason);
-        setMessages([]);
-      }
-
-      // Check if SMS banner should be shown (checklist complete but SMS not enabled)
-      const business = userRes.data?.business;
-      if (business) {
-        const checklistComplete = 
-          business.vapi_phone_number &&
-          business.email_ai_answered !== false &&
-          business.ai_enabled;
-        
-        if (checklistComplete && !business.sms_enabled) {
-          // Check if user has dismissed the banner
-          const dismissed = localStorage.getItem('sms_banner_dismissed');
-          setShowSmsBanner(!dismissed);
-        }
-      }
-
-      console.log('[Dashboard] ========== LOADING DATA COMPLETE ==========');
-    } catch (error) {
-      console.error('[Dashboard] ========== LOADING DATA ERROR ==========');
-      console.error('[Dashboard] Critical error loading dashboard data:', error);
-      // Set defaults to prevent UI from breaking
-      // Even if user data fails, try to show something
-      if (!user) {
-        // If user data failed, we can't show the dashboard
-        console.error('[Dashboard] Cannot show dashboard without user data');
-      }
-      setUsage({ minutes_used: 0, minutes_total: 0, minutes_remaining: 0, usage_percent: 0 });
-      setCalls([]);
-      setMessages([]);
     } finally {
       setLoading(false);
-      isLoadingRef.current = false;
     }
   };
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  // Reload data whenever pathname changes to /dashboard
-  useEffect(() => {
-    if (pathname === '/dashboard' && prevPathnameRef.current !== pathname) {
-      prevPathnameRef.current = pathname;
-      loadData();
-      if (searchParams.get('refresh')) {
-        router.replace('/dashboard', { scroll: false });
-      }
+  const getStatusBadge = (module) => {
+    if (module.subscribed) {
+      return (
+        <span 
+          className="px-2 py-1 text-xs font-medium flex items-center gap-1"
+          style={{
+            backgroundColor: 'rgba(20, 184, 166, 0.1)',
+            color: 'var(--color-accent)',
+            borderRadius: 'var(--button-radius)',
+          }}
+        >
+          <CheckCircle2 className="w-3 h-3" /> Active
+        </span>
+      );
     }
-  }, [pathname, searchParams, router]);
+    return (
+      <span 
+        className="px-2 py-1 text-xs font-medium flex items-center gap-1"
+        style={{
+          backgroundColor: 'rgba(0, 0, 0, 0.05)',
+          color: 'var(--color-text-muted)',
+          borderRadius: 'var(--button-radius)',
+        }}
+      >
+        <Lock className="w-3 h-3" /> Available
+      </span>
+    );
+  };
 
-  // Reload data when page becomes visible (debounced)
-  useEffect(() => {
-    let visibilityTimeout;
-    let focusTimeout;
+  const getHealthBadge = (status) => {
+    if (status === 'healthy') {
+      return (
+        <span 
+          className="px-2 py-1 text-xs font-medium flex items-center gap-1"
+          style={{
+            backgroundColor: 'rgba(20, 184, 166, 0.1)',
+            color: 'var(--color-accent)',
+            borderRadius: 'var(--button-radius)',
+          }}
+        >
+          <span>●</span> Healthy
+        </span>
+      );
+    }
+    if (status === 'degraded') {
+      return (
+        <span 
+          className="px-2 py-1 text-xs font-medium flex items-center gap-1"
+          style={{
+            backgroundColor: 'rgba(250, 204, 21, 0.1)',
+            color: 'var(--color-accent-2)',
+            borderRadius: 'var(--button-radius)',
+          }}
+        >
+          <span>⚠</span> Degraded
+        </span>
+      );
+    }
+    if (status === 'offline') {
+      return (
+        <span 
+          className="px-2 py-1 text-xs font-medium flex items-center gap-1"
+          style={{
+            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+            color: 'var(--color-danger)',
+            borderRadius: 'var(--button-radius)',
+          }}
+        >
+          <span>●</span> Offline
+        </span>
+      );
+    }
+    return null;
+  };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        // Debounce visibility changes
-        clearTimeout(visibilityTimeout);
-        visibilityTimeout = setTimeout(() => {
-          loadData();
-        }, 3000); // Wait 3 seconds after becoming visible
-      }
+  // Get app logo path for module
+  const getModuleLogo = (moduleKey) => {
+    const logoMap = {
+      'phone-agent': '/App-Logos/Tavari-Phone-Agent.png',
+      'reviews': '/App-Logos/Tavari-Review-Reply-AI.png',
+      // Add more modules as logo files are added
     };
-
-    // Remove focus handler - it was too aggressive and causing rate limits
-    // Users can manually refresh if needed
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      clearTimeout(visibilityTimeout);
-      clearTimeout(focusTimeout);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
-
-  // Check if checklist should be shown
-  const shouldShowChecklist = () => {
-    if (!user?.business) return true;
-    const business = user.business;
-    
-    // Checklist is complete when everything except SMS is done
-    const isComplete = 
-      business.vapi_phone_number &&
-      business.email_ai_answered !== false &&
-      business.ai_enabled;
-    
-    return !isComplete;
+    return logoMap[moduleKey] || null;
   };
 
-  // Count AI handled calls (completed calls without messages)
-  const aiHandledCalls = calls.filter(
-    call => call.status === 'completed' && !call.message_taken
-  ).length;
+  // Separate modules into active and available (same logic as sidebar)
+  const activeModules = modules.filter(module => module.subscribed && module.health_status !== 'offline');
+  const availableModules = modules.filter(module => !module.subscribed);
 
-  // Import date formatter
-  const formatDate = (dateString) => {
-    if (!dateString) return 'N/A';
-    // Ensure the date string is treated as UTC if it doesn't have timezone info
-    let date;
-    if (dateString.includes('Z') || dateString.includes('+') || dateString.includes('-', 10)) {
-      // Already has timezone info
-      date = new Date(dateString);
-    } else {
-      // Assume UTC if no timezone specified (database timestamps are typically UTC)
-      date = new Date(dateString + 'Z');
-    }
-    
-    // Convert to local timezone for display
-    return date.toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: true
-    });
-  };
+  // Module card component
+  const ModuleCard = ({ module }) => {
+    const logoPath = getModuleLogo(module.key);
+    return (
+      <div
+        key={module.key}
+        className="shadow transition-shadow overflow-hidden flex flex-col"
+        style={{
+          backgroundColor: 'var(--color-background)',
+          borderRadius: 'var(--card-radius)',
+        }}
+        onMouseEnter={(e) => e.currentTarget.style.boxShadow = '0 10px 15px rgba(0,0,0,0.1)'}
+        onMouseLeave={(e) => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)'}
+      >
+        {/* App Logo Tile at Top */}
+        {logoPath && (
+          <div className="w-full h-48 flex items-center justify-center" style={{ backgroundColor: 'var(--color-background)' }}>
+            <img
+              src={logoPath}
+              alt={module.name}
+              className="w-full h-full object-contain"
+              style={{ padding: '1rem' }}
+            />
+          </div>
+        )}
+        
+        {/* Card Content */}
+        <div className="flex flex-col flex-1" style={{ padding: 'var(--padding-base)' }}>
+          {/* Module Title */}
+          <h3 className="text-xl font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>
+            {module.name}
+          </h3>
+          
+          {/* Status Badge */}
+          <div className="mb-3">
+            {getStatusBadge(module)}
+          </div>
 
-  const formatDuration = (seconds) => {
-    if (!seconds) return '0:00';
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
+          {/* Description */}
+          {module.description && (
+            <p className="text-sm mb-4 flex-1" style={{ color: 'var(--color-text-muted)' }}>
+              {module.description}
+            </p>
+          )}
 
-  const dismissSmsBanner = () => {
-    localStorage.setItem('sms_banner_dismissed', 'true');
-    setShowSmsBanner(false);
+          {/* Action Button */}
+          <div className="mt-auto">
+            <Link
+              href={module.subscribed 
+                ? (module.key === 'phone-agent' ? '/tavari-ai-phone/dashboard' : module.key === 'reviews' ? '/review-reply-ai/dashboard' : `/${module.key}/dashboard`)
+                : `/dashboard/v2/modules/${module.key}`
+              }
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium transition-colors rounded w-full"
+              style={{ 
+                backgroundColor: 'var(--color-accent)',
+                color: 'white',
+                borderRadius: 'var(--button-radius)',
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.opacity = '0.9'}
+              onMouseLeave={(e) => e.currentTarget.style.opacity = '1'}
+            >
+              {module.subscribed ? (
+                <>Open Dashboard <ArrowRight className="w-4 h-4" /></>
+              ) : (
+                <>Learn More <ArrowRight className="w-4 h-4" /></>
+              )}
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-lg">Loading...</div>
-      </div>
+      <AuthGuard>
+        <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
+          <V2DashboardHeader />
+          <V2Sidebar />
+          <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }} className="flex items-center justify-center min-h-[60vh]">
+            <div className="text-lg" style={{ color: 'var(--color-text-muted)' }}>Loading modules...</div>
+          </div>
+        </div>
+      </AuthGuard>
     );
   }
 
-  // If no user data, show error
-  if (!user) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <DashboardHeader />
-        <main className="container mx-auto px-4 py-8 max-w-7xl">
-          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
-            <p className="font-semibold">Failed to load dashboard data</p>
-            <p className="text-sm mt-1">Please refresh the page or contact support if the problem persists.</p>
-          </div>
-        </main>
-      </div>
-    );
-  }
-
-  const business = user?.business;
-  const showChecklist = shouldShowChecklist();
-
-  console.log('[Dashboard Render] State:', {
-    hasUser: !!user,
-    hasBusiness: !!business,
-    usage,
-    callsCount: calls.length,
-    messagesCount: messages.length,
-    loading,
-    showChecklist,
-  });
-
-  return (
-    <div className="min-h-screen bg-gray-50" style={{ color: '#000000' }}>
-      <DashboardHeader />
-
-      <main className="container mx-auto px-4 py-8 max-w-7xl">
-        <div className="mb-8">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">Welcome back!</h2>
-          <p className="text-gray-600">
-            {business?.name || user?.business?.name || 'Business'} • {user?.user?.email || user?.email || 'Loading...'}
-          </p>
-          {apiError && (
-            <div className="mt-4 bg-yellow-50 border border-yellow-200 text-yellow-700 px-4 py-3 rounded">
-              <p className="text-sm">{apiError}</p>
-            </div>
-          )}
-        </div>
-
-        {/* SMS Activation Banner */}
-        {showSmsBanner && !showChecklist && (
-          <div className="bg-blue-50 border-l-4 border-blue-500 p-4 mb-6 rounded-r-lg relative">
-            <button
-              onClick={dismissSmsBanner}
-              className="absolute top-2 right-2 text-gray-400 hover:text-gray-600"
-            >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-            <div className="flex items-center gap-3">
-              <div className="flex-1">
-                <h3 className="text-sm font-semibold text-blue-900 mb-1">Activate SMS for important messages</h3>
-                <p className="text-sm text-blue-700">Get instant SMS alerts when callers request urgent callbacks</p>
-              </div>
-              <button
-                onClick={() => router.push('/dashboard/settings')}
-                className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-medium"
-              >
-                Activate SMS
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Setup Checklist */}
-        {showChecklist && (
-          <div className="bg-white rounded-lg shadow p-6 mb-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-4">Setup Checklist</h2>
-            <div className="space-y-3">
-              {/* Phone Number */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {business?.vapi_phone_number ? (
-                    <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  )}
-                  <span className={`text-sm ${business?.vapi_phone_number ? 'text-gray-900' : 'text-gray-500'}`}>
-                    Phone number provisioned
-                  </span>
-                </div>
-                {!business?.vapi_phone_number && (
-                  <Link href="/dashboard/settings" className="text-sm text-blue-600 hover:underline">
-                    Select phone number →
-                  </Link>
-                )}
-              </div>
-
-              {/* Email Notifications */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {business?.email_ai_answered !== false ? (
-                    <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  )}
-                  <span className={`text-sm ${business?.email_ai_answered !== false ? 'text-gray-900' : 'text-gray-500'}`}>
-                    Email notifications enabled
-                  </span>
-                </div>
-                {business?.email_ai_answered === false && (
-                  <Link href="/dashboard/settings" className="text-sm text-blue-600 hover:underline">
-                    Enable →
-                  </Link>
-                )}
-              </div>
-
-              {/* AI Agent Active */}
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  {business?.ai_enabled ? (
-                    <svg className="w-5 h-5 text-green-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                  ) : (
-                    <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  )}
-                  <span className={`text-sm ${business?.ai_enabled ? 'text-gray-900' : 'text-gray-500'}`}>
-                    AI Phone Agent active
-                  </span>
-                </div>
-                {!business?.ai_enabled && (
-                  <Link href="/dashboard/settings" className="text-sm text-blue-600 hover:underline">
-                    Enable →
-                  </Link>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Action Cards - Always show this section */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
-          {/* Your AI Agent Number */}
-          {business?.vapi_phone_number && (
-            <button
-              onClick={() => router.push('/dashboard/settings')}
-              className="bg-gradient-to-br from-blue-500 to-blue-600 rounded-xl shadow-lg p-6 text-left hover:shadow-xl transition-all transform hover:-translate-y-1"
-            >
-              <div className="flex items-center justify-between mb-2">
-                <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-                </svg>
-                <span className={`inline-block w-3 h-3 rounded-full ${business?.ai_enabled ? 'bg-green-400' : 'bg-gray-400'}`}></span>
-              </div>
-              <h3 className="text-white font-semibold text-lg mb-1">Your AI Agent Number</h3>
-              <p className="text-blue-100 text-sm mb-2">{business.vapi_phone_number}</p>
-              <p className="text-blue-200 text-xs">Click to manage settings</p>
-            </button>
-          )}
-
-          {/* Minutes Used */}
-          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-blue-500">
-            <h3 className="text-sm font-semibold text-gray-600 mb-2">Minutes Used</h3>
-            <p className="text-3xl font-bold text-gray-900 mb-2" style={{ color: '#000000' }}>
-              {Math.round(usage?.minutes_used || 0)} / {usage?.minutes_total || 0}
-            </p>
-            <div className="w-full bg-gray-200 rounded-full h-2.5 mb-2">
-              <div
-                className={`h-2.5 rounded-full transition-all ${
-                  (usage?.usage_percent || 0) >= 100
-                    ? 'bg-red-500'
-                    : (usage?.usage_percent || 0) >= 80
-                    ? 'bg-yellow-500'
-                    : 'bg-blue-500'
-                }`}
-                style={{ width: `${Math.min(usage?.usage_percent || 0, 100)}%` }}
-              />
-            </div>
-            <p className="text-xs text-gray-500">
-              {usage?.minutes_remaining || 0} minutes remaining
-            </p>
-          </div>
-
-          {/* AI Handled Calls */}
-          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-green-500">
-            <h3 className="text-sm font-semibold text-gray-600 mb-2">AI Handled Calls</h3>
-            <p className="text-3xl font-bold text-gray-900 mb-1" style={{ color: '#000000' }}>{aiHandledCalls}</p>
-            <p className="text-xs text-gray-500">Calls handled completely by AI</p>
-          </div>
-
-          {/* Recent Calls */}
-          <div className="bg-white rounded-xl shadow-lg p-6 border-l-4 border-purple-500">
-            <h3 className="text-sm font-semibold text-gray-600 mb-2">Recent Calls</h3>
-            <p className="text-3xl font-bold text-gray-900 mb-1" style={{ color: '#000000' }}>{calls.length}</p>
-            <p className="text-xs text-gray-500">Total calls received</p>
-          </div>
-        </div>
-
-        {/* Recent Calls and Messages */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
-          {/* Recent Calls */}
-          <div className="bg-white rounded-xl shadow-lg p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-gray-900">Recent Calls</h3>
-              <Link href="/dashboard/calls" className="text-sm text-blue-600 hover:underline">
-                View all →
-              </Link>
-            </div>
-            {calls.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>No calls yet</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {calls.slice(0, 5).map((call) => (
-                  <div key={call.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="text-sm font-medium text-gray-900">
-                          {call.caller_number || 'Unknown'}
-                        </span>
-                        {call.message_taken && (
-                          <span className="px-2 py-0.5 text-xs bg-blue-100 text-blue-800 rounded-full">
-                            Message
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-3 text-xs text-gray-500">
-                        <span>{formatDate(call.started_at)}</span>
-                        <span>•</span>
-                        <span>{formatDuration(call.duration_seconds)}</span>
-                      </div>
-                    </div>
-                    <Link
-                      href={`/dashboard/calls/${call.id}`}
-                      className="text-blue-600 hover:text-blue-800 text-sm font-medium"
-                    >
-                      View
-                    </Link>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Recent Messages */}
-          <div className="bg-white rounded-xl shadow-lg p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-bold text-gray-900">Recent Messages</h3>
-              <Link href="/dashboard/messages" className="text-sm text-blue-600 hover:underline">
-                View all →
-              </Link>
-            </div>
-            {messages.length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                <p>No messages yet</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {(() => {
-                  // Sort messages: newest unread first, then follow up, then most recent read
-                  const sortedMessages = [...messages].sort((a, b) => {
-                    const aIsNew = !a.is_read && a.status !== 'follow_up';
-                    const bIsNew = !b.is_read && b.status !== 'follow_up';
-                    const aIsFollowUp = a.status === 'follow_up';
-                    const bIsFollowUp = b.status === 'follow_up';
-                    
-                    // New messages first
-                    if (aIsNew && !bIsNew) return -1;
-                    if (!aIsNew && bIsNew) return 1;
-                    
-                    // Follow up messages second
-                    if (aIsFollowUp && !bIsFollowUp && !bIsNew) return -1;
-                    if (!aIsFollowUp && bIsFollowUp && !aIsNew) return 1;
-                    
-                    // Within same category, sort by date (newest first)
-                    const dateA = new Date(a.created_at);
-                    const dateB = new Date(b.created_at);
-                    return dateB - dateA;
-                  });
-                  
-                  return sortedMessages.slice(0, 5).map((message) => (
-                    <div
-                      key={message.id}
-                      className={`p-3 rounded-lg hover:bg-gray-50 transition ${
-                        !message.is_read && message.status !== 'follow_up'
-                          ? 'bg-blue-50 border-l-4 border-blue-500'
-                          : message.status === 'follow_up'
-                          ? 'bg-yellow-50 border-l-4 border-yellow-500'
-                          : 'bg-gray-50'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-1">
-                        <span className="text-sm font-medium text-gray-900">
-                          {message.caller_name || 'Unknown Caller'}
-                        </span>
-                        {!message.is_read && message.status !== 'follow_up' && (
-                          <span className="px-2 py-0.5 text-xs bg-blue-600 text-white rounded-full">
-                            New
-                          </span>
-                        )}
-                        {message.status === 'follow_up' && (
-                          <span className="px-2 py-0.5 text-xs bg-yellow-600 text-white rounded-full">
-                            Follow Up
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-xs text-gray-500 mb-2">{formatDate(message.created_at)}</p>
-                      <p className="text-sm text-gray-700 line-clamp-2">{message.message_text}</p>
-                    </div>
-                  ));
-                })()}
-              </div>
-            )}
-          </div>
-        </div>
-
-      </main>
-    </div>
-  );
-}
-
-function DashboardWithSearchParams() {
-  return <DashboardContent />;
-}
-
-export default function DashboardPage() {
   return (
     <AuthGuard>
-      <Suspense fallback={
-        <div className="min-h-screen bg-gray-50">
-          <DashboardHeader />
-          <main className="container mx-auto px-4 py-8 max-w-7xl">
-            <div className="flex items-center justify-center min-h-[60vh]">
-              <div className="text-lg">Loading dashboard...</div>
+      <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
+        <V2DashboardHeader />
+        <V2Sidebar />
+        
+        <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }}>
+          <div className="mx-auto py-8" style={{ maxWidth: 'var(--max-content-width)', padding: 'var(--padding-base)' }}>
+            {/* Header */}
+            <div className="mb-8">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-3xl font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>Module Marketplace</h1>
+                  <p style={{ color: 'var(--color-text-muted)' }}>
+                    Browse and activate AI modules for your organization
+                  </p>
+                </div>
+              </div>
             </div>
-          </main>
+
+            {error && (
+              <div 
+                className="px-4 py-3 mb-6"
+                style={{
+                  backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                  border: '1px solid rgba(239, 68, 68, 0.2)',
+                  color: 'var(--color-danger)',
+                  borderRadius: 'var(--card-radius)',
+                }}
+              >
+                {error}
+              </div>
+            )}
+
+            {/* Active Modules Section */}
+            {activeModules.length > 0 && (
+              <div className="mb-12">
+                <h2 className="text-2xl font-semibold mb-4" style={{ color: 'var(--color-text-main)' }}>
+                  Active Modules ({activeModules.length})
+                </h2>
+                <div 
+                  className="shadow p-6"
+                  style={{
+                    backgroundColor: 'var(--color-surface)',
+                    borderRadius: 'var(--card-radius)',
+                  }}
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {activeModules.map((module) => (
+                      <ModuleCard key={module.key} module={module} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Available Modules Section */}
+            {availableModules.length > 0 && (
+              <div>
+                <h2 className="text-2xl font-semibold mb-4" style={{ color: 'var(--color-text-main)' }}>
+                  Available Modules ({availableModules.length})
+                </h2>
+                <div 
+                  className="shadow p-6"
+                  style={{
+                    backgroundColor: 'var(--color-surface)',
+                    borderRadius: 'var(--card-radius)',
+                  }}
+                >
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {availableModules.map((module) => (
+                      <ModuleCard key={module.key} module={module} />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Empty State */}
+            {activeModules.length === 0 && availableModules.length === 0 && (
+              <div 
+                className="shadow p-12 text-center"
+                style={{
+                  backgroundColor: 'var(--color-surface)',
+                  borderRadius: 'var(--card-radius)',
+                }}
+              >
+                <p style={{ color: 'var(--color-text-muted)' }}>No modules available.</p>
+              </div>
+            )}
+          </div>
         </div>
-      }>
-        <DashboardWithSearchParams />
-      </Suspense>
+      </div>
     </AuthGuard>
   );
 }

@@ -75,11 +75,11 @@ export default function SignupPage() {
 
       // Check if signup succeeded (we got a token)
       if (response?.token) {
-        // Account was created successfully - redirect to setup wizard
+        // Account was created successfully - redirect to AI marketplace
         setActivationStatus('success');
-        // Redirect to setup wizard after a brief delay
+        // Redirect to marketplace after a brief delay
         setTimeout(() => {
-          router.push('/dashboard/setup');
+          router.push('/dashboard');
         }, 1500);
       } else {
         // Signup failed
@@ -116,7 +116,7 @@ export default function SignupPage() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-2">Account Created!</h1>
-          <p className="text-gray-600 mb-4">Redirecting to setup wizard...</p>
+          <p className="text-gray-600 mb-4">Redirecting to AI marketplace...</p>
           <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
         </div>
       </div>

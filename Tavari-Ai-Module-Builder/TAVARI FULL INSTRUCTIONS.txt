@@ -1,0 +1,1950 @@
+TAVARI AI CORE FOUNDATION v2 + MODULE STANDARD
+Consolidated Specification (Authoritative)
+
+Version: 2.3 (Enhanced - Risk Mitigation & Health Monitoring Added)
+Last Updated: 2024
+Status: Production-Ready Specification
+
+================================================================================
+TABLE OF CONTENTS
+================================================================================
+
+1. Role & Mission
+2. Critical Safety Rules
+3. Database Schema (Unified & Conflict-Resolved)
+4. Architecture Phases
+5. Module Building Standard
+6. UI/UX Design System
+7. API Standards
+8. Billing & Usage Model
+9. Unified Billing Architecture
+10. Security & Enforcement Rules
+11. Operational Contracts
+12. Risk Mitigation Rules
+
+================================================================================
+ROLE & MISSION
+================================================================================
+
+You are a senior SaaS platform engineer building Tavari AI Core v2, a modular,
+multi-tenant AI platform.
+
+Primary Objective: Build a new foundation in parallel to existing production
+system without refactoring or modifying existing code.
+
+Core Principles:
+- Safety, consistency, and repeatability over speed or creativity
+- Architecturally separate, experientially unified
+- Copy-based migration (not refactor-based)
+- Incremental rollout
+- Feature flags everywhere
+- ONE unified Stripe billing system (no duplication)
+- Security-first: Server-side enforcement of all business rules
+
+================================================================================
+CRITICAL SAFETY RULES (NON-NEGOTIABLE)
+================================================================================
+
+DO NOT:
+- Refactor existing production code
+- Modify existing APIs
+- Share files with current system
+- Assume backward compatibility
+- Delete data
+- Touch Phone Agent code (it's working)
+- Create duplicate Stripe customer/subscription fields
+- Trust client-side enforcement alone (ALWAYS enforce server-side)
+- Allow API access without valid business context
+- Process webhooks without signature verification
+- Allow unbounded AI requests without rate limiting
+
+DO:
+- Build in parallel
+- Copy existing implementations
+- Only change inputs (organization context)
+- Validate independently
+- Migrate later, module by module
+- Use ONE unified Stripe billing system
+- Enforce business context on EVERY API request
+- Verify subscription status from Stripe (source of truth)
+- Enforce legal acceptance before module access
+- Verify all webhook signatures before processing
+- Implement rate limiting on all AI endpoints
+- Make all Stripe operations idempotent and retry-safe
+
+================================================================================
+PLATFORM CONTEXT
+================================================================================
+
+Platform Name: Tavari AI
+Primary Dashboard: ai.tavarios.com
+
+Already Configured (DO NOT rebuild):
+- Supabase (Database) - Using custom auth (NOT Supabase Auth)
+- OpenAI API
+- Telnyx (SMS)
+- AWS SES (Email)
+- Stripe (Billing) - ONE unified system
+- Vapi (AI Phone Agent) - WORKING, DO NOT TOUCH
+
+Existing Features (Phone Agent Module):
+- AI Phone Agent (call_sessions, ai_agents, usage_minutes)
+- Takeout Orders (takeout_orders, takeout_order_items, menu_items, global_modifiers)
+- SMS Campaigns (sms_campaigns, sms_campaign_recipients, contacts, contact_lists)
+- HR Contracts (hr_contracts)
+- Website Analytics (website_analytics)
+- Invoices & Billing (invoices, invoice_settings, pricing_packages)
+- Admin Tools (admin_users, admin_activity_log, support_tickets)
+
+Environment Strategy:
+- Supabase: tavari-ai-dev (dev) / tavari-ai-prod (prod)
+- Stripe: Test keys (dev) / Live keys (prod)
+- Telnyx & Email: Same account, different "from" numbers/emails in dev
+- Fail startup if required environment variables are missing
+
+================================================================================
+DATABASE SCHEMA (UNIFIED & CONFLICT-RESOLVED)
+================================================================================
+
+CORE PRINCIPLE: NO DUPLICATION
+
+- ONE Stripe customer per business → businesses.stripe_customer_id
+- ONE Stripe subscription per business → businesses.stripe_subscription_id
+- Module entitlements → subscriptions table (references subscription items)
+- ONE source of truth for all business data → businesses table
+
+EXISTING PRODUCTION TABLES (DO NOT MODIFY)
+
+businesses (Comprehensive Tenant Table)
+Status: EXISTING - 73+ columns, includes Phone Agent fields, ClickBank fields,
+takeout settings, etc.
+Action: Only add minimal new columns if needed
+
+Added columns (from migration):
+- legal_name VARCHAR(255)
+- brand_tone VARCHAR(100)
+- industry VARCHAR(100)
+
+Note: Use businesses.name as display_name (no separate field needed)
+
+users (Custom Auth - Confirmed Structure)
+Status: EXISTING - Custom auth with business_id, password_hash
+Action: No changes needed
+
+Confirmed columns:
+- id, business_id, email, password_hash, first_name, last_name
+- role, is_active, last_login, created_at, updated_at, deleted_at
+- terms_accepted_at, privacy_accepted_at, terms_version, terms_accepted_ip
+- password_reset_token, password_reset_expires, personal_info_token
+
+CRITICAL: User → Business Relationship Rules
+
+For multi-organization access, authorization MUST always be determined via
+organization_users table. users.business_id is used only as a fallback when
+a user belongs to exactly one business.
+
+This means:
+- organization_users is the source of truth for access control
+- users.business_id is legacy/primary only, not used for authorization checks
+- When checking if user can access a business, ALWAYS query organization_users
+- Only use users.business_id as convenience for single-org users (e.g., auto-selecting organization)
+
+Phone Agent Tables (EXISTING - DO NOT MODIFY)
+- ai_agents - Phone Agent configuration
+- call_sessions - Call records
+- messages - Messages from callers
+- usage_minutes - Usage tracking for Phone Agent
+- business_phone_numbers - Phone number management
+- takeout_orders, takeout_order_items - Takeout ordering
+- menu_items, global_modifiers - Menu/ordering features
+- sms_campaigns, sms_campaign_recipients, sms_opt_outs - SMS features
+- contacts, contact_lists, contact_list_members - Contact management
+- hr_contracts - HR feature
+- website_analytics - Analytics
+
+Support Tables (EXISTING)
+- admin_users - Tavari staff accounts
+- admin_activity_log - Staff activity tracking
+- invoices - Invoice records
+- support_tickets - Support system
+- pricing_packages - Pricing configuration
+- invoice_settings - Invoice settings
+- demo_usage, demo_emails - Demo tracking
+
+NEW v2 TABLES (Created by Migration)
+
+organization_users (Multi-Org User Access)
+Purpose: Enable users to belong to multiple businesses (organizations)
+
+Structure:
+- id (UUID PRIMARY KEY)
+- business_id (FK to businesses)
+- user_id (FK to users)
+- role ('owner' | 'admin' | 'staff')
+- created_at, deleted_at
+- UNIQUE(business_id, user_id)
+
+Migration: Existing users migrated automatically via SQL
+
+CRITICAL: This is the source of truth for user → business authorization.
+Always check this table when verifying user access to a business.
+users.business_id is NOT used for authorization - only as fallback for
+convenience (e.g., auto-selecting organization when user has only one).
+
+modules (Module Registry)
+Purpose: Define available modules in the platform
+
+Structure:
+- id, key (unique), name, description
+- is_active, is_clickbank_enabled
+- stripe_price_id_monthly, stripe_price_id_yearly
+- required_permissions (TEXT[]), admin_permissions (TEXT[])
+- health_status VARCHAR(20) DEFAULT 'healthy' CHECK (health_status IN ('healthy', 'degraded', 'offline'))
+- created_at, updated_at
+
+Default modules:
+- phone - Phone Agent (existing, not ClickBank)
+- sales - Sales AI (ClickBank enabled)
+- content - Content AI (ClickBank enabled)
+- estimator - Estimator AI (ClickBank enabled)
+- music - Music AI (ClickBank enabled)
+
+health_status Use Cases:
+- 'healthy' - Module is fully operational
+- 'degraded' - Module has issues but still partially functional (e.g., some API endpoints down)
+- 'offline' - Module is completely unavailable (e.g., OpenAI outage, infrastructure failure)
+
+When health_status is not 'healthy':
+- Show graceful UI messages to users
+- Disable module activation in marketplace
+- Block module API access (return 503 Service Unavailable)
+- Log health status changes in audit_logs
+- Monitor and alert Tavari admin team
+
+subscriptions (Module Entitlements - NO Duplicate Stripe Fields)
+Purpose: Track which modules each business has access to
+
+Structure:
+- id, business_id, module_key
+- plan, status ('trial' | 'active' | 'canceled' | 'expired' | 'pending')
+- stripe_subscription_item_id - Stripe subscription item ID (NOT subscription ID)
+- usage_limit, usage_limit_reset_date
+- started_at, ends_at, trial_ends_at
+- created_at, updated_at
+- UNIQUE(business_id, module_key)
+
+Critical:
+- NO stripe_customer_id (use businesses.stripe_customer_id)
+- NO stripe_subscription_id (use businesses.stripe_subscription_id)
+- Uses Stripe subscription items on the unified subscription
+
+IMPORTANT: subscriptions.status is a CACHED MIRROR of Stripe state.
+Stripe is the source of truth. Always verify with Stripe API for critical
+operations. Webhooks update subscriptions.status.
+
+usage_logs (Universal Usage Tracking)
+Purpose: Track usage across ALL modules in a unified way
+
+Structure:
+- id, business_id, user_id, module_key
+- action, units_used, metadata (JSONB)
+- created_at
+
+Integration: Phone Agent's usage_minutes coexists. Optional triggers can sync
+to usage_logs for unified reporting.
+
+ai_requests (AI Request Logging)
+Purpose: Track all AI API calls across modules
+
+Structure:
+- id, business_id, user_id, module_key
+- prompt_type, input (JSONB), output (JSONB)
+- tokens_used, model, created_at
+
+module_settings (Per-Module Configuration)
+Purpose: Store module-specific settings per business
+
+Structure:
+- id, business_id, module_key
+- settings (JSONB)
+- created_at, updated_at
+- UNIQUE(business_id, module_key)
+
+Access Control: Only users with 'configure_module' permission can edit.
+Owner/Admin have this permission by default. Staff is read-only.
+
+permissions (Permission Registry)
+Purpose: Define available permissions in the system
+
+Default permissions:
+- manage_billing, manage_users, manage_modules
+- view_audit_logs, view_notifications
+- use_module, configure_module
+
+role_permissions (Role → Permission Mapping)
+Purpose: Define what each role can do
+
+Default mappings:
+- owner → All permissions
+- admin → Most permissions (except manage_billing, manage_modules)
+- staff → Basic permissions (view_notifications, use_module)
+
+audit_logs (Enhanced Audit Logging)
+Purpose: Track all important actions across the platform
+
+Structure:
+- id, business_id, user_id, admin_user_id
+- action, resource_type, resource_id
+- metadata (JSONB), ip_address, user_agent
+- created_at
+
+Special Actions to Log:
+- impersonation_start, impersonation_end (when admin impersonates user)
+- subscription_status_change
+- module_activation, module_deactivation
+- terms_acceptance, privacy_acceptance
+- health_status_change (when module health changes)
+
+Note: Coexists with admin_activity_log (more comprehensive)
+
+notifications (System Notifications)
+Purpose: Store notifications for businesses/users
+
+Structure:
+- id, business_id, user_id
+- type ('info' | 'warning' | 'billing' | 'limit' | 'module')
+- message, metadata (JSONB)
+- read_at, created_at
+
+external_purchases (ClickBank Integration)
+Purpose: Track purchases made through ClickBank
+
+Structure:
+- id, provider (default 'clickbank')
+- external_order_id (unique per provider)
+- business_id, user_id, module_key
+- email, amount, currency, status
+- purchase_data (JSONB)
+- created_at, updated_at
+
+CRITICAL: When status changes to 'refunded':
+1. Remove associated Stripe subscription item
+2. Update subscriptions.status = 'canceled'
+3. Log action in audit_logs
+This MUST be handled automatically via webhook.
+
+platform_version (Platform Versioning)
+Purpose: Track platform version for feature rollout control, debugging, and
+ClickBank cohort tracking
+
+Structure:
+- id (UUID PRIMARY KEY)
+- version VARCHAR(50) NOT NULL (e.g., '2.2.0')
+- applied_at TIMESTAMP DEFAULT NOW()
+- description TEXT
+- metadata JSONB
+
+Use Cases:
+- Feature flag eligibility (show features only to certain versions)
+- Debugging (know which version a business is on when issues arise)
+- ClickBank cohort tracking (track when features were introduced for cohort analysis)
+- Rollback planning
+
+================================================================================
+SECURITY & ENFORCEMENT RULES (CRITICAL)
+================================================================================
+
+GAP #2: ACTIVE BUSINESS CONTEXT ENFORCEMENT AT API LEVEL
+
+Problem: UI behavior is defined, but server-side enforcement is missing.
+Users could access data from other businesses if only client-side enforcement
+exists.
+
+SOLUTION: requireBusinessContext Middleware
+
+Every API request MUST:
+
+1. Resolve active_business_id from:
+   - Request header: X-Active-Business-Id
+   - Session: active_organization_id
+   - Fallback: user's primary business_id (if only one organization)
+
+2. Verify user belongs to that business:
+   - Check organization_users table for (user_id, business_id) match
+   - Verify deleted_at IS NULL
+   - Reject with 403 Forbidden if user doesn't belong
+
+CRITICAL: Always query organization_users table for authorization.
+DO NOT use users.business_id for authorization checks - it is only a fallback
+for convenience when determining which business to auto-select.
+
+3. Attach business context to request:
+   - req.active_business_id
+   - req.business (full business object)
+
+4. Reject requests without valid business context:
+   - 400 Bad Request if no business_id can be determined
+   - 403 Forbidden if user doesn't belong to business
+
+Implementation:
+- Apply to ALL module APIs (e.g., /api/{module_key}/*)
+- Apply to ALL settings APIs (/api/settings/*)
+- Apply to ALL billing APIs (/api/billing/*)
+- Skip only for auth endpoints (/api/auth/*)
+
+Example Middleware:
+requireBusinessContext(req, res, next) {
+  const activeBusinessId = 
+    req.headers['x-active-business-id'] ||
+    req.session.active_organization_id ||
+    (req.user.organization_count === 1 ? req.user.primary_business_id : null);
+    
+  if (!activeBusinessId) {
+    return res.status(400).json({ error: 'Active business context required' });
+  }
+  
+  // CRITICAL: Verify user belongs to business via organization_users
+  // DO NOT check users.business_id - it's not for authorization
+  const membership = await organization_users.findOne({
+    user_id: req.user.id,
+    business_id: activeBusinessId,
+    deleted_at: null
+  });
+  
+  if (!membership) {
+    return res.status(403).json({ error: 'Access denied to this business' });
+  }
+  
+  req.active_business_id = activeBusinessId;
+  req.business_membership = membership;
+  next();
+}
+
+RISK #2: API RATE LIMITING (AI COST CONTROL)
+
+Problem: Usage limits track overall consumption, but don't prevent prompt abuse,
+scripted attacks, or cost spikes before usage logs catch up.
+
+SOLUTION: Request-Level Rate Limiting
+
+All AI generate endpoints MUST implement:
+- Per-user rate limiting (e.g., X requests per minute per user)
+- Per-business rate limiting (e.g., Y requests per minute per business)
+- Per-IP rate limiting (optional, for additional protection)
+
+Rate limits are SEPARATE from usage limits:
+- Rate limits: Prevent abuse and cost spikes (requests per time period)
+- Usage limits: Track consumption for billing (total units used)
+
+Implementation:
+- Use rate limiting middleware (e.g., express-rate-limit)
+- Configure different limits per module if needed
+- Store rate limit state in Redis or similar (fast, shared across instances)
+- Return 429 Too Many Requests when limit exceeded
+- Log rate limit violations in audit_logs
+
+Example:
+// Apply to all AI generation endpoints
+const aiRateLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: async (req) => {
+    // Per-user limit
+    return 10; // 10 requests per minute per user
+  },
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    // Log violation
+    audit_logs.create({
+      action: 'rate_limit_exceeded',
+      user_id: req.user.id,
+      business_id: req.active_business_id,
+      metadata: { endpoint: req.path }
+    });
+    res.status(429).json({
+      error: 'Too many requests. Please try again later.'
+    });
+  }
+});
+
+// Apply to routes:
+router.post('/api/:moduleKey/generate',
+  requireBusinessContext,
+  requireLegalAcceptance,
+  aiRateLimiter, // Rate limiting BEFORE AI processing
+  verifySubscription,
+  checkUsageLimits,
+  generateAI
+);
+
+Rate Limit Configuration:
+- Define limits in environment variables or config file
+- Default: 10 requests/minute per user, 100 requests/minute per business
+- Can be adjusted per module based on expected usage patterns
+- Should be documented but exact numbers can be tuned in production
+
+GAP #3: SUBSCRIPTION STATUS SOURCE OF TRUTH
+
+Problem: Both Stripe subscription status and subscriptions.status exist, but
+there's no clear rule for which wins when they disagree. This will happen due
+to webhook delays, failed renewals, etc.
+
+SOLUTION: Stripe is Source of Truth
+
+Rule:
+- Stripe subscription status is the SOURCE OF TRUTH
+- subscriptions.status is a CACHED MIRROR for performance
+- subscriptions.status must be kept in sync via webhooks
+- UI/API should verify with Stripe API for critical operations
+
+Sync Logic:
+
+1. Stripe Webhooks Update subscriptions.status:
+   - customer.subscription.updated → Update subscriptions.status
+   - customer.subscription.deleted → Update subscriptions.status = 'canceled'
+   - invoice.payment_succeeded → Update subscriptions.status = 'active'
+   - invoice.payment_failed → Update subscriptions.status = 'past_due' (if applicable)
+
+CRITICAL: All Stripe and ClickBank webhooks MUST verify provider signatures
+before processing. This prevents webhook spoofing and ensures data integrity.
+
+Webhook Signature Verification:
+- Stripe: Verify signature using Stripe webhook secret
+- ClickBank: Verify signature using ClickBank webhook secret
+- Reject webhooks with invalid signatures (return 401 Unauthorized)
+- Log signature verification failures in audit_logs
+
+Implementation:
+// Stripe webhook verification
+app.post('/api/webhooks/stripe', express.raw({type: 'application/json'}), (req, res) => {
+  const sig = req.headers['stripe-signature'];
+  let event;
+  
+  try {
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    // Invalid signature
+    audit_logs.create({
+      action: 'webhook_signature_invalid',
+      metadata: { provider: 'stripe', error: err.message }
+    });
+    return res.status(401).send('Webhook signature verification failed');
+  }
+  
+  // Process verified webhook
+  handleStripeWebhook(event);
+  res.json({received: true});
+});
+
+// ClickBank webhook verification
+app.post('/api/webhooks/clickbank', (req, res) => {
+  const signature = req.headers['x-clickbank-signature'];
+  const payload = JSON.stringify(req.body);
+  
+  if (!verifyClickBankSignature(payload, signature)) {
+    audit_logs.create({
+      action: 'webhook_signature_invalid',
+      metadata: { provider: 'clickbank' }
+    });
+    return res.status(401).send('Webhook signature verification failed');
+  }
+  
+  // Process verified webhook
+  handleClickBankWebhook(req.body);
+  res.json({received: true});
+});
+
+2. Before Critical Operations, Verify with Stripe:
+   - Before allowing module access, check Stripe API
+   - Before processing payment, check Stripe API
+   - Cache result for short period (5-15 minutes) to avoid rate limits
+
+3. Background Sync Job:
+   - Periodic job (every 6 hours) to sync subscription statuses
+   - Reconciles discrepancies between Stripe and database
+   - Logs discrepancies in audit_logs for investigation
+
+Implementation Pattern:
+async function verifySubscriptionStatus(businessId, moduleKey) {
+  // Check cache first (subscriptions table)
+  const subscription = await subscriptions.findOne({
+    business_id: businessId,
+    module_key: moduleKey
+  });
+  
+  // For critical operations, verify with Stripe
+  if (subscription && subscription.stripe_subscription_item_id) {
+    const stripeItem = await stripe.subscriptionItems.retrieve(
+      subscription.stripe_subscription_item_id
+    );
+    const stripeSubscription = await stripe.subscriptions.retrieve(
+      stripeItem.subscription
+    );
+    
+    // Update cache if different
+    if (stripeSubscription.status !== subscription.status) {
+      await subscriptions.update(subscription.id, {
+        status: stripeSubscription.status
+      });
+      // Log discrepancy
+      await audit_logs.create({
+        action: 'subscription_status_sync',
+        business_id: businessId,
+        metadata: {
+          cached_status: subscription.status,
+          stripe_status: stripeSubscription.status
+        }
+      });
+    }
+    
+    return stripeSubscription.status === 'active';
+  }
+  
+  return false;
+}
+
+RISK #3: PARTIAL STRIPE FAILURE STATE
+
+Problem: Edge case where Stripe operation succeeds but database update fails
+(network issue, crash, etc.), leaving system in inconsistent state.
+
+Example:
+- Stripe subscription item removed successfully
+- Database update fails (network error, crash)
+- Result: Stripe shows item removed, DB shows it still active
+- User loses access but system thinks they still have it
+
+SOLUTION: Idempotent Operations with Retry Logic
+
+All Stripe-mutating operations must be idempotent and retry-safe.
+
+Rule:
+- All Stripe operations must be idempotent (safe to retry)
+- Failed DB updates after Stripe operations must be retried via background job
+- Use idempotency keys for Stripe operations where possible
+- Track operation state in database (e.g., pending, completed, failed)
+
+Implementation Pattern:
+async function removeStripeSubscriptionItem(subscriptionId, itemId) {
+  // Use idempotency key to prevent duplicate operations
+  const idempotencyKey = `remove_item_${itemId}_${Date.now()}`;
+  
+  try {
+    // Step 1: Remove from Stripe
+    await stripe.subscriptionItems.del(itemId, {
+      idempotency_key: idempotencyKey
+    });
+    
+    // Step 2: Update database
+    await subscriptions.update(subscriptionId, {
+      status: 'canceled',
+      stripe_subscription_item_id: null
+    });
+    
+    // Success
+    return { success: true };
+    
+  } catch (error) {
+    // If Stripe succeeded but DB failed, queue retry
+    if (error.type === 'database_error' || error.code === 'ECONNREFUSED') {
+      // Queue background job to retry DB update
+      await backgroundJobs.queue({
+        type: 'sync_stripe_to_db',
+        stripe_item_id: itemId,
+        subscription_id: subscriptionId,
+        operation: 'remove',
+        retry_count: 0,
+        max_retries: 5
+      });
+      
+      // Log for monitoring
+      await audit_logs.create({
+        action: 'stripe_db_sync_queued',
+        business_id: subscription.business_id,
+        metadata: {
+          stripe_item_id: itemId,
+          error: error.message
+        }
+      });
+    }
+    
+    throw error;
+  }
+}
+
+Background Retry Job:
+// Runs periodically (every 5 minutes)
+async function retryStripeSyncJobs() {
+  const failedJobs = await backgroundJobs.find({
+    type: 'sync_stripe_to_db',
+    status: 'pending',
+    retry_count: { $lt: 5 }
+  });
+  
+  for (const job of failedJobs) {
+    try {
+      // Verify Stripe state
+      const stripeItem = await stripe.subscriptionItems.retrieve(job.stripe_item_id);
+      
+      // Update DB to match Stripe
+      if (job.operation === 'remove' && !stripeItem) {
+        // Item removed in Stripe, update DB
+        await subscriptions.update(job.subscription_id, {
+          status: 'canceled',
+          stripe_subscription_item_id: null
+        });
+        
+        // Mark job complete
+        await backgroundJobs.update(job.id, { status: 'completed' });
+        
+      } else if (job.operation === 'add' && stripeItem) {
+        // Item exists in Stripe, update DB
+        await subscriptions.update(job.subscription_id, {
+          stripe_subscription_item_id: stripeItem.id,
+          status: 'active'
+        });
+        
+        // Mark job complete
+        await backgroundJobs.update(job.id, { status: 'completed' });
+      }
+      
+    } catch (error) {
+      // Increment retry count
+      await backgroundJobs.update(job.id, {
+        retry_count: job.retry_count + 1,
+        last_error: error.message
+      });
+      
+      // If max retries reached, alert admin
+      if (job.retry_count >= 4) {
+        await notifications.create({
+          business_id: job.business_id,
+          type: 'warning',
+          message: 'Subscription sync failed. Manual intervention required.'
+        });
+      }
+    }
+  }
+}
+
+GAP #4: CLICKBANK REFUND HANDLING
+
+Problem: ClickBank refunds must automatically revoke Stripe subscription items,
+otherwise paid access remains active after refund, creating support nightmares.
+
+SOLUTION: Automated Refund Webhook Handler
+
+ClickBank Refund Webhook Flow:
+
+1. Verify webhook signature (CRITICAL - see webhook verification above)
+
+2. Receive refund webhook from ClickBank
+
+3. Update external_purchases:
+   - Find by external_order_id
+   - Update status = 'refunded'
+   - Store refund data in purchase_data JSONB
+
+4. Remove Stripe Subscription Item (with retry logic):
+   - Find subscription by business_id + module_key
+   - Get stripe_subscription_item_id
+   - Call: stripe.subscriptionItems.del(stripe_subscription_item_id) (idempotent)
+   - If Stripe succeeds but DB update fails, queue retry job
+
+5. Update subscriptions table:
+   - Update subscriptions.status = 'canceled'
+   - Update subscriptions.ends_at = NOW()
+   - Set usage_limit = 0 (immediately block access)
+
+6. Log in audit_logs:
+   - action: 'clickbank_refund_processed'
+   - business_id, module_key
+   - external_order_id, refund_amount
+   - metadata: full refund details
+
+7. Send notification:
+   - Create notification for business
+   - Type: 'billing'
+   - Message: "Your {module_name} subscription has been canceled due to refund"
+
+Implementation:
+POST /api/webhooks/clickbank/refund
+
+async function handleClickBankRefund(webhookData) {
+  // Verify signature FIRST
+  if (!verifyClickBankSignature(webhookData)) {
+    return res.status(401).send('Invalid signature');
+  }
+  
+  const { order_id, refund_amount } = webhookData;
+  
+  // Find purchase
+  const purchase = await external_purchases.findOne({
+    provider: 'clickbank',
+    external_order_id: order_id
+  });
+  
+  if (!purchase || purchase.status === 'refunded') {
+    return; // Already processed or not found
+  }
+  
+  // Update purchase
+  await external_purchases.update(purchase.id, {
+    status: 'refunded',
+    purchase_data: { ...purchase.purchase_data, refund: webhookData }
+  });
+  
+  // Find subscription
+  const subscription = await subscriptions.findOne({
+    business_id: purchase.business_id,
+    module_key: purchase.module_key
+  });
+  
+  if (subscription && subscription.stripe_subscription_item_id) {
+    try {
+      // Remove Stripe subscription item (idempotent operation)
+      await removeStripeSubscriptionItem(
+        subscription.id,
+        subscription.stripe_subscription_item_id
+      );
+    } catch (error) {
+      // If removal fails, queue retry
+      // (Error handling already in removeStripeSubscriptionItem function)
+    }
+  }
+  
+  // Update subscription status
+  await subscriptions.update(subscription.id, {
+    status: 'canceled',
+    ends_at: new Date(),
+    usage_limit: 0
+  });
+  
+  // Log
+  await audit_logs.create({
+    action: 'clickbank_refund_processed',
+    business_id: purchase.business_id,
+    metadata: {
+      module_key: purchase.module_key,
+      external_order_id: order_id,
+      refund_amount
+    }
+  });
+  
+  // Notify
+  await notifications.create({
+    business_id: purchase.business_id,
+    type: 'billing',
+    message: `Your ${purchase.module_key} subscription has been canceled due to refund.`
+  });
+}
+
+GAP #5: MODULE SETTINGS OWNERSHIP
+
+Problem: Module settings can be edited, but ownership rules aren't defined.
+Need to specify who can edit module settings.
+
+SOLUTION: Permission-Based Access Control
+
+Rule:
+- Owner/Admin → configure_module permission → Can edit module settings
+- Staff → No configure_module permission → Read-only access
+
+Route Guard for /settings/modules/{module_key}:
+
+1. Check user has 'configure_module' permission for this business:
+   - Get user's role from organization_users (NOT users.business_id)
+   - Check role_permissions for (role, 'configure_module')
+   - Reject with 403 if no permission
+
+2. For API: POST /api/{module_key}/settings:
+   - Apply requireBusinessContext middleware
+   - Check configure_module permission
+   - Reject with 403 if no permission
+
+Implementation:
+async function requireModuleConfigurePermission(req, res, next) {
+  const membership = req.business_membership; // From requireBusinessContext
+  
+  // Check if user's role has configure_module permission
+  const hasPermission = await role_permissions.findOne({
+    role: membership.role,
+    permission_key: 'configure_module'
+  });
+  
+  if (!hasPermission) {
+    return res.status(403).json({
+      error: 'You do not have permission to configure this module'
+    });
+  }
+  
+  next();
+}
+
+// Apply to routes:
+router.post('/api/:moduleKey/settings',
+  requireBusinessContext,
+  requireModuleConfigurePermission,
+  updateModuleSettings
+);
+
+================================================================================
+OPERATIONAL CONTRACTS (LOCK THESE NOW)
+================================================================================
+
+ADDITION #1: LEGAL ACCEPTANCE ENFORCEMENT
+
+Problem: Terms and privacy acceptance is tracked, but not enforced before
+module access. Users could access modules without accepting latest terms.
+
+SOLUTION: Enforce Before Module Access
+
+Rule:
+User cannot access ANY module until:
+- Latest Terms of Service accepted (terms_accepted_at is current)
+- Latest Privacy Policy accepted (privacy_accepted_at is current)
+- terms_version matches current platform terms_version
+
+Enforcement Points:
+
+1. Before Module API Access:
+   - Check users.terms_accepted_at is recent (within last X days or matches current version)
+   - Check users.privacy_accepted_at is recent
+   - Check users.terms_version matches current platform terms_version
+   - Reject with 403 and redirect to /accept-terms if outdated
+
+2. Before Module UI Access:
+   - Same checks in route guards
+   - Show modal: "You must accept updated Terms and Privacy Policy to continue"
+   - Redirect to /accept-terms if rejected
+
+3. Current Terms Version:
+   - Store in environment variable: CURRENT_TERMS_VERSION
+   - Store in platform_version table as metadata
+   - Update when terms/privacy change
+
+Implementation:
+async function requireLegalAcceptance(req, res, next) {
+  const user = req.user;
+  const currentTermsVersion = process.env.CURRENT_TERMS_VERSION;
+  
+  if (!user.terms_accepted_at ||
+      !user.privacy_accepted_at ||
+      user.terms_version !== currentTermsVersion) {
+    
+    return res.status(403).json({
+      error: 'Terms and Privacy Policy acceptance required',
+      code: 'TERMS_NOT_ACCEPTED',
+      redirect_to: '/accept-terms'
+    });
+  }
+  
+  next();
+}
+
+// Apply to all module routes:
+router.use('/api/:moduleKey/*',
+  requireBusinessContext,
+  requireLegalAcceptance,
+  // ... other middleware
+);
+
+ADDITION #2: SUPPORT IMPERSONATION CONTRACT
+
+Problem: Admin access is mentioned, but impersonation capabilities aren't
+explicitly defined. This will save massive support time.
+
+SOLUTION: Admin Impersonation System
+
+Rules:
+
+1. Tavari Admin Can Impersonate Users:
+   - Only admin_users with role 'admin' or 'support' can impersonate
+   - Can impersonate in two modes:
+     a. Read-only mode: View user's data, cannot make changes
+     b. Full mode: Act as user, make changes on their behalf
+
+2. Impersonation Process:
+   - Admin initiates via: POST /admin/impersonate
+   - Parameters: user_id, mode ('readonly' | 'full')
+   - System creates impersonation session
+   - Admin's requests include X-Impersonating-User-Id header
+   - Original admin_user_id stored in req.impersonated_by
+
+3. Audit Logging:
+   - Log impersonation_start action in audit_logs
+   - Log all actions during impersonation with:
+     - user_id: Impersonated user's ID
+     - admin_user_id: Admin who is impersonating
+     - action: 'impersonation_start', 'impersonation_end'
+     - metadata: { mode, reason, duration }
+   - Log impersonation_end when session ends
+
+4. UI Indicators:
+   - Show banner: "Impersonating: [User Name] | Mode: [Read-only/Full] | End Session"
+   - All pages show impersonation context
+   - All actions show in audit log under impersonated user but with admin_user_id
+
+5. Restrictions:
+   - Cannot impersonate other admin_users
+   - Cannot access /admin routes while impersonating (except /admin/impersonate/end)
+   - Read-only mode: All POST/PUT/DELETE requests return 403
+   - Session expires after 2 hours (configurable)
+
+Implementation:
+// Start impersonation
+POST /admin/impersonate
+Body: { user_id, mode: 'readonly' | 'full', reason }
+
+async function startImpersonation(req, res) {
+  const adminUser = req.admin_user;
+  const { user_id, mode, reason } = req.body;
+  
+  // Verify target user is not an admin
+  const targetUser = await users.findById(user_id);
+  if (!targetUser || targetUser.is_admin) {
+    return res.status(403).json({ error: 'Cannot impersonate this user' });
+  }
+  
+  // Create impersonation session
+  req.session.impersonation = {
+    user_id,
+    mode,
+    started_at: new Date(),
+    admin_user_id: adminUser.id,
+    reason
+  };
+  
+  // Log
+  await audit_logs.create({
+    action: 'impersonation_start',
+    admin_user_id: adminUser.id,
+    user_id,
+    metadata: { mode, reason }
+  });
+  
+  res.json({ 
+    success: true,
+    impersonating: user_id,
+    mode 
+  });
+}
+
+// Middleware to apply impersonation context
+async function applyImpersonation(req, res, next) {
+  if (req.session.impersonation) {
+    const { user_id, mode, admin_user_id } = req.session.impersonation;
+    
+    // Override user context
+    req.original_user = req.user;
+    req.user = await users.findById(user_id);
+    req.impersonated_by = admin_user_id;
+    req.impersonation_mode = mode;
+    
+    // In read-only mode, block mutations
+    if (mode === 'readonly' && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(req.method)) {
+      return res.status(403).json({
+        error: 'Read-only impersonation mode. Cannot make changes.'
+      });
+    }
+    
+    // Attach to audit log context
+    req.audit_context = {
+      ...req.audit_context,
+      impersonated: true,
+      impersonated_by: admin_user_id,
+      impersonation_mode: mode
+    };
+  }
+  
+  next();
+}
+
+// End impersonation
+POST /admin/impersonate/end
+
+async function endImpersonation(req, res) {
+  const impersonation = req.session.impersonation;
+  
+  if (impersonation) {
+    const duration = Date.now() - new Date(impersonation.started_at);
+    
+    await audit_logs.create({
+      action: 'impersonation_end',
+      admin_user_id: impersonation.admin_user_id,
+      user_id: impersonation.user_id,
+      metadata: {
+        mode: impersonation.mode,
+        duration_ms: duration,
+        reason: impersonation.reason
+      }
+    });
+    
+    delete req.session.impersonation;
+  }
+  
+  res.json({ success: true });
+}
+
+ADDITION #3: PLATFORM VERSIONING
+
+Problem: Need to track platform version for feature rollout control, debugging,
+and ClickBank cohort tracking.
+
+SOLUTION: platform_version Table
+
+Use Cases:
+1. Feature Rollout: Show features only to businesses on version >= X.X.X
+2. Debugging: Know which version a business is on when issues arise
+3. ClickBank Cohort Tracking: Track when features were introduced for cohort analysis
+4. Rollback Planning: Know what version to roll back to
+
+Implementation:
+// On deployment, insert new version
+INSERT INTO platform_version (version, description, metadata) VALUES
+('2.2.0', 'Added security enforcement and impersonation', '{"features": ["impersonation", "legal_enforcement"]}');
+
+// Check version in feature flags
+async function isFeatureEnabled(businessId, featureName) {
+  const business = await businesses.findById(businessId);
+  const currentVersion = await platform_version.findOne({
+    order: [['applied_at', 'DESC']]
+  });
+  
+  const featureMinVersion = FEATURE_VERSIONS[featureName];
+  return compareVersions(currentVersion.version, featureMinVersion) >= 0;
+}
+
+// Track version per business (optional, for detailed tracking)
+ALTER TABLE businesses ADD COLUMN IF NOT EXISTS platform_version VARCHAR(50);
+UPDATE businesses SET platform_version = '2.2.0' WHERE platform_version IS NULL;
+
+================================================================================
+RISK MITIGATION RULES
+================================================================================
+
+RISK #1: USER → BUSINESS RELATIONSHIP DUPLICATION
+
+Clarification Added:
+For multi-organization access, authorization MUST always be determined via
+organization_users table. users.business_id is used only as a fallback when
+a user belongs to exactly one business.
+
+This means:
+- organization_users is the source of truth for access control
+- users.business_id is legacy/primary only, not used for authorization checks
+- When checking if user can access a business, ALWAYS query organization_users
+- Only use users.business_id as convenience for single-org users (e.g., auto-selecting organization)
+
+This rule is enforced in:
+- requireBusinessContext middleware (checks organization_users, not users.business_id)
+- requireModuleConfigurePermission (uses organization_users role)
+- All authorization checks throughout the system
+
+================================================================================
+UNIFIED BILLING ARCHITECTURE
+================================================================================
+
+Principle: ONE Stripe System, Multiple Module Entitlements
+
+businesses table:
+  stripe_customer_id: "cus_xxxxx"        ← ONE customer per business
+  stripe_subscription_id: "sub_xxxxx"    ← ONE subscription per business
+
+Stripe Subscription (sub_xxxxx) contains multiple items:
+  - Subscription Item 1: Phone Agent (price_id: price_phone)
+  - Subscription Item 2: Sales AI (price_id: price_sales) → "si_xxxxx"
+  - Subscription Item 3: Content AI (price_id: price_content) → "si_yyyyy"
+
+subscriptions table:
+  business_id + 'phone' → No item_id (uses businesses.stripe_subscription_id directly)
+  business_id + 'sales' → stripe_subscription_item_id: "si_xxxxx"
+  business_id + 'content' → stripe_subscription_item_id: "si_yyyyy"
+
+Billing Logic:
+
+For Phone Agent:
+- Check businesses.stripe_subscription_id status directly
+- Use existing logic
+
+For v2 Modules:
+1. Check businesses.stripe_subscription_id status (must be active)
+2. Check subscriptions table for module entitlement
+3. Check subscriptions.status = 'active' (but verify with Stripe for critical ops)
+4. Check subscriptions.usage_limit vs actual usage
+5. Use subscriptions.stripe_subscription_item_id for Stripe operations
+
+CRITICAL: Always verify subscription status with Stripe API for critical
+operations. subscriptions.status is cached for performance but Stripe is
+source of truth.
+
+Adding a Module to Subscription:
+
+When activating a module:
+1. Get or create subscription: businesses.stripe_subscription_id
+2. Add subscription item: stripe.subscriptions.update(subscription_id, {
+     items: [{ price: module.stripe_price_id_monthly }]
+   })
+3. Save returned subscription_item.id to subscriptions.stripe_subscription_item_id
+
+CRITICAL: All Stripe operations must be idempotent and retry-safe. If Stripe
+succeeds but database update fails, queue background job to retry DB update.
+
+ClickBank Refund Handling:
+
+When ClickBank refund webhook received:
+1. Verify webhook signature FIRST (CRITICAL)
+2. Update external_purchases.status = 'refunded'
+3. Remove Stripe subscription item immediately (idempotent operation)
+4. Update subscriptions.status = 'canceled' (with retry if DB fails)
+5. Set subscriptions.usage_limit = 0 (immediately block access)
+6. Log in audit_logs
+7. Send notification to business
+
+If Stripe removal succeeds but DB update fails, background job will retry
+until successful.
+
+================================================================================
+ARCHITECTURE PHASES
+================================================================================
+
+PHASE 1: Core Foundation v2 (No AI Modules) - COMPLETE
+
+Goal: Build the foundation for multi-module support without breaking Phone Agent
+
+Completed Tasks:
+- Database migration (all v2 tables created)
+- Module registry (modules table)
+- Unified billing structure (subscriptions table with subscription items)
+- Usage tracking (usage_logs table)
+- Permissions system (permissions, role_permissions)
+- Multi-organization support (organization_users)
+- Platform versioning (platform_version table)
+
+Remaining Tasks:
+1. Organization Selection System
+   - Build organization selection flow (after login)
+   - If user belongs to 0 organizations → Force Business Setup Wizard
+   - If 1 organization → Auto-select (use users.business_id as fallback)
+   - If >1 organization → Show selection modal
+   - Store active_organization_id in session + localStorage
+
+2. Multi-Organization User Support
+   - Update auth middleware to support organization context
+   - Build organization switcher in top bar
+
+3. Business Context Enforcement (NEW)
+   - Implement requireBusinessContext middleware
+   - ALWAYS check organization_users table for authorization (NOT users.business_id)
+   - Apply to all module APIs
+   - Apply to all settings APIs
+   - Apply to all billing APIs
+   - Test with multiple organizations to ensure isolation
+
+4. Legal Acceptance Enforcement (NEW)
+   - Implement requireLegalAcceptance middleware
+   - Add /accept-terms page
+   - Check terms_version on every module access
+   - Show modal/redirect if outdated
+
+5. Rate Limiting Implementation (NEW)
+   - Implement rate limiting middleware for AI endpoints
+   - Configure per-user and per-business limits
+   - Set up Redis or similar for rate limit state
+   - Test rate limiting with multiple requests
+
+6. Webhook Signature Verification (NEW)
+   - Implement Stripe webhook signature verification
+   - Implement ClickBank webhook signature verification
+   - Test with invalid signatures (should reject)
+   - Log verification failures in audit_logs
+
+7. Stripe Operation Retry System (NEW)
+   - Implement background job system for retry logic
+   - Make all Stripe operations idempotent
+   - Queue failed DB updates for retry
+   - Test partial failure scenarios
+
+8. Module Health Status System (NEW)
+   - Add health_status monitoring to modules
+   - Create admin interface to update module health
+   - Block module access when health_status is not 'healthy'
+   - Show graceful UI messages when module is degraded/offline
+
+9. Business & Communications Core
+   - Build /settings/business page
+   - Build /settings/communications page
+   - Create communications service (copy existing Telnyx/AWS SES logic)
+   - Only change inputs to read from businesses + communication_settings
+
+10. Shared Settings Pages
+   - /settings/users - User management with roles
+   - /settings/billing - Global billing (one Stripe customer per business)
+   - /settings/modules - Module activation/management
+   - Apply requireModuleConfigurePermission to module settings routes
+
+11. Admin Routes (Tavari Staff Only)
+   - /admin/audit - View audit logs
+   - /admin/notifications - System notifications
+   - /admin/modules - Manage modules (including health_status)
+   - /admin/pricing - Manage pricing
+   - /admin/support - Support tickets
+   - /admin/impersonate - Impersonation controls (NEW)
+
+12. Shared UI Shell
+   - Build AppShell component (TopBar + Sidebar + MainContent)
+   - Auto-generate sidebar from modules + subscriptions tables
+   - Locked modules show 🔒, unlocked show ✅
+   - Show degraded/offline status for modules (NEW)
+   - Implement design system (colors, typography, layout)
+   - Show impersonation banner if active (NEW)
+
+13. Module Registry System
+   - Build module registration system
+   - Modules register metadata (settingsSections, permissions, etc.)
+   - Settings UI renders dynamically from registry
+
+14. Subscription Status Sync (NEW)
+   - Implement Stripe webhook handlers (with signature verification)
+   - Background sync job for subscription statuses
+   - Reconcile discrepancies and log in audit_logs
+   - Implement retry logic for failed DB updates
+
+15. ClickBank Webhook Handler (NEW)
+   - Implement refund webhook handler (with signature verification)
+   - Automatic Stripe subscription item removal (idempotent)
+   - Update subscriptions status to canceled
+   - Queue retry if DB update fails
+   - Send notifications
+
+Deliverables:
+- Working organization selection
+- Multi-organization user access
+- Server-side business context enforcement (via organization_users)
+- Legal acceptance enforcement
+- Rate limiting on all AI endpoints
+- Webhook signature verification
+- Idempotent Stripe operations with retry logic
+- Module health status monitoring
+- Shared settings pages
+- Admin dashboard with impersonation
+- UI shell with dynamic sidebar and health indicators
+- Communications service (copied, not refactored)
+- Subscription status sync system
+- ClickBank refund handling
+
+Testing:
+- Phone Agent continues to work unchanged
+- Existing businesses can access Phone Agent
+- New organizations can be created
+- Users can belong to multiple organizations
+- Users cannot access other organizations' data (security test)
+- Rate limiting blocks excessive requests
+- Webhook signature verification rejects invalid signatures
+- Stripe operations are idempotent and retry on failure
+- Module health status blocks access when offline
+- Legal acceptance is enforced before module access
+- Subscription status sync works correctly
+- ClickBank refunds revoke access immediately
+
+PHASE 2: Module Infrastructure
+
+Goal: Build the infrastructure for adding new modules
+
+Tasks:
+1. Module Marketplace Page
+   - Build /modules page showing all available modules
+   - Module cards with description, pricing, "Activate" button
+   - Show health_status indicator on each module
+   - Disable activation if health_status is not 'healthy'
+   - "Learn more" links to external landing pages
+   - ClickBank purchase flow integration
+
+2. Usage Tracking System
+   - Unified usage tracking via usage_logs table
+   - Usage limits enforcement per module/plan
+   - Usage dashboard showing consumption across modules
+   - Verify subscription status with Stripe before allowing usage
+
+3. Billing Integration
+   - Module-level subscription management
+   - Unified Stripe subscription with subscription items
+   - ClickBank webhook handling (already implemented with signature verification)
+   - Subscription status sync (already implemented with retry logic)
+
+4. Module Settings System
+   - Dynamic settings pages based on module registration
+   - JSON-based settings storage in module_settings
+   - Settings validation and defaults
+   - Permission-based access control (configure_module)
+
+5. Paywall & Upsell Logic
+   - Locked features visible but clickable
+   - Upgrade modal on locked feature click
+   - Usage limit reached handling
+   - Subscription inactive handling
+   - Verify with Stripe before blocking (don't trust cached status alone)
+
+6. Rate Limiting Configuration
+   - Configure rate limits per module
+   - Document rate limit values
+   - Monitor rate limit violations
+   - Adjust limits based on production usage
+
+Deliverables:
+- Module marketplace UI with health indicators
+- Usage tracking and limits
+- Module billing integration (unified Stripe)
+- Settings system with permission enforcement
+- Paywall system with Stripe verification
+- Rate limiting configuration
+
+PHASE 3: Build First New Module (Sales AI)
+
+Goal: Build Sales AI module following the standard
+
+Tasks:
+1. Module Registration
+   {
+     moduleKey: "sales",
+     name: "Sales AI",
+     requiredPermissions: ["use_module"],
+     adminPermissions: ["configure_module"],
+     settingsSections: [
+       {
+         key: "sales",
+         label: "Sales AI",
+         route: "/settings/modules/sales"
+       }
+     ],
+     auditEvents: ["sales.generate", "sales.update_settings"],
+     notificationTypes: ["sales.limit_reached"]
+   }
+
+2. Database Tables (Module-Specific)
+   CREATE TABLE sales_outputs (
+     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+     business_id UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+     module_key VARCHAR(50) DEFAULT 'sales',
+     prompt_type VARCHAR(100) NOT NULL,
+     input JSONB NOT NULL,
+     output TEXT NOT NULL,
+     created_at TIMESTAMP DEFAULT NOW(),
+     updated_at TIMESTAMP DEFAULT NOW()
+   );
+
+3. API Routes
+   - POST /api/sales/generate - Generate sales content
+   - GET /api/sales/history - Get generation history
+   - GET /api/sales/usage - Get usage stats
+   - POST /api/sales/settings - Update settings
+   
+   ALL routes MUST:
+   - Use requireBusinessContext middleware (checks organization_users)
+   - Use requireLegalAcceptance middleware
+   - Use rate limiting middleware (aiRateLimiter)
+   - Verify subscription status with Stripe before allowing action
+   - Check module health_status (reject if not 'healthy')
+   - Check usage limits
+   - Log to usage_logs and ai_requests
+
+4. UI Screens
+   - /sales/dashboard - Usage summary, primary CTA
+   - /sales/history - Past AI outputs
+   - /sales/settings - Module preferences (registered, permission-protected)
+   - /sales/upgrade - Plan limits, pricing comparison
+   - /sales/help - How this module works
+
+5. Usage Tracking
+   - Log to usage_logs on each generation
+   - Log to ai_requests for OpenAI calls
+   - Verify subscription status with Stripe API (not just DB)
+   - Check usage limits in subscriptions table
+   - Block and show upgrade modal if limit reached
+
+6. Prompt Structure
+   SYSTEM: "You are Tavari AI. This request comes from the Sales AI module."
+   CONTEXT: {
+     business_info: {...},  // From businesses table
+     user_settings: {...},   // From users table
+     module_settings: {...}  // From module_settings table
+   }
+   TASK: "<Specific instruction>"
+   OUTPUT_FORMAT: "<Strict, structured output>"
+
+7. Health Status Monitoring
+   - Check module.health_status before allowing API access
+   - Show graceful error if module is degraded/offline
+   - Log health-related blocks in audit_logs
+
+Deliverables:
+- Fully functional Sales AI module
+- Follows all standards
+- Integrated with unified billing and usage tracking
+- Security enforcement in place (organization_users check)
+- Legal acceptance enforced
+- Rate limiting implemented
+- Stripe verification on critical operations
+- Health status checks before access
+- Can be activated via module marketplace
+
+PHASE 4: Additional Modules
+
+Goal: Build remaining modules (Content AI, Estimator AI, Music AI)
+
+Tasks:
+- Repeat Phase 3 for each module
+- Reuse patterns and components
+- Maintain consistency
+- Test each module independently
+- Ensure security enforcement on all (organization_users check)
+- Implement rate limiting on all
+- Add health status monitoring
+
+PHASE 5: Phone Agent Migration (Optional)
+
+Goal: Migrate Phone Agent to use v2 infrastructure (only if needed)
+
+Tasks:
+- ONLY IF Phone Agent needs multi-organization support
+- ONLY IF Phone Agent needs to use new billing system
+- Otherwise, leave Phone Agent unchanged
+
+Warning: Phone Agent is working. Only migrate if absolutely necessary.
+
+================================================================================
+MODULE BUILDING STANDARD
+================================================================================
+
+Required Module Structure
+
+Every new module MUST include:
+
+1. Module Declaration
+   {
+     moduleKey: "module_key",  // lowercase, no spaces
+     name: "Module Name",
+     requiredPermissions: ["use_module"],
+     adminPermissions: ["configure_module"],
+     settingsSections: [...],
+     auditEvents: [...],
+     notificationTypes: [...]
+   }
+
+2. Database Tables
+
+Every module-specific table MUST include:
+- id (UUID PRIMARY KEY)
+- business_id (UUID, FK to businesses)
+- module_key (VARCHAR(50), DEFAULT 'module_key')
+- created_at (TIMESTAMP)
+- updated_at (TIMESTAMP)
+
+3. Required API Routes
+
+POST   /api/{module_key}/generate
+GET    /api/{module_key}/history
+GET    /api/{module_key}/usage
+POST   /api/{module_key}/settings
+
+ALL routes MUST use:
+- requireBusinessContext middleware (checks organization_users, NOT users.business_id)
+- requireLegalAcceptance middleware
+- Rate limiting middleware (aiRateLimiter)
+- Health status check (verify module.health_status is 'healthy')
+- Subscription status verification (Stripe API)
+- Usage limit checking
+- Audit logging
+
+4. Required UI Screens
+
+- Dashboard (/{module_key}/dashboard)
+- History (/{module_key}/history)
+- Settings (registered, permission-protected)
+- Upgrade (/{module_key}/upgrade)
+- Help (/{module_key}/help)
+
+5. Usage Model
+
+- Each AI action consumes units (default: 1 unit)
+- Log to usage_logs table
+- Verify subscription with Stripe API (not just DB cache)
+- Check subscription + usage limits before action
+- Block if limit reached, show upgrade modal
+
+6. Prompt Structure (Mandatory)
+
+SYSTEM: You are Tavari AI. This request comes from the {module_name} module.
+
+CONTEXT:
+- Business info (from businesses table)
+- User settings (from users table)
+- Module settings (from module_settings table)
+
+TASK: <Specific instruction>
+
+OUTPUT FORMAT: <Strict, structured output>
+
+Never allow free-form AI responses.
+
+7. Security Requirements (MANDATORY)
+
+- All APIs must enforce business context (via organization_users)
+- All APIs must verify legal acceptance
+- All APIs must verify subscription with Stripe (not just DB)
+- All APIs must implement rate limiting
+- All APIs must check module health_status
+- All settings APIs must check configure_module permission
+- All actions must be logged in audit_logs
+
+8. Health Status Handling (MANDATORY)
+
+- Check module.health_status before allowing API access
+- If health_status is 'degraded', show warning but allow access
+- If health_status is 'offline', return 503 Service Unavailable
+- Log health-related blocks in audit_logs
+- Show health indicator in UI
+
+================================================================================
+UI/UX DESIGN SYSTEM (MANDATORY)
+================================================================================
+
+Colors:
+Primary:    #0F172A (Dark Navy)
+Accent:     #14B8A6 (Teal)
+Accent 2:   #FACC15 (Soft Yellow)
+Danger:     #EF4444 (Red)
+Background: #F8FAFC (Light Gray)
+Surface:    #FFFFFF
+Border:     #E5E7EB
+Text Main:  #020617
+Text Muted: #64748B
+
+Typography:
+Font: Inter, system-ui, sans-serif
+
+H1: 32px / 600
+H2: 24px / 600
+H3: 18px / 600
+Body: 14px / 400
+Small: 12px / 400
+
+Layout (Strict):
+Sidebar width:      260px (fixed)
+Top bar height:     64px
+Content max width:  1200px
+Content padding:    24px
+Card radius:        12px
+Button radius:      10px
+Input height:       40px
+
+Components:
+
+Buttons:
+- Primary: Teal background (#14B8A6), white text, 10px radius
+- Secondary: White background, bordered (#E5E7EB), dark navy text
+- Danger: Red background (#EF4444), white text
+
+Cards:
+- White background, 1px border (#E5E7EB), subtle shadow, 12px radius, 16-24px padding
+
+Impersonation Banner (NEW):
+- Red background (#EF4444) at top of page
+- White text, bold
+- "Impersonating: [User Name] | Mode: [Read-only/Full] | [End Session] button"
+- Always visible when impersonation is active
+
+Health Status Indicators:
+- Healthy: Green dot/badge
+- Degraded: Yellow dot/badge with warning message
+- Offline: Red dot/badge with "Service Unavailable" message
+
+================================================================================
+SHARED ROUTING (ONE TIME ONLY)
+================================================================================
+
+Settings Routes (Shared):
+/settings
+/settings/business
+/settings/communications
+/settings/users
+/settings/billing
+/settings/modules
+/settings/modules/{module_key}  (Dynamic, registered by module, permission-protected)
+
+Admin Routes (Tavari Staff Only):
+/admin/audit
+/admin/notifications
+/admin/modules (includes health_status management)
+/admin/pricing
+/admin/support
+/admin/impersonate (NEW)
+/admin/impersonate/end (NEW)
+
+Legal Routes:
+/accept-terms (NEW)
+
+Module Routes (Per Module):
+/{module_key}/dashboard
+/{module_key}/history
+/{module_key}/upgrade
+/{module_key}/help
+
+Module Marketplace:
+/modules
+
+================================================================================
+BILLING & USAGE MODEL
+================================================================================
+
+Billing Structure:
+
+- One Stripe customer per business (stored in businesses.stripe_customer_id)
+- One Stripe subscription per business (stored in businesses.stripe_subscription_id)
+- Multiple subscription items on the subscription (one per module)
+- Module entitlements tracked in subscriptions table (via stripe_subscription_item_id)
+- One billing page (/settings/billing)
+- Usage resets on subscription anniversary (per module)
+- Deactivation immediately revokes access
+- Refunds revoke access automatically (ClickBank webhook)
+
+Subscription Status Verification:
+
+CRITICAL RULE: Stripe is source of truth, subscriptions.status is cached mirror.
+
+For critical operations (module access, payment processing):
+1. Check subscriptions.status (cached, fast)
+2. Verify with Stripe API (source of truth, slower)
+3. Update subscriptions.status if different
+4. Log discrepancies in audit_logs
+
+For non-critical operations (UI display, dashboards):
+- Can use cached subscriptions.status
+- Background sync job keeps it updated
+
+CRITICAL: All Stripe operations must be idempotent and retry-safe. If Stripe
+succeeds but DB update fails, background job will retry DB update until successful.
+
+Usage Tracking:
+
+- Units: Each AI action consumes units (configurable per module)
+- Logging: All usage logged to usage_logs table
+- Limits: Enforced per module/plan combination (in subscriptions.usage_limit)
+- Blocking: If usage exceeds limit → block action, show upgrade modal
+
+Rate Limiting (Separate from Usage Limits):
+
+- Per-user rate limiting: X requests per minute (prevents prompt abuse)
+- Per-business rate limiting: Y requests per minute (prevents cost spikes)
+- Per-IP rate limiting: Optional additional protection
+- Rate limits are SEPARATE from usage limits
+- Rate limits: Prevent abuse and cost spikes (requests per time period)
+- Usage limits: Track consumption for billing (total units used)
+
+Universal Rule:
+IF businesses.stripe_subscription_id IS ACTIVE (verify with Stripe)
+  AND subscriptions.status = 'active' (cached)
+  AND module.health_status = 'healthy'
+  AND usage < subscriptions.usage_limit 
+  AND rate limit not exceeded
+→ allow
+ELSE → show upgrade modal or appropriate error
+
+ClickBank Integration:
+
+- ClickBank purchases tracked in external_purchases table
+- Webhook handler creates subscriptions record
+- Links to existing businesses record via email lookup
+- Creates business if doesn't exist
+- Adds subscription item to unified Stripe subscription
+
+ClickBank Refund Handling (CRITICAL):
+
+When refund webhook received:
+1. Verify webhook signature FIRST (CRITICAL - reject if invalid)
+2. Update external_purchases.status = 'refunded'
+3. Remove Stripe subscription item immediately (idempotent operation)
+4. Update subscriptions.status = 'canceled' (with retry if DB fails)
+5. Set subscriptions.usage_limit = 0
+6. Log in audit_logs
+7. Send notification to business
+
+If Stripe removal succeeds but DB update fails, background job will retry
+until successful.
+
+================================================================================
+COMMUNICATIONS SERVICE
+================================================================================
+
+Structure:
+/services/communications/
+  sendSms.ts
+  sendEmail.ts
+
+Rules:
+
+1. COPY existing Telnyx + AWS SES implementations
+2. DO NOT change internal logic
+3. Only change inputs to read from:
+   - businesses.sms_notification_number or businesses.business_phone_numbers
+   - businesses.email (use businesses.name as display name)
+4. Production code must remain untouched
+
+================================================================================
+ERROR HANDLING STANDARD
+================================================================================
+
+All errors must be:
+- Logged (to audit_logs or ai_requests)
+- User-friendly (non-technical language)
+- Actionable (tell user what to do)
+
+Examples:
+- "Usage limit reached" → Show upgrade modal
+- "Module not active" → Show activation button
+- "Temporary system issue" → Suggest retry later
+- "Active business context required" → Redirect to organization selection
+- "You must accept updated Terms" → Redirect to /accept-terms
+- "Access denied to this business" → Show 403, log security event
+- "Too many requests" → Show 429, suggest retry later
+- "Module temporarily unavailable" → Show 503, show health status message
+- "Webhook signature invalid" → Log security event, return 401
+
+================================================================================
+FEATURE FLAGS (REQUIRED)
+================================================================================
+
+All modules must support feature flags:
+
+features = {
+  autoSend: false,
+  integrations: false,
+  // ... module-specific flags
+}
+
+Store in module_settings.settings.features JSONB field.
+
+Feature flags can be version-gated using platform_version table.
+
+================================================================================
+NAMING CONVENTIONS
+================================================================================
+
+- Database: snake_case
+- URLs: kebab-case
+- JavaScript: camelCase
+- Module keys: lowercase (sales, content, estimator, phone)
+
+================================================================================
+VALIDATION CHECKLIST
+================================================================================
+
+Before any module goes to production:
+
+- Follows all database standards (required columns)
+- Implements all required API routes
+- Implements all required UI screens
+- Uses shared UI shell and design system
+- Logs usage to usage_logs
+- Logs AI requests to ai_requests
+- Checks subscription status before actions (unified billing)
+- VERIFIES subscription with Stripe API (not just DB cache)
+- Implements rate limiting on all AI endpoints
+- Checks module health_status before allowing access
+- Verifies webhook signatures before processing
+- Makes all Stripe operations idempotent and retry-safe
+- Shows upgrade modal when limits reached
+- Registers module metadata
+- Follows prompt structure standard
+- Implements error handling
+- Supports feature flags
+- Tests with multiple organizations
+- Does not break Phone Agent
+- Uses unified Stripe billing (subscription items, not duplicate customer/subscription IDs)
+- Enforces business context on all APIs (requireBusinessContext via organization_users)
+- NEVER uses users.business_id for authorization (only for convenience/fallback)
+- Enforces legal acceptance before module access
+- Protects module settings with permission checks
+- Implements audit logging for all actions
+- Tests ClickBank refund flow (removes access immediately)
+- Tests subscription status sync (Stripe webhook updates DB)
+- Tests rate limiting (blocks excessive requests)
+- Tests webhook signature verification (rejects invalid signatures)
+- Tests partial failure scenarios (Stripe succeeds, DB fails - retry works)
+- Tests module health status (blocks access when offline)
+
+================================================================================
+MIGRATION STRATEGY
+================================================================================
+
+1. Build v2 in parallel (new codebase, new routes)
+2. Test with new organizations first
+3. Migrate existing businesses gradually
+4. Keep Phone Agent unchanged until migration complete
+5. Monitor both systems during transition
+6. Use unified Stripe billing from day one
+7. Enforce security rules from day one (business context via organization_users, legal acceptance)
+8. Implement rate limiting from day one
+9. Verify all webhook signatures from day one
+10. Make all Stripe operations idempotent from day one
+11. Monitor module health_status from day one
+12. Set up webhook monitoring for Stripe and ClickBank
+13. Monitor audit_logs for security events and discrepancies
+14. Monitor rate limit violations and adjust limits
+15. Monitor Stripe operation failures and retry success rate
+
+================================================================================
+DATABASE SUMMARY
+================================================================================
+
+Tables Created by Migration:
+- organization_users - Multi-org support (source of truth for authorization)
+- modules - Module registry (includes health_status)
+- subscriptions - Module entitlements (unified billing)
+- usage_logs - Universal usage tracking
+- ai_requests - AI request logging
+- module_settings - Per-module configuration
+- permissions - Permission registry
+- role_permissions - Role → permission mapping
+- audit_logs - Enhanced audit logging
+- notifications - System notifications
+- external_purchases - ClickBank integration
+- platform_version - Platform versioning
+
+Tables Modified:
+- businesses - Added: legal_name, brand_tone, industry
+
+Tables Unchanged:
+- All Phone Agent tables remain untouched
+- All support tables remain untouched
+
+New Middleware Required:
+- requireBusinessContext - Enforce business context on all APIs (checks organization_users, NOT users.business_id)
+- requireLegalAcceptance - Enforce terms/privacy acceptance
+- requireModuleConfigurePermission - Protect module settings
+- applyImpersonation - Apply impersonation context
+- aiRateLimiter - Rate limiting for AI endpoints
+- verifyModuleHealth - Check module health_status before access
+
+New Webhook Handlers Required:
+- Stripe subscription webhooks (update subscriptions.status, with signature verification)
+- ClickBank refund webhook (revoke access immediately, with signature verification)
+
+New Background Jobs Required:
+- Subscription status sync job (reconcile Stripe with DB)
+- Stripe operation retry job (retry failed DB updates after Stripe operations)
+
+New Monitoring Required:
+- Rate limit violation tracking
+- Webhook signature verification failure tracking
+- Stripe operation failure and retry tracking
+- Module health status changes
+
+================================================================================
+END OF SPECIFICATION
+================================================================================

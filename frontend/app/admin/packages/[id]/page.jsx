@@ -86,7 +86,7 @@ function PackageDetailPage() {
               <Link href="/admin/packages" className="text-gray-700 hover:text-blue-600">
                 Packages
               </Link>
-              <Link href="/admin/dashboard" className="text-gray-700 hover:text-blue-600">
+              <Link href="/admin-dashboard" className="text-gray-700 hover:text-blue-600">
                 Dashboard
               </Link>
               <button
@@ -104,7 +104,16 @@ function PackageDetailPage() {
 
         <main className="container mx-auto px-4 py-8 max-w-7xl">
           <div className="mb-6">
-            <Link href="/admin/packages" className="text-blue-600 hover:text-blue-800 mb-4 inline-block">
+            <Link 
+              href={
+                pkg.module_key === 'reviews' 
+                  ? '/review-reply-ai/package'
+                  : pkg.module_key === 'phone-agent'
+                  ? '/tavari-ai-phone/package'
+                  : '/admin/packages'
+              } 
+              className="text-blue-600 hover:text-blue-800 mb-4 inline-block"
+            >
               ← Back to Packages
             </Link>
           </div>
@@ -139,46 +148,60 @@ function PackageDetailPage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+            <div className={`grid grid-cols-1 md:grid-cols-2 ${pkg.module_key === 'reviews' ? 'lg:grid-cols-2' : 'lg:grid-cols-4'} gap-4 mb-6`}>
               <div className="bg-gray-50 rounded-lg p-4">
                 <div className="text-sm text-gray-600 mb-1">Monthly Price</div>
                 <div className="text-2xl font-bold text-gray-900">${parseFloat(pkg.monthly_price).toFixed(2)}</div>
               </div>
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Minutes Included</div>
-                <div className="text-2xl font-bold text-gray-900">{pkg.minutes_included}</div>
-                {pkg.overage_price_per_minute > 0 && (
-                  <div className="text-xs text-gray-500 mt-1">
-                    ${parseFloat(pkg.overage_price_per_minute).toFixed(4)}/min overage
+              {pkg.module_key === 'reviews' ? (
+                // Review Reply AI fields
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="text-sm text-gray-600 mb-1">Prompts Included</div>
+                  <div className="text-2xl font-bold text-gray-900">{pkg.prompts_included || 0}</div>
+                  <div className="text-xs text-gray-500 mt-1">prompts/month</div>
+                </div>
+              ) : (
+                // Phone Agent fields
+                <>
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="text-sm text-gray-600 mb-1">Minutes Included</div>
+                    <div className="text-2xl font-bold text-gray-900">{pkg.minutes_included}</div>
+                    {pkg.overage_price_per_minute > 0 && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        ${parseFloat(pkg.overage_price_per_minute).toFixed(4)}/min overage
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">SMS Included</div>
-                <div className="text-2xl font-bold text-gray-900">{pkg.sms_included || 0}</div>
-                {pkg.sms_overage_price > 0 && (
-                  <div className="text-xs text-gray-500 mt-1">
-                    ${parseFloat(pkg.sms_overage_price).toFixed(4)} overage
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="text-sm text-gray-600 mb-1">SMS Included</div>
+                    <div className="text-2xl font-bold text-gray-900">{pkg.sms_included || 0}</div>
+                    {pkg.sms_overage_price > 0 && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        ${parseFloat(pkg.sms_overage_price).toFixed(4)} overage
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              <div className="bg-gray-50 rounded-lg p-4">
-                <div className="text-sm text-gray-600 mb-1">Emails Included</div>
-                <div className="text-2xl font-bold text-gray-900">{pkg.emails_included || 0}</div>
-                {pkg.emails_overage_price > 0 && (
-                  <div className="text-xs text-gray-500 mt-1">
-                    ${parseFloat(pkg.emails_overage_price).toFixed(4)} overage
+                  <div className="bg-gray-50 rounded-lg p-4">
+                    <div className="text-sm text-gray-600 mb-1">Emails Included</div>
+                    <div className="text-2xl font-bold text-gray-900">{pkg.emails_included || 0}</div>
+                    {pkg.emails_overage_price > 0 && (
+                      <div className="text-xs text-gray-500 mt-1">
+                        ${parseFloat(pkg.emails_overage_price).toFixed(4)} overage
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </>
+              )}
             </div>
 
             <div className="border-t pt-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <div className="text-gray-600">Max FAQs</div>
-                  <div className="font-medium text-gray-900">{pkg.max_faqs}</div>
-                </div>
+              <div className={`grid grid-cols-2 ${pkg.module_key === 'reviews' ? 'md:grid-cols-3' : 'md:grid-cols-4'} gap-4 text-sm`}>
+                {pkg.module_key === 'phone-agent' && (
+                  <div>
+                    <div className="text-gray-600">Max FAQs</div>
+                    <div className="font-medium text-gray-900">{pkg.max_faqs}</div>
+                  </div>
+                )}
                 {pkg.stripe_product_id && (
                   <div>
                     <div className="text-gray-600">Stripe Product ID</div>

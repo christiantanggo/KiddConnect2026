@@ -4,7 +4,9 @@ import { useState, useEffect } from 'react';
 import AdminGuard from '@/components/AdminGuard';
 import Link from 'next/link';
 
-function AdminDashboardPage() {
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+
+function PhoneAgentAdminPage() {
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [rebuilding, setRebuilding] = useState(false);
@@ -21,7 +23,6 @@ function AdminDashboardPage() {
   const loadStats = async () => {
     try {
       const token = getAdminToken();
-      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, ''); // Remove trailing slash
       const response = await fetch(`${API_URL}/api/admin/stats`, {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -65,7 +66,6 @@ function AdminDashboardPage() {
 
     try {
       const token = getAdminToken();
-      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, ''); // Remove trailing slash
       const response = await fetch(`${API_URL}/api/admin/rebuild-all-assistants`, {
         method: 'POST',
         headers: {
@@ -105,8 +105,6 @@ function AdminDashboardPage() {
     
     try {
       const token = getAdminToken();
-      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
-      // Always fetch ALL users - marketing consent is just an indicator, not a filter
       const url = `${API_URL}/api/admin/demo-users`;
       
       console.log('[Demo Modal] Fetching demo users from:', url);
@@ -152,6 +150,17 @@ function AdminDashboardPage() {
     setShowMarketingConsentOnly(false);
   };
 
+  const handleLogout = () => {
+    document.cookie = 'admin_token=; path=/; max-age=0';
+    window.location.href = '/admin/login';
+  };
+
+  const getAdminToken = () => {
+    const cookies = document.cookie.split(';');
+    const tokenCookie = cookies.find(c => c.trim().startsWith('admin_token='));
+    return tokenCookie ? tokenCookie.split('=')[1] : null;
+  };
+
   if (loading) {
     return (
       <AdminGuard>
@@ -167,12 +176,13 @@ function AdminDashboardPage() {
       <div className="min-h-screen bg-gray-50">
         <nav className="bg-white shadow-sm">
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-            <h1 className="text-xl font-bold text-blue-600">Admin Dashboard</h1>
-            <div className="flex gap-4 items-center">
-              <Link href="/admin/dashboard" className="text-blue-600 font-medium">
-                Dashboard
+            <div className="flex items-center gap-4">
+              <Link href="/admin-dashboard" className="text-blue-600 hover:text-blue-700">
+                ← Back to Dashboard
               </Link>
-              <span className="text-gray-300">|</span>
+              <h1 className="text-xl font-bold text-blue-600">Phone Agent - Admin</h1>
+            </div>
+            <div className="flex gap-4 items-center">
               <Link href="/admin/accounts" className="text-gray-700 hover:text-blue-600">
                 Accounts
               </Link>
@@ -204,25 +214,6 @@ function AdminDashboardPage() {
         </nav>
 
         <main className="container mx-auto px-4 py-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Total Accounts</h3>
-              <p className="text-3xl font-bold text-gray-900">{stats?.total_accounts || 0}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Active Accounts</h3>
-              <p className="text-3xl font-bold text-green-600">{stats?.active_accounts || 0}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Inactive Accounts</h3>
-              <p className="text-3xl font-bold text-gray-600">{stats?.inactive_accounts || 0}</p>
-            </div>
-            <div className="bg-white rounded-lg shadow p-6">
-              <h3 className="text-sm font-medium text-gray-500 mb-2">Pro Plans</h3>
-              <p className="text-3xl font-bold text-blue-600">{stats?.by_tier?.pro || 0}</p>
-            </div>
-          </div>
-
           {/* Demo Usage Section */}
           <div className="bg-white rounded-lg shadow p-6 mb-6">
             <h2 className="text-xl font-bold mb-4 text-gray-900">Demo Usage (VAPI Costs)</h2>
@@ -311,6 +302,46 @@ function AdminDashboardPage() {
             )}
           </div>
 
+          {/* Marketing Pages */}
+          <div className="bg-white rounded-lg shadow p-6 mb-6">
+            <h2 className="text-xl font-bold mb-4 text-gray-900">Marketing Pages</h2>
+            <div className="flex gap-4 flex-wrap">
+              <a
+                href="/tavari-ai-phone/landing"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 font-medium inline-flex items-center gap-2"
+              >
+                <span>Visit Pitch Page</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+              <a
+                href="/tavari-ai-phone/thank-you"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-6 py-3 bg-green-600 text-white rounded-md hover:bg-green-700 font-medium inline-flex items-center gap-2"
+              >
+                <span>Visit Thank You Page</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+              <a
+                href="/tavari-ai-phone/clickbank"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-6 py-3 bg-yellow-600 text-white rounded-md hover:bg-yellow-700 font-medium inline-flex items-center gap-2"
+              >
+                <span>Visit ClickBank Page</span>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                </svg>
+              </a>
+            </div>
+          </div>
+
           <div className="flex gap-4 flex-wrap">
             <Link
               href="/admin/accounts"
@@ -319,7 +350,7 @@ function AdminDashboardPage() {
               Manage Accounts
             </Link>
             <Link
-              href="/admin/packages"
+              href="/tavari-ai-phone/package"
               className="px-6 py-3 bg-purple-600 text-white rounded-md hover:bg-purple-700 font-medium"
             >
               Manage Packages
@@ -461,18 +492,7 @@ function AdminDashboardPage() {
       </div>
     </AdminGuard>
   );
-
-  function handleLogout() {
-    document.cookie = 'admin_token=; path=/; max-age=0';
-    window.location.href = '/admin/login';
-  }
-
-  function getAdminToken() {
-    const cookies = document.cookie.split(';');
-    const tokenCookie = cookies.find(c => c.trim().startsWith('admin_token='));
-    return tokenCookie ? tokenCookie.split('=')[1] : null;
-  }
 }
 
-export default AdminDashboardPage;
+export default PhoneAgentAdminPage;
 

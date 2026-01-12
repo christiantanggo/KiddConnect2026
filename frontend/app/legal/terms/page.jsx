@@ -73,3 +73,11 @@ export default function TermsPage() {
 
 
 
+
+
+
+
+
+
+
+

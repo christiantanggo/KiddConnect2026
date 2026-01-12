@@ -269,7 +269,8 @@ app.use("/api/kiosk", kioskRoutes);
 // ========== TAVARI AI CORE v2 ROUTES ==========
 // Mount v2 routes (built in parallel, does not touch Phone Agent)
 try {
-  const v2OrganizationsRoutes = (await import("./routes/v2/organizations.js")).default;
+  // Multi-organization routes removed - will be added back later
+  // const v2OrganizationsRoutes = (await import("./routes/v2/organizations.js")).default;
   const v2ModulesRoutes = (await import("./routes/v2/modules.js")).default;
   const v2SettingsRoutes = (await import("./routes/v2/settings.js")).default;
   const v2MarketplaceRoutes = (await import("./routes/v2/marketplace.js")).default;
@@ -279,7 +280,8 @@ try {
   const v2AdminRoutes = (await import("./routes/v2/admin.js")).default;
   const v2NotificationsRoutes = (await import("./routes/v2/notifications.js")).default;
 
-  app.use("/api/v2/organizations", v2OrganizationsRoutes);
+  // Multi-organization routes removed - will be added back later
+  // app.use("/api/v2/organizations", v2OrganizationsRoutes);
   app.use("/api/v2/modules", v2ModulesRoutes);
   app.use("/api/v2/settings", v2SettingsRoutes);
   app.use("/api/v2/marketplace", v2MarketplaceRoutes);
@@ -320,7 +322,7 @@ try {
       status: "ok",
       version: "v2",
       routes: {
-        organizations: "/api/v2/organizations",
+        // organizations: "/api/v2/organizations", // Removed - will be added back later
         modules: "/api/v2/modules",
         settings: "/api/v2/settings",
         marketplace: "/api/v2/marketplace",

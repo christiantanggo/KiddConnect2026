@@ -18,8 +18,7 @@ const keyGenerator = (req) => {
 // General API rate limiter
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // Limit each IP to 100 requests per windowMs
-  message: "Too many requests from this IP, please try again later.",
+  max: 200, // Increased limit: 200 requests per 15 minutes (was 100)
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator, // Use custom key generator
@@ -29,6 +28,14 @@ export const apiLimiter = rateLimit({
            req.path === '/ready' || 
            req.method === 'OPTIONS' ||
            req.path.startsWith('/kiosk'); // Kiosk routes have their own limiter
+  },
+  // Return JSON error instead of HTML
+  handler: (req, res) => {
+    res.status(429).json({
+      error: 'Too many requests from this IP, please try again later.',
+      code: 'RATE_LIMIT_EXCEEDED',
+      retryAfter: Math.ceil((req.rateLimit.resetTime - Date.now()) / 1000)
+    });
   },
 });
 
@@ -93,5 +100,58 @@ export const kioskLimiter = rateLimit({
     // Skip rate limiting for CORS preflight requests
     return req.method === 'OPTIONS';
   },
+});
+
+// AI rate limiter for AI generation endpoints
+// Per-user and per-business rate limiting to prevent prompt abuse and cost spikes
+// Separate from usage limits (which track total consumption)
+export const aiRateLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: async (req) => {
+    // Default: 10 requests per minute per user
+    // Can be configured per module in the future
+    return parseInt(process.env.AI_RATE_LIMIT_PER_USER || '10');
+  },
+  message: "Too many AI requests. Please try again later.",
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => {
+    // Use user ID if available (more accurate than IP)
+    if (req.user?.id) {
+      return `ai:user:${req.user.id}`;
+    }
+    // Fallback to IP
+    return keyGenerator(req);
+  },
+  skip: (req) => {
+    // Skip rate limiting for CORS preflight requests
+    return req.method === 'OPTIONS';
+  },
+  // Custom handler to log violations
+  handler: (req, res) => {
+    // Log rate limit violation if audit_logs available
+    if (req.user && req.active_business_id) {
+      // Async - don't block response
+      import('../../models/v2/AuditLog.js').then(({ AuditLog }) => {
+        AuditLog.create({
+          business_id: req.active_business_id,
+          user_id: req.user.id,
+          action: 'rate_limit_exceeded',
+          metadata: {
+            endpoint: req.path,
+            method: req.method,
+            module_key: req.params.moduleKey || 'unknown'
+          },
+          ip_address: req.ip,
+          user_agent: req.headers['user-agent']
+        }).catch(err => console.error('[aiRateLimiter] Failed to log violation:', err));
+      });
+    }
+    
+    res.status(429).json({
+      error: 'Too many requests. Please try again later.',
+      code: 'RATE_LIMIT_EXCEEDED'
+    });
+  }
 });
 

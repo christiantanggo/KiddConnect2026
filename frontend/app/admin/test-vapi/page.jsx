@@ -44,7 +44,7 @@ function TestVAPIPage() {
         <nav className="bg-white shadow-sm">
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
             <h1 className="text-xl font-bold text-blue-600">Test VAPI Connection</h1>
-            <Link href="/admin/dashboard" className="text-gray-700 hover:text-blue-600">
+            <Link href="/admin-dashboard" className="text-gray-700 hover:text-blue-600">
               Dashboard
             </Link>
           </div>

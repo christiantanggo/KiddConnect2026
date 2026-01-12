@@ -1,19 +1,51 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { billingAPI } from '@/lib/api';
+import { billingAPI, modulesAPI } from '@/lib/api';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
-export default function PricingModal({ isOpen, onClose }) {
+export default function PricingModal({ isOpen, onClose, module = null }) {
+  const router = useRouter();
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [activating, setActivating] = useState(false);
   const [selectedPackage, setSelectedPackage] = useState(null);
 
   useEffect(() => {
     if (isOpen) {
-      loadPackages();
+      if (module && module.metadata?.pricing) {
+        // Show module-specific pricing
+        loadModulePricing();
+      } else {
+        // Show Phone Agent packages
+        loadPackages();
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, module]);
+
+  const loadModulePricing = () => {
+    setLoading(true);
+    try {
+      const pricing = module.metadata.pricing;
+      // Create a synthetic package from module pricing
+      const syntheticPackage = {
+        id: module.key,
+        name: module.name,
+        description: module.description || `Get started with ${module.name}`,
+        monthly_price: (pricing.monthly_price_cents / 100).toFixed(2),
+        minutes_included: pricing.usage_limit || 'Unlimited',
+        module_key: module.key,
+        is_module: true
+      };
+      setPackages([syntheticPackage]);
+      setSelectedPackage(syntheticPackage);
+    } catch (error) {
+      console.error('Failed to load module pricing:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const loadPackages = async () => {
     try {
@@ -64,7 +96,9 @@ export default function PricingModal({ isOpen, onClose }) {
       <div className="relative bg-white rounded-lg shadow-xl max-w-4xl w-full mx-4 max-h-[90vh] overflow-y-auto">
         {/* Header */}
         <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-          <h2 className="text-2xl font-bold text-gray-900">Choose Your Package</h2>
+          <h2 className="text-2xl font-bold text-gray-900">
+            {module ? `${module.name} Pricing` : 'Choose Your Package'}
+          </h2>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-gray-600 text-2xl font-bold leading-none"
@@ -88,7 +122,15 @@ export default function PricingModal({ isOpen, onClose }) {
           ) : (
             <>
               <p className="text-sm text-gray-600 mb-6">Select a package that fits your needs</p>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+              <div 
+                className={`flex flex-wrap justify-center gap-4 mb-6 ${
+                  packages.length === 1 
+                    ? 'grid grid-cols-1 max-w-sm mx-auto' 
+                    : packages.length === 2 
+                    ? 'grid grid-cols-1 md:grid-cols-2 max-w-2xl mx-auto' 
+                    : 'grid grid-cols-1 md:grid-cols-3'
+                }`}
+              >
                 {packages.map((pkg) => {
                   const isOnSale = pkg.isOnSale && pkg.saleAvailable;
                   const saleBorderColor = isOnSale ? 'border-orange-500' : '';
@@ -128,13 +170,25 @@ export default function PricingModal({ isOpen, onClose }) {
                       </div>
                       <p className="text-sm text-gray-600 mb-4">{pkg.description}</p>
                       <div className="text-xs text-gray-500 space-y-1">
-                        <div>
-                          {pkg.minutes_included ? `${pkg.minutes_included} minutes included` : 'Unlimited minutes'}
-                        </div>
-                        {pkg.sms_included !== undefined && pkg.sms_included !== null && (
+                        {pkg.is_module ? (
                           <div>
-                            {pkg.sms_included > 0 ? `${pkg.sms_included} SMS included` : 'No SMS included'}
+                            {typeof pkg.minutes_included === 'number' 
+                              ? `${pkg.minutes_included} generations included per month`
+                              : pkg.minutes_included === 'Unlimited'
+                              ? 'Unlimited generations'
+                              : `${pkg.minutes_included} generations per month`}
                           </div>
+                        ) : (
+                          <>
+                            <div>
+                              {pkg.minutes_included ? `${pkg.minutes_included} minutes included` : 'Unlimited minutes'}
+                            </div>
+                            {pkg.sms_included !== undefined && pkg.sms_included !== null && (
+                              <div>
+                                {pkg.sms_included > 0 ? `${pkg.sms_included} SMS included` : 'No SMS included'}
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                       {isOnSale && pkg.sale_max_quantity && (
@@ -166,13 +220,38 @@ export default function PricingModal({ isOpen, onClose }) {
 
               {/* CTA Button */}
               <div className="flex justify-center mt-6">
-                <Link
-                  href="/signup"
-                  className="bg-blue-600 text-white px-8 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl"
-                  onClick={onClose}
-                >
-                  Get Started
-                </Link>
+                {module && module.key ? (
+                  <button
+                    onClick={async () => {
+                      try {
+                        setActivating(true);
+                        const response = await modulesAPI.activate(module.key);
+                        onClose();
+                        if (response.data.redirect_to) {
+                          router.push(response.data.redirect_to);
+                        } else {
+                          router.push(`/modules/${module.key}/setup`);
+                        }
+                      } catch (error) {
+                        console.error('Failed to activate module:', error);
+                        alert(error.response?.data?.message || 'Failed to activate module. Please try again.');
+                        setActivating(false);
+                      }
+                    }}
+                    disabled={activating}
+                    className="bg-blue-600 text-white px-8 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {activating ? 'Activating...' : 'Activate Module'}
+                  </button>
+                ) : (
+                  <Link
+                    href="/signup"
+                    className="bg-blue-600 text-white px-8 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl"
+                    onClick={onClose}
+                  >
+                    Get Started
+                  </Link>
+                )}
               </div>
             </>
           )}

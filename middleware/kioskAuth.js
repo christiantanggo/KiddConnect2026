@@ -9,6 +9,11 @@ import { supabaseClient } from '../config/database.js';
  * Token is passed as query parameter: ?token=xxx or header: Authorization: Bearer xxx
  */
 export const authenticateKiosk = async (req, res, next) => {
+  // Skip authentication for OPTIONS requests (CORS preflight)
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+  
   try {
     // Get token from query parameter or Authorization header
     const token = req.query.token || 

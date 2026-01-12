@@ -21,11 +21,36 @@ router.get('/test-mode', async (req, res) => {
 // Get available packages (public endpoint - no auth required for pricing modal)
 router.get('/packages', async (req, res) => {
   try {
+    const { module_key, clickbank } = req.query;
+    
+    // If clickbank=true, return only the ClickBank package for the module
+    if (clickbank === 'true' && module_key) {
+      const clickBankPackage = await PricingPackage.findClickBankPackage(module_key);
+      if (!clickBankPackage) {
+        return res.status(404).json({ 
+          error: 'ClickBank package not found for this module',
+          package: null 
+        });
+      }
+      
+      // Add sale status to the package
+      const isOnSale = PricingPackage.isSaleActive(clickBankPackage);
+      const saleAvailable = PricingPackage.isSaleAvailable(clickBankPackage);
+      const packageWithSaleStatus = {
+        ...clickBankPackage,
+        isOnSale,
+        saleAvailable,
+      };
+      
+      return res.json({ package: packageWithSaleStatus, packages: [packageWithSaleStatus] });
+    }
+    
     // Show all active packages (both public and private) for billing
     // This ensures all live/active plans are available for purchase
     const packages = await PricingPackage.findAll({
       includeInactive: false, // Only show active packages
       includePrivate: true, // Include all packages (public and private) - show all live plans
+      moduleKey: module_key || null, // Filter by module if provided
     });
     
     console.log('[Billing] Found packages:', packages.length);
@@ -207,38 +232,97 @@ router.get('/status', authenticate, async (req, res) => {
         const { getStripeInstance } = await import('../services/stripe.js');
         const stripe = getStripeInstance();
         
-        // Get subscription details if subscription ID exists
+        // Get subscription details - try stored ID first, then query Stripe for active subscriptions
         if (business.stripe_subscription_id) {
           try {
             subscription = await stripe.subscriptions.retrieve(business.stripe_subscription_id, {
               expand: ['default_payment_method']
             });
+            // Verify it's still active
+            if (subscription.status === 'canceled' || subscription.status === 'unpaid' || subscription.status === 'incomplete_expired') {
+              subscription = null; // Treat canceled/expired subscriptions as null
+            }
           } catch (subError) {
-            console.warn('[Billing Status] Could not retrieve subscription:', subError.message);
+            console.warn('[Billing Status] Could not retrieve subscription by ID:', subError.message);
+            subscription = null; // Clear it so we search for active subscriptions below
           }
         }
         
-        // Get payment method from customer if no subscription payment method
-        if (!subscription?.default_payment_method) {
+        // If no subscription found from stored ID, query Stripe for active subscriptions
+        if (!subscription) {
           try {
-            const customer = await stripe.customers.retrieve(business.stripe_customer_id, {
-              expand: ['invoice_settings.default_payment_method']
+            const subscriptions = await stripe.subscriptions.list({
+              customer: business.stripe_customer_id,
+              status: 'all', // Get all statuses
+              limit: 10
             });
             
+            // Find the first active, trialing, or past_due subscription (these are "active" subscriptions)
+            subscription = subscriptions.data.find(sub => 
+              sub.status === 'active' || 
+              sub.status === 'trialing' || 
+              sub.status === 'past_due'
+            );
+            
+            if (subscription) {
+              // Expand payment method
+              subscription = await stripe.subscriptions.retrieve(subscription.id, {
+                expand: ['default_payment_method']
+              });
+              
+              // Optionally update the business record with the found subscription ID
+              // This helps with future lookups
+              if (subscription.id !== business.stripe_subscription_id) {
+                console.log(`[Billing Status] Found subscription ${subscription.id}, updating business record`);
+                await Business.update(business.id, {
+                  stripe_subscription_id: subscription.id
+                }).catch(err => console.warn('[Billing Status] Failed to update business with subscription ID:', err.message));
+              }
+            }
+          } catch (listError) {
+            console.warn('[Billing Status] Could not list subscriptions:', listError.message);
+          }
+        }
+        
+        // Get payment method - try subscription first, then customer default
+        if (subscription?.default_payment_method) {
+          // Extract payment method from subscription
+          try {
+            paymentMethod = typeof subscription.default_payment_method === 'string'
+              ? await stripe.paymentMethods.retrieve(subscription.default_payment_method)
+              : subscription.default_payment_method;
+          } catch (pmError) {
+            console.warn('[Billing Status] Could not retrieve subscription payment method:', pmError.message);
+          }
+        }
+        
+        // If no payment method from subscription, try customer default
+        if (!paymentMethod) {
+          try {
+            const customer = await stripe.customers.retrieve(business.stripe_customer_id, {
+              expand: ['invoice_settings.default_payment_method', 'default_source']
+            });
+            
+            // Try invoice_settings.default_payment_method first
             if (customer.invoice_settings?.default_payment_method) {
               const pm = typeof customer.invoice_settings.default_payment_method === 'string'
                 ? await stripe.paymentMethods.retrieve(customer.invoice_settings.default_payment_method)
                 : customer.invoice_settings.default_payment_method;
               paymentMethod = pm;
             }
+            // Also check for any payment methods attached to the customer
+            else {
+              const paymentMethods = await stripe.paymentMethods.list({
+                customer: business.stripe_customer_id,
+                type: 'card',
+              });
+              if (paymentMethods.data && paymentMethods.data.length > 0) {
+                paymentMethod = paymentMethods.data[0]; // Use the first one
+              }
+            }
           } catch (pmError) {
-            console.warn('[Billing Status] Could not retrieve payment method:', pmError.message);
+            console.warn('[Billing Status] Could not retrieve customer payment method:', pmError.message);
           }
-        } else if (subscription.default_payment_method) {
-          // Extract payment method from subscription
-          paymentMethod = typeof subscription.default_payment_method === 'string'
-            ? await stripe.paymentMethods.retrieve(subscription.default_payment_method)
-            : subscription.default_payment_method;
         }
         
         // Extract actual subscription price from Stripe subscription

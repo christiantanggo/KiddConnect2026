@@ -2,32 +2,50 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Import Inter font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-start-rgb: 214, 219, 220;
-  --background-end-rgb: 255, 255, 255;
+  /* Tavari AI v2 Design System - From Specification */
+  --color-primary: #0F172A;
+  --color-accent: #14B8A6;
+  --color-accent-2: #FACC15;
+  --color-danger: #EF4444;
+  --color-background: #F8FAFC;
+  --color-surface: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-text-main: #020617;
+  --color-text-muted: #64748B;
+  
+  /* Layout - From Specification */
+  --sidebar-width: 260px;
+  --topbar-height: 64px;
+  --max-content-width: 1200px;
+  --padding-base: 24px;
+  --card-radius: 12px;
+  --button-radius: 10px;
+  --input-height: 40px;
 }
 
 /* Disable dark mode auto-detection - we use light theme */
 @media (prefers-color-scheme: dark) {
   :root {
-    --foreground-rgb: 0, 0, 0;
-    --background-start-rgb: 214, 219, 220;
-    --background-end-rgb: 255, 255, 255;
+    --color-primary: #0F172A;
+    --color-accent: #14B8A6;
+    --color-accent-2: #FACC15;
+    --color-danger: #EF4444;
+    --color-background: #F8FAFC;
+    --color-surface: #FFFFFF;
+    --color-border: #E5E7EB;
+    --color-text-main: #020617;
+    --color-text-muted: #64748B;
   }
 }
 
 body {
-  color: rgb(var(--foreground-rgb));
-  background: linear-gradient(
-      to bottom,
-      transparent,
-      rgb(var(--background-end-rgb))
-    )
-    rgb(var(--background-start-rgb));
-  /* Force light theme colors */
-  color: #000000;
-  background-color: #f9fafb;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--color-text-main);
+  background-color: var(--color-background);
 }
 
 @keyframes slide-in {

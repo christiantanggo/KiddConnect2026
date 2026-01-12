@@ -14,6 +14,7 @@ function PackagesPage() {
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [editingPackage, setEditingPackage] = useState(null);
+  const [moduleKey, setModuleKey] = useState('phone-agent'); // Default to phone-agent
   const [formData, setFormData] = useState({
     name: '',
     description: '',
@@ -39,13 +40,19 @@ function PackagesPage() {
   });
 
   useEffect(() => {
-    loadPackages();
+    // Get module_key from URL query params
+    const urlParams = new URLSearchParams(window.location.search);
+    const urlModuleKey = urlParams.get('module_key') || 'phone-agent';
+    setModuleKey(urlModuleKey);
+    loadPackages(urlModuleKey);
   }, []);
 
-  const loadPackages = async () => {
+  const loadPackages = async (moduleKeyParam = null) => {
     try {
       setLoading(true);
-      const response = await adminPackagesAPI.getPackages(true);
+      const urlParams = new URLSearchParams(window.location.search);
+      const moduleKeyToUse = moduleKeyParam || urlParams.get('module_key') || 'phone-agent';
+      const response = await adminPackagesAPI.getPackages(true, moduleKeyToUse);
       setPackages(response.data.packages || []);
     } catch (error) {
       console.error('Failed to load packages:', error);
@@ -58,6 +65,10 @@ function PackagesPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
+      // Get module_key from URL params if not in formData
+      const urlParams = new URLSearchParams(window.location.search);
+      const moduleKey = urlParams.get('module_key') || formData.module_key || 'phone-agent';
+      
       const packageData = {
         ...formData,
         monthly_price: parseFloat(formData.monthly_price),
@@ -68,6 +79,8 @@ function PackagesPage() {
         emails_included: parseInt(formData.emails_included) || 0,
         emails_overage_price: parseFloat(formData.emails_overage_price) || 0,
         max_faqs: parseInt(formData.max_faqs) || 5,
+        module_key: moduleKey,
+        prompts_included: parseInt(formData.prompts_included) || 0,
         // Sale fields - set to null/empty to clear sale, or set values to activate
         sale_name: formData.sale_name || null,
         sale_start_date: formData.sale_start_date || null,
@@ -97,6 +110,10 @@ function PackagesPage() {
 
   const handleEdit = (pkg) => {
     setEditingPackage(pkg);
+    // Set module_key state if package has one
+    if (pkg.module_key) {
+      setModuleKey(pkg.module_key);
+    }
     setFormData({
       name: pkg.name || '',
       description: pkg.description || '',
@@ -119,6 +136,8 @@ function PackagesPage() {
       sale_sold_count: pkg.sale_sold_count || 0,
       sale_price: pkg.sale_price || '',
       sale_duration_months: pkg.sale_duration_months || '',
+      module_key: pkg.module_key || moduleKey,
+      prompts_included: pkg.prompts_included || 0,
     });
     setShowForm(true);
   };
@@ -139,6 +158,8 @@ function PackagesPage() {
   };
 
   const resetForm = () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const moduleKey = urlParams.get('module_key') || 'phone-agent';
     setFormData({
       name: '',
       description: '',
@@ -161,6 +182,8 @@ function PackagesPage() {
       sale_sold_count: 0,
       sale_price: '',
       sale_duration_months: '',
+      module_key: moduleKey,
+      prompts_included: 0,
     });
   };
 
@@ -187,7 +210,7 @@ function PackagesPage() {
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
             <h1 className="text-xl font-bold text-blue-600">Package Management</h1>
             <div className="flex gap-4 items-center">
-              <Link href="/admin/dashboard" className="text-gray-700 hover:text-blue-600">
+              <Link href="/admin-dashboard" className="text-gray-700 hover:text-blue-600">
                 Dashboard
               </Link>
               <span className="text-gray-300">|</span>
@@ -267,73 +290,92 @@ function PackagesPage() {
                       required
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Minutes Included *</label>
-                    <input
-                      type="number"
-                      value={formData.minutes_included}
-                      onChange={(e) => setFormData({ ...formData, minutes_included: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Overage Price per Minute ($)</label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      value={formData.overage_price_per_minute}
-                      onChange={(e) => setFormData({ ...formData, overage_price_per_minute: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">SMS Included</label>
-                    <input
-                      type="number"
-                      value={formData.sms_included}
-                      onChange={(e) => setFormData({ ...formData, sms_included: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">SMS Overage Price ($)</label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      value={formData.sms_overage_price}
-                      onChange={(e) => setFormData({ ...formData, sms_overage_price: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Emails Included</label>
-                    <input
-                      type="number"
-                      value={formData.emails_included}
-                      onChange={(e) => setFormData({ ...formData, emails_included: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Emails Overage Price ($)</label>
-                    <input
-                      type="number"
-                      step="0.0001"
-                      value={formData.emails_overage_price}
-                      onChange={(e) => setFormData({ ...formData, emails_overage_price: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Max FAQs</label>
-                    <input
-                      type="number"
-                      value={formData.max_faqs}
-                      onChange={(e) => setFormData({ ...formData, max_faqs: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
-                    />
-                  </div>
+                  {moduleKey === 'reviews' ? (
+                    // Review Reply AI fields
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">Prompts Included *</label>
+                      <input
+                        type="number"
+                        value={formData.prompts_included || 0}
+                        onChange={(e) => setFormData({ ...formData, prompts_included: e.target.value })}
+                        className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                        required
+                        placeholder="e.g., 100, 500, 1000"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">Number of review reply prompts included per month</p>
+                    </div>
+                  ) : (
+                    // Phone Agent fields
+                    <>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Minutes Included *</label>
+                        <input
+                          type="number"
+                          value={formData.minutes_included}
+                          onChange={(e) => setFormData({ ...formData, minutes_included: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                          required
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Overage Price per Minute ($)</label>
+                        <input
+                          type="number"
+                          step="0.0001"
+                          value={formData.overage_price_per_minute}
+                          onChange={(e) => setFormData({ ...formData, overage_price_per_minute: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">SMS Included</label>
+                        <input
+                          type="number"
+                          value={formData.sms_included}
+                          onChange={(e) => setFormData({ ...formData, sms_included: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">SMS Overage Price ($)</label>
+                        <input
+                          type="number"
+                          step="0.0001"
+                          value={formData.sms_overage_price}
+                          onChange={(e) => setFormData({ ...formData, sms_overage_price: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Emails Included</label>
+                        <input
+                          type="number"
+                          value={formData.emails_included}
+                          onChange={(e) => setFormData({ ...formData, emails_included: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Emails Overage Price ($)</label>
+                        <input
+                          type="number"
+                          step="0.0001"
+                          value={formData.emails_overage_price}
+                          onChange={(e) => setFormData({ ...formData, emails_overage_price: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-gray-700 mb-1">Max FAQs</label>
+                        <input
+                          type="number"
+                          value={formData.max_faqs}
+                          onChange={(e) => setFormData({ ...formData, max_faqs: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                        />
+                      </div>
+                    </>
+                  )}
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Stripe Product ID</label>
                     <input

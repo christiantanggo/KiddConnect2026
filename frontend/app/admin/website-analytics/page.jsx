@@ -56,7 +56,7 @@ function WebsiteAnalyticsPage() {
           <div className="container mx-auto px-4 py-4 flex justify-between items-center">
             <h1 className="text-xl font-bold text-blue-600">Website Analytics</h1>
             <div className="flex gap-4 items-center">
-              <Link href="/admin/dashboard" className="text-gray-700 hover:text-blue-600">
+              <Link href="/admin-dashboard" className="text-gray-700 hover:text-blue-600">
                 Dashboard
               </Link>
               <span className="text-gray-300">|</span>

@@ -13,3 +13,11 @@ ADD COLUMN IF NOT EXISTS voice_id VARCHAR(100) DEFAULT '21m00Tcm4TlvDq8ikWAM';
 
 
 
+
+
+
+
+
+
+
+

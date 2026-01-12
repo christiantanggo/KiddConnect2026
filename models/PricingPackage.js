@@ -27,6 +27,10 @@ export class PricingPackage {
       sale_sold_count = 0,
       sale_price,
       sale_duration_months,
+      module_key = 'phone-agent',
+      prompts_included = 0,
+      is_clickbank_package = false,
+      clickbank_commission_rate = null,
     } = data;
 
     if (!name || !monthly_price) {
@@ -48,6 +52,10 @@ export class PricingPackage {
       stripe_price_id,
       is_active,
       is_public,
+      module_key,
+      prompts_included,
+      is_clickbank_package,
+      clickbank_commission_rate,
       updated_at: new Date().toISOString(),
     };
     
@@ -83,12 +91,16 @@ export class PricingPackage {
   }
 
   static async findAll(options = {}) {
-    const { includeInactive = false, includePrivate = false } = options;
+    const { includeInactive = false, includePrivate = false, moduleKey = null } = options;
     
     let query = supabaseClient
       .from('pricing_packages')
       .select('*')
       .is('deleted_at', null);
+
+    if (moduleKey) {
+      query = query.eq('module_key', moduleKey);
+    }
 
     if (!includeInactive) {
       query = query.eq('is_active', true);
@@ -233,6 +245,43 @@ export class PricingPackage {
 
     if (error) throw error;
     return data || [];
+  }
+
+  /**
+   * Find the ClickBank package for a specific module
+   */
+  static async findClickBankPackage(moduleKey) {
+    const { data, error } = await supabaseClient
+      .from('pricing_packages')
+      .select('*')
+      .eq('module_key', moduleKey)
+      .eq('is_clickbank_package', true)
+      .is('deleted_at', null)
+      .single();
+
+    if (error && error.code !== 'PGRST116') throw error;
+    return data || null;
+  }
+
+  /**
+   * Check if another ClickBank package exists for the same module (excluding the current package)
+   */
+  static async hasOtherClickBankPackage(moduleKey, excludePackageId) {
+    let query = supabaseClient
+      .from('pricing_packages')
+      .select('id')
+      .eq('module_key', moduleKey)
+      .eq('is_clickbank_package', true)
+      .is('deleted_at', null);
+
+    if (excludePackageId) {
+      query = query.neq('id', excludePackageId);
+    }
+
+    const { data, error } = await query.limit(1);
+
+    if (error) throw error;
+    return (data && data.length > 0) || false;
   }
 }
 

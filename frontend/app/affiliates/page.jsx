@@ -50,7 +50,7 @@ export default function AffiliatesPage() {
             Tavari Affiliate Program
           </h1>
           <p className="text-xl text-gray-600">
-            Earn 75% commission promoting the #1 AI phone agent for small businesses
+            Earn 75% commission promoting AI receptionist software for small businesses
           </p>
         </div>
 
@@ -85,7 +85,7 @@ export default function AffiliatesPage() {
                 <div>
                   <h2 className="text-3xl font-bold text-gray-900 mb-4">Join Our Affiliate Program</h2>
                   <p className="text-lg text-gray-700 mb-6">
-                    Promote Tavari AI and earn generous commissions on every sale. Perfect for marketers, content creators, and business consultants.
+                    Promote Tavari AI and earn generous commissions on every sale. Perfect for marketers, content creators, business consultants, and anyone with an audience of small business owners.
                   </p>
                 </div>
 
@@ -123,16 +123,14 @@ export default function AffiliatesPage() {
                 <div className="bg-white border-2 border-blue-200 rounded-lg p-8">
                   <h3 className="text-2xl font-bold text-gray-900 mb-4">🚀 Get Started</h3>
                   <p className="text-gray-700 mb-6">
-                    Join our affiliate program through ClickBank, the world's largest affiliate marketplace.
+                    Join our affiliate program and earn commissions promoting AI receptionist software to small businesses. We provide all the tools you need to succeed.
                   </p>
                   <div className="flex flex-col sm:flex-row gap-4">
                     <a
-                      href="https://www.clickbank.com/marketplace/"
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      href="mailto:info@tanggo.ca?subject=Affiliate Program Inquiry"
                       className="bg-blue-600 text-white px-8 py-3 rounded-lg font-semibold hover:bg-blue-700 transition-colors text-center"
                     >
-                      Join via ClickBank →
+                      Apply to Join →
                     </a>
                     <Link
                       href="/affiliates?tab=product"
@@ -149,13 +147,43 @@ export default function AffiliatesPage() {
 
                 <div className="bg-gray-50 rounded-lg p-6">
                   <h3 className="text-xl font-semibold text-gray-900 mb-3">How It Works</h3>
-                  <ol className="list-decimal list-inside space-y-2 text-gray-700">
-                    <li>Sign up as an affiliate on ClickBank</li>
-                    <li>Get your unique affiliate link</li>
-                    <li>Promote Tavari to your audience</li>
-                    <li>Earn 75% commission on every sale</li>
-                    <li>Get paid weekly via ClickBank</li>
+                  <ol className="list-decimal list-inside space-y-2 text-gray-700 mb-4">
+                    <li>Apply to join our affiliate program</li>
+                    <li>Get approved and receive your unique affiliate link and tracking code</li>
+                    <li>Promote Tavari AI receptionist software to your audience</li>
+                    <li>Earn 75% commission on every sale ($89.25 per sale at $119/month)</li>
+                    <li>Track your earnings in real-time through our affiliate dashboard</li>
+                    <li>Get paid monthly via direct deposit or PayPal</li>
                   </ol>
+                  <p className="text-sm text-gray-600 mt-4">
+                    <strong>Note:</strong> Commissions are paid on initial sales only. Recurring subscription revenue helps us maintain the service and support customers.
+                  </p>
+                </div>
+
+                <div className="bg-blue-50 rounded-lg p-6">
+                  <h3 className="text-xl font-semibold text-gray-900 mb-3">What We Provide</h3>
+                  <ul className="space-y-2 text-gray-700">
+                    <li className="flex items-start">
+                      <span className="text-blue-600 mr-2">✓</span>
+                      <span>Unique tracking links and codes for all your campaigns</span>
+                    </li>
+                    <li className="flex items-start">
+                      <span className="text-blue-600 mr-2">✓</span>
+                      <span>Marketing materials (banners, copy, product information)</span>
+                    </li>
+                    <li className="flex items-start">
+                      <span className="text-blue-600 mr-2">✓</span>
+                      <span>Real-time affiliate dashboard to track clicks and conversions</span>
+                    </li>
+                    <li className="flex items-start">
+                      <span className="text-blue-600 mr-2">✓</span>
+                      <span>Support from our team to help you succeed</span>
+                    </li>
+                    <li className="flex items-start">
+                      <span className="text-blue-600 mr-2">✓</span>
+                      <span>Marketing tips and best practices for promoting software</span>
+                    </li>
+                  </ul>
                 </div>
               </div>
             )}
@@ -164,9 +192,9 @@ export default function AffiliatesPage() {
             {activeTab === 'product' && (
               <div className="space-y-8">
                 <div>
-                  <h2 className="text-3xl font-bold text-gray-900 mb-4">Tavari AI - Product Details</h2>
+                    <h2 className="text-3xl font-bold text-gray-900 mb-4">Tavari AI - Product Details</h2>
                   <p className="text-lg text-gray-700 mb-6">
-                    Everything you need to know about Tavari AI Phone Agent to promote it effectively.
+                    Everything you need to know about Tavari AI receptionist software to promote it effectively.
                   </p>
                 </div>
 
@@ -174,9 +202,10 @@ export default function AffiliatesPage() {
                   <div>
                     <h3 className="text-2xl font-semibold text-gray-900 mb-3">What is Tavari AI?</h3>
                     <p className="text-gray-700 mb-4">
-                      Tavari AI is an AI-powered phone answering service designed specifically for small businesses. 
-                      It answers every call, 24/7, using your business information to handle customer inquiries, 
-                      answer FAQs, and take messages.
+                      Tavari AI is AI receptionist software designed specifically for small businesses. 
+                      This software automatically handles customer communication, answers FAQs using your business information, 
+                      and captures messages - all through a web-based dashboard. It's perfect for businesses that want to 
+                      provide 24/7 customer service without hiring a full-time receptionist.
                     </p>
                   </div>
 

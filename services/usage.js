@@ -11,6 +11,7 @@ import {
   sendOverageChargesNotification,
   sendAIDisabledNotification,
 } from "./notifications.js";
+import { Notification } from "../models/v2/Notification.js";
 
 /**
  * Check if minutes are available for a call
@@ -80,6 +81,28 @@ export async function checkMinutesAvailable(businessId, callDurationMinutes = 0)
       minutesRemaining,
       billingCycle.end
     );
+    
+    // Create in-app notification for usage limit warning
+    try {
+      await Notification.create({
+        business_id: business.id,
+        user_id: null, // All users in organization see this
+        type: 'limit',
+        message: `You've used ${Math.round(usagePercent)}% of your monthly minutes (${totalMinutesUsed} of ${totalAvailable} minutes). Limit resets on ${billingCycle.end.toLocaleDateString()}.`,
+        metadata: {
+          module_key: 'phone-agent',
+          minutes_used: totalMinutesUsed,
+          minutes_total: totalAvailable,
+          minutes_remaining: minutesRemaining,
+          usage_percent: Math.round(usagePercent),
+          reset_date: billingCycle.end.toISOString(),
+        },
+      });
+      console.log(`[Usage] ✅ In-app notification created for usage limit warning`);
+    } catch (notifError) {
+      console.error(`[Usage] ⚠️ Failed to create usage limit notification (non-blocking):`, notifError);
+    }
+    
     // Mark as sent (would need to track this in database)
   }
 
@@ -100,6 +123,26 @@ export async function checkMinutesAvailable(businessId, callDurationMinutes = 0)
         // Send optional notification if enabled
         if (business.notify_minutes_fully_used) {
           await sendMinutesFullyUsedNotification(business, totalAvailable, billingCycle.end, true);
+        }
+
+        // Create in-app notification for minutes exhausted
+        try {
+          await Notification.create({
+            business_id: business.id,
+            user_id: null, // All users in organization see this
+            type: 'warning',
+            message: `Monthly minutes exhausted (${totalMinutesUsed}/${totalAvailable}). AI has been disabled. Resets on ${billingCycle.end.toLocaleDateString()}.`,
+            metadata: {
+              module_key: 'phone-agent',
+              minutes_used: totalMinutesUsed,
+              minutes_total: totalAvailable,
+              reset_date: billingCycle.end.toISOString(),
+              ai_disabled: true,
+            },
+          });
+          console.log(`[Usage] ✅ In-app notification created for minutes exhausted`);
+        } catch (notifError) {
+          console.error(`[Usage] ⚠️ Failed to create minutes exhausted notification (non-blocking):`, notifError);
         }
       }
 

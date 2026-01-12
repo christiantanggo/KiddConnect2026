@@ -206,7 +206,7 @@ function AdminSupportTicketPage() {
                 ← Back to Tickets
               </Link>
               <span className="text-gray-300">|</span>
-              <Link href="/admin/dashboard" className="text-gray-700 hover:text-blue-600">
+              <Link href="/admin-dashboard" className="text-gray-700 hover:text-blue-600">
                 Dashboard
               </Link>
               <span className="text-gray-300">|</span>

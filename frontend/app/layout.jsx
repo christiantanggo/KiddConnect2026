@@ -10,6 +10,14 @@ export const metadata = {
 export default function RootLayout({ children }) {
   const gaMeasurementId = process.env.NEXT_PUBLIC_GA_MEASUREMENT_ID;
 
+  // Generate Google Analytics script content
+  const gaScriptContent = gaMeasurementId ? `
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', '${gaMeasurementId}');
+  ` : '';
+
   return (
     <html lang="en">
       <body>
@@ -21,12 +29,7 @@ export default function RootLayout({ children }) {
               strategy="afterInteractive"
             />
             <Script id="google-analytics" strategy="afterInteractive">
-              {`
-                window.dataLayer = window.dataLayer || [];
-                function gtag(){dataLayer.push(arguments);}
-                gtag('js', new Date());
-                gtag('config', '${gaMeasurementId}');
-              `}
+              {gaScriptContent}
             </Script>
           </>
         )}

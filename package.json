@@ -16,6 +16,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "migrate": "node scripts/migrate.js",
+    "migrate:legacy-users": "node scripts/migrate-legacy-users.js",
+    "check:migration-status": "node scripts/check-user-migration-status.js",
     "test:vapi": "node scripts/test-vapi-connection.js",
     "test:phone": "node scripts/test-phone-provisioning.js",
     "test:key": "node scripts/test-vapi-key-direct.js",
@@ -81,6 +83,7 @@
     "libphonenumber-js": "^1.12.31",
     "multer": "^2.0.2",
     "node-fetch": "^3.3.2",
+    "openai": "^6.16.0",
     "pdfkit": "^0.14.0",
     "stripe": "^20.1.0",
     "winston": "^3.11.0"

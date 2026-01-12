@@ -32,7 +32,7 @@ function AdminLoginPage() {
       if (response.ok) {
         // Store admin token
         document.cookie = `admin_token=${data.token}; path=/; max-age=86400; SameSite=Strict`;
-        router.push('/admin/dashboard');
+        router.push('/admin-dashboard');
       } else {
         setError(data.error || 'Login failed');
       }

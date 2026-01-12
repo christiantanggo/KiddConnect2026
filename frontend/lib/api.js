@@ -19,6 +19,7 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // Multi-organization features removed - business context handled server-side via user.business_id
   return config;
 });
 
@@ -290,7 +291,11 @@ export const adminSupportAPI = {
 
 // Admin Packages API
 export const adminPackagesAPI = {
-  getPackages: (includeInactive = false) => adminApi.get('/packages', { params: { includeInactive } }),
+  getPackages: (includeInactive = false, module_key = null) => {
+    const params = { includeInactive };
+    if (module_key) params.module_key = module_key;
+    return adminApi.get('/packages', { params });
+  },
   getPackage: (id) => adminApi.get(`/packages/${id}`),
   createPackage: (data) => adminApi.post('/packages', data),
   updatePackage: (id, data) => adminApi.put(`/packages/${id}`, data),
@@ -340,6 +345,32 @@ export const bulkSMSAPI = {
   getOptOuts: () => api.get('/bulk-sms/opt-outs'),
   diagnose: () => api.get('/bulk-sms/diagnose'),
   debugOptOuts: () => api.get('/bulk-sms/debug-opt-outs'),
+};
+
+// Modules API (v2)
+export const modulesAPI = {
+  list: () => api.get('/v2/modules/list'),
+  getAll: () => api.get('/v2/modules'),
+  getModule: (moduleKey) => api.get(`/v2/modules/${moduleKey}`),
+  activate: (moduleKey) => api.post(`/v2/modules/${moduleKey}/activate`),
+};
+
+// Reviews API (v2)
+export const reviewsAPI = {
+  generate: (data) => api.post('/v2/reviews/generate', data),
+  getHistory: (params) => api.get('/v2/reviews/history', { params }),
+  getUsage: () => api.get('/v2/reviews/usage'),
+  getSettings: () => api.get('/v2/reviews/settings'),
+  updateSettings: (settings) => api.put('/v2/reviews/settings', { settings }),
+  getSetupStatus: () => api.get('/v2/reviews/setup/status'),
+  saveSetupStep: (stepNumber, stepData) => api.post(`/v2/reviews/setup/step/${stepNumber}`, stepData),
+  completeSetup: () => api.post('/v2/reviews/setup/complete'),
+  submitFeedback: (outputId, feedbackType, adjustmentType = null, selectedReplyOption = null) => api.post('/v2/reviews/feedback', {
+    output_id: outputId,
+    feedback_type: feedbackType,
+    adjustment_type: adjustmentType,
+    selected_reply_option: selectedReplyOption
+  }),
 };
 
 // Contacts API

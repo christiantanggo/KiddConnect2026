@@ -88,6 +88,24 @@ router.get("/me", authenticateAdmin, async (req, res) => {
   }
 });
 
+// Get all modules (admin version - no business context needed)
+router.get("/modules", authenticateAdmin, async (req, res) => {
+  try {
+    const { Module } = await import('../models/v2/Module.js');
+    const modules = await Module.findAll();
+    res.json({ modules });
+  } catch (error) {
+    console.error('[GET /api/admin/modules] Error:', error);
+    // Return fallback modules if error
+    res.json({ 
+      modules: [
+        { key: 'phone-agent', name: 'Tavari AI Phone Agent', description: 'AI phone answering and call management', is_active: true },
+        { key: 'reviews', name: 'Tavari AI Review Reply', description: 'AI-powered review response generation', is_active: true },
+      ]
+    });
+  }
+});
+
 // Get all businesses (with search/filter)
 router.get("/accounts", authenticateAdmin, async (req, res) => {
   try {
@@ -725,10 +743,11 @@ import { AIAgent } from "../models/AIAgent.js";
 // Get all packages
 router.get("/packages", authenticateAdmin, async (req, res) => {
   try {
-    const { includeInactive } = req.query;
+    const { includeInactive, module_key } = req.query;
     const packages = await PricingPackage.findAll({
       includeInactive: includeInactive === 'true',
       includePrivate: true, // Admins can see all packages
+      moduleKey: module_key || null, // Filter by module if provided
     });
 
     // Get business count for each package
@@ -781,6 +800,27 @@ router.post("/packages", authenticateAdmin, async (req, res) => {
     const packageData = req.body;
     
     console.log("Creating package with data:", packageData);
+    
+    // Validate ClickBank package - only one per module allowed
+    if (packageData.is_clickbank_package) {
+      const moduleKey = packageData.module_key || 'phone-agent';
+      const hasOther = await PricingPackage.hasOtherClickBankPackage(moduleKey, null);
+      if (hasOther) {
+        return res.status(400).json({
+          error: `Only one ClickBank package is allowed per module. Another ClickBank package already exists for module: ${moduleKey}`
+        });
+      }
+      
+      // Validate commission rate if ClickBank package
+      if (packageData.clickbank_commission_rate !== null && packageData.clickbank_commission_rate !== undefined) {
+        const rate = parseFloat(packageData.clickbank_commission_rate);
+        if (isNaN(rate) || rate < 0 || rate > 100) {
+          return res.status(400).json({
+            error: 'ClickBank commission rate must be between 0 and 100'
+          });
+        }
+      }
+    }
     
     const pkg = await PricingPackage.create(packageData);
 
@@ -840,6 +880,27 @@ router.put("/packages/:id", authenticateAdmin, async (req, res) => {
       return res.status(400).json({
         error: `Sale price ($${packageData.sale_price.toFixed(2)} ${currency.toUpperCase()}) is below Stripe's minimum charge amount of $${minimumAmount.toFixed(2)} ${currency.toUpperCase()}. Stripe will reject payments below this amount.`,
       });
+    }
+
+    // Validate ClickBank package - only one per module allowed
+    if (packageData.is_clickbank_package) {
+      const moduleKey = packageData.module_key || existingPackage.module_key || 'phone-agent';
+      const hasOther = await PricingPackage.hasOtherClickBankPackage(moduleKey, packageId);
+      if (hasOther) {
+        return res.status(400).json({
+          error: `Only one ClickBank package is allowed per module. Another ClickBank package already exists for module: ${moduleKey}`
+        });
+      }
+      
+      // Validate commission rate if ClickBank package
+      if (packageData.clickbank_commission_rate !== null && packageData.clickbank_commission_rate !== undefined) {
+        const rate = parseFloat(packageData.clickbank_commission_rate);
+        if (isNaN(rate) || rate < 0 || rate > 100) {
+          return res.status(400).json({
+            error: 'ClickBank commission rate must be between 0 and 100'
+          });
+        }
+      }
     }
 
     const pkg = await PricingPackage.update(packageId, packageData);

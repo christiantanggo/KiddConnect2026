@@ -223,19 +223,21 @@ export async function sendCallSummaryEmail(business, callSession, transcript, su
     console.log("[Call Summary Email] 🔥 FORCING EMAIL - This is a callback/message, email will be sent regardless of email_ai_answered setting");
   }
 
-  // CRITICAL: Don't send email if summary and transcript are both empty (summary not ready yet)
+  // CRITICAL: Don't send email if summary is empty (summary not ready yet)
   // This prevents duplicate emails - one with "No summary available" and one with actual summary
   // Exception: Always send if there's a message (callback/message) even if summary is empty
   const hasSummary = summary && summary.trim().length > 0 && summary !== "No summary available";
   const hasTranscript = transcript && transcript.trim().length > 0 && transcript !== "No transcript available";
   const hasMessage = message && message.message_text && message.message_text.trim().length > 0;
   
-  if (!hasSummary && !hasTranscript && !hasMessage) {
-    console.log("[Call Summary Email] ⚠️ Skipping email - summary and transcript are empty (summary not ready yet). Will send when summary is available.");
+  // Only send email if we have a summary (for regular calls) OR a message (for callback/message calls)
+  // Don't send if we only have a transcript but no summary (wait for end-of-call-report event)
+  if (!hasSummary && !hasMessage) {
+    console.log("[Call Summary Email] ⚠️ Skipping email - summary is empty and no message (summary not ready yet). Will send when summary is available.");
     console.log("[Call Summary Email] Summary:", summary || "(empty)");
     console.log("[Call Summary Email] Transcript:", transcript ? `${transcript.substring(0, 50)}...` : "(empty)");
     console.log("[Call Summary Email] Message:", hasMessage ? "present" : "none");
-    return; // Wait for next webhook event that has the actual summary
+    return; // Wait for next webhook event (end-of-call-report) that has the actual summary
   }
 
   try {

@@ -37,7 +37,7 @@ export default function AdminTestWizardPage() {
                   Start Test Wizard
                 </button>
                 <a
-                  href="/admin/dashboard"
+                  href="/admin-dashboard"
                   className="px-6 py-3 border border-gray-300 text-gray-700 rounded-md hover:bg-gray-50 font-medium"
                 >
                   Back to Admin Dashboard

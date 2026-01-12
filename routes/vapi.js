@@ -11,6 +11,7 @@ import { checkMinutesAvailable, recordCallUsage } from "../services/usage.js";
 import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail } from "../services/notifications.js";
 import { isBusinessOpenAtTime } from "../utils/businessHours.js";
 import { AIAgent } from "../models/AIAgent.js";
+import { Notification } from "../models/v2/Notification.js";
 
 const router = express.Router();
 
@@ -637,9 +638,10 @@ router.post("/webhook", async (req, res) => {
             console.log(`[VAPI Webhook ${webhookId}] 🟢 Processing status-update (call-start) event`);
             await handleCallStart(event); // Pass full event, not just message
           } else if (eventTypeFromEvent === "status-update" && event.message?.status === "ended") {
-            // status-update with status "ended" is equivalent to call-end
-            console.log(`[VAPI Webhook ${webhookId}] 🔴 Processing status-update (call-end) event`);
-            await handleCallEnd(event); // Pass full event, not just message
+            // status-update with status "ended" - don't process as call-end here
+            // We'll wait for the end-of-call-report event which has the full summary
+            // This prevents duplicate emails (one with no summary, one with summary)
+            console.log(`[VAPI Webhook ${webhookId}] ⚠️ Skipping status-update (ended) - waiting for end-of-call-report event`);
           } else {
             console.log(`[VAPI Webhook ${webhookId}] 🟢 Processing call-start/status-update event`);
             await handleCallStart(event); // Pass full event, not just message
@@ -947,6 +949,25 @@ async function handleCallStart(event) {
       status: createdSession.status,
       created_at: createdSession.created_at,
     });
+
+    // Create in-app notification for incoming call
+    try {
+      const callerDisplay = callerNumber ? callerNumber.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3') : 'Unknown caller';
+      await Notification.create({
+        business_id: business.id,
+        user_id: null, // All users in organization see this
+        type: 'module',
+        message: `Incoming call from ${callerDisplay}`,
+        metadata: {
+          module_key: 'phone-agent',
+          call_session_id: createdSession.id,
+          caller_number: callerNumber,
+        },
+      });
+      console.log(`[VAPI Webhook] ✅ In-app notification created for incoming call`);
+    } catch (notifError) {
+      console.error(`[VAPI Webhook] ⚠️ Failed to create incoming call notification (non-blocking):`, notifError);
+    }
   } catch (error) {
     console.error(`[VAPI Webhook] ❌❌❌ CRITICAL ERROR creating call session:`, error);
     console.error(`[VAPI Webhook] Error name:`, error.name);
@@ -1495,6 +1516,27 @@ async function handleCallEnd(event) {
             status: createdMessage.status,
             created_at: createdMessage.created_at,
           });
+          
+          // Create in-app notification for new message
+          try {
+            const callerName = messageData.name || callSession.caller_name || "Unknown caller";
+            await Notification.create({
+              business_id: business.id,
+              user_id: null, // All users in organization see this
+              type: 'module',
+              message: `New message from ${callerName}: ${(messageData.message || summary || "Callback requested").substring(0, 100)}${(messageData.message || summary || "").length > 100 ? '...' : ''}`,
+              metadata: {
+                module_key: 'phone-agent',
+                call_session_id: callSession.id,
+                message_id: createdMessage.id,
+                caller_name: callerName,
+                caller_phone: messageData.phone || callSession.caller_number,
+              },
+            });
+            console.log(`[VAPI Webhook] ✅ In-app notification created for new message`);
+          } catch (notifError) {
+            console.error(`[VAPI Webhook] ⚠️ Failed to create notification (non-blocking):`, notifError);
+          }
         }
       } catch (msgError) {
         console.error(`[VAPI Webhook] ❌❌❌ ERROR creating message:`, msgError);
@@ -1590,6 +1632,31 @@ async function handleCallEnd(event) {
       console.log(`[VAPI Webhook] ✅ SMS notification sent`);
     } catch (smsError) {
       console.error(`[VAPI Webhook] ❌ Error sending SMS:`, smsError);
+    }
+  }
+
+  // Create notification for call completion (if no message was created)
+  if (!createdMessage) {
+    try {
+      const durationDisplay = durationMinutes > 0 ? `${durationMinutes} min` : `${duration} sec`;
+      const callerDisplay = callSession.caller_number ? callSession.caller_number.replace(/(\d{3})(\d{3})(\d{4})/, '($1) $2-$3') : 'Unknown caller';
+      await Notification.create({
+        business_id: business.id,
+        user_id: null, // All users in organization see this
+        type: 'module',
+        message: `Call completed from ${callerDisplay} (${durationDisplay})`,
+        metadata: {
+          module_key: 'phone-agent',
+          call_session_id: callSession.id,
+          caller_number: callSession.caller_number,
+          duration_seconds: duration,
+          duration_minutes: durationMinutes,
+          intent: intent,
+        },
+      });
+      console.log(`[VAPI Webhook] ✅ In-app notification created for call completion`);
+    } catch (notifError) {
+      console.error(`[VAPI Webhook] ⚠️ Failed to create call completion notification (non-blocking):`, notifError);
     }
   }
 }
