@@ -7,7 +7,7 @@ import DemoModal from '@/components/DemoModal';
 import PricingModal from '@/components/PricingModal';
 import { trackButtonClick, trackLinkClick, trackPageView, trackScrollDepth, trackTimeOnPage, trackSectionView, trackExitIntent } from '@/lib/analytics';
 
-export default function PhoneAgentLandingPage() {
+export default function RestaurantLandingPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPricingModalOpen, setIsPricingModalOpen] = useState(false);
   const [showStickyCTA, setShowStickyCTA] = useState(false);
