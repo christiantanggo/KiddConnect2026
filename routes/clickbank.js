@@ -14,30 +14,41 @@ const router = express.Router();
  * 
  * URL to configure in ClickBank: https://api.tavarios.com/api/clickbank/webhook
  */
-router.post('/webhook', async (req, res) => {
+router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
   console.log('[ClickBank Webhook] ========== WEBHOOK REQUEST RECEIVED ==========');
   console.log('[ClickBank Webhook] Method:', req.method);
   console.log('[ClickBank Webhook] Content-Type:', req.headers['content-type']);
   console.log('[ClickBank Webhook] Headers:', Object.keys(req.headers));
-  console.log('[ClickBank Webhook] Body keys:', Object.keys(req.body || {}));
-  console.log('[ClickBank Webhook] Full body:', JSON.stringify(req.body, null, 2));
+  console.log('[ClickBank Webhook] Body type:', typeof req.body);
+  console.log('[ClickBank Webhook] Body is Buffer:', Buffer.isBuffer(req.body));
+  console.log('[ClickBank Webhook] Body length:', req.body?.length || 0);
   
   try {
     const secretKey = process.env.CLICKBANK_CLIENT_SECRET;
     
-    // Get raw body for HMAC verification (if available)
-    const rawBody = req.body ? JSON.stringify(req.body) : '';
+    // Get raw body as string for HMAC verification
+    let rawBodyString = '';
+    if (Buffer.isBuffer(req.body)) {
+      rawBodyString = req.body.toString('utf8');
+    } else if (typeof req.body === 'string') {
+      rawBodyString = req.body;
+    } else {
+      rawBodyString = JSON.stringify(req.body);
+    }
+    
+    console.log('[ClickBank Webhook] Raw body (first 500 chars):', rawBodyString.substring(0, 500));
     
     // Check for HMAC signature in headers (ClickBank might use different header names)
     const signatureHeader = req.headers['x-clickbank-signature'] || 
                            req.headers['clickbank-signature'] || 
                            req.headers['signature'] ||
-                           req.body?.signature || // Sometimes in body
                            null;
+    
+    console.log('[ClickBank Webhook] Signature header:', signatureHeader ? 'Found' : 'Not found');
     
     // Verify HMAC signature if provided
     if (signatureHeader && secretKey) {
-      const isValid = verifyClickBankSignature(rawBody, signatureHeader, secretKey);
+      const isValid = verifyClickBankSignature(rawBodyString, signatureHeader, secretKey);
       if (!isValid) {
         console.error('[ClickBank Webhook] ❌ HMAC signature verification failed');
         return res.status(401).send('Invalid signature');
@@ -49,7 +60,16 @@ router.post('/webhook', async (req, res) => {
     }
     
     // Parse the payload - ClickBank sends plain JSON
-    let params = req.body;
+    let params = {};
+    try {
+      params = JSON.parse(rawBodyString);
+      console.log('[ClickBank Webhook] ✅ Parsed JSON body successfully');
+      console.log('[ClickBank Webhook] Body keys:', Object.keys(params));
+    } catch (parseError) {
+      console.error('[ClickBank Webhook] ❌ Failed to parse JSON body:', parseError.message);
+      console.error('[ClickBank Webhook] Raw body:', rawBodyString);
+      return res.status(400).send('Invalid JSON payload');
+    }
     
     // Handle case where ClickBank might wrap data in a notification field
     // The notification field might be base64-encoded JSON (not encrypted, just encoded)
@@ -76,6 +96,7 @@ router.post('/webhook', async (req, res) => {
     }
     
     console.log('[ClickBank Webhook] Final params keys:', Object.keys(params || {}));
+    console.log('[ClickBank Webhook] Full params:', JSON.stringify(params, null, 2));
     
     // Extract transaction data
     const receipt = params?.receipt || params?.receiptNumber || 'unknown';
