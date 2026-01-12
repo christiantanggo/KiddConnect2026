@@ -71,38 +71,53 @@ export function decryptClickBankNotification(encryptedNotification, iv, secretKe
     const encryptedBuffer = Buffer.from(encryptedNotification, 'base64');
     const ivBuffer = Buffer.from(iv, 'base64');
     
-    // ClickBank uses the secret key to derive the encryption key
-    // Common approach: Use MD5 hash of the secret key for AES-128, or SHA-256 for AES-256
-    // Based on ClickBank docs, they typically use MD5 hash of the secret key
-    let key = crypto.createHash('md5').update(secretKey).digest(); // 16 bytes for AES-128
+    // Try multiple key derivation methods since ClickBank's exact method is not documented
+    // Method 1: Use secret key directly (if exactly 16 bytes) for AES-128
+    if (Buffer.from(secretKey, 'utf8').length === 16) {
+      try {
+        const key = Buffer.from(secretKey, 'utf8');
+        const decipher = crypto.createDecipheriv('aes-128-cbc', key, ivBuffer);
+        let decrypted = decipher.update(encryptedBuffer);
+        decrypted = Buffer.concat([decrypted, decipher.final()]);
+        const decryptedText = decrypted.toString('utf8');
+        const params = JSON.parse(decryptedText);
+        console.log('[ClickBank] ✅ Notification decrypted successfully (direct key, AES-128-CBC)');
+        return params;
+      } catch (e) {
+        console.log('[ClickBank] Direct key method failed, trying MD5 hash...');
+      }
+    }
     
-    // Try AES-128-CBC first (most common for ClickBank)
+    // Method 2: MD5 hash of secret key (16 bytes) for AES-128
     try {
+      const key = crypto.createHash('md5').update(secretKey).digest();
       const decipher = crypto.createDecipheriv('aes-128-cbc', key, ivBuffer);
       let decrypted = decipher.update(encryptedBuffer);
       decrypted = Buffer.concat([decrypted, decipher.final()]);
-      
-      // Parse the decrypted JSON
       const decryptedText = decrypted.toString('utf8');
       const params = JSON.parse(decryptedText);
-      
-      console.log('[ClickBank] ✅ Notification decrypted successfully (AES-128-CBC)');
+      console.log('[ClickBank] ✅ Notification decrypted successfully (MD5 hash, AES-128-CBC)');
       return params;
-    } catch (aes128Error) {
-      // If AES-128 fails, try AES-256 with SHA-256 hash
-      console.log('[ClickBank] AES-128-CBC failed, trying AES-256-CBC...');
-      key = crypto.createHash('sha256').update(secretKey).digest(); // 32 bytes for AES-256
-      
+    } catch (e) {
+      console.log('[ClickBank] MD5 hash method failed, trying SHA-256 hash...');
+    }
+    
+    // Method 3: SHA-256 hash of secret key (32 bytes) for AES-256
+    try {
+      const key = crypto.createHash('sha256').update(secretKey).digest();
       const decipher = crypto.createDecipheriv('aes-256-cbc', key, ivBuffer);
       let decrypted = decipher.update(encryptedBuffer);
       decrypted = Buffer.concat([decrypted, decipher.final()]);
-      
-      // Parse the decrypted JSON
       const decryptedText = decrypted.toString('utf8');
       const params = JSON.parse(decryptedText);
-      
-      console.log('[ClickBank] ✅ Notification decrypted successfully (AES-256-CBC)');
+      console.log('[ClickBank] ✅ Notification decrypted successfully (SHA-256 hash, AES-256-CBC)');
       return params;
+    } catch (e) {
+      console.error('[ClickBank] All decryption methods failed. This might indicate:');
+      console.error('[ClickBank] 1. Incorrect secret key');
+      console.error('[ClickBank] 2. ClickBank uses a different encryption method');
+      console.error('[ClickBank] 3. Contact ClickBank support for exact encryption specification');
+      throw new Error('All decryption methods failed');
     }
   } catch (error) {
     console.error('[ClickBank] ❌ Error decrypting notification:', error);
