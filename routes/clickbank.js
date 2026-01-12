@@ -37,7 +37,13 @@ router.post('/webhook', async (req, res) => {
       
       if (!params) {
         console.error('[ClickBank Webhook] ❌ Failed to decrypt notification');
-        return res.status(400).send('Failed to decrypt notification');
+        console.error('[ClickBank Webhook] Secret key length:', secretKey ? secretKey.length : 0);
+        console.error('[ClickBank Webhook] Notification length:', req.body.notification ? req.body.notification.length : 0);
+        console.error('[ClickBank Webhook] IV length:', req.body.iv ? req.body.iv.length : 0);
+        console.error('[ClickBank Webhook] ⚠️  ACTION REQUIRED: Contact ClickBank support for exact encryption specification');
+        console.error('[ClickBank Webhook] ⚠️  Or check ClickBank dashboard for option to disable encryption/use older INS version');
+        // Return 200 to prevent ClickBank from retrying, but log the error
+        return res.status(200).send('OK - Decryption failed, logged for manual review');
       }
       
       console.log('[ClickBank Webhook] Decrypted params keys:', Object.keys(params));
