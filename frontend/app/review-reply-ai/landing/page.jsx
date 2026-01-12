@@ -74,13 +74,15 @@ export default function ReviewReplyAILandingPage() {
             
             {/* CTA Buttons */}
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-6">
-              <Link
-                href="/signup"
-                className="bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 w-full sm:w-auto"
+              <a
+                href="https://tavarios.pay.clickbank.net/?cbitems=2"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 w-full sm:w-auto text-center"
                 onClick={handleGetStarted}
               >
                 Get Started
-              </Link>
+              </a>
               <Link
                 href="#features"
                 className="bg-white text-blue-600 border-2 border-blue-600 px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-50 transition-all w-full sm:w-auto"
@@ -234,13 +236,15 @@ export default function ReviewReplyAILandingPage() {
             <p className="text-xl mb-8 opacity-90">
               Join businesses that are saving time while maintaining professional review responses.
             </p>
-            <Link
-              href="/signup"
+            <a
+              href="https://tavarios.pay.clickbank.net/?cbitems=2"
+              target="_blank"
+              rel="noopener noreferrer"
               className="inline-block bg-white text-blue-600 px-10 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"
               onClick={handleGetStarted}
             >
               Get Started Now
-            </Link>
+            </a>
           </div>
         </section>
       </main>
