@@ -54,10 +54,51 @@ export default function ModuleDetailPage() {
     try {
       setError(null);
       const headers = getAuthHeaders();
-      const businessId = getActiveBusinessId();
+      let businessId = getActiveBusinessId();
+
+      // If no business ID, try to load current organization
+      if (!businessId) {
+        try {
+          const currentRes = await fetch(`${API_URL}/api/v2/organizations/current`, { headers });
+          if (currentRes.ok) {
+            const currentData = await currentRes.json();
+            if (currentData.organization?.id) {
+              businessId = currentData.organization.id;
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('activeBusinessId', businessId);
+              }
+            }
+          } else {
+            // Try to get organizations list and use the first one
+            const orgsRes = await fetch(`${API_URL}/api/v2/organizations`, { headers });
+            if (orgsRes.ok) {
+              const orgsData = await orgsRes.json();
+              const orgs = orgsData.organizations || [];
+              if (orgs.length > 0) {
+                businessId = orgs[0].id;
+                if (typeof window !== 'undefined') {
+                  localStorage.setItem('activeBusinessId', businessId);
+                }
+                // Try to select it on the backend
+                try {
+                  await fetch(`${API_URL}/api/v2/organizations/select`, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify({ business_id: businessId }),
+                  });
+                } catch (err) {
+                  console.warn('[Module Detail] Failed to select organization:', err);
+                }
+              }
+            }
+          }
+        } catch (orgErr) {
+          console.warn('[Module Detail] Failed to load organization:', orgErr);
+        }
+      }
 
       if (!businessId) {
-        setError('Please select an organization first');
+        setError('Please select an organization first. Please visit /dashboard/v2 to select an organization.');
         setLoading(false);
         return;
       }
