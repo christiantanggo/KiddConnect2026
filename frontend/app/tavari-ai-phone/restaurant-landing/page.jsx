@@ -489,7 +489,7 @@ export default function RestaurantLandingPage() {
       <DemoModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
       
       {/* Pricing Modal */}
-      <PricingModal isOpen={isPricingModalOpen} onClose={() => setIsPricingModalOpen(false)} />
+      <PricingModal isOpen={isPricingModalOpen} onClose={() => setIsPricingModalOpen(false)} moduleKey="phone-agent" />
     </div>
   );
 }

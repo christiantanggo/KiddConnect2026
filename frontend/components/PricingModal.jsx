@@ -5,7 +5,7 @@ import { billingAPI, modulesAPI } from '@/lib/api';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
-export default function PricingModal({ isOpen, onClose, module = null }) {
+export default function PricingModal({ isOpen, onClose, module = null, moduleKey = null }) {
   const router = useRouter();
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -18,11 +18,11 @@ export default function PricingModal({ isOpen, onClose, module = null }) {
         // Show module-specific pricing
         loadModulePricing();
       } else {
-        // Show Phone Agent packages
+        // Show packages (filtered by moduleKey if provided)
         loadPackages();
       }
     }
-  }, [isOpen, module]);
+  }, [isOpen, module, moduleKey]);
 
   const loadModulePricing = () => {
     setLoading(true);
@@ -50,7 +50,9 @@ export default function PricingModal({ isOpen, onClose, module = null }) {
   const loadPackages = async () => {
     try {
       setLoading(true);
-      const response = await billingAPI.getPackages();
+      // Use moduleKey prop if provided, otherwise use module.key if module is provided
+      const filterModuleKey = moduleKey || (module?.key || null);
+      const response = await billingAPI.getPackages(filterModuleKey);
       setPackages(response.data.packages || []);
     } catch (error) {
       console.error('Failed to load packages:', error);

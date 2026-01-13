@@ -158,7 +158,10 @@ export const setupAPI = {
 export const billingAPI = {
   getStatus: () => api.get('/billing/status'),
   getPortal: () => api.get('/billing/portal'),
-  getPackages: () => api.get('/billing/packages'),
+  getPackages: (moduleKey = null) => {
+    const params = moduleKey ? { module_key: moduleKey } : {};
+    return api.get('/billing/packages', { params });
+  },
   createCheckout: (packageId) => api.post('/billing/checkout', { packageId }),
   verifyStripeSession: (sessionId) => api.get('/billing/verify-session', { params: { session_id: sessionId } }),
   getTestMode: () => api.get('/billing/test-mode'),
