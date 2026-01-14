@@ -27,19 +27,23 @@ export default function V2AuthGuard({ children }) {
   const checkingRef = useRef(false); // Prevent concurrent checks
   const lastPathnameRef = useRef(pathname); // Track last pathname to prevent duplicate checks
   const termsCheckedRef = useRef(false); // Prevent repeated terms checks
+  const hasRunOnceRef = useRef(false); // Track if we've ever run the check
 
   useEffect(() => {
-    // Only check on initial mount, not on every pathname change
+    // CRITICAL: Only check ONCE EVER - never re-run, even if component re-mounts
     // This prevents infinite reload loops
-    let mounted = true;
-    
-    if (!authChecked && !checkingRef.current && mounted) {
-      checkAuthAndSetup();
+    if (hasRunOnceRef.current) {
+      console.log('[V2AuthGuard] Already ran once - SKIPPING to prevent reload loop');
+      return;
     }
     
-    return () => {
-      mounted = false;
-    };
+    if (!authChecked && !checkingRef.current) {
+      hasRunOnceRef.current = true;
+      console.log('[V2AuthGuard] Initial mount - running auth check ONCE (this will never run again)');
+      checkAuthAndSetup();
+    }
+    // Intentionally empty dependency array - this MUST only run once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty dependency array - only run once on mount
 
   const getAuthHeaders = () => {
@@ -127,17 +131,21 @@ export default function V2AuthGuard({ children }) {
         // Already have org loaded, skip
       }
 
-      // Check legal acceptance - only once
+      // Check legal acceptance - only once, and don't block rendering
       if (!termsCheckedRef.current) {
-        await checkLegalAcceptance();
+        // Run async without blocking - if it redirects, fine, but don't wait
+        checkLegalAcceptance().catch(err => {
+          console.warn('[V2AuthGuard] Legal check failed (non-blocking):', err);
+        });
       }
 
     } catch (err) {
-      console.error('[V2AuthGuard] Error:', err);
+      console.error('[V2AuthGuard] Error in checkAuthAndSetup:', err);
+      console.error('[V2AuthGuard] Error stack:', err?.stack);
     } finally {
       setLoading(false);
       checkingRef.current = false; // Reset checking flag
-      console.log('[V2AuthGuard] Auth check complete');
+      console.log('[V2AuthGuard] Auth check complete - loading set to false, checking flag reset');
     }
   };
 
@@ -190,10 +198,12 @@ export default function V2AuthGuard({ children }) {
   const checkLegalAcceptance = async () => {
     // Only check once to prevent loops
     if (termsCheckedRef.current || pathname === '/accept-terms') {
+      console.log('[V2AuthGuard] Skipping legal check - already checked or on accept-terms page');
       return;
     }
     
     termsCheckedRef.current = true;
+    console.log('[V2AuthGuard] Checking legal acceptance...');
     
     try {
       const headers = getAuthHeaders();
@@ -210,17 +220,21 @@ export default function V2AuthGuard({ children }) {
       const testRes = await fetch(`${API_URL}/api/v2/modules`, { headers });
       
       if (testRes.status === 403) {
-        const errorData = await testRes.json();
+        const errorData = await testRes.json().catch(() => ({}));
         if (errorData.code === 'TERMS_NOT_ACCEPTED') {
+          console.log('[V2AuthGuard] Terms not accepted - redirecting to accept-terms');
           setNeedsTermsAcceptance(true);
           const returnUrl = encodeURIComponent(pathname);
           router.push(`/accept-terms?return=${returnUrl}`);
+          return; // Exit early on redirect
         }
       }
+      
+      console.log('[V2AuthGuard] Legal acceptance check passed');
     } catch (err) {
       // If check fails, allow through (better UX than blocking)
-      console.warn('[V2AuthGuard] Legal acceptance check failed:', err);
-      termsCheckedRef.current = false; // Reset on error so it can retry
+      console.warn('[V2AuthGuard] Legal acceptance check failed (non-blocking):', err);
+      // Don't reset termsCheckedRef - we'll just skip future checks if it fails
     }
   };
 

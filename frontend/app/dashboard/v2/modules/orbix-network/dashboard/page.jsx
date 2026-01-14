@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
@@ -35,6 +35,9 @@ export default function OrbixNetworkDashboard() {
     render: false,
     publish: false
   });
+  const isLoadingDataRef = useRef(false); // Prevent concurrent loadDashboardData calls
+  const rateLimitedRef = useRef(false); // Track if we're rate limited
+  const autoRefreshIntervalRef = useRef(null); // Store interval reference
 
   useEffect(() => {
     checkSetupAndLoadData();
@@ -42,14 +45,49 @@ export default function OrbixNetworkDashboard() {
 
   // Auto-refresh dashboard data every 5 seconds if there are PENDING or PROCESSING renders
   useEffect(() => {
-    const hasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-    if (!hasActiveRenders) return;
+    // Clear any existing interval first
+    if (autoRefreshIntervalRef.current) {
+      console.log('[Orbix Dashboard] Clearing existing auto-refresh interval');
+      clearInterval(autoRefreshIntervalRef.current);
+      autoRefreshIntervalRef.current = null;
+    }
     
-    const interval = setInterval(() => {
+    const hasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+    console.log('[Orbix Dashboard] Auto-refresh check - hasActiveRenders:', hasActiveRenders, 'renders count:', renders.length, 'rateLimited:', rateLimitedRef.current);
+    
+    // Don't set up auto-refresh if rate limited
+    if (rateLimitedRef.current) {
+      console.log('[Orbix Dashboard] Rate limited - NOT setting up auto-refresh');
+      return;
+    }
+    
+    if (!hasActiveRenders) {
+      console.log('[Orbix Dashboard] No active renders - skipping auto-refresh');
+      return;
+    }
+    
+    console.log('[Orbix Dashboard] Setting up auto-refresh interval (5 seconds)...');
+    autoRefreshIntervalRef.current = setInterval(() => {
+      // Don't refresh if already loading or rate limited
+      if (isLoadingDataRef.current) {
+        console.log('[Orbix Dashboard] Auto-refresh skipped - already loading data');
+        return;
+      }
+      if (rateLimitedRef.current) {
+        console.log('[Orbix Dashboard] Auto-refresh skipped - rate limited');
+        return;
+      }
+      console.log('[Orbix Dashboard] Auto-refresh triggered - reloading dashboard data...');
       loadDashboardData();
     }, 5000);
     
-    return () => clearInterval(interval);
+    return () => {
+      console.log('[Orbix Dashboard] Cleaning up auto-refresh interval');
+      if (autoRefreshIntervalRef.current) {
+        clearInterval(autoRefreshIntervalRef.current);
+        autoRefreshIntervalRef.current = null;
+      }
+    };
   }, [renders.length]); // Only re-run when renders array length changes
 
   const checkSetupAndLoadData = async () => {
@@ -81,10 +119,26 @@ export default function OrbixNetworkDashboard() {
   };
 
   const loadDashboardData = async () => {
+    // Prevent concurrent calls
+    if (isLoadingDataRef.current) {
+      console.log('[Orbix Dashboard] loadDashboardData already in progress - skipping');
+      return;
+    }
+    
+    // Don't load if rate limited
+    if (rateLimitedRef.current) {
+      console.log('[Orbix Dashboard] Rate limited - skipping loadDashboardData');
+      return;
+    }
+    
+    isLoadingDataRef.current = true;
+    console.log('[Orbix Dashboard] ========== LOAD DASHBOARD DATA START ==========');
+    
     try {
       setLoading(true);
       
       // Load raw items, stories, renders, and publishes in parallel
+      console.log('[Orbix Dashboard] Fetching dashboard data in parallel...');
       const [rawItemsRes, storiesRes, rendersRes, publishesRes] = await Promise.all([
         orbixNetworkAPI.getRawItems({ limit: 10 }),
         orbixNetworkAPI.getStories({ limit: 10 }),
@@ -92,6 +146,7 @@ export default function OrbixNetworkDashboard() {
         orbixNetworkAPI.getPublishes({ limit: 5 })
       ]);
       
+      console.log('[Orbix Dashboard] Dashboard data fetched successfully');
       setRawItems(rawItemsRes.data.raw_items || []);
       setStories(storiesRes.data.stories || []);
       setRenders(rendersRes.data.renders || []);
@@ -105,8 +160,43 @@ export default function OrbixNetworkDashboard() {
         totalPublishes: publishesRes.data.publishes?.length || 0,
         totalViews: publishesRes.data.publishes?.reduce((sum, p) => sum + (p.views || 0), 0) || 0
       });
+      
+      // If we were rate limited before, clear it now
+      if (rateLimitedRef.current) {
+        console.log('[Orbix Dashboard] Rate limit cleared - requests successful');
+        rateLimitedRef.current = false;
+      }
+      
+      console.log('[Orbix Dashboard] ========== LOAD DASHBOARD DATA SUCCESS ==========');
     } catch (error) {
-      console.error('Failed to load dashboard data:', error);
+      console.error('[Orbix Dashboard] ========== LOAD DASHBOARD DATA ERROR ==========');
+      console.error('[Orbix Dashboard] Error:', error);
+      console.error('[Orbix Dashboard] Error response status:', error?.response?.status);
+      
+      // Check if it's a rate limit error (429)
+      if (error?.response?.status === 429) {
+        console.error('[Orbix Dashboard] RATE LIMIT DETECTED - Stopping auto-refresh and retries');
+        rateLimitedRef.current = true;
+        
+        // Clear auto-refresh interval
+        if (autoRefreshIntervalRef.current) {
+          console.log('[Orbix Dashboard] Clearing auto-refresh due to rate limit');
+          clearInterval(autoRefreshIntervalRef.current);
+          autoRefreshIntervalRef.current = null;
+        }
+        
+        // Show error but don't retry
+        showErrorToast('Rate limit exceeded. Please wait a moment before refreshing.');
+        
+        // Clear rate limit after 60 seconds
+        setTimeout(() => {
+          console.log('[Orbix Dashboard] Rate limit cooldown expired - clearing flag');
+          rateLimitedRef.current = false;
+        }, 60000);
+        
+        return; // Exit early - don't show generic error
+      }
+      
       const errorInfo = handleAPIError(error);
       showErrorToast(errorInfo.message || 'Failed to load dashboard data');
       if (errorInfo.redirect) {
@@ -114,6 +204,8 @@ export default function OrbixNetworkDashboard() {
       }
     } finally {
       setLoading(false);
+      isLoadingDataRef.current = false;
+      console.log('[Orbix Dashboard] loadDashboardData complete - loading flag reset');
     }
   };
 
@@ -209,23 +301,59 @@ export default function OrbixNetworkDashboard() {
   };
 
   const handleRestartRender = async (renderId) => {
+    console.log('[Orbix Dashboard] ========== RESTART RENDER START ==========');
+    console.log('[Orbix Dashboard] Render ID:', renderId);
+    console.log('[Orbix Dashboard] Current render details:', selectedRender);
+    
     try {
-      await orbixNetworkAPI.restartRender(renderId);
+      console.log('[Orbix Dashboard] Calling orbixNetworkAPI.restartRender...');
+      const startTime = Date.now();
+      
+      const response = await orbixNetworkAPI.restartRender(renderId);
+      
+      const duration = Date.now() - startTime;
+      console.log('[Orbix Dashboard] restartRender API call completed in', duration, 'ms');
+      console.log('[Orbix Dashboard] API Response:', response);
+      
       success('Render restarted. It will be processed again.');
       setSelectedRender(null);
       setRenderDetails(null);
-      loadDashboardData(); // Reload data to refresh the list
+      
+      console.log('[Orbix Dashboard] Reloading dashboard data...');
+      await loadDashboardData();
+      console.log('[Orbix Dashboard] Dashboard data reloaded');
+      console.log('[Orbix Dashboard] ========== RESTART RENDER SUCCESS ==========');
     } catch (error) {
-      console.error('Failed to restart render:', error);
+      console.error('[Orbix Dashboard] ========== RESTART RENDER ERROR ==========');
+      console.error('[Orbix Dashboard] Error type:', error?.constructor?.name);
+      console.error('[Orbix Dashboard] Error message:', error?.message);
+      console.error('[Orbix Dashboard] Error stack:', error?.stack);
+      console.error('[Orbix Dashboard] Full error object:', error);
+      console.error('[Orbix Dashboard] Error response:', error?.response);
+      console.error('[Orbix Dashboard] Error response data:', error?.response?.data);
+      console.error('[Orbix Dashboard] Error response status:', error?.response?.status);
+      console.error('[Orbix Dashboard] ========== END ERROR ==========');
+      
       const errorInfo = handleAPIError(error);
       showErrorToast(errorInfo.message || 'Failed to restart render');
     }
   };
 
   const triggerJob = async (jobName, jobFunction) => {
+    console.log('[Orbix Dashboard] ========== TRIGGER JOB START ==========');
+    console.log('[Orbix Dashboard] Job name:', jobName);
+    console.log('[Orbix Dashboard] Job function:', jobFunction?.name || 'anonymous');
+    
     try {
       setRunningJobs(prev => ({ ...prev, [jobName]: true }));
+      console.log('[Orbix Dashboard] Calling job function...');
+      const startTime = Date.now();
+      
       const response = await jobFunction();
+      
+      const duration = Date.now() - startTime;
+      console.log('[Orbix Dashboard] Job function completed in', duration, 'ms');
+      console.log('[Orbix Dashboard] Job response:', response);
       
       // For scrape job, show detailed results
       if (jobName === 'scrape' && response.data?.results) {
@@ -250,16 +378,32 @@ export default function OrbixNetworkDashboard() {
       }
       
       // Reload dashboard data after a short delay
-      setTimeout(() => {
-        loadDashboardData();
+      console.log('[Orbix Dashboard] Scheduling dashboard reload in 2 seconds...');
+      setTimeout(async () => {
+        console.log('[Orbix Dashboard] Reloading dashboard data after job completion...');
+        await loadDashboardData();
+        console.log('[Orbix Dashboard] Dashboard data reloaded after job');
       }, 2000);
+      
+      console.log('[Orbix Dashboard] ========== TRIGGER JOB SUCCESS ==========');
       return response;
     } catch (error) {
-      console.error(`Failed to trigger ${jobName} job:`, error);
+      console.error('[Orbix Dashboard] ========== TRIGGER JOB ERROR ==========');
+      console.error('[Orbix Dashboard] Job name:', jobName);
+      console.error('[Orbix Dashboard] Error type:', error?.constructor?.name);
+      console.error('[Orbix Dashboard] Error message:', error?.message);
+      console.error('[Orbix Dashboard] Error stack:', error?.stack);
+      console.error('[Orbix Dashboard] Full error object:', error);
+      console.error('[Orbix Dashboard] Error response:', error?.response);
+      console.error('[Orbix Dashboard] Error response data:', error?.response?.data);
+      console.error('[Orbix Dashboard] Error response status:', error?.response?.status);
+      console.error('[Orbix Dashboard] ========== END ERROR ==========');
+      
       const errorInfo = handleAPIError(error);
       showErrorToast(errorInfo.message || `Failed to trigger ${jobName} job`);
     } finally {
       setRunningJobs(prev => ({ ...prev, [jobName]: false }));
+      console.log('[Orbix Dashboard] Job running state set to false for:', jobName);
     }
   };
 
@@ -347,7 +491,13 @@ export default function OrbixNetworkDashboard() {
               </button>
               
               <button
-                onClick={() => triggerJob('render', orbixNetworkAPI.triggerRenderJob)}
+                onClick={() => {
+                  console.log('[Orbix Dashboard] ========== RENDER BUTTON CLICKED ==========');
+                  console.log('[Orbix Dashboard] Button clicked at:', new Date().toISOString());
+                  console.log('[Orbix Dashboard] Running jobs state:', runningJobs);
+                  console.log('[Orbix Dashboard] Calling triggerJob with render...');
+                  triggerJob('render', orbixNetworkAPI.triggerRenderJob);
+                }}
                 disabled={runningJobs.render}
                 className="flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >

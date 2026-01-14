@@ -26,16 +26,24 @@ api.interceptors.request.use((config) => {
 // Retry logic for rate limiting (429 errors)
 const retryRequest = async (config, retries = 2) => {
   for (let i = 0; i < retries; i++) {
-    // Exponential backoff: wait 1s, 2s, 4s
-    const delay = Math.pow(2, i) * 1000;
-    await new Promise(resolve => setTimeout(resolve, delay));
-    
     try {
       return await api.request(config);
     } catch (retryError) {
-      if (retryError.response?.status !== 429 || i === retries - 1) {
+      // DON'T retry 429 errors - they need user action or time
+      if (retryError.response?.status === 429) {
+        console.warn('[API] Rate limit (429) - NOT retrying, user needs to wait');
         throw retryError;
       }
+      
+      // For other errors, retry with exponential backoff
+      if (i === retries - 1) {
+        throw retryError;
+      }
+      
+      // Exponential backoff: wait 1s, 2s, 4s
+      const delay = Math.pow(2, i) * 1000;
+      console.log(`[API] Retrying request after ${delay}ms (attempt ${i + 1}/${retries})`);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
 };
@@ -60,15 +68,11 @@ api.interceptors.response.use(
       }
     }
     
-    // Retry on 429 (rate limit) errors
-    if (error.response?.status === 429 && error.config && !error.config._retry) {
-      error.config._retry = true;
-      try {
-        return await retryRequest(error.config);
-      } catch (retryError) {
-        // If retry fails, return the original error
-        return Promise.reject(error);
-      }
+    // DON'T auto-retry on 429 (rate limit) errors - they need user action or time
+    // Auto-retrying causes infinite loops and makes rate limiting worse
+    if (error.response?.status === 429) {
+      console.warn('[API] Rate limit (429) detected - NOT auto-retrying');
+      return Promise.reject(error);
     }
     
     return Promise.reject(error);
