@@ -38,9 +38,15 @@ export default function OrbixNetworkDashboard() {
   const isLoadingDataRef = useRef(false); // Prevent concurrent loadDashboardData calls
   const rateLimitedRef = useRef(false); // Track if we're rate limited
   const autoRefreshIntervalRef = useRef(null); // Store interval reference
+  const hasCheckedSetupRef = useRef(false); // Prevent multiple setup checks
+  const isCheckingSetupRef = useRef(false); // Prevent concurrent setup checks
 
   useEffect(() => {
-    checkSetupAndLoadData();
+    // Only check setup once on mount
+    if (!hasCheckedSetupRef.current && !isCheckingSetupRef.current) {
+      hasCheckedSetupRef.current = true;
+      checkSetupAndLoadData();
+    }
   }, []);
 
   // Auto-refresh dashboard data every 5 seconds if there are PENDING or PROCESSING renders
@@ -91,22 +97,59 @@ export default function OrbixNetworkDashboard() {
   }, [renders.length]); // Only re-run when renders array length changes
 
   const checkSetupAndLoadData = async () => {
+    // Prevent concurrent calls
+    if (isCheckingSetupRef.current) {
+      console.log('[Orbix Dashboard] checkSetupAndLoadData already in progress - skipping');
+      return;
+    }
+    
+    // Don't check if rate limited
+    if (rateLimitedRef.current) {
+      console.log('[Orbix Dashboard] Rate limited - skipping setup check');
+      return;
+    }
+    
+    isCheckingSetupRef.current = true;
+    console.log('[Orbix Dashboard] ========== CHECK SETUP START ==========');
+    
     try {
       setLoading(true);
       
       // Check setup status first
+      console.log('[Orbix Dashboard] Checking setup status...');
       const setupRes = await orbixNetworkAPI.getSetupStatus();
+      console.log('[Orbix Dashboard] Setup status:', setupRes.data);
       
       // If setup not complete, redirect to setup
       if (!setupRes.data.setup_status?.is_complete) {
+        console.log('[Orbix Dashboard] Setup not complete - redirecting to setup');
         router.push('/modules/orbix-network/setup');
         return;
       }
       
       // Setup complete - load dashboard data
+      console.log('[Orbix Dashboard] Setup complete - loading dashboard data');
       await loadDashboardData();
+      console.log('[Orbix Dashboard] ========== CHECK SETUP SUCCESS ==========');
     } catch (error) {
-      console.error('Failed to check setup:', error);
+      console.error('[Orbix Dashboard] ========== CHECK SETUP ERROR ==========');
+      console.error('[Orbix Dashboard] Error:', error);
+      console.error('[Orbix Dashboard] Error response status:', error?.response?.status);
+      
+      // Handle rate limiting
+      if (error?.response?.status === 429) {
+        console.error('[Orbix Dashboard] Rate limited during setup check');
+        rateLimitedRef.current = true;
+        showErrorToast('Rate limit exceeded. Please wait a moment before refreshing.');
+        
+        // Clear rate limit after 60 seconds
+        setTimeout(() => {
+          rateLimitedRef.current = false;
+        }, 60000);
+        
+        return;
+      }
+      
       const errorInfo = handleAPIError(error);
       if (errorInfo.redirect) {
         router.push(errorInfo.redirect);
@@ -115,6 +158,8 @@ export default function OrbixNetworkDashboard() {
       showErrorToast(errorInfo.message || 'An error occurred');
     } finally {
       setLoading(false);
+      isCheckingSetupRef.current = false;
+      console.log('[Orbix Dashboard] checkSetupAndLoadData complete');
     }
   };
 
