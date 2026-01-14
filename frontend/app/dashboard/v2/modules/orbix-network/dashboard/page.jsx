@@ -51,15 +51,15 @@ export default function OrbixNetworkDashboard() {
 
   // Auto-refresh dashboard data every 5 seconds if there are PENDING or PROCESSING renders
   useEffect(() => {
-    // Clear any existing interval first
+    const hasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+    console.log('[Orbix Dashboard] Auto-refresh check - hasActiveRenders:', hasActiveRenders, 'renders count:', renders.length, 'rateLimited:', rateLimitedRef.current);
+    
+    // Clear existing interval first
     if (autoRefreshIntervalRef.current) {
       console.log('[Orbix Dashboard] Clearing existing auto-refresh interval');
       clearInterval(autoRefreshIntervalRef.current);
       autoRefreshIntervalRef.current = null;
     }
-    
-    const hasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-    console.log('[Orbix Dashboard] Auto-refresh check - hasActiveRenders:', hasActiveRenders, 'renders count:', renders.length, 'rateLimited:', rateLimitedRef.current);
     
     // Don't set up auto-refresh if rate limited
     if (rateLimitedRef.current) {
@@ -67,12 +67,13 @@ export default function OrbixNetworkDashboard() {
       return;
     }
     
+    // Only set up interval if there are active renders
     if (!hasActiveRenders) {
-      console.log('[Orbix Dashboard] No active renders - skipping auto-refresh');
+      console.log('[Orbix Dashboard] No active renders - NOT setting up auto-refresh');
       return;
     }
     
-    console.log('[Orbix Dashboard] Setting up auto-refresh interval (5 seconds)...');
+    console.log('[Orbix Dashboard] Setting up auto-refresh interval (5 seconds) - there are active renders');
     autoRefreshIntervalRef.current = setInterval(() => {
       // Don't refresh if already loading or rate limited
       if (isLoadingDataRef.current) {
@@ -80,21 +81,37 @@ export default function OrbixNetworkDashboard() {
         return;
       }
       if (rateLimitedRef.current) {
-        console.log('[Orbix Dashboard] Auto-refresh skipped - rate limited');
+        console.log('[Orbix Dashboard] Auto-refresh skipped - rate limited, clearing interval');
+        if (autoRefreshIntervalRef.current) {
+          clearInterval(autoRefreshIntervalRef.current);
+          autoRefreshIntervalRef.current = null;
+        }
         return;
       }
+      
+      // Check again if there are still active renders
+      const stillHasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      if (!stillHasActiveRenders) {
+        console.log('[Orbix Dashboard] No more active renders - clearing auto-refresh interval');
+        if (autoRefreshIntervalRef.current) {
+          clearInterval(autoRefreshIntervalRef.current);
+          autoRefreshIntervalRef.current = null;
+        }
+        return;
+      }
+      
       console.log('[Orbix Dashboard] Auto-refresh triggered - reloading dashboard data...');
       loadDashboardData();
     }, 5000);
     
     return () => {
-      console.log('[Orbix Dashboard] Cleaning up auto-refresh interval');
+      console.log('[Orbix Dashboard] Cleaning up auto-refresh interval (unmount/change)');
       if (autoRefreshIntervalRef.current) {
         clearInterval(autoRefreshIntervalRef.current);
         autoRefreshIntervalRef.current = null;
       }
     };
-  }, [renders.length]); // Only re-run when renders array length changes
+  }, [renders]); // Re-run when renders array changes - will check if any are PENDING/PROCESSING
 
   const checkSetupAndLoadData = async () => {
     // Prevent concurrent calls
