@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { CheckCircle2, Lock, AlertTriangle, Layout } from 'lucide-react';
@@ -11,9 +11,16 @@ export default function V2Sidebar() {
   const pathname = usePathname();
   const [modules, setModules] = useState([]);
   const [loading, setLoading] = useState(true);
+  const isLoadingRef = useRef(false); // Prevent concurrent calls
+  const hasLoadedRef = useRef(false); // Prevent multiple loads
+  const rateLimitedRef = useRef(false); // Track rate limiting
 
   useEffect(() => {
-    loadModules();
+    // Only load once
+    if (!hasLoadedRef.current && !isLoadingRef.current) {
+      hasLoadedRef.current = true;
+      loadModules();
+    }
   }, []);
 
   const getAuthHeaders = () => {
@@ -29,6 +36,21 @@ export default function V2Sidebar() {
   };
 
   const loadModules = async () => {
+    // Prevent concurrent calls
+    if (isLoadingRef.current) {
+      console.log('[V2Sidebar] Already loading modules - skipping');
+      return;
+    }
+    
+    // Don't load if rate limited
+    if (rateLimitedRef.current) {
+      console.log('[V2Sidebar] Rate limited - skipping loadModules');
+      return;
+    }
+    
+    isLoadingRef.current = true;
+    console.log('[V2Sidebar] Loading modules...');
+    
     try {
       const headers = getAuthHeaders();
       
@@ -37,17 +59,38 @@ export default function V2Sidebar() {
       if (res.ok) {
         const data = await res.json();
         setModules(data.modules || []);
+        rateLimitedRef.current = false; // Clear rate limit flag on success
+        console.log('[V2Sidebar] Modules loaded successfully');
       } else if (res.status === 429) {
-        // Rate limited - silently fail, will retry on next mount
-        console.warn('[V2Sidebar] Rate limited, will retry later');
+        // Rate limited - stop trying
+        console.warn('[V2Sidebar] Rate limited - STOPPING all requests');
+        rateLimitedRef.current = true;
+        setLoading(false); // Stop loading state
+        
+        // Clear rate limit after 60 seconds
+        setTimeout(() => {
+          rateLimitedRef.current = false;
+        }, 60000);
+      } else {
+        setLoading(false);
       }
     } catch (err) {
       // Ignore JSON parse errors from rate limiting
       if (!err.message?.includes('JSON') && !err.message?.includes('429')) {
         console.error('[V2Sidebar] Error loading modules:', err);
       }
-    } finally {
+      
+      // Check if it's a 429 in the error
+      if (err.message?.includes('429')) {
+        rateLimitedRef.current = true;
+        setTimeout(() => {
+          rateLimitedRef.current = false;
+        }, 60000);
+      }
+      
       setLoading(false);
+    } finally {
+      isLoadingRef.current = false;
     }
   };
 

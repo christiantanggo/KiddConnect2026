@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { logout } from '@/lib/auth';
@@ -11,12 +11,26 @@ const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').rep
 export default function V2DashboardHeader() {
   const pathname = usePathname();
   const [unreadCount, setUnreadCount] = useState(0);
+  const isLoadingRef = useRef(false); // Prevent concurrent calls
+  const rateLimitedRef = useRef(false); // Track rate limiting
+  const intervalRef = useRef(null); // Store interval
 
   useEffect(() => {
     loadUnreadCount();
-    // Poll for new notifications every 30 seconds
-    const interval = setInterval(loadUnreadCount, 30000);
-    return () => clearInterval(interval);
+    // Poll for new notifications every 30 seconds - BUT ONLY IF NOT RATE LIMITED
+    intervalRef.current = setInterval(() => {
+      if (!rateLimitedRef.current && !isLoadingRef.current) {
+        loadUnreadCount();
+      } else {
+        console.log('[V2DashboardHeader] Skipping notification poll - rate limited or loading');
+      }
+    }, 30000);
+    
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
   }, []);
 
   const getAuthHeaders = () => {
@@ -32,16 +46,68 @@ export default function V2DashboardHeader() {
   };
 
   const loadUnreadCount = async () => {
+    // Prevent concurrent calls
+    if (isLoadingRef.current) {
+      console.log('[V2DashboardHeader] Already loading unread count - skipping');
+      return;
+    }
+    
+    // Don't load if rate limited
+    if (rateLimitedRef.current) {
+      console.log('[V2DashboardHeader] Rate limited - skipping loadUnreadCount');
+      return;
+    }
+    
+    isLoadingRef.current = true;
+    
     try {
       const headers = getAuthHeaders();
       const res = await fetch(`${API_URL}/api/v2/notifications/unread-count`, { headers });
+      
       if (res.ok) {
         const data = await res.json();
         setUnreadCount(data.count || 0);
+        rateLimitedRef.current = false; // Clear rate limit flag on success
+      } else if (res.status === 429) {
+        // Rate limited - stop polling
+        console.warn('[V2DashboardHeader] Rate limited - STOPPING notification polling');
+        rateLimitedRef.current = true;
+        
+        // Clear interval if rate limited
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        
+        // Clear rate limit after 60 seconds and restart polling
+        setTimeout(() => {
+          rateLimitedRef.current = false;
+          console.log('[V2DashboardHeader] Rate limit cleared - restarting notification polling');
+          if (!intervalRef.current) {
+            intervalRef.current = setInterval(() => {
+              if (!rateLimitedRef.current && !isLoadingRef.current) {
+                loadUnreadCount();
+              }
+            }, 30000);
+          }
+        }, 60000);
       }
     } catch (err) {
+      // Check if it's a 429 error
+      if (err.message?.includes('429') || err.response?.status === 429) {
+        rateLimitedRef.current = true;
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+        setTimeout(() => {
+          rateLimitedRef.current = false;
+        }, 60000);
+      }
       // Silently fail - notifications are not critical
       console.error('[V2DashboardHeader] Error loading unread count:', err);
+    } finally {
+      isLoadingRef.current = false;
     }
   };
 
