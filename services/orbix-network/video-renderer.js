@@ -155,38 +155,69 @@ async function generateAudio(script) {
  * @param {Object} renderJob - Render job from database
  * @param {Object} script - Script object
  * @param {Object} story - Story object
+ * @param {Function} progressCallback - Optional callback for progress updates (0-1)
  * @returns {Promise<string>} Path to rendered video file
  */
-export async function renderVideo(renderJob, script, story) {
+export async function renderVideo(renderJob, script, story, progressCallback = null) {
   try {
     console.log(`[Orbix Video Renderer] Starting render for job ${renderJob.id}`);
+    
+    if (progressCallback) progressCallback(0.1); // 10% - Starting
     
     // Get background image URL (all backgrounds are images)
     const imageId = renderJob.background_id; // 1-12
     const imageUrl = await getBackgroundImageUrl(imageId);
     
+    if (progressCallback) progressCallback(0.2); // 20% - Background loaded
+    
     // If MOTION type, animate the image into a video first
     let backgroundVideoPath;
     if (renderJob.background_type === 'MOTION') {
       backgroundVideoPath = await animateImageToVideo(imageUrl, script.duration_target_seconds);
+      if (progressCallback) progressCallback(0.4); // 40% - Background animated
     } else {
       // For STILL, we'll use the image directly in FFmpeg (with loop)
       backgroundVideoPath = null; // Will use image directly
+      if (progressCallback) progressCallback(0.3); // 30% - Background ready
     }
     
     // Generate audio (text-to-speech)
     const audioPath = await generateAudio(script);
+    if (progressCallback) progressCallback(0.5); // 50% - Audio generated
     
     // Create temporary output file
     const outputPath = join(tmpdir(), `orbix-render-${renderJob.id}-${Date.now()}.mp4`);
     
     // Build FFmpeg command
     // This is a placeholder - actual FFmpeg command will need to be built based on template
+    // Use backgroundVideoPath if available (MOTION), otherwise use imageUrl (STILL)
+    const backgroundUrl = backgroundVideoPath || imageUrl;
     const ffmpegCommand = buildFFmpegCommand(backgroundUrl, audioPath, script, story, renderJob.template, outputPath);
+    
+    if (progressCallback) progressCallback(0.6); // 60% - Command built
     
     // Execute FFmpeg
     console.log(`[Orbix Video Renderer] Executing FFmpeg command...`);
-    const { stdout, stderr } = await execAsync(ffmpegCommand);
+    
+    // For long-running FFmpeg, we could monitor progress, but for now we'll estimate
+    // FFmpeg rendering typically takes the longest, so we'll simulate progress
+    const ffmpegPromise = execAsync(ffmpegCommand);
+    
+    // Simulate progress during FFmpeg execution (60% -> 90%)
+    const progressInterval = setInterval(() => {
+      if (progressCallback) {
+        // Estimate progress based on time (this is a rough estimate)
+        // In a real implementation, you'd parse FFmpeg output for actual progress
+        const elapsed = Date.now() - (renderJob.created_at ? new Date(renderJob.created_at).getTime() : Date.now());
+        const estimatedProgress = Math.min(0.9, 0.6 + (elapsed / 60000) * 0.3); // Assume ~1 minute for rendering
+        progressCallback(estimatedProgress);
+      }
+    }, 2000); // Update every 2 seconds
+    
+    const { stdout, stderr } = await ffmpegPromise;
+    clearInterval(progressInterval);
+    
+    if (progressCallback) progressCallback(0.9); // 90% - FFmpeg complete
     
     // Log FFmpeg output
     console.log(`[Orbix Video Renderer] FFmpeg stdout:`, stdout);
@@ -195,6 +226,7 @@ export async function renderVideo(renderJob, script, story) {
     }
     
     console.log(`[Orbix Video Renderer] Video rendered: ${outputPath}`);
+    if (progressCallback) progressCallback(1.0); // 100% - Complete
     return outputPath;
   } catch (error) {
     console.error('[Orbix Video Renderer] Error rendering video:', error);
@@ -276,13 +308,36 @@ export async function uploadToStorage(videoPath, businessId, renderId) {
 }
 
 /**
+ * Update render progress in database
+ * @param {string} renderId - Render ID
+ * @param {number} progress - Progress percentage (0-100)
+ */
+async function updateRenderProgress(renderId, progress) {
+  try {
+    await supabaseClient
+      .from('orbix_renders')
+      .update({ 
+        progress_percentage: Math.max(0, Math.min(100, Math.round(progress))),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', renderId);
+  } catch (error) {
+    console.error(`[Orbix Video Renderer] Error updating progress for render ${renderId}:`, error);
+    // Don't throw - progress updates are non-critical
+  }
+}
+
+/**
  * Process a render job (select template, background, render, upload)
  * @param {Object} renderJob - Render job from database
  * @returns {Promise<Object>} Updated render job with output URL
  */
 export async function processRenderJob(renderJob) {
   try {
-    // Get story and script
+    // Progress: 0% - Starting
+    await updateRenderProgress(renderJob.id, 0);
+    
+    // Get story and script (10% progress)
     const { data: story } = await supabaseClient
       .from('orbix_stories')
       .select('*')
@@ -299,11 +354,25 @@ export async function processRenderJob(renderJob) {
       throw new Error('Story or script not found');
     }
     
-    // Render video
-    const videoPath = await renderVideo(renderJob, script, story);
+    await updateRenderProgress(renderJob.id, 10);
     
-    // Upload to storage
+    // Render video (10% -> 80% progress)
+    // This is the longest step, so we'll simulate progress during rendering
+    const videoPath = await renderVideo(renderJob, script, story, (progress) => {
+      // Progress callback: 10% + (progress * 70%) = 10% to 80%
+      const totalProgress = 10 + (progress * 0.7);
+      updateRenderProgress(renderJob.id, totalProgress);
+    });
+    
+    await updateRenderProgress(renderJob.id, 80);
+    
+    // Upload to storage (80% -> 95% progress)
     const outputUrl = await uploadToStorage(videoPath, renderJob.business_id, renderJob.id);
+    
+    await updateRenderProgress(renderJob.id, 95);
+    
+    // Finalize (95% -> 100%)
+    await updateRenderProgress(renderJob.id, 100);
     
     return {
       outputUrl,
@@ -311,6 +380,8 @@ export async function processRenderJob(renderJob) {
     };
   } catch (error) {
     console.error('[Orbix Video Renderer] Error processing render job:', error);
+    // Update progress to show failure
+    await updateRenderProgress(renderJob.id, 0); // Reset on failure
     return {
       status: 'FAILED',
       error: error.message

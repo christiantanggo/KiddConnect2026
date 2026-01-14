@@ -40,6 +40,18 @@ export default function OrbixNetworkDashboard() {
     checkSetupAndLoadData();
   }, []);
 
+  // Auto-refresh dashboard data every 5 seconds if there are PENDING or PROCESSING renders
+  useEffect(() => {
+    const hasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+    if (!hasActiveRenders) return;
+    
+    const interval = setInterval(() => {
+      loadDashboardData();
+    }, 5000);
+    
+    return () => clearInterval(interval);
+  }, [renders.length]); // Only re-run when renders array length changes
+
   const checkSetupAndLoadData = async () => {
     try {
       setLoading(true);
@@ -553,6 +565,30 @@ export default function OrbixNetworkDashboard() {
                                   Template {render.template} • {render.background_type}
                                 </span>
                               </div>
+                              {/* Progress Bar for PENDING or PROCESSING renders */}
+                              {(render.render_status === 'PENDING' || render.render_status === 'PROCESSING') && (
+                                <div className="mt-2 mb-2">
+                                  <div className="flex justify-between items-center mb-1">
+                                    <span className="text-xs text-gray-600">Progress</span>
+                                    <span className="text-xs font-medium text-gray-700">
+                                      {render.progress_percentage || 0}%
+                                    </span>
+                                  </div>
+                                  <div className="w-full bg-gray-200 rounded-full h-2">
+                                    <div
+                                      className={`h-2 rounded-full transition-all duration-300 ${
+                                        render.render_status === 'PROCESSING' 
+                                          ? 'bg-blue-600' 
+                                          : 'bg-gray-400'
+                                      }`}
+                                      style={{ width: `${render.progress_percentage || 0}%` }}
+                                    />
+                                  </div>
+                                  {render.render_status === 'PENDING' && render.progress_percentage === 0 && (
+                                    <p className="text-xs text-gray-500 mt-1">Waiting to start...</p>
+                                  )}
+                                </div>
+                              )}
                               {render.output_url && (
                                 <a
                                   href={render.output_url}
@@ -691,6 +727,40 @@ export default function OrbixNetworkDashboard() {
                           )}
                         </div>
                       </div>
+
+                      {/* Progress Bar */}
+                      {(renderDetails.render_status === 'PENDING' || renderDetails.render_status === 'PROCESSING' || selectedRender.render_status === 'PENDING' || selectedRender.render_status === 'PROCESSING') && (
+                        <div>
+                          <h3 className="font-semibold text-lg mb-2">Render Progress</h3>
+                          <div className="space-y-2">
+                            <div className="flex justify-between items-center">
+                              <span className="text-sm text-gray-600">Progress</span>
+                              <span className="text-sm font-medium text-gray-700">
+                                {renderDetails.progress_percentage || selectedRender.progress_percentage || 0}%
+                              </span>
+                            </div>
+                            <div className="w-full bg-gray-200 rounded-full h-3">
+                              <div
+                                className={`h-3 rounded-full transition-all duration-300 ${
+                                  (renderDetails.render_status === 'PROCESSING' || selectedRender.render_status === 'PROCESSING')
+                                    ? 'bg-blue-600' 
+                                    : 'bg-gray-400'
+                                }`}
+                                style={{ 
+                                  width: `${renderDetails.progress_percentage || selectedRender.progress_percentage || 0}%` 
+                                }}
+                              />
+                            </div>
+                            {(renderDetails.render_status === 'PENDING' || selectedRender.render_status === 'PENDING') && 
+                             (renderDetails.progress_percentage === 0 || selectedRender.progress_percentage === 0) && (
+                              <p className="text-sm text-gray-500 mt-1">Waiting to start processing...</p>
+                            )}
+                            {(renderDetails.render_status === 'PROCESSING' || selectedRender.render_status === 'PROCESSING') && (
+                              <p className="text-sm text-gray-500 mt-1">Rendering video... This may take a few minutes.</p>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                       {renderDetails.error_message && (
                         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
