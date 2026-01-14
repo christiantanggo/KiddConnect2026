@@ -49,6 +49,12 @@ export default function OrbixNetworkDashboard() {
     }
   }, []);
 
+  // Ref to track current renders for interval callback
+  const rendersRef = useRef(renders);
+  useEffect(() => {
+    rendersRef.current = renders;
+  }, [renders]);
+
   // Auto-refresh dashboard data every 5 seconds if there are PENDING or PROCESSING renders
   useEffect(() => {
     // Calculate active renders
@@ -78,8 +84,9 @@ export default function OrbixNetworkDashboard() {
     
     console.log('[Orbix Dashboard] Setting up auto-refresh interval (5 seconds) - active renders detected');
     autoRefreshIntervalRef.current = setInterval(() => {
-      // Check if there are still active renders (check current renders state)
-      const currentActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      // Check if there are still active renders using ref (current state)
+      const currentRenders = rendersRef.current;
+      const currentActiveRenders = currentRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
       
       if (!currentActiveRenders) {
         console.log('[Orbix Dashboard] No more active renders detected - STOPPING auto-refresh interval');
