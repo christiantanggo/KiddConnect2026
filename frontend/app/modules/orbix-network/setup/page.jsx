@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
@@ -10,9 +10,12 @@ import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
 import { ArrowLeft, ArrowRight, Check, Loader, CheckCircle2, AlertCircle, Plus, Trash2, ExternalLink } from 'lucide-react';
 
+// Force dynamic rendering to allow useSearchParams
+export const dynamic = 'force-dynamic';
+
 const TOTAL_STEPS = 5;
 
-function OrbixNetworkSetupWizard() {
+function OrbixNetworkSetupWizardContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { success, error: showErrorToast } = useToast();
@@ -821,5 +824,19 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
   );
 }
 
-export default OrbixNetworkSetupWizard;
+export default function OrbixNetworkSetupWizard() {
+  return (
+    <Suspense fallback={
+      <AuthGuard>
+        <V2AppShell>
+          <div className="flex items-center justify-center min-h-screen">
+            <Loader className="w-8 h-8 animate-spin text-blue-600" />
+          </div>
+        </V2AppShell>
+      </AuthGuard>
+    }>
+      <OrbixNetworkSetupWizardContent />
+    </Suspense>
+  );
+}
 

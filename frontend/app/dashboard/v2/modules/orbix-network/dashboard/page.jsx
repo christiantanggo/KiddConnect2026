@@ -163,8 +163,8 @@ export default function OrbixNetworkDashboard() {
   };
 
   const handleRenderClick = async (render) => {
-    // Only allow clicking on PENDING or PROCESSING renders
-    if (render.render_status !== 'PENDING' && render.render_status !== 'PROCESSING') {
+    // Allow clicking on PENDING, PROCESSING, COMPLETED, or FAILED renders
+    if (!['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'].includes(render.render_status)) {
       return;
     }
     
@@ -535,16 +535,19 @@ export default function OrbixNetworkDashboard() {
                 ) : (
                   <div className="space-y-4">
                     {renders.slice(0, 5).map((render) => {
-                      // All renders are clickable now (to view details and restart if needed)
+                      const canClick = ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'].includes(render.render_status);
+                      const isFailed = render.render_status === 'FAILED';
+                      const isCompleted = render.render_status === 'COMPLETED';
+                      
                       return (
                         <div
                           key={render.id}
-                          className="border-b border-gray-100 pb-4 last:border-0 last:pb-0 cursor-pointer hover:bg-gray-50 -mx-2 px-2 rounded transition-colors"
-                          onClick={() => handleRenderClick(render)}
+                          className={`border-b border-gray-100 pb-4 last:border-0 last:pb-0 ${canClick ? 'cursor-pointer hover:bg-gray-50' : ''} -mx-2 px-2 rounded transition-colors`}
+                          onClick={canClick ? () => handleRenderClick(render) : undefined}
                         >
                           <div className="flex justify-between items-center">
                             <div className="flex-1">
-                              <div className="flex gap-2 mb-2">
+                              <div className="flex gap-2 mb-2 items-center">
                                 {getStatusBadge(render.render_status)}
                                 <span className="text-xs text-gray-500">
                                   Template {render.template} • {render.background_type}
@@ -560,6 +563,18 @@ export default function OrbixNetworkDashboard() {
                                 >
                                   View Video →
                                 </a>
+                              )}
+                              {(isFailed || isCompleted) && (
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRestartRender(render.id);
+                                  }}
+                                  className="mt-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 flex items-center gap-1"
+                                >
+                                  <RotateCw className="w-3 h-3" />
+                                  Restart
+                                </button>
                               )}
                             </div>
                           </div>

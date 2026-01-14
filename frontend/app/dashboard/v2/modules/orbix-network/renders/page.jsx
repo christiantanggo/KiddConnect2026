@@ -8,11 +8,11 @@ import V2AppShell from '@/components/V2AppShell';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
-import { ArrowLeft, Loader, Video, Download, ExternalLink } from 'lucide-react';
+import { ArrowLeft, Loader, Video, Download, ExternalLink, RotateCw } from 'lucide-react';
 
 export default function OrbixNetworkRendersPage() {
   const router = useRouter();
-  const { error: showErrorToast } = useToast();
+  const { success, error: showErrorToast } = useToast();
   const [loading, setLoading] = useState(true);
   const [renders, setRenders] = useState([]);
   const [statusFilter, setStatusFilter] = useState('');
@@ -72,6 +72,21 @@ export default function OrbixNetworkRendersPage() {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const handleRestartRender = async (renderId) => {
+    if (!window.confirm('Are you sure you want to restart this render? It will be re-queued for processing.')) {
+      return;
+    }
+    try {
+      await orbixNetworkAPI.restartRender(renderId);
+      success('Render restarted. It will be processed again.');
+      loadRenders(); // Reload the list
+    } catch (error) {
+      console.error('Failed to restart render:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to restart render');
+    }
   };
 
   if (loading) {
@@ -162,26 +177,37 @@ export default function OrbixNetworkRendersPage() {
                         </div>
                       )}
 
-                      {render.output_url && render.render_status === 'COMPLETED' && (
-                        <div className="flex gap-2">
-                          <a
-                            href={render.output_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-center text-sm flex items-center justify-center gap-2"
+                      <div className="flex gap-2 mt-4">
+                        {render.output_url && render.render_status === 'COMPLETED' && (
+                          <>
+                            <a
+                              href={render.output_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-center text-sm flex items-center justify-center gap-2"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                              View Video
+                            </a>
+                            <a
+                              href={render.output_url}
+                              download
+                              className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center gap-2"
+                            >
+                              <Download className="w-4 h-4" />
+                            </a>
+                          </>
+                        )}
+                        {(render.render_status === 'FAILED' || render.render_status === 'COMPLETED') && (
+                          <button
+                            onClick={() => handleRestartRender(render.id)}
+                            className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-center text-sm flex items-center justify-center gap-2"
                           >
-                            <ExternalLink className="w-4 h-4" />
-                            View Video
-                          </a>
-                          <a
-                            href={render.output_url}
-                            download
-                            className="px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center gap-2"
-                          >
-                            <Download className="w-4 h-4" />
-                          </a>
-                        </div>
-                      )}
+                            <RotateCw className="w-4 h-4" />
+                            Restart Render
+                          </button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
