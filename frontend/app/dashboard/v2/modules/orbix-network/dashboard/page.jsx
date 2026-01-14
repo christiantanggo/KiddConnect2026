@@ -49,22 +49,17 @@ export default function OrbixNetworkDashboard() {
     }
   }, []);
 
-  // Calculate active render IDs for dependency tracking
-  const activeRenderIds = renders
-    .filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING')
-    .map(r => r.id)
-    .sort()
-    .join(',');
-
   // Auto-refresh dashboard data every 5 seconds if there are PENDING or PROCESSING renders
   useEffect(() => {
-    const hasActiveRenders = activeRenderIds.length > 0;
+    // Calculate active renders
+    const hasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+    const activeCount = renders.filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING').length;
     
-    console.log('[Orbix Dashboard] Auto-refresh effect - hasActiveRenders:', hasActiveRenders, 'active render IDs:', activeRenderIds || 'none', 'rateLimited:', rateLimitedRef.current);
+    console.log('[Orbix Dashboard] Auto-refresh effect - hasActiveRenders:', hasActiveRenders, 'active count:', activeCount, 'total renders:', renders.length, 'rateLimited:', rateLimitedRef.current);
     
     // ALWAYS clear existing interval first - we'll set up a new one if needed
     if (autoRefreshIntervalRef.current) {
-      console.log('[Orbix Dashboard] Clearing existing auto-refresh interval');
+      console.log('[Orbix Dashboard] CLEARING existing auto-refresh interval');
       clearInterval(autoRefreshIntervalRef.current);
       autoRefreshIntervalRef.current = null;
     }
@@ -77,12 +72,24 @@ export default function OrbixNetworkDashboard() {
     
     // Only set up interval if there are active renders
     if (!hasActiveRenders) {
-      console.log('[Orbix Dashboard] No active renders - NOT setting up auto-refresh interval');
+      console.log('[Orbix Dashboard] No active renders - NOT setting up auto-refresh interval (STOPPING)');
       return;
     }
     
     console.log('[Orbix Dashboard] Setting up auto-refresh interval (5 seconds) - active renders detected');
     autoRefreshIntervalRef.current = setInterval(() => {
+      // Check if there are still active renders (check current renders state)
+      const currentActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      
+      if (!currentActiveRenders) {
+        console.log('[Orbix Dashboard] No more active renders detected - STOPPING auto-refresh interval');
+        if (autoRefreshIntervalRef.current) {
+          clearInterval(autoRefreshIntervalRef.current);
+          autoRefreshIntervalRef.current = null;
+        }
+        return;
+      }
+      
       // Don't refresh if already loading or rate limited
       if (isLoadingDataRef.current) {
         console.log('[Orbix Dashboard] Auto-refresh skipped - already loading data');
@@ -108,7 +115,7 @@ export default function OrbixNetworkDashboard() {
         autoRefreshIntervalRef.current = null;
       }
     };
-  }, [activeRenderIds]); // Re-run only when active render IDs change
+  }, [renders.map(r => `${r.id}-${r.render_status}`).join(',')]); // Re-run when renders or their statuses change
 
   const checkSetupAndLoadData = async () => {
     // Prevent concurrent calls
