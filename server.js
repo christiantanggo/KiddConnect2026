@@ -359,12 +359,15 @@ try {
   }
 
   // Load Orbix Network job routes (for scheduled tasks)
+  // NOTE: This import may fail on Node.js 18 due to undici/File API dependency
+  // If it fails, the server will still start but Orbix Network jobs won't be available
   try {
     const v2OrbixNetworkJobRoutes = (await import("./routes/v2/orbix-network-jobs.js")).default;
     app.use("/api/v2/orbix-network/jobs", v2OrbixNetworkJobRoutes);
     console.log('✅ Orbix Network job routes loaded');
   } catch (orbixJobError) {
     console.warn('⚠️  Orbix Network job routes not loaded:', orbixJobError.message);
+    console.warn('⚠️  This is likely due to Node.js 18 incompatibility. Orbix Network jobs will not be available.');
   }
   
   // V2 routes health check
