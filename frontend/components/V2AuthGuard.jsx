@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { isAuthenticated } from '@/lib/auth';
 import OrganizationSelectionModal from './OrganizationSelectionModal';
@@ -24,10 +24,23 @@ export default function V2AuthGuard({ children }) {
   const [currentOrg, setCurrentOrg] = useState(null);
   const [showOrgModal, setShowOrgModal] = useState(false);
   const [needsTermsAcceptance, setNeedsTermsAcceptance] = useState(false);
+  const checkingRef = useRef(false); // Prevent concurrent checks
+  const lastPathnameRef = useRef(pathname); // Track last pathname to prevent duplicate checks
+  const termsCheckedRef = useRef(false); // Prevent repeated terms checks
 
   useEffect(() => {
-    checkAuthAndSetup();
-  }, [pathname]);
+    // Only check on initial mount, not on every pathname change
+    // This prevents infinite reload loops
+    let mounted = true;
+    
+    if (!authChecked && !checkingRef.current && mounted) {
+      checkAuthAndSetup();
+    }
+    
+    return () => {
+      mounted = false;
+    };
+  }, []); // Empty dependency array - only run once on mount
 
   const getAuthHeaders = () => {
     if (typeof document === 'undefined') return {};
@@ -42,58 +55,98 @@ export default function V2AuthGuard({ children }) {
   };
 
   const checkAuthAndSetup = async () => {
+    // Prevent concurrent checks
+    if (checkingRef.current) {
+      console.log('[V2AuthGuard] Already checking, skipping...');
+      return;
+    }
+    
+    checkingRef.current = true;
+    console.log('[V2AuthGuard] Starting auth check...');
+    
     try {
       // Check authentication first
       if (!isAuthenticated()) {
+        console.log('[V2AuthGuard] Not authenticated, redirecting to login');
         router.push('/login');
         return;
       }
 
+      console.log('[V2AuthGuard] Authenticated, checking setup...');
       setAuthChecked(true);
 
-      // Load organizations
-      const headers = getAuthHeaders();
-      const orgsRes = await fetch(`${API_URL}/api/v2/organizations`, { headers });
-      
-      if (orgsRes.ok) {
-        const orgsData = await orgsRes.json();
-        const orgs = orgsData.organizations || [];
-        setOrganizations(orgs);
+      // Load organizations - only if not already loaded
+      if (organizations.length === 0 && !currentOrg) {
+        console.log('[V2AuthGuard] Loading organizations...');
+        const headers = getAuthHeaders();
+        const orgsRes = await fetch(`${API_URL}/api/v2/organizations`, { headers });
+        
+        if (orgsRes.ok) {
+          const orgsData = await orgsRes.json();
+          const orgs = orgsData.organizations || [];
+          setOrganizations(orgs);
 
-        // Handle organization selection per spec:
-        // 0 organizations -> force setup wizard (show modal with message)
-        // 1 organization -> auto-select
-        // >1 organization -> show selection modal
-        if (orgs.length === 0) {
-          setShowOrgModal(true);
-        } else if (orgs.length === 1) {
-          // Auto-select single organization
-          await selectOrganization(orgs[0].id);
-        } else {
-          // Multiple organizations - check if one is already selected
-          const activeBusinessId = typeof window !== 'undefined' 
-            ? localStorage.getItem('activeBusinessId') 
-            : null;
-          
-          if (!activeBusinessId || !orgs.find(o => o.id === activeBusinessId)) {
+          // Handle organization selection per spec:
+          // 0 organizations -> force setup wizard (show modal with message)
+          // 1 organization -> auto-select (only if not already selected)
+          // >1 organization -> show selection modal
+          if (orgs.length === 0) {
             setShowOrgModal(true);
+          } else if (orgs.length === 1) {
+            // Auto-select single organization (only if not already selected)
+            const activeBusinessId = typeof window !== 'undefined' 
+              ? localStorage.getItem('activeBusinessId') 
+              : null;
+            
+            if (activeBusinessId === orgs[0].id && currentOrg?.id === orgs[0].id) {
+              // Already selected, just load it
+              await loadCurrentOrganization(orgs[0].id);
+            } else if (activeBusinessId !== orgs[0].id) {
+              // Not selected yet, select it
+              await selectOrganization(orgs[0].id);
+            }
           } else {
-            await loadCurrentOrganization(activeBusinessId);
+            // Multiple organizations - check if one is already selected
+            const activeBusinessId = typeof window !== 'undefined' 
+              ? localStorage.getItem('activeBusinessId') 
+              : null;
+            
+            if (!activeBusinessId || !orgs.find(o => o.id === activeBusinessId)) {
+              setShowOrgModal(true);
+            } else {
+              await loadCurrentOrganization(activeBusinessId);
+            }
           }
+        } else if (orgsRes.status === 401 || orgsRes.status === 403) {
+          // Auth failed - redirect to login
+          router.push('/login');
+          return;
         }
+        // If API fails for other reasons, continue anyway to avoid blocking
+      } else if (currentOrg) {
+        // Already have org loaded, skip
       }
 
-      // Check legal acceptance
-      await checkLegalAcceptance();
+      // Check legal acceptance - only once
+      if (!termsCheckedRef.current) {
+        await checkLegalAcceptance();
+      }
 
     } catch (err) {
       console.error('[V2AuthGuard] Error:', err);
     } finally {
       setLoading(false);
+      checkingRef.current = false; // Reset checking flag
+      console.log('[V2AuthGuard] Auth check complete');
     }
   };
 
   const selectOrganization = async (businessId) => {
+    // Prevent re-selecting if already selected
+    if (currentOrg?.id === businessId) {
+      return;
+    }
+    
     try {
       const headers = getAuthHeaders();
       const res = await fetch(`${API_URL}/api/v2/organizations/select`, {
@@ -109,8 +162,8 @@ export default function V2AuthGuard({ children }) {
           localStorage.setItem('activeBusinessId', businessId);
         }
         setShowOrgModal(false);
-        // Reload to refresh context
-        window.location.reload();
+        // DON'T call router.refresh() - it causes infinite reload loops
+        // The state update is enough to trigger a re-render
       }
     } catch (err) {
       console.error('[V2AuthGuard] Error selecting organization:', err);
@@ -135,12 +188,14 @@ export default function V2AuthGuard({ children }) {
   };
 
   const checkLegalAcceptance = async () => {
+    // Only check once to prevent loops
+    if (termsCheckedRef.current || pathname === '/accept-terms') {
+      return;
+    }
+    
+    termsCheckedRef.current = true;
+    
     try {
-      // Skip check on accept-terms page
-      if (pathname === '/accept-terms') {
-        return;
-      }
-
       const headers = getAuthHeaders();
       const businessId = typeof window !== 'undefined' 
         ? localStorage.getItem('activeBusinessId') 
@@ -165,6 +220,7 @@ export default function V2AuthGuard({ children }) {
     } catch (err) {
       // If check fails, allow through (better UX than blocking)
       console.warn('[V2AuthGuard] Legal acceptance check failed:', err);
+      termsCheckedRef.current = false; // Reset on error so it can retry
     }
   };
 

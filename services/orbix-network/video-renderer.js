@@ -135,19 +135,47 @@ async function animateImageToVideo(imageUrl, duration = VIDEO_DURATION) {
 }
 
 /**
- * Generate text-to-speech audio for script
+ * Generate text-to-speech audio for script using OpenAI TTS
  * @param {Object} script - Script object
  * @returns {Promise<string>} Path to audio file
  */
 async function generateAudio(script) {
-  // TODO: Implement text-to-speech
-  // Options:
-  // 1. OpenAI TTS API
-  // 2. Google Cloud Text-to-Speech
-  // 3. Amazon Polly
-  // 
-  // For now, return placeholder
-  throw new Error('Audio generation not yet implemented');
+  try {
+    const OpenAI = (await import('openai')).default;
+    const fs = await import('fs');
+    
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error('OPENAI_API_KEY not set');
+    }
+    
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    
+    // Get script text
+    const scriptText = script.script_text || script.text || '';
+    if (!scriptText) {
+      throw new Error('Script text is empty');
+    }
+    
+    console.log(`[Orbix Video Renderer] Generating TTS audio for script (${scriptText.length} chars)...`);
+    
+    // Generate speech using OpenAI TTS
+    const mp3 = await openai.audio.speech.create({
+      model: 'tts-1',
+      voice: 'alloy', // Options: alloy, echo, fable, onyx, nova, shimmer
+      input: scriptText,
+    });
+    
+    // Save to temporary file
+    const audioPath = join(tmpdir(), `orbix-audio-${Date.now()}.mp3`);
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+    await fs.promises.writeFile(audioPath, buffer);
+    
+    console.log(`[Orbix Video Renderer] Audio generated: ${audioPath}`);
+    return audioPath;
+  } catch (error) {
+    console.error('[Orbix Video Renderer] Error generating audio:', error);
+    throw error;
+  }
 }
 
 /**
@@ -170,10 +198,24 @@ export async function renderVideo(renderJob, script, story, progressCallback = n
     
     if (progressCallback) progressCallback(0.2); // 20% - Background loaded
     
+    // Download remote image to local file if needed
+    let backgroundLocalPath = imageUrl;
+    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+      console.log(`[Orbix Video Renderer] Downloading background image from ${imageUrl}...`);
+      const axios = (await import('axios')).default;
+      const fs = await import('fs');
+      const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
+      backgroundLocalPath = join(tmpdir(), `orbix-bg-${Date.now()}.png`);
+      await fs.promises.writeFile(backgroundLocalPath, response.data);
+      console.log(`[Orbix Video Renderer] Background downloaded to ${backgroundLocalPath}`);
+    }
+    
+    if (progressCallback) progressCallback(0.25); // 25% - Background downloaded
+    
     // If MOTION type, animate the image into a video first
     let backgroundVideoPath;
     if (renderJob.background_type === 'MOTION') {
-      backgroundVideoPath = await animateImageToVideo(imageUrl, script.duration_target_seconds);
+      backgroundVideoPath = await animateImageToVideo(backgroundLocalPath, script.duration_target_seconds || VIDEO_DURATION);
       if (progressCallback) progressCallback(0.4); // 40% - Background animated
     } else {
       // For STILL, we'll use the image directly in FFmpeg (with loop)
@@ -189,9 +231,8 @@ export async function renderVideo(renderJob, script, story, progressCallback = n
     const outputPath = join(tmpdir(), `orbix-render-${renderJob.id}-${Date.now()}.mp4`);
     
     // Build FFmpeg command
-    // This is a placeholder - actual FFmpeg command will need to be built based on template
-    // Use backgroundVideoPath if available (MOTION), otherwise use imageUrl (STILL)
-    const backgroundUrl = backgroundVideoPath || imageUrl;
+    // Use backgroundVideoPath if available (MOTION), otherwise use backgroundLocalPath (STILL)
+    const backgroundUrl = backgroundVideoPath || backgroundLocalPath;
     const ffmpegCommand = buildFFmpegCommand(backgroundUrl, audioPath, script, story, renderJob.template, outputPath);
     
     if (progressCallback) progressCallback(0.6); // 60% - Command built
@@ -245,24 +286,68 @@ export async function renderVideo(renderJob, script, story, progressCallback = n
  * @returns {string} FFmpeg command
  */
 function buildFFmpegCommand(backgroundUrl, audioPath, script, story, template, outputPath) {
-  // This is a placeholder - actual FFmpeg command building will be complex
-  // and depends on:
-  // - Background type (still image vs video)
-  // - Template type (A, B, or C)
-  // - Text overlay positions and styling
-  // - Watermark overlay
-  // - Audio mixing
-  
-  // Basic structure:
-  // - Input: background (image or video)
-  // - Input: audio file
-  // - Filters: scale to 1080x1920, text overlays, watermark
-  // - Output: vertical video, 30-45 seconds, MP4
-  
-  // For now, return a placeholder command structure
-  // Actual implementation will require FFmpeg filter_complex for text overlays
-  
-  throw new Error('FFmpeg command building not yet implemented - requires template definitions and text overlay configuration');
+  try {
+    // Determine if background is a video file or image URL
+    const isVideo = backgroundUrl.endsWith('.mp4') || backgroundUrl.endsWith('.mov') || backgroundUrl.startsWith('file://');
+    const isLocalFile = backgroundUrl.startsWith('/') || !backgroundUrl.startsWith('http');
+    
+    // Get story title and key points for text overlay
+    const title = story.title || 'Breaking News';
+    const headline = title.length > 60 ? title.substring(0, 57) + '...' : title;
+    
+    // Build FFmpeg command based on template
+    let videoFilter = '';
+    let textOverlay = '';
+    
+    if (isVideo) {
+      // Background is already a video (MOTION type)
+      videoFilter = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[v]`;
+    } else {
+      // Background is an image (STILL type) - loop it
+      videoFilter = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,loop=loop=-1:size=1:start=0[v]`;
+    }
+    
+    // Add text overlay based on template
+    // Escape special characters for FFmpeg
+    const escapedHeadline = headline
+      .replace(/\\/g, '\\\\')
+      .replace(/'/g, "\\'")
+      .replace(/:/g, '\\:')
+      .replace(/\[/g, '\\[')
+      .replace(/\]/g, '\\]');
+    
+    // Use built-in font (DejaVu Sans) which is available on most systems
+    // Template A: Large headline at top
+    // Template B: Medium headline
+    // Template C: Smaller headline
+    const fontSize = template === 'A' ? 72 : template === 'B' ? 64 : 56;
+    const yPos = template === 'A' ? 100 : template === 'B' ? 150 : 200;
+    
+    textOverlay = `drawtext=text='${escapedHeadline}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=${yPos}:box=1:boxcolor=black@0.5:boxborderw=10`;
+    
+    // Build the complete FFmpeg command
+    // Input 0: Background (image or video)
+    // Input 1: Audio file
+    let command;
+    
+    if (isVideo && isLocalFile) {
+      // Local video file
+      command = `ffmpeg -i "${backgroundUrl}" -i "${audioPath}" -filter_complex "${videoFilter};[v]${textOverlay}[vout]" -map "[vout]" -map 1:a -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k -shortest -pix_fmt yuv420p "${outputPath}"`;
+    } else if (!isVideo && !isLocalFile) {
+      // Remote image URL - need to download first (handled separately)
+      // For now, assume it's been downloaded to a local path
+      command = `ffmpeg -loop 1 -i "${backgroundUrl}" -i "${audioPath}" -filter_complex "${videoFilter};[v]${textOverlay}[vout]" -map "[vout]" -map 1:a -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k -shortest -pix_fmt yuv420p "${outputPath}"`;
+    } else {
+      // Local image file
+      command = `ffmpeg -loop 1 -i "${backgroundUrl}" -i "${audioPath}" -filter_complex "${videoFilter};[v]${textOverlay}[vout]" -map "[vout]" -map 1:a -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k -shortest -pix_fmt yuv420p "${outputPath}"`;
+    }
+    
+    console.log(`[Orbix Video Renderer] FFmpeg command: ${command.substring(0, 200)}...`);
+    return command;
+  } catch (error) {
+    console.error('[Orbix Video Renderer] Error building FFmpeg command:', error);
+    throw error;
+  }
 }
 
 /**
