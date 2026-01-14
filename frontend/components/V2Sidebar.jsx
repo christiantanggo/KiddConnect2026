@@ -113,12 +113,12 @@ export default function V2Sidebar() {
               // Special handling for phone-agent module - link to existing Phone Agent dashboard
               const href = module.key === 'phone-agent' 
                 ? '/dashboard' 
-                : `/modules/${module.key}/dashboard`;
+                : `/dashboard/v2/modules/${module.key}/dashboard`;
               
               // For phone-agent, check if we're on the Phone Agent dashboard
               const isActive = module.key === 'phone-agent' 
                 ? pathname === '/dashboard' || pathname?.startsWith('/dashboard/') && !pathname?.startsWith('/dashboard/v2')
-                : pathname?.includes(`/modules/${module.key}/dashboard`);
+                : pathname?.startsWith(`/dashboard/v2/modules/${module.key}`);
               
               return (
                 <Link

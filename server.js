@@ -303,18 +303,68 @@ try {
   
   // Load reviews main routes separately (requires openai package)
   try {
-    const v2ReviewsRoutes = (await import("./routes/v2/reviews.js")).default;
+    const reviewsModule = await import("./routes/v2/reviews.js");
+    const v2ReviewsRoutes = reviewsModule?.default;
     if (!v2ReviewsRoutes) {
+      console.warn('⚠️  Reviews module routes file is empty or has no default export - skipping');
+      console.warn('⚠️  The reviews module will not be available until reviews.js is properly implemented.');
+    } else {
+      app.use("/api/v2/reviews", v2ReviewsRoutes);
+      console.log('✅ Reviews module routes loaded');
+      console.log('✅ Reviews routes registered at /api/v2/reviews');
+    }
+  } catch (reviewsError) {
+    // Only log as warning if it's a missing file, otherwise error
+    if (reviewsError.code === 'MODULE_NOT_FOUND' || reviewsError.message.includes('Cannot find module')) {
+      console.warn('⚠️  Reviews module routes file not found - skipping');
+    } else {
+      console.error('❌ Reviews module routes FAILED to load:', reviewsError.message);
+      console.error('❌ Full error:', reviewsError);
+      console.error('❌ Stack trace:', reviewsError.stack);
+    }
+    console.warn('⚠️  The reviews module will not be available until this is fixed.');
+  }
+  
+  // Load Orbix Network YouTube OAuth callback (PUBLIC route - no auth required)
+  // MUST be registered BEFORE authenticated routes so it's matched first
+  try {
+    const v2OrbixNetworkYouTubeCallback = (await import("./routes/v2/orbix-network-youtube-callback.js")).default;
+    app.use("/api/v2/orbix-network", v2OrbixNetworkYouTubeCallback);
+    console.log('✅ Orbix Network YouTube OAuth callback route loaded (public)');
+  } catch (youtubeCallbackError) {
+    console.warn('⚠️  Orbix Network YouTube OAuth callback route not loaded:', youtubeCallbackError.message);
+  }
+
+  // Load Orbix Network setup routes
+  try {
+    const v2OrbixNetworkSetupRoutes = (await import("./routes/v2/orbix-network-setup.js")).default;
+    app.use("/api/v2/orbix-network", v2OrbixNetworkSetupRoutes);
+    console.log('✅ Orbix Network setup routes loaded');
+  } catch (setupError) {
+    console.warn('⚠️  Orbix Network setup routes not loaded:', setupError.message);
+  }
+  
+  // Load Orbix Network main routes
+  try {
+    const v2OrbixNetworkRoutes = (await import("./routes/v2/orbix-network.js")).default;
+    if (!v2OrbixNetworkRoutes) {
       throw new Error('Router export is undefined');
     }
-    app.use("/api/v2/reviews", v2ReviewsRoutes);
-    console.log('✅ Reviews module routes loaded');
-    console.log('✅ Reviews routes registered at /api/v2/reviews');
-  } catch (reviewsError) {
-    console.error('❌ Reviews module routes FAILED to load:', reviewsError.message);
-    console.error('❌ Full error:', reviewsError);
-    console.error('❌ Stack trace:', reviewsError.stack);
-    console.warn('⚠️  The reviews module will not be available until this is fixed.');
+    app.use("/api/v2/orbix-network", v2OrbixNetworkRoutes);
+    console.log('✅ Orbix Network module routes loaded');
+    console.log('✅ Orbix Network routes registered at /api/v2/orbix-network');
+  } catch (orbixError) {
+    console.error('❌ Orbix Network module routes FAILED to load:', orbixError.message);
+    console.warn('⚠️  The Orbix Network module will not be available until this is fixed.');
+  }
+
+  // Load Orbix Network job routes (for scheduled tasks)
+  try {
+    const v2OrbixNetworkJobRoutes = (await import("./routes/v2/orbix-network-jobs.js")).default;
+    app.use("/api/v2/orbix-network/jobs", v2OrbixNetworkJobRoutes);
+    console.log('✅ Orbix Network job routes loaded');
+  } catch (orbixJobError) {
+    console.warn('⚠️  Orbix Network job routes not loaded:', orbixJobError.message);
   }
   
   // V2 routes health check
@@ -331,6 +381,7 @@ try {
         admin: "/api/v2/admin",
         notifications: "/api/v2/notifications",
         reviews: "/api/v2/reviews (optional - requires openai package)",
+        orbixNetwork: "/api/v2/orbix-network",
         webhooks: {
           stripe: "/api/v2/webhooks/stripe",
           clickbank: "/api/v2/webhooks/clickbank"
@@ -528,6 +579,132 @@ try {
   console.log('✅ Daily assistant rebuild scheduled (runs daily at 3 AM)');
 } catch (error) {
   console.warn('⚠️  Could not start daily assistant rebuild:', error.message);
+}
+
+// Start scheduled jobs for Orbix Network
+let orbixNetworkIntervals = {};
+try {
+  const {
+    runScrapeJob,
+    runProcessJob,
+    runReviewQueueJob,
+    runRenderJob,
+    runPublishJob,
+    runAnalyticsJob
+  } = await import('./routes/v2/orbix-network-jobs.js');
+  
+  // 1. Scrape News (every hour)
+  const scrapeJob = async () => {
+    try {
+      console.log('[Orbix Jobs] Running scrape job...');
+      await runScrapeJob();
+    } catch (error) {
+      console.error('[Orbix Jobs] Scrape job error:', error.message);
+      console.error('[Orbix Jobs] Scrape job error stack:', error.stack);
+      // Don't crash the server - just log the error
+    }
+  };
+  // Don't run immediately on startup - wait for first interval to avoid startup crashes
+  // scrapeJob(); // Commented out to prevent startup crashes
+  orbixNetworkIntervals.scrape = setInterval(scrapeJob, 60 * 60 * 1000); // Every hour
+  console.log('✅ Orbix Network scrape job scheduled (runs every hour)');
+  
+  // 2. Process Stories (every 15 minutes)
+  const processJob = async () => {
+    try {
+      console.log('[Orbix Jobs] Running process job...');
+      await runProcessJob();
+    } catch (error) {
+      console.error('[Orbix Jobs] Process job error:', error.message);
+      console.error('[Orbix Jobs] Process job error stack:', error.stack);
+      // Don't crash the server - just log the error
+    }
+  };
+  // Don't run immediately on startup - wait for first interval
+  // processJob(); // Commented out to prevent startup crashes
+  orbixNetworkIntervals.process = setInterval(processJob, 15 * 60 * 1000); // Every 15 minutes
+  console.log('✅ Orbix Network process job scheduled (runs every 15 minutes)');
+  
+  // 3. Process Review Queue (every 5 minutes)
+  const reviewQueueJob = async () => {
+    try {
+      console.log('[Orbix Jobs] Running review queue job...');
+      await runReviewQueueJob();
+    } catch (error) {
+      console.error('[Orbix Jobs] Review queue job error:', error.message);
+      console.error('[Orbix Jobs] Review queue job error stack:', error.stack);
+      // Don't crash the server - just log the error
+    }
+  };
+  // Don't run immediately on startup - wait for first interval
+  // reviewQueueJob(); // Commented out to prevent startup crashes
+  orbixNetworkIntervals.reviewQueue = setInterval(reviewQueueJob, 5 * 60 * 1000); // Every 5 minutes
+  console.log('✅ Orbix Network review queue job scheduled (runs every 5 minutes)');
+  
+  // 4. Render Videos (every 10 minutes)
+  const renderJob = async () => {
+    try {
+      console.log('[Orbix Jobs] Running render job...');
+      await runRenderJob();
+    } catch (error) {
+      console.error('[Orbix Jobs] Render job error:', error.message);
+      console.error('[Orbix Jobs] Render job error stack:', error.stack);
+      // Don't crash the server - just log the error
+    }
+  };
+  // Don't run immediately on startup - wait for first interval
+  // renderJob(); // Commented out to prevent startup crashes
+  orbixNetworkIntervals.render = setInterval(renderJob, 10 * 60 * 1000); // Every 10 minutes
+  console.log('✅ Orbix Network render job scheduled (runs every 10 minutes)');
+  
+  // 5. Publish Videos (every 15 minutes)
+  const publishJob = async () => {
+    try {
+      console.log('[Orbix Jobs] Running publish job...');
+      await runPublishJob();
+    } catch (error) {
+      console.error('[Orbix Jobs] Publish job error:', error.message);
+      console.error('[Orbix Jobs] Publish job error stack:', error.stack);
+      // Don't crash the server - just log the error
+    }
+  };
+  // Don't run immediately on startup - wait for first interval
+  // publishJob(); // Commented out to prevent startup crashes
+  orbixNetworkIntervals.publish = setInterval(publishJob, 15 * 60 * 1000); // Every 15 minutes
+  console.log('✅ Orbix Network publish job scheduled (runs every 15 minutes)');
+  
+  // 6. Fetch Analytics (daily at 2 AM)
+  const getMsUntil2AM = () => {
+    const now = new Date();
+    const next2AM = new Date();
+    next2AM.setHours(2, 0, 0, 0);
+    if (now >= next2AM) {
+      next2AM.setDate(next2AM.getDate() + 1);
+    }
+    return next2AM.getTime() - now.getTime();
+  };
+  
+  const analyticsJob = async () => {
+    try {
+      console.log('[Orbix Jobs] Running analytics job...');
+      await runAnalyticsJob();
+    } catch (error) {
+      console.error('[Orbix Jobs] Analytics job error:', error.message);
+    }
+  };
+  
+  const scheduleAnalytics = () => {
+    const msUntilNext = getMsUntil2AM();
+    setTimeout(() => {
+      analyticsJob();
+      orbixNetworkIntervals.analytics = setInterval(analyticsJob, 24 * 60 * 60 * 1000); // 24 hours
+    }, msUntilNext);
+  };
+  scheduleAnalytics();
+  console.log('✅ Orbix Network analytics job scheduled (runs daily at 2 AM)');
+  
+} catch (error) {
+  console.warn('⚠️  Could not start Orbix Network scheduled jobs:', error.message);
 }
 
 // Start server

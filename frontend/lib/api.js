@@ -376,6 +376,39 @@ export const reviewsAPI = {
   }),
 };
 
+// Orbix Network API (v2)
+export const orbixNetworkAPI = {
+  getSetupStatus: () => api.get('/v2/orbix-network/setup/status'),
+  startSetup: () => api.post('/v2/orbix-network/setup/start'),
+  saveSetup: (step, stepData) => api.post('/v2/orbix-network/setup/save', { step, stepData }),
+  completeSetup: () => api.post('/v2/orbix-network/setup/complete'),
+  getStories: (params) => api.get('/v2/orbix-network/stories', { params }),
+  getStory: (id) => api.get(`/v2/orbix-network/stories/${id}`),
+  getRenders: (params) => api.get('/v2/orbix-network/renders', { params }),
+  getRender: (id) => api.get(`/v2/orbix-network/renders/${id}`),
+  deleteRender: (id) => api.delete(`/v2/orbix-network/renders/${id}`),
+  restartRender: (id) => api.post(`/v2/orbix-network/renders/${id}/restart`),
+  getPublishes: (params) => api.get('/v2/orbix-network/publishes', { params }),
+  getRawItems: (params) => api.get('/v2/orbix-network/raw-items', { params }),
+  getSources: () => api.get('/v2/orbix-network/sources'),
+  addSource: (data) => api.post('/v2/orbix-network/sources', data),
+  updateSource: (id, data) => api.put(`/v2/orbix-network/sources/${id}`, data),
+  deleteSource: (id) => api.delete(`/v2/orbix-network/sources/${id}`),
+  getReviewQueue: () => api.get('/v2/orbix-network/review-queue'),
+  approveStory: (id) => api.post(`/v2/orbix-network/stories/${id}/approve`),
+  rejectStory: (id) => api.post(`/v2/orbix-network/stories/${id}/reject`),
+  editScriptHook: (id, hook) => api.post(`/v2/orbix-network/stories/${id}/script/edit-hook`, { hook }),
+  getAnalytics: (params) => api.get('/v2/orbix-network/analytics', { params }),
+  getYoutubeAuthUrl: () => api.get('/v2/orbix-network/youtube/auth-url'),
+  getYoutubeChannel: () => api.get('/v2/orbix-network/youtube/channel'),
+  disconnectYoutube: () => api.post('/v2/orbix-network/youtube/disconnect'),
+  triggerScrapeJob: () => api.post('/v2/orbix-network/jobs/scrape'),
+  triggerProcessJob: () => api.post('/v2/orbix-network/jobs/process'),
+  triggerReviewQueueJob: () => api.post('/v2/orbix-network/jobs/review-queue'),
+  triggerRenderJob: () => api.post('/v2/orbix-network/jobs/render'),
+  triggerPublishJob: () => api.post('/v2/orbix-network/jobs/publish'),
+};
+
 // Contacts API
 export const contactsAPI = {
   getContacts: (params) => api.get('/contacts', { params }),

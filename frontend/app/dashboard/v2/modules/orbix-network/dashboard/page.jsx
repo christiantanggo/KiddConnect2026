@@ -1,0 +1,723 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import AuthGuard from '@/components/AuthGuard';
+import V2AppShell from '@/components/V2AppShell';
+import { orbixNetworkAPI } from '@/lib/api';
+import { useToast } from '@/components/ToastProvider';
+import { handleAPIError } from '@/lib/errorHandler';
+import { Loader, TrendingUp, Video, FileText, Eye, Play, RefreshCw, X, XCircle, RotateCw } from 'lucide-react';
+
+export default function OrbixNetworkDashboard() {
+  const router = useRouter();
+  const { success, error: showErrorToast } = useToast();
+  const [loading, setLoading] = useState(true);
+  const [rawItems, setRawItems] = useState([]);
+  const [stories, setStories] = useState([]);
+  const [renders, setRenders] = useState([]);
+  const [publishes, setPublishes] = useState([]);
+  const [selectedRender, setSelectedRender] = useState(null);
+  const [renderDetails, setRenderDetails] = useState(null);
+  const [loadingRenderDetails, setLoadingRenderDetails] = useState(false);
+  const [stats, setStats] = useState({
+    totalRawItems: 0,
+    totalStories: 0,
+    totalRenders: 0,
+    totalPublishes: 0,
+    totalViews: 0
+  });
+  const [runningJobs, setRunningJobs] = useState({
+    scrape: false,
+    process: false,
+    reviewQueue: false,
+    render: false,
+    publish: false
+  });
+
+  useEffect(() => {
+    checkSetupAndLoadData();
+  }, []);
+
+  const checkSetupAndLoadData = async () => {
+    try {
+      setLoading(true);
+      
+      // Check setup status first
+      const setupRes = await orbixNetworkAPI.getSetupStatus();
+      
+      // If setup not complete, redirect to setup
+      if (!setupRes.data.setup_status?.is_complete) {
+        router.push('/modules/orbix-network/setup');
+        return;
+      }
+      
+      // Setup complete - load dashboard data
+      await loadDashboardData();
+    } catch (error) {
+      console.error('Failed to check setup:', error);
+      const errorInfo = handleAPIError(error);
+      if (errorInfo.redirect) {
+        router.push(errorInfo.redirect);
+        return;
+      }
+      showErrorToast(errorInfo.message || 'An error occurred');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadDashboardData = async () => {
+    try {
+      setLoading(true);
+      
+      // Load raw items, stories, renders, and publishes in parallel
+      const [rawItemsRes, storiesRes, rendersRes, publishesRes] = await Promise.all([
+        orbixNetworkAPI.getRawItems({ limit: 10 }),
+        orbixNetworkAPI.getStories({ limit: 10 }),
+        orbixNetworkAPI.getRenders({ limit: 5 }),
+        orbixNetworkAPI.getPublishes({ limit: 5 })
+      ]);
+      
+      setRawItems(rawItemsRes.data.raw_items || []);
+      setStories(storiesRes.data.stories || []);
+      setRenders(rendersRes.data.renders || []);
+      setPublishes(publishesRes.data.publishes || []);
+      
+      // Calculate stats
+      setStats({
+        totalRawItems: rawItemsRes.data.raw_items?.length || 0,
+        totalStories: storiesRes.data.stories?.length || 0,
+        totalRenders: rendersRes.data.renders?.length || 0,
+        totalPublishes: publishesRes.data.publishes?.length || 0,
+        totalViews: publishesRes.data.publishes?.reduce((sum, p) => sum + (p.views || 0), 0) || 0
+      });
+    } catch (error) {
+      console.error('Failed to load dashboard data:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to load dashboard data');
+      if (errorInfo.redirect) {
+        router.push(errorInfo.redirect);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getStatusBadge = (status) => {
+    const statusColors = {
+      'QUEUED': 'bg-yellow-100 text-yellow-800',
+      'APPROVED': 'bg-green-100 text-green-800',
+      'REJECTED': 'bg-red-100 text-red-800',
+      'RENDERED': 'bg-blue-100 text-blue-800',
+      'PUBLISHED': 'bg-purple-100 text-purple-800',
+      'PENDING': 'bg-gray-100 text-gray-800',
+      'PROCESSING': 'bg-blue-100 text-blue-800',
+      'COMPLETED': 'bg-green-100 text-green-800',
+      'FAILED': 'bg-red-100 text-red-800'
+    };
+    
+    return (
+      <span className={`px-2 py-1 text-xs font-medium rounded ${statusColors[status] || 'bg-gray-100 text-gray-800'}`}>
+        {status}
+      </span>
+    );
+  };
+
+  const getCategoryBadge = (category) => {
+    const categoryNames = {
+      'ai-automation': 'AI & Automation',
+      'corporate-collapses': 'Corporate',
+      'tech-decisions': 'Tech',
+      'laws-rules': 'Laws & Rules',
+      'money-markets': 'Money & Markets'
+    };
+    
+    return (
+      <span className="px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded">
+        {categoryNames[category] || category}
+      </span>
+    );
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    // Parse date string (assume UTC if no timezone info)
+    let date;
+    if (dateString.includes('Z') || dateString.includes('+') || dateString.includes('-', 10)) {
+      // Already has timezone info
+      date = new Date(dateString);
+    } else {
+      // Assume UTC if no timezone specified (database timestamps are typically UTC)
+      date = new Date(dateString + 'Z');
+    }
+    // Convert to local timezone for display (browser's timezone)
+    return date.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+  };
+
+  const handleRenderClick = async (render) => {
+    // Only allow clicking on PENDING or PROCESSING renders
+    if (render.render_status !== 'PENDING' && render.render_status !== 'PROCESSING') {
+      return;
+    }
+    
+    setSelectedRender(render);
+    setLoadingRenderDetails(true);
+    
+    try {
+      const response = await orbixNetworkAPI.getRender(render.id);
+      setRenderDetails(response.data.render);
+    } catch (error) {
+      console.error('Failed to load render details:', error);
+      showErrorToast('Failed to load render details');
+    } finally {
+      setLoadingRenderDetails(false);
+    }
+  };
+
+  const handleCancelRender = async (renderId) => {
+    try {
+      await orbixNetworkAPI.deleteRender(renderId);
+      success('Render cancelled');
+      setSelectedRender(null);
+      setRenderDetails(null);
+      loadDashboardData(); // Reload data to refresh the list
+    } catch (error) {
+      console.error('Failed to cancel render:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to cancel render');
+    }
+  };
+
+  const handleRestartRender = async (renderId) => {
+    try {
+      await orbixNetworkAPI.restartRender(renderId);
+      success('Render restarted. It will be processed again.');
+      setSelectedRender(null);
+      setRenderDetails(null);
+      loadDashboardData(); // Reload data to refresh the list
+    } catch (error) {
+      console.error('Failed to restart render:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to restart render');
+    }
+  };
+
+  const triggerJob = async (jobName, jobFunction) => {
+    try {
+      setRunningJobs(prev => ({ ...prev, [jobName]: true }));
+      const response = await jobFunction();
+      
+      // For scrape job, show detailed results
+      if (jobName === 'scrape' && response.data?.results) {
+        const result = response.data.results[0]; // First business result
+        if (result) {
+          const message = result.error 
+            ? `Scrape failed: ${result.error}`
+            : `Scraped ${result.scraped || 0} items from ${result.enabled_sources || 0} source(s). Saved ${result.saved || 0} items.`;
+          if (result.error) {
+            showErrorToast(message);
+          } else {
+            success(message);
+            if (result.disabled_sources > 0) {
+              showErrorToast(`${result.disabled_sources} source(s) are disabled. Enable them in Settings to scrape.`);
+            }
+          }
+        } else {
+          success(`${jobName} job completed successfully`);
+        }
+      } else {
+        success(`${jobName} job completed successfully`);
+      }
+      
+      // Reload dashboard data after a short delay
+      setTimeout(() => {
+        loadDashboardData();
+      }, 2000);
+      return response;
+    } catch (error) {
+      console.error(`Failed to trigger ${jobName} job:`, error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || `Failed to trigger ${jobName} job`);
+    } finally {
+      setRunningJobs(prev => ({ ...prev, [jobName]: false }));
+    }
+  };
+
+  if (loading) {
+    return (
+      <AuthGuard>
+        <V2AppShell>
+          <div className="flex items-center justify-center min-h-screen">
+            <Loader className="w-8 h-8 animate-spin text-blue-600" />
+          </div>
+        </V2AppShell>
+      </AuthGuard>
+    );
+  }
+
+  return (
+    <AuthGuard>
+      <V2AppShell>
+        <div className="p-6 space-y-6">
+          {/* Header */}
+          <div className="flex justify-between items-center">
+            <div>
+              <h1 className="text-3xl font-bold mb-2">Orbix Network</h1>
+              <p className="text-gray-600">Automated video news network</p>
+            </div>
+            <div className="flex gap-3">
+              <Link
+                href="/dashboard/v2/modules/orbix-network/stories"
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                View All Stories
+              </Link>
+            </div>
+          </div>
+
+          {/* Manual Job Triggers */}
+          <div className="bg-white rounded-lg shadow p-6">
+            <h2 className="text-xl font-semibold mb-4">Manual Job Triggers</h2>
+            <p className="text-sm text-gray-600 mb-4">
+              Manually trigger background jobs for testing. Jobs normally run automatically on a schedule.
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+              <Link
+                href="/dashboard/v2/modules/orbix-network/scraped"
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-center"
+              >
+                <Play className="w-4 h-4" />
+                Scrape & View
+              </Link>
+              
+              <button
+                onClick={() => triggerJob('process', orbixNetworkAPI.triggerProcessJob)}
+                disabled={runningJobs.process}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {runningJobs.process ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    Process
+                  </>
+                )}
+              </button>
+              
+              <button
+                onClick={() => triggerJob('reviewQueue', orbixNetworkAPI.triggerReviewQueueJob)}
+                disabled={runningJobs.reviewQueue}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {runningJobs.reviewQueue ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    Review Queue
+                  </>
+                )}
+              </button>
+              
+              <button
+                onClick={() => triggerJob('render', orbixNetworkAPI.triggerRenderJob)}
+                disabled={runningJobs.render}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {runningJobs.render ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    Render
+                  </>
+                )}
+              </button>
+              
+              <button
+                onClick={() => triggerJob('publish', orbixNetworkAPI.triggerPublishJob)}
+                disabled={runningJobs.publish}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-pink-600 text-white rounded-lg hover:bg-pink-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {runningJobs.publish ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    Publish
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+
+          {/* Stats Cards */}
+          <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Raw Items</p>
+                  <p className="text-2xl font-bold">{stats.totalRawItems}</p>
+                </div>
+                <RefreshCw className="w-8 h-8 text-orange-600" />
+              </div>
+            </div>
+            
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Stories Processed</p>
+                  <p className="text-2xl font-bold">{stats.totalStories}</p>
+                </div>
+                <FileText className="w-8 h-8 text-blue-600" />
+              </div>
+            </div>
+            
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Videos Rendered</p>
+                  <p className="text-2xl font-bold">{stats.totalRenders}</p>
+                </div>
+                <Video className="w-8 h-8 text-green-600" />
+              </div>
+            </div>
+            
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Published Videos</p>
+                  <p className="text-2xl font-bold">{stats.totalPublishes}</p>
+                </div>
+                <TrendingUp className="w-8 h-8 text-purple-600" />
+              </div>
+            </div>
+            
+            <div className="bg-white rounded-lg shadow p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm text-gray-600 mb-1">Total Views</p>
+                  <p className="text-2xl font-bold">{stats.totalViews.toLocaleString()}</p>
+                </div>
+                <Eye className="w-8 h-8 text-orange-600" />
+              </div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Recent Raw Items */}
+            <div className="bg-white rounded-lg shadow">
+              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+                <h2 className="text-xl font-semibold">Recent Raw Items</h2>
+              </div>
+              <div className="p-6">
+                {rawItems.length === 0 ? (
+                  <p className="text-gray-500 text-center py-8">No raw items yet. Run the Scrape job to fetch news items.</p>
+                ) : (
+                  <div className="space-y-4">
+                    {rawItems.slice(0, 5).map((item) => (
+                      <div key={item.id} className="border-b border-gray-100 pb-4 last:border-0 last:pb-0">
+                        <div className="flex flex-col">
+                          <p className="font-medium text-sm line-clamp-2 mb-2">{item.title || 'Untitled'}</p>
+                          <div className="flex gap-2 mb-2">
+                            <span className={`px-2 py-1 text-xs rounded ${
+                              item.status === 'NEW' ? 'bg-yellow-100 text-yellow-800' :
+                              item.status === 'PROCESSED' ? 'bg-green-100 text-green-800' :
+                              'bg-gray-100 text-gray-800'
+                            }`}>
+                              {item.status}
+                            </span>
+                          </div>
+                          {item.url && (
+                            <a
+                              href={item.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-blue-600 hover:text-blue-700 break-all"
+                              title={item.url}
+                            >
+                              {item.url}
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Recent Stories */}
+            <div className="bg-white rounded-lg shadow">
+              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+                <h2 className="text-xl font-semibold">Recent Stories</h2>
+                <Link
+                  href="/dashboard/v2/modules/orbix-network/stories"
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  View All →
+                </Link>
+              </div>
+              <div className="p-6">
+                {stories.length === 0 ? (
+                  <p className="text-gray-500 text-center py-8">No stories yet</p>
+                ) : (
+                  <div className="space-y-4">
+                    {stories.slice(0, 5).map((story) => {
+                      // Determine navigation path based on status
+                      const isQueued = story.status === 'PENDING' || story.status === 'QUEUED';
+                      const storyPath = isQueued 
+                        ? '/dashboard/v2/modules/orbix-network/review'
+                        : '/dashboard/v2/modules/orbix-network/stories';
+                      
+                      return (
+                        <Link
+                          key={story.id}
+                          href={storyPath}
+                          className="block border-b border-gray-100 pb-4 last:border-0 last:pb-0 hover:bg-gray-50 -mx-2 px-2 rounded transition-colors cursor-pointer"
+                        >
+                          <div className="flex justify-between items-start mb-2">
+                            <div className="flex-1">
+                              <p className="font-medium text-sm line-clamp-2">{story.title || 'Untitled Story'}</p>
+                              <div className="flex gap-2 mt-2">
+                                {getCategoryBadge(story.category)}
+                                {getStatusBadge(story.status)}
+                              </div>
+                            </div>
+                            <div className="text-right ml-4">
+                              <p className="text-xs text-gray-500">Score</p>
+                              <p className="text-sm font-semibold">{story.shock_score}/100</p>
+                            </div>
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Recent Renders */}
+            <div className="bg-white rounded-lg shadow">
+              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+                <h2 className="text-xl font-semibold">Recent Renders</h2>
+                <Link
+                  href="/dashboard/v2/modules/orbix-network/renders"
+                  className="text-sm text-blue-600 hover:text-blue-700"
+                >
+                  View All →
+                </Link>
+              </div>
+              <div className="p-6">
+                {renders.length === 0 ? (
+                  <p className="text-gray-500 text-center py-8">No renders yet</p>
+                ) : (
+                  <div className="space-y-4">
+                    {renders.slice(0, 5).map((render) => {
+                      // All renders are clickable now (to view details and restart if needed)
+                      return (
+                        <div
+                          key={render.id}
+                          className="border-b border-gray-100 pb-4 last:border-0 last:pb-0 cursor-pointer hover:bg-gray-50 -mx-2 px-2 rounded transition-colors"
+                          onClick={() => handleRenderClick(render)}
+                        >
+                          <div className="flex justify-between items-center">
+                            <div className="flex-1">
+                              <div className="flex gap-2 mb-2">
+                                {getStatusBadge(render.render_status)}
+                                <span className="text-xs text-gray-500">
+                                  Template {render.template} • {render.background_type}
+                                </span>
+                              </div>
+                              {render.output_url && (
+                                <a
+                                  href={render.output_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-blue-600 hover:text-blue-700"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  View Video →
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Published Videos */}
+          <div className="bg-white rounded-lg shadow">
+            <div className="p-6 border-b border-gray-200 flex justify-between items-center">
+              <h2 className="text-xl font-semibold">Published Videos</h2>
+              <Link
+                href="/dashboard/v2/modules/orbix-network/published"
+                className="text-sm text-blue-600 hover:text-blue-700"
+              >
+                View All →
+              </Link>
+            </div>
+            <div className="p-6">
+              {publishes.length === 0 ? (
+                <p className="text-gray-500 text-center py-8">No published videos yet</p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {publishes.map((publish) => (
+                    <div key={publish.id} className="border border-gray-200 rounded-lg p-4">
+                      <div className="flex justify-between items-start mb-2">
+                        {getStatusBadge(publish.publish_status)}
+                      </div>
+                      <h3 className="font-medium text-sm mb-2 line-clamp-2">{publish.title}</h3>
+                      {publish.platform_video_id && (
+                        <a
+                          href={`https://www.youtube.com/watch?v=${publish.platform_video_id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 hover:text-blue-700"
+                        >
+                          Watch on YouTube →
+                        </a>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Render Progress Modal */}
+          {selectedRender && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-lg max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+                <div className="p-6 border-b border-gray-200 flex justify-between items-center sticky top-0 bg-white">
+                  <h2 className="text-2xl font-bold">Render Progress</h2>
+                  <button
+                    onClick={() => {
+                      setSelectedRender(null);
+                      setRenderDetails(null);
+                    }}
+                    className="text-gray-500 hover:text-gray-700"
+                  >
+                    <X className="w-6 h-6" />
+                  </button>
+                </div>
+                <div className="p-6 space-y-6">
+                  {loadingRenderDetails ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader className="w-8 h-8 animate-spin text-blue-600" />
+                    </div>
+                  ) : renderDetails ? (
+                    <>
+                      <div className="flex gap-2">
+                        {getStatusBadge(renderDetails.render_status || selectedRender.render_status)}
+                      </div>
+                      
+                      {renderDetails.orbix_stories && (
+                        <div>
+                          <h3 className="font-semibold text-lg mb-2">Story</h3>
+                          <p className="text-gray-900">{renderDetails.orbix_stories.title || 'Untitled Story'}</p>
+                          <div className="flex gap-2 mt-2">
+                            {getCategoryBadge(renderDetails.orbix_stories.category)}
+                            <span className="text-sm text-gray-500">
+                              Score: {renderDetails.orbix_stories.shock_score}/100
+                            </span>
+                          </div>
+                        </div>
+                      )}
+                      
+                      <div>
+                        <h3 className="font-semibold text-lg mb-2">Render Details</h3>
+                        <div className="space-y-2 text-sm">
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Template:</span>
+                            <span className="font-medium">{renderDetails.template || selectedRender.template}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Background:</span>
+                            <span className="font-medium">
+                              {renderDetails.background_type || selectedRender.background_type} (ID: {renderDetails.background_id || selectedRender.background_id})
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-gray-600">Created:</span>
+                            <span className="font-medium">{formatDate(renderDetails.created_at || selectedRender.created_at)}</span>
+                          </div>
+                          {renderDetails.updated_at && (
+                            <div className="flex justify-between">
+                              <span className="text-gray-600">Last Updated:</span>
+                              <span className="font-medium">{formatDate(renderDetails.updated_at)}</span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {renderDetails.error_message && (
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-4">
+                          <h3 className="font-semibold text-lg mb-2 text-red-800">Error</h3>
+                          <p className="text-red-700 text-sm">{renderDetails.error_message}</p>
+                        </div>
+                      )}
+
+                      <div className="flex gap-4 pt-4 border-t border-gray-200">
+                        {(renderDetails.render_status === 'PENDING' || renderDetails.render_status === 'PROCESSING' || selectedRender.render_status === 'PENDING' || selectedRender.render_status === 'PROCESSING') && (
+                          <button
+                            onClick={() => handleCancelRender(selectedRender.id)}
+                            className="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center justify-center gap-2"
+                          >
+                            <XCircle className="w-5 h-5" />
+                            Cancel Render
+                          </button>
+                        )}
+                        
+                        {(renderDetails.render_status === 'COMPLETED' || renderDetails.render_status === 'FAILED' || selectedRender.render_status === 'COMPLETED' || selectedRender.render_status === 'FAILED') && (
+                          <button
+                            onClick={() => handleRestartRender(selectedRender.id)}
+                            className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+                          >
+                            <RotateCw className="w-5 h-5" />
+                            Restart Render
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      Failed to load render details
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </V2AppShell>
+    </AuthGuard>
+  );
+}
+

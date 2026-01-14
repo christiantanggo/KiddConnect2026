@@ -73,6 +73,7 @@ export default function ModuleSettingsPage() {
     const paths = {
       'reviews': '/review-reply-ai/dashboard/settings',
       'phone-agent': '/tavari-ai-phone/dashboard/settings',
+      'orbix-network': '/dashboard/v2/modules/orbix-network/settings',
     };
     return paths[moduleKey] || null;
   };
@@ -82,6 +83,7 @@ export default function ModuleSettingsPage() {
     const paths = {
       'reviews': '/review-reply-ai/dashboard',
       'phone-agent': '/tavari-ai-phone/dashboard',
+      'orbix-network': '/dashboard/v2/modules/orbix-network/dashboard',
     };
     return paths[moduleKey] || `/dashboard/${moduleKey}`;
   };

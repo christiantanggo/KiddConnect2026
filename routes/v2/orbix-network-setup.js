@@ -1,0 +1,257 @@
+import express from 'express';
+import { authenticate } from '../../middleware/auth.js';
+import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
+import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { Business } from '../../models/Business.js';
+import { supabaseClient } from '../../config/database.js';
+import { AuditLog } from '../../models/v2/AuditLog.js';
+
+const router = express.Router();
+router.use(authenticate);
+router.use(requireBusinessContext);
+
+const MODULE_KEY = 'orbix-network';
+
+/**
+ * GET /api/v2/orbix-network/setup/status
+ * Get setup status and existing data for auto-fill
+ */
+router.get('/setup/status', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    
+    // Get existing setup state
+    const { data: setupState } = await supabaseClient
+      .from('module_setup_state')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('module_key', MODULE_KEY)
+      .maybeSingle();
+    
+    // Get existing business data for auto-fill
+    const business = await Business.findById(businessId);
+    
+    // Get existing module settings (if any)
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    
+    // Check what data already exists
+    const existingData = {
+      youtube_channel_id: moduleSettings?.settings?.youtube?.channel_id || '',
+      review_mode_enabled: moduleSettings?.settings?.review_mode?.enabled !== false,
+      auto_approve_minutes: moduleSettings?.settings?.review_mode?.auto_approve_minutes || 60,
+      youtube_visibility: moduleSettings?.settings?.publishing?.youtube_visibility || 'public',
+      enable_rumble: moduleSettings?.settings?.publishing?.enable_rumble || false,
+      background_random_mode: moduleSettings?.settings?.backgrounds?.random_mode || 'uniform',
+      shock_score_threshold: moduleSettings?.settings?.scoring?.shock_score_threshold || 65,
+      daily_video_cap: moduleSettings?.settings?.limits?.daily_video_cap || 5,
+      current_step: setupState?.current_step || 1,
+      completed_steps: setupState?.completed_steps || [],
+      is_complete: setupState?.is_complete || false,
+      setup_data: setupState?.setup_data || {}
+    };
+    
+    res.json({
+      setup_status: {
+        is_complete: existingData.is_complete,
+        current_step: existingData.current_step,
+        completed_steps: existingData.completed_steps
+      },
+      existing_data: existingData,
+      total_steps: 5
+    });
+  } catch (error) {
+    console.error('[GET /api/v2/orbix-network/setup/status] Error:', error);
+    res.status(500).json({ error: 'Failed to fetch setup status' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/setup/start
+ * Start setup process
+ */
+router.post('/setup/start', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    
+    // Create or update setup state
+    const { data: setupState, error } = await supabaseClient
+      .from('module_setup_state')
+      .upsert({
+        business_id: businessId,
+        module_key: MODULE_KEY,
+        current_step: 1,
+        completed_steps: [],
+        setup_data: {},
+        is_complete: false,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'business_id,module_key'
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      setup_state: setupState
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/setup/start] Error:', error);
+    res.status(500).json({ error: 'Failed to start setup' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/setup/save
+ * Save setup step data
+ */
+router.post('/setup/save', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const { step, stepData } = req.body;
+    
+    if (!step || !stepData) {
+      return res.status(400).json({ error: 'Step and stepData are required' });
+    }
+    
+    // Get current setup state (may not exist yet)
+    const { data: currentState, error: fetchError } = await supabaseClient
+      .from('module_setup_state')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('module_key', MODULE_KEY)
+      .maybeSingle(); // Use maybeSingle() instead of single() to handle no rows
+    
+    const existingSetupData = currentState?.setup_data || {};
+    const existingCompletedSteps = currentState?.completed_steps || [];
+    
+    // Merge new step data
+    const setupData = { ...existingSetupData };
+    setupData[`step${step}`] = stepData;
+    
+    // Add step to completed steps if not already there
+    const completedSteps = [...existingCompletedSteps];
+    if (!completedSteps.includes(step)) {
+      completedSteps.push(step);
+    }
+    
+    // Upsert setup state (create if doesn't exist, update if it does)
+    const { data: updatedState, error } = await supabaseClient
+      .from('module_setup_state')
+      .upsert({
+        business_id: businessId,
+        module_key: MODULE_KEY,
+        setup_data: setupData,
+        completed_steps: completedSteps,
+        current_step: step + 1,
+        is_complete: false,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'business_id,module_key'
+      })
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      setup_state: updatedState
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/setup/save] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to save setup step',
+      message: error.message 
+    });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/setup/complete
+ * Complete setup and save all settings
+ */
+router.post('/setup/complete', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    
+    // Get setup state
+    const { data: setupState, error: setupStateError } = await supabaseClient
+      .from('module_setup_state')
+      .select('*')
+      .eq('business_id', businessId)
+      .eq('module_key', MODULE_KEY)
+      .maybeSingle();
+    
+    if (setupStateError && setupStateError.code !== 'PGRST116') {
+      throw setupStateError;
+    }
+    
+    // Get existing module settings (YouTube credentials are stored here from OAuth)
+    const existingSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    const existingYoutubeSettings = existingSettings?.settings?.youtube || {};
+    
+    // Build module settings from setup data, preserving existing YouTube settings
+    const moduleSettings = {
+      youtube: existingYoutubeSettings, // Preserve YouTube OAuth credentials
+      review_mode: {
+        enabled: setupState?.setup_data?.step3?.review_mode_enabled !== false,
+        auto_approve_minutes: setupState?.setup_data?.step3?.auto_approve_minutes || 60
+      },
+      publishing: {
+        youtube_visibility: setupState?.setup_data?.step4?.youtube_visibility || 'public',
+        enable_rumble: setupState?.setup_data?.step4?.enable_rumble || false
+      },
+      scoring: {
+        shock_score_threshold: setupState?.setup_data?.step3?.shock_score_threshold || 65
+      },
+      backgrounds: {
+        random_mode: setupState?.setup_data?.step5?.background_random_mode || 'uniform'
+      },
+      limits: {
+        daily_video_cap: setupState?.setup_data?.step4?.daily_video_cap || 5
+      }
+    };
+    
+    // Save module settings
+    await ModuleSettings.update(businessId, MODULE_KEY, moduleSettings);
+    
+    // Mark setup as complete (create if doesn't exist)
+    await supabaseClient
+      .from('module_setup_state')
+      .upsert({
+        business_id: businessId,
+        module_key: MODULE_KEY,
+        is_complete: true,
+        completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'business_id,module_key'
+      });
+    
+    // Log audit event
+    await AuditLog.create({
+      business_id: businessId,
+      user_id: req.user.id,
+      action: 'module_setup_completed',
+      resource_type: 'module_setup',
+      resource_id: null,
+      metadata: { module_key: MODULE_KEY }
+    }).catch(err => console.error('[completeSetup] Failed to log audit:', err));
+    
+    res.json({
+      success: true,
+      message: 'Setup completed successfully'
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/setup/complete] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to complete setup',
+      message: error.message
+    });
+  }
+});
+
+export default router;
+
