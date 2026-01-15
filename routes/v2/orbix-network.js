@@ -208,6 +208,16 @@ router.post('/renders/:id/restart', async (req, res) => {
       return res.status(400).json({ error: 'Can only restart COMPLETED or FAILED renders' });
     }
     
+    // Get full render with story and script for processing
+    const { data: fullRender, error: fullRenderError } = await supabaseClient
+      .from('orbix_renders')
+      .select('*, orbix_stories(*), orbix_scripts(*)')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .single();
+    
+    if (fullRenderError) throw fullRenderError;
+    
     // Reset render status to PENDING and clear output/error fields
     const { data: updatedRender, error: updateError } = await supabaseClient
       .from('orbix_renders')
@@ -221,7 +231,7 @@ router.post('/renders/:id/restart', async (req, res) => {
       })
       .eq('id', id)
       .eq('business_id', businessId)
-      .select('*, orbix_stories(*), orbix_scripts(*)')
+      .select()
       .single();
     
     if (updateError) throw updateError;
@@ -230,7 +240,7 @@ router.post('/renders/:id/restart', async (req, res) => {
     
     // Immediately trigger render job processing for this render
     try {
-      const { processRenderJob } = await import('../services/orbix-network/video-renderer.js');
+      const { processRenderJob } = await import('../../services/orbix-network/video-renderer.js');
       console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Triggering immediate render job for render ${id}...`);
       
       // Update status to PROCESSING first
@@ -242,8 +252,14 @@ router.post('/renders/:id/restart', async (req, res) => {
         })
         .eq('id', id);
       
+      console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} status updated to PROCESSING, starting background job...`);
+      
       // Process the render in the background (don't wait for it)
-      processRenderJob(updatedRender)
+      // Use fullRender which includes story and script data
+      processRenderJob({
+        ...fullRender,
+        render_status: 'PROCESSING' // Update status in the render object
+      })
         .then(async (result) => {
           console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Background render job completed for ${id}:`, result.status);
           
@@ -257,6 +273,7 @@ router.post('/renders/:id/restart', async (req, res) => {
                 updated_at: new Date().toISOString()
               })
               .eq('id', id);
+            console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} marked as COMPLETED`);
           } else {
             await supabaseClient
               .from('orbix_renders')
@@ -266,10 +283,12 @@ router.post('/renders/:id/restart', async (req, res) => {
                 updated_at: new Date().toISOString()
               })
               .eq('id', id);
+            console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} marked as FAILED:`, result.error);
           }
         })
         .catch(async (error) => {
           console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Background render job failed for ${id}:`, error);
+          console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error stack:`, error.stack);
           await supabaseClient
             .from('orbix_renders')
             .update({
@@ -278,9 +297,11 @@ router.post('/renders/:id/restart', async (req, res) => {
               updated_at: new Date().toISOString()
             })
             .eq('id', id);
+          console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} marked as FAILED due to error`);
         });
     } catch (processError) {
       console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Failed to trigger render job:`, processError);
+      console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error stack:`, processError.stack);
       // Don't fail the restart - just log the error
       // The scheduled job will pick it up eventually
     }
