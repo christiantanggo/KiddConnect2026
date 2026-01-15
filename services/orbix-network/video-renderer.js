@@ -406,8 +406,24 @@ async function updateRenderProgress(renderId, progress) {
         updated_at: new Date().toISOString()
       })
       .eq('id', renderId);
+    console.log(`[Orbix Video Renderer] Updated progress for render ${renderId}: ${Math.round(progress)}%`);
   } catch (error) {
-    console.error(`[Orbix Video Renderer] Error updating progress for render ${renderId}:`, error);
+    // If progress_percentage column doesn't exist, just update updated_at
+    if (error.message && (error.message.includes('progress_percentage') || error.message.includes('schema cache'))) {
+      console.log(`[Orbix Video Renderer] Progress column not found, skipping progress update for render ${renderId} (${Math.round(progress)}%)`);
+      try {
+        await supabaseClient
+          .from('orbix_renders')
+          .update({ 
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', renderId);
+      } catch (updateError) {
+        console.error(`[Orbix Video Renderer] Error updating timestamp for render ${renderId}:`, updateError.message);
+      }
+    } else {
+      console.error(`[Orbix Video Renderer] Error updating progress for render ${renderId}:`, error.message);
+    }
     // Don't throw - progress updates are non-critical
   }
 }
