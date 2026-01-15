@@ -290,7 +290,6 @@ export async function renderVideo(renderJob, script, story, progressCallback = n
       }
     }, 2000); // Update every 2 seconds
     
-    let stdout, stderr;
     let result;
     try {
       result = await ffmpegPromise;
