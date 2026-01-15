@@ -150,13 +150,33 @@ async function generateAudio(script) {
     
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     
-    // Get script text
-    const scriptText = script.script_text || script.text || '';
-    if (!scriptText) {
-      throw new Error('Script text is empty');
+    // Build script text from individual fields
+    // Script structure: hook, what_happened, why_it_matters, what_happens_next, cta_line
+    let scriptText = '';
+    
+    // Check if script has the new structure (individual fields) or old structure (script_text/text)
+    if (script.script_text || script.text) {
+      // Old structure - use script_text or text field
+      scriptText = script.script_text || script.text || '';
+    } else {
+      // New structure - build from individual fields
+      const parts = [];
+      
+      if (script.hook) parts.push(script.hook);
+      if (script.what_happened) parts.push(script.what_happened);
+      if (script.why_it_matters) parts.push(script.why_it_matters);
+      if (script.what_happens_next) parts.push(script.what_happens_next);
+      if (script.cta_line) parts.push(script.cta_line);
+      
+      scriptText = parts.join('. ');
+    }
+    
+    if (!scriptText || scriptText.trim().length === 0) {
+      throw new Error(`Script text is empty. Script object: ${JSON.stringify(script)}`);
     }
     
     console.log(`[Orbix Video Renderer] Generating TTS audio for script (${scriptText.length} chars)...`);
+    console.log(`[Orbix Video Renderer] Script preview: ${scriptText.substring(0, 100)}...`);
     
     // Generate speech using OpenAI TTS
     const mp3 = await openai.audio.speech.create({
