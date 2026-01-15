@@ -671,11 +671,17 @@ try {
   // 4. Render Videos (every 10 minutes)
   const renderJob = async () => {
     try {
-      console.log('[Orbix Jobs] Running render job...');
-      await runRenderJob();
+      console.log('[Orbix Jobs] ========== RENDER JOB TRIGGERED (SCHEDULED) ==========');
+      console.log('[Orbix Jobs] Running render job at:', new Date().toISOString());
+      const result = await runRenderJob();
+      console.log('[Orbix Jobs] Render job completed:', result);
+      console.log('[Orbix Jobs] ========== RENDER JOB FINISHED ==========');
     } catch (error) {
+      console.error('[Orbix Jobs] ========== RENDER JOB ERROR (SCHEDULED) ==========');
       console.error('[Orbix Jobs] Render job error:', error.message);
       console.error('[Orbix Jobs] Render job error stack:', error.stack);
+      console.error('[Orbix Jobs] Full error:', error);
+      console.error('[Orbix Jobs] ========== END RENDER JOB ERROR ==========');
       // Don't crash the server - just log the error
     }
   };
