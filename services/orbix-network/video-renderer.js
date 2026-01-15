@@ -122,6 +122,16 @@ async function animateImageToVideo(imageUrl, duration = VIDEO_DURATION) {
     const ffmpegCommand = `ffmpeg -loop 1 -i "${imagePath}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=1080*1.1:1920*1.1,zoompan=z='zoom+0.001':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${duration * 30}:s=1080x1920" -t ${duration} -pix_fmt yuv420p -c:v libx264 "${videoPath}"`;
     
     console.log('[Orbix Video Renderer] Animating image to video...');
+    console.log('[Orbix Video Renderer] FFmpeg command:', ffmpegCommand);
+    try {
+      const { stdout, stderr } = await execAsync(ffmpegCommand);
+      console.log('[Orbix Video Renderer] Animation completed successfully');
+    } catch (error) {
+      if (error.message && error.message.includes('not recognized')) {
+        throw new Error('FFmpeg is not installed. Please install FFmpeg and ensure it is in your system PATH. See: https://ffmpeg.org/download.html');
+      }
+      throw error;
+    }
     const { stdout, stderr } = await execAsync(ffmpegCommand);
     
     // Clean up temp image
@@ -282,10 +292,9 @@ export async function renderVideo(renderJob, script, story, progressCallback = n
     }, 2000); // Update every 2 seconds
     
     let stdout, stderr;
+    let result;
     try {
-      const result = await ffmpegPromise;
-      stdout = result.stdout;
-      stderr = result.stderr;
+      result = await ffmpegPromise;
       clearInterval(progressInterval);
       console.log(`[Orbix Video Renderer] FFmpeg command completed successfully (took ${((Date.now() - startTime) / 1000).toFixed(0)}s)`);
     } catch (error) {
@@ -293,8 +302,16 @@ export async function renderVideo(renderJob, script, story, progressCallback = n
       console.error(`[Orbix Video Renderer] FFmpeg command failed:`, error.message);
       console.error(`[Orbix Video Renderer] FFmpeg error code:`, error.code);
       console.error(`[Orbix Video Renderer] FFmpeg stderr:`, error.stderr?.substring(0, 1000));
+      
+      // Provide helpful error message if FFmpeg is not installed
+      if (error.message && (error.message.includes('not recognized') || error.message.includes('not found'))) {
+        throw new Error('FFmpeg is not installed or not in your system PATH. Please install FFmpeg:\n\nWindows: Download from https://www.gyan.dev/ffmpeg/builds/ or use: choco install ffmpeg\nMac: brew install ffmpeg\nLinux: sudo apt-get install ffmpeg\n\nAfter installation, restart your development server.');
+      }
       throw error;
     }
+    
+    const stdout = result.stdout;
+    const stderr = result.stderr;
     
     if (progressCallback) progressCallback(0.9); // 90% - FFmpeg complete
     
