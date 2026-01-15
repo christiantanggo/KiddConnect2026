@@ -43,9 +43,13 @@ export default function OrbixNetworkDashboard() {
 
   useEffect(() => {
     // Only check setup once on mount
+    // Add a small delay to stagger requests and avoid hitting rate limits on initial load
     if (!hasCheckedSetupRef.current && !isCheckingSetupRef.current) {
       hasCheckedSetupRef.current = true;
-      checkSetupAndLoadData();
+      // Delay by 500ms to let other components (header, sidebar) make their requests first
+      setTimeout(() => {
+        checkSetupAndLoadData();
+      }, 500);
     }
   }, []);
 
