@@ -115,8 +115,8 @@ export default function OrbixNetworkDashboard() {
         return;
       }
       
-      console.log('[Orbix Dashboard] Auto-refresh triggered - reloading dashboard data...');
-      loadDashboardData();
+      console.log('[Orbix Dashboard] Auto-refresh triggered - checking render status only...');
+      checkRenderStatus();
     }, 5000);
     
     return () => {
@@ -192,6 +192,53 @@ export default function OrbixNetworkDashboard() {
       setLoading(false);
       isCheckingSetupRef.current = false;
       console.log('[Orbix Dashboard] checkSetupAndLoadData complete');
+    }
+  };
+
+  // Lightweight function to check render status only (no page reload)
+  const checkRenderStatus = async () => {
+    // Don't check if rate limited
+    if (rateLimitedRef.current) {
+      return;
+    }
+    
+    try {
+      // Only fetch renders - don't reload everything
+      const rendersRes = await orbixNetworkAPI.getRenders({ limit: 5 });
+      
+      // Check if any renders changed status (completed/failed)
+      const previousRenders = rendersRef.current;
+      const newRenders = rendersRes.data.renders || [];
+      
+      const hadActiveRenders = previousRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      const hasActiveRenders = newRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      
+      // Only update renders state (not loading, not other data)
+      setRenders(newRenders);
+      
+      // If renders completed/failed, reload full dashboard data once
+      if (hadActiveRenders && !hasActiveRenders) {
+        console.log('[Orbix Dashboard] Renders completed - reloading full dashboard data');
+        // Load full dashboard data in background without setting loading state
+        loadDashboardData();
+      }
+    } catch (error) {
+      // Silently fail - don't disrupt the UI
+      if (error?.response?.status === 429) {
+        console.warn('[Orbix Dashboard] Rate limited during render status check');
+        rateLimitedRef.current = true;
+        
+        // Clear auto-refresh interval
+        if (autoRefreshIntervalRef.current) {
+          clearInterval(autoRefreshIntervalRef.current);
+          autoRefreshIntervalRef.current = null;
+        }
+        
+        // Clear rate limit after 60 seconds
+        setTimeout(() => {
+          rateLimitedRef.current = false;
+        }, 60000);
+      }
     }
   };
 
