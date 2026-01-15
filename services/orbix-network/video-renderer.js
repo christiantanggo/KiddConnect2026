@@ -127,12 +127,11 @@ async function animateImageToVideo(imageUrl, duration = VIDEO_DURATION) {
       const { stdout, stderr } = await execAsync(ffmpegCommand);
       console.log('[Orbix Video Renderer] Animation completed successfully');
     } catch (error) {
-      if (error.message && error.message.includes('not recognized')) {
-        throw new Error('FFmpeg is not installed. Please install FFmpeg and ensure it is in your system PATH. See: https://ffmpeg.org/download.html');
+      if (error.message && (error.message.includes('not recognized') || error.message.includes('not found'))) {
+        throw new Error('FFmpeg is not installed or not in your system PATH. Please install FFmpeg:\n\nWindows: Download from https://www.gyan.dev/ffmpeg/builds/ or use: choco install ffmpeg\nMac: brew install ffmpeg\nLinux: sudo apt-get install ffmpeg\n\nAfter installation, restart your development server.');
       }
       throw error;
     }
-    const { stdout, stderr } = await execAsync(ffmpegCommand);
     
     // Clean up temp image
     await unlinkAsync(imagePath);
