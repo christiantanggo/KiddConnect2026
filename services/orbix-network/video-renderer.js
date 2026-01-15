@@ -257,26 +257,44 @@ export async function renderVideo(renderJob, script, story, progressCallback = n
     
     if (progressCallback) progressCallback(0.6); // 60% - Command built
     
-    // Execute FFmpeg
+    // Execute FFmpeg with timeout and better error handling
     console.log(`[Orbix Video Renderer] Executing FFmpeg command...`);
+    console.log(`[Orbix Video Renderer] FFmpeg command preview: ${ffmpegCommand.substring(0, 200)}...`);
+    
+    // Add timeout to prevent hanging (10 minutes max for video rendering)
+    const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+    const startTime = Date.now();
     
     // For long-running FFmpeg, we could monitor progress, but for now we'll estimate
     // FFmpeg rendering typically takes the longest, so we'll simulate progress
-    const ffmpegPromise = execAsync(ffmpegCommand);
+    const ffmpegPromise = execAsync(ffmpegCommand, { timeout: TIMEOUT_MS });
     
     // Simulate progress during FFmpeg execution (60% -> 90%)
     const progressInterval = setInterval(() => {
       if (progressCallback) {
         // Estimate progress based on time (this is a rough estimate)
         // In a real implementation, you'd parse FFmpeg output for actual progress
-        const elapsed = Date.now() - (renderJob.created_at ? new Date(renderJob.created_at).getTime() : Date.now());
+        const elapsed = Date.now() - startTime;
         const estimatedProgress = Math.min(0.9, 0.6 + (elapsed / 60000) * 0.3); // Assume ~1 minute for rendering
         progressCallback(estimatedProgress);
+        console.log(`[Orbix Video Renderer] Estimated render progress: ${(estimatedProgress * 100).toFixed(1)}% (${(elapsed / 1000).toFixed(0)}s elapsed)`);
       }
     }, 2000); // Update every 2 seconds
     
-    const { stdout, stderr } = await ffmpegPromise;
-    clearInterval(progressInterval);
+    let stdout, stderr;
+    try {
+      const result = await ffmpegPromise;
+      stdout = result.stdout;
+      stderr = result.stderr;
+      clearInterval(progressInterval);
+      console.log(`[Orbix Video Renderer] FFmpeg command completed successfully (took ${((Date.now() - startTime) / 1000).toFixed(0)}s)`);
+    } catch (error) {
+      clearInterval(progressInterval);
+      console.error(`[Orbix Video Renderer] FFmpeg command failed:`, error.message);
+      console.error(`[Orbix Video Renderer] FFmpeg error code:`, error.code);
+      console.error(`[Orbix Video Renderer] FFmpeg stderr:`, error.stderr?.substring(0, 1000));
+      throw error;
+    }
     
     if (progressCallback) progressCallback(0.9); // 90% - FFmpeg complete
     
