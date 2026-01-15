@@ -423,6 +423,7 @@ export async function runRenderJob() {
         }
         
         // Process pending renders (limited for now - rendering is resource-intensive)
+        console.log(`[Orbix Jobs] Checking for pending renders for business ${businessId}...`);
         const { data: pendingRenders, error: rendersError } = await supabaseClient
           .from('orbix_renders')
           .select('*, orbix_stories(*), orbix_scripts(*)')
@@ -430,7 +431,15 @@ export async function runRenderJob() {
           .eq('render_status', 'PENDING')
           .limit(1); // Process 1 at a time (rendering is resource-intensive)
         
-        if (rendersError) throw rendersError;
+        if (rendersError) {
+          console.error(`[Orbix Jobs] Error fetching pending renders for business ${businessId}:`, rendersError);
+          throw rendersError;
+        }
+        
+        console.log(`[Orbix Jobs] Found ${pendingRenders?.length || 0} pending renders for business ${businessId}`);
+        if (pendingRenders && pendingRenders.length > 0) {
+          console.log(`[Orbix Jobs] Pending render IDs:`, pendingRenders.map(r => r.id));
+        }
         
         if (pendingRenders && pendingRenders.length > 0) {
           for (const render of pendingRenders) {
@@ -536,6 +545,10 @@ export async function runRenderJob() {
         // Continue with next business
       }
     }
+    
+    console.log('[Orbix Jobs] ========== RENDER JOB COMPLETE ==========');
+    console.log('[Orbix Jobs] Renders created:', totalRendersCreated);
+    console.log('[Orbix Jobs] Renders processed:', totalRendersProcessed);
     
     return {
       success: true,
