@@ -248,8 +248,8 @@ router.post('/renders/:id/restart', async (req, res) => {
       if (!fullRender) {
         throw new Error('Full render data not found');
       }
-      if (!fullRender.orbix_stories || !fullRender.orbix_scripts) {
-        throw new Error('Story or script data missing from render');
+      if (!fullRender.story_id || !fullRender.script_id) {
+        throw new Error(`Story or script ID missing from render. story_id: ${fullRender.story_id}, script_id: ${fullRender.script_id}`);
       }
       
       console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Triggering immediate render job for render ${id}...`);
@@ -267,8 +267,8 @@ router.post('/renders/:id/restart', async (req, res) => {
       console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} status updated to PROCESSING, starting background job...`);
       
       // Process the render in the background (don't wait for it)
-      // Use fullRender which includes story and script data, but remove the nested objects
-      // processRenderJob expects a render object with story_id and script_id (not nested)
+      // processRenderJob expects a render object with story_id and script_id
+      // It will fetch the story and script itself from the database
       processRenderJob({
         id: fullRender.id,
         business_id: fullRender.business_id,
@@ -324,14 +324,25 @@ router.post('/renders/:id/restart', async (req, res) => {
       console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error type:`, processError?.constructor?.name);
       console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error message:`, processError.message);
       console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error stack:`, processError.stack);
-      // Don't fail the restart - just log the error
-      // The scheduled job will pick it up eventually
+      // Return the actual error to the client instead of a generic message
+      return res.status(500).json({ 
+        error: 'Failed to restart render', 
+        details: processError.message,
+        stack: process.env.NODE_ENV === 'development' ? processError.stack : undefined
+      });
     }
     
     res.json({ render: updatedRender });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error:', error);
-    res.status(500).json({ error: 'Failed to restart render' });
+    console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error type:', error?.constructor?.name);
+    console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error message:', error.message);
+    console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error stack:', error.stack);
+    res.status(500).json({ 
+      error: 'Failed to restart render',
+      details: error.message,
+      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
 
