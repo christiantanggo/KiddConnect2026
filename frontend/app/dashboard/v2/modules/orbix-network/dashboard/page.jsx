@@ -547,8 +547,6 @@ export default function OrbixNetworkDashboard() {
         }
       }
       
-      const duration = Date.now() - startTime;
-      console.log('[Orbix Dashboard] Job function completed in', duration, 'ms');
       console.log('[Orbix Dashboard] Job response:', response);
       
       // For scrape job, show detailed results
