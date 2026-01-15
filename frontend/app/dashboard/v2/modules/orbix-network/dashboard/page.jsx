@@ -213,21 +213,45 @@ export default function OrbixNetworkDashboard() {
       // Get previous renders state
       const previousRenders = rendersRef.current;
       
-      // Log current render states
+      // Log current render states with full details
       console.log('[Orbix Dashboard] Previous renders count:', previousRenders.length);
-      console.log('[Orbix Dashboard] Previous active renders:', previousRenders
-        .filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING')
-        .map(r => ({ id: r.id, status: r.render_status, story_id: r.story_id })));
+      const previousActiveRenders = previousRenders.filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      console.log('[Orbix Dashboard] Previous active renders count:', previousActiveRenders.length);
+      previousActiveRenders.forEach(r => {
+        console.log(`[Orbix Dashboard] Previous active render ID ${r.id}:`, {
+          status: r.render_status,
+          story_id: r.story_id,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+          progress: r.progress,
+          error_message: r.error_message
+        });
+      });
       
       console.log('[Orbix Dashboard] New renders count:', newRenders.length);
-      console.log('[Orbix Dashboard] New renders:', newRenders.map(r => ({
+      const newActiveRenders = newRenders.filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      console.log('[Orbix Dashboard] New active renders count:', newActiveRenders.length);
+      newActiveRenders.forEach(r => {
+        console.log(`[Orbix Dashboard] New active render ID ${r.id}:`, {
+          status: r.render_status,
+          story_id: r.story_id,
+          created_at: r.created_at,
+          updated_at: r.updated_at,
+          progress: r.progress,
+          error_message: r.error_message
+        });
+      });
+      
+      // Log all renders (including completed/failed) for comparison
+      console.log('[Orbix Dashboard] All previous renders:', previousRenders.map(r => ({
         id: r.id,
         status: r.render_status,
-        story_id: r.story_id,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-        progress: r.progress,
-        error_message: r.error_message
+        updated_at: r.updated_at
+      })));
+      console.log('[Orbix Dashboard] All new renders:', newRenders.map(r => ({
+        id: r.id,
+        status: r.render_status,
+        updated_at: r.updated_at
       })));
       
       // Check status changes
@@ -238,18 +262,39 @@ export default function OrbixNetworkDashboard() {
       console.log('[Orbix Dashboard] Has active renders:', hasActiveRenders);
       
       // Check for status changes in individual renders
+      let statusChanged = false;
       previousRenders.forEach(prevRender => {
         const newRender = newRenders.find(r => r.id === prevRender.id);
-        if (newRender && newRender.render_status !== prevRender.render_status) {
-          console.log(`[Orbix Dashboard] Render ${prevRender.id} status changed: ${prevRender.render_status} → ${newRender.render_status}`);
-          if (newRender.progress !== undefined) {
-            console.log(`[Orbix Dashboard] Render ${prevRender.id} progress: ${newRender.progress}%`);
-          }
-          if (newRender.error_message) {
-            console.log(`[Orbix Dashboard] Render ${prevRender.id} error: ${newRender.error_message}`);
+        if (newRender) {
+          if (newRender.render_status !== prevRender.render_status) {
+            statusChanged = true;
+            console.log(`[Orbix Dashboard] ⚠️ RENDER STATUS CHANGED: ID ${prevRender.id}`);
+            console.log(`[Orbix Dashboard]   Status: ${prevRender.render_status} → ${newRender.render_status}`);
+            if (newRender.progress !== undefined && newRender.progress !== prevRender.progress) {
+              console.log(`[Orbix Dashboard]   Progress: ${prevRender.progress || 0}% → ${newRender.progress}%`);
+            }
+            if (newRender.error_message) {
+              console.log(`[Orbix Dashboard]   Error: ${newRender.error_message}`);
+            }
+            if (newRender.updated_at !== prevRender.updated_at) {
+              console.log(`[Orbix Dashboard]   Updated: ${prevRender.updated_at} → ${newRender.updated_at}`);
+            }
+          } else if (newRender.render_status === 'PENDING' || newRender.render_status === 'PROCESSING') {
+            // Even if status hasn't changed, check if updated_at changed (render is still processing)
+            if (newRender.updated_at !== prevRender.updated_at) {
+              console.log(`[Orbix Dashboard] Render ${prevRender.id} still ${newRender.render_status} - updated_at changed: ${prevRender.updated_at} → ${newRender.updated_at}`);
+            }
+            if (newRender.progress !== undefined && newRender.progress !== prevRender.progress) {
+              console.log(`[Orbix Dashboard] ⚡ Render ${prevRender.id} progress updated: ${prevRender.progress || 0}% → ${newRender.progress}%`);
+            }
           }
         }
       });
+      
+      if (!statusChanged && hasActiveRenders) {
+        console.log('[Orbix Dashboard] ⚠️ No status changes detected - renders may be stuck in', 
+          newActiveRenders.map(r => `${r.render_status} (ID: ${r.id})`).join(', '));
+      }
       
       // Only update renders state (not loading, not other data)
       setRenders(newRenders);
