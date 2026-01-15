@@ -2,6 +2,25 @@
 // Tavari Voice Agent - VAPI Integration
 // BULLETPROOF VERSION - Won't crash on startup
 
+// Polyfill for File API (required by undici/fetch in Node.js 18)
+// This must be done BEFORE any other imports
+// File API is available in Node.js 20+ but not in Node.js 18
+if (typeof globalThis.File === 'undefined' && typeof Blob !== 'undefined') {
+  // Simple File polyfill using Blob (which exists in Node.js 18)
+  globalThis.File = class File extends Blob {
+    constructor(fileBits, fileName, options = {}) {
+      super(fileBits, options);
+      this.name = fileName;
+      this.lastModified = options.lastModified || Date.now();
+      this.webkitRelativePath = options.webkitRelativePath || '';
+    }
+    
+    get [Symbol.toStringTag]() {
+      return 'File';
+    }
+  };
+}
+
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
