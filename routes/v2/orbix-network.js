@@ -219,16 +219,18 @@ router.post('/renders/:id/restart', async (req, res) => {
     if (fullRenderError) throw fullRenderError;
     
     // Reset render status to PENDING and clear output/error fields
+    // Note: progress_percentage column may not exist if migration hasn't run yet
+    const updateData = {
+      render_status: 'PENDING',
+      output_url: null,
+      error_message: null,
+      completed_at: null,
+      updated_at: new Date().toISOString()
+    };
+    
     const { data: updatedRender, error: updateError } = await supabaseClient
       .from('orbix_renders')
-      .update({
-        render_status: 'PENDING',
-        output_url: null,
-        error_message: null,
-        completed_at: null,
-        progress_percentage: null,
-        updated_at: new Date().toISOString()
-      })
+      .update(updateData)
       .eq('id', id)
       .eq('business_id', businessId)
       .select()
