@@ -199,31 +199,75 @@ export default function OrbixNetworkDashboard() {
   const checkRenderStatus = async () => {
     // Don't check if rate limited
     if (rateLimitedRef.current) {
+      console.log('[Orbix Dashboard] checkRenderStatus skipped - rate limited');
       return;
     }
     
     try {
+      console.log('[Orbix Dashboard] ========== CHECK RENDER STATUS START ==========');
+      
       // Only fetch renders - don't reload everything
       const rendersRes = await orbixNetworkAPI.getRenders({ limit: 5 });
-      
-      // Check if any renders changed status (completed/failed)
-      const previousRenders = rendersRef.current;
       const newRenders = rendersRes.data.renders || [];
       
+      // Get previous renders state
+      const previousRenders = rendersRef.current;
+      
+      // Log current render states
+      console.log('[Orbix Dashboard] Previous renders count:', previousRenders.length);
+      console.log('[Orbix Dashboard] Previous active renders:', previousRenders
+        .filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING')
+        .map(r => ({ id: r.id, status: r.render_status, story_id: r.story_id })));
+      
+      console.log('[Orbix Dashboard] New renders count:', newRenders.length);
+      console.log('[Orbix Dashboard] New renders:', newRenders.map(r => ({
+        id: r.id,
+        status: r.render_status,
+        story_id: r.story_id,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        progress: r.progress,
+        error_message: r.error_message
+      })));
+      
+      // Check status changes
       const hadActiveRenders = previousRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
       const hasActiveRenders = newRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
+      
+      console.log('[Orbix Dashboard] Had active renders:', hadActiveRenders);
+      console.log('[Orbix Dashboard] Has active renders:', hasActiveRenders);
+      
+      // Check for status changes in individual renders
+      previousRenders.forEach(prevRender => {
+        const newRender = newRenders.find(r => r.id === prevRender.id);
+        if (newRender && newRender.render_status !== prevRender.render_status) {
+          console.log(`[Orbix Dashboard] Render ${prevRender.id} status changed: ${prevRender.render_status} → ${newRender.render_status}`);
+          if (newRender.progress !== undefined) {
+            console.log(`[Orbix Dashboard] Render ${prevRender.id} progress: ${newRender.progress}%`);
+          }
+          if (newRender.error_message) {
+            console.log(`[Orbix Dashboard] Render ${prevRender.id} error: ${newRender.error_message}`);
+          }
+        }
+      });
       
       // Only update renders state (not loading, not other data)
       setRenders(newRenders);
       
       // If renders completed/failed, reload full dashboard data once
       if (hadActiveRenders && !hasActiveRenders) {
-        console.log('[Orbix Dashboard] Renders completed - reloading full dashboard data');
+        console.log('[Orbix Dashboard] All renders completed/failed - reloading full dashboard data');
         // Load full dashboard data in background without setting loading state
         loadDashboardData();
       }
+      
+      console.log('[Orbix Dashboard] ========== CHECK RENDER STATUS SUCCESS ==========');
     } catch (error) {
-      // Silently fail - don't disrupt the UI
+      console.error('[Orbix Dashboard] ========== CHECK RENDER STATUS ERROR ==========');
+      console.error('[Orbix Dashboard] Error:', error);
+      console.error('[Orbix Dashboard] Error response:', error?.response);
+      console.error('[Orbix Dashboard] Error status:', error?.response?.status);
+      
       if (error?.response?.status === 429) {
         console.warn('[Orbix Dashboard] Rate limited during render status check');
         rateLimitedRef.current = true;
@@ -428,6 +472,7 @@ export default function OrbixNetworkDashboard() {
     console.log('[Orbix Dashboard] ========== RESTART RENDER START ==========');
     console.log('[Orbix Dashboard] Render ID:', renderId);
     console.log('[Orbix Dashboard] Current render details:', selectedRender);
+    console.log('[Orbix Dashboard] Current time:', new Date().toISOString());
     
     try {
       console.log('[Orbix Dashboard] Calling orbixNetworkAPI.restartRender...');
@@ -437,7 +482,18 @@ export default function OrbixNetworkDashboard() {
       
       const duration = Date.now() - startTime;
       console.log('[Orbix Dashboard] restartRender API call completed in', duration, 'ms');
-      console.log('[Orbix Dashboard] API Response:', response);
+      console.log('[Orbix Dashboard] API Response status:', response?.status);
+      console.log('[Orbix Dashboard] API Response data:', response?.data);
+      
+      if (response?.data?.render) {
+        console.log('[Orbix Dashboard] Restarted render:', {
+          id: response.data.render.id,
+          status: response.data.render.render_status,
+          story_id: response.data.render.story_id,
+          created_at: response.data.render.created_at,
+          updated_at: response.data.render.updated_at
+        });
+      }
       
       success('Render restarted. It will be processed again.');
       setSelectedRender(null);
@@ -467,6 +523,7 @@ export default function OrbixNetworkDashboard() {
     console.log('[Orbix Dashboard] ========== TRIGGER JOB START ==========');
     console.log('[Orbix Dashboard] Job name:', jobName);
     console.log('[Orbix Dashboard] Job function:', jobFunction?.name || 'anonymous');
+    console.log('[Orbix Dashboard] Current time:', new Date().toISOString());
     
     try {
       setRunningJobs(prev => ({ ...prev, [jobName]: true }));
@@ -474,6 +531,21 @@ export default function OrbixNetworkDashboard() {
       const startTime = Date.now();
       
       const response = await jobFunction();
+      
+      const duration = Date.now() - startTime;
+      console.log('[Orbix Dashboard] Job function completed in', duration, 'ms');
+      console.log('[Orbix Dashboard] Job response status:', response?.status);
+      console.log('[Orbix Dashboard] Job response data:', response?.data);
+      
+      if (jobName === 'render' && response?.data) {
+        console.log('[Orbix Dashboard] Render job triggered - response:', response.data);
+        if (response.data.renders_created) {
+          console.log('[Orbix Dashboard] Renders created:', response.data.renders_created);
+        }
+        if (response.data.message) {
+          console.log('[Orbix Dashboard] Message:', response.data.message);
+        }
+      }
       
       const duration = Date.now() - startTime;
       console.log('[Orbix Dashboard] Job function completed in', duration, 'ms');
