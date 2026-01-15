@@ -418,55 +418,94 @@ async function updateRenderProgress(renderId, progress) {
  * @returns {Promise<Object>} Updated render job with output URL
  */
 export async function processRenderJob(renderJob) {
+  console.log(`[Orbix Video Renderer] ========== PROCESS RENDER JOB START ==========`);
+  console.log(`[Orbix Video Renderer] Render ID: ${renderJob.id}`);
+  console.log(`[Orbix Video Renderer] Story ID: ${renderJob.story_id}`);
+  console.log(`[Orbix Video Renderer] Script ID: ${renderJob.script_id}`);
+  
   try {
     // Progress: 0% - Starting
+    console.log(`[Orbix Video Renderer] Setting progress to 0%...`);
     await updateRenderProgress(renderJob.id, 0);
     
     // Get story and script (10% progress)
-    const { data: story } = await supabaseClient
+    console.log(`[Orbix Video Renderer] Fetching story ${renderJob.story_id}...`);
+    const { data: story, error: storyError } = await supabaseClient
       .from('orbix_stories')
       .select('*')
       .eq('id', renderJob.story_id)
       .single();
     
-    const { data: script } = await supabaseClient
+    if (storyError) {
+      throw new Error(`Failed to fetch story: ${storyError.message}`);
+    }
+    console.log(`[Orbix Video Renderer] Story fetched:`, story ? 'found' : 'not found');
+    
+    console.log(`[Orbix Video Renderer] Fetching script ${renderJob.script_id}...`);
+    const { data: script, error: scriptError } = await supabaseClient
       .from('orbix_scripts')
       .select('*')
       .eq('id', renderJob.script_id)
       .single();
     
+    if (scriptError) {
+      throw new Error(`Failed to fetch script: ${scriptError.message}`);
+    }
+    console.log(`[Orbix Video Renderer] Script fetched:`, script ? 'found' : 'not found');
+    
     if (!story || !script) {
       throw new Error('Story or script not found');
     }
     
+    console.log(`[Orbix Video Renderer] Setting progress to 10%...`);
     await updateRenderProgress(renderJob.id, 10);
     
     // Render video (10% -> 80% progress)
     // This is the longest step, so we'll simulate progress during rendering
+    console.log(`[Orbix Video Renderer] Starting renderVideo...`);
     const videoPath = await renderVideo(renderJob, script, story, (progress) => {
       // Progress callback: 10% + (progress * 70%) = 10% to 80%
       const totalProgress = 10 + (progress * 0.7);
+      console.log(`[Orbix Video Renderer] Render progress: ${totalProgress.toFixed(1)}%`);
       updateRenderProgress(renderJob.id, totalProgress);
     });
     
+    console.log(`[Orbix Video Renderer] renderVideo completed. Video path: ${videoPath}`);
+    console.log(`[Orbix Video Renderer] Setting progress to 80%...`);
     await updateRenderProgress(renderJob.id, 80);
     
     // Upload to storage (80% -> 95% progress)
+    console.log(`[Orbix Video Renderer] Uploading to storage...`);
     const outputUrl = await uploadToStorage(videoPath, renderJob.business_id, renderJob.id);
+    console.log(`[Orbix Video Renderer] Upload completed. Output URL: ${outputUrl}`);
     
+    console.log(`[Orbix Video Renderer] Setting progress to 95%...`);
     await updateRenderProgress(renderJob.id, 95);
     
     // Finalize (95% -> 100%)
+    console.log(`[Orbix Video Renderer] Setting progress to 100%...`);
     await updateRenderProgress(renderJob.id, 100);
     
+    console.log(`[Orbix Video Renderer] ========== PROCESS RENDER JOB SUCCESS ==========`);
     return {
       outputUrl,
       status: 'COMPLETED'
     };
   } catch (error) {
-    console.error('[Orbix Video Renderer] Error processing render job:', error);
+    console.error('[Orbix Video Renderer] ========== PROCESS RENDER JOB ERROR ==========');
+    console.error(`[Orbix Video Renderer] Render ID: ${renderJob.id}`);
+    console.error(`[Orbix Video Renderer] Error type: ${error?.constructor?.name}`);
+    console.error(`[Orbix Video Renderer] Error message: ${error.message}`);
+    console.error(`[Orbix Video Renderer] Error stack:`, error.stack);
+    console.error(`[Orbix Video Renderer] Full error:`, error);
+    
     // Update progress to show failure
-    await updateRenderProgress(renderJob.id, 0); // Reset on failure
+    try {
+      await updateRenderProgress(renderJob.id, 0); // Reset on failure
+    } catch (progressError) {
+      console.error(`[Orbix Video Renderer] Failed to update progress on error:`, progressError);
+    }
+    
     return {
       status: 'FAILED',
       error: error.message

@@ -434,9 +434,21 @@ export async function runRenderJob() {
         
         if (pendingRenders && pendingRenders.length > 0) {
           for (const render of pendingRenders) {
+            console.log(`[Orbix Jobs] ========== PROCESSING RENDER ${render.id} ==========`);
+            console.log(`[Orbix Jobs] Render details:`, {
+              id: render.id,
+              story_id: render.story_id,
+              script_id: render.script_id,
+              business_id: render.business_id,
+              current_status: render.render_status,
+              created_at: render.created_at,
+              updated_at: render.updated_at
+            });
+            
             try {
               // Update status to PROCESSING
-              await supabaseClient
+              console.log(`[Orbix Jobs] Updating render ${render.id} to PROCESSING...`);
+              const { error: updateError } = await supabaseClient
                 .from('orbix_renders')
                 .update({ 
                   render_status: 'PROCESSING',
@@ -444,11 +456,33 @@ export async function runRenderJob() {
                 })
                 .eq('id', render.id);
               
-              // Process the render
-              const result = await processRenderJob(render);
+              if (updateError) {
+                throw new Error(`Failed to update render status: ${updateError.message}`);
+              }
+              
+              console.log(`[Orbix Jobs] Render ${render.id} status updated to PROCESSING`);
+              console.log(`[Orbix Jobs] Calling processRenderJob for render ${render.id}...`);
+              const startTime = Date.now();
+              
+              // Process the render with timeout (30 minutes max)
+              const processPromise = processRenderJob(render);
+              const timeoutPromise = new Promise((_, reject) => 
+                setTimeout(() => reject(new Error('Render timeout after 30 minutes')), 30 * 60 * 1000)
+              );
+              
+              const result = await Promise.race([processPromise, timeoutPromise]);
+              const duration = Date.now() - startTime;
+              
+              console.log(`[Orbix Jobs] processRenderJob completed for render ${render.id} in ${duration}ms`);
+              console.log(`[Orbix Jobs] Result:`, {
+                status: result?.status,
+                outputUrl: result?.outputUrl ? 'present' : 'missing',
+                error: result?.error || null
+              });
               
               if (result.status === 'COMPLETED' && result.outputUrl) {
                 // Update render with output URL and mark as COMPLETED
+                console.log(`[Orbix Jobs] Updating render ${render.id} to COMPLETED...`);
                 await supabaseClient
                   .from('orbix_renders')
                   .update({
@@ -460,32 +494,40 @@ export async function runRenderJob() {
                   .eq('id', render.id);
                 
                 totalRendersProcessed++;
-                console.log(`[Orbix Jobs] Render ${render.id} completed successfully`);
+                console.log(`[Orbix Jobs] ✅ Render ${render.id} completed successfully`);
               } else {
                 // Mark as FAILED
+                console.log(`[Orbix Jobs] Updating render ${render.id} to FAILED (result status: ${result?.status})`);
                 await supabaseClient
                   .from('orbix_renders')
                   .update({
                     render_status: 'FAILED',
-                    error_message: result.error || 'Unknown error during rendering',
+                    error_message: result?.error || 'Unknown error during rendering',
                     updated_at: new Date().toISOString()
                   })
                   .eq('id', render.id);
                 
-                console.error(`[Orbix Jobs] Render ${render.id} failed:`, result.error);
+                console.error(`[Orbix Jobs] ❌ Render ${render.id} failed:`, result?.error || 'No error message');
               }
             } catch (renderError) {
-              console.error(`[Orbix Jobs] Error processing render ${render.id}:`, renderError.message);
+              console.error(`[Orbix Jobs] ❌ ERROR processing render ${render.id}:`, renderError);
+              console.error(`[Orbix Jobs] Error message:`, renderError.message);
+              console.error(`[Orbix Jobs] Error stack:`, renderError.stack);
+              
               // Mark as FAILED
               await supabaseClient
                 .from('orbix_renders')
                 .update({
                   render_status: 'FAILED',
-                  error_message: renderError.message,
+                  error_message: renderError.message || 'Unknown error',
                   updated_at: new Date().toISOString()
                 })
                 .eq('id', render.id);
+              
+              console.error(`[Orbix Jobs] Render ${render.id} marked as FAILED`);
             }
+            
+            console.log(`[Orbix Jobs] ========== FINISHED PROCESSING RENDER ${render.id} ==========`);
           }
         }
         
