@@ -271,17 +271,21 @@ router.post('/renders/:id/restart', async (req, res) => {
       // Process the render in the background (don't wait for it)
       // processRenderJob expects a render object with story_id and script_id
       // It will fetch the story and script itself from the database
-      processRenderJob({
-        id: fullRender.id,
-        business_id: fullRender.business_id,
-        story_id: fullRender.story_id,
-        script_id: fullRender.script_id,
-        template: fullRender.template,
-        background_type: fullRender.background_type,
-        background_id: fullRender.background_id,
-        render_status: 'PROCESSING'
-      })
-        .then(async (result) => {
+      // Wrap in setTimeout to ensure it doesn't block or crash the server
+      setTimeout(async () => {
+        try {
+          console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Starting background render job for ${id}...`);
+          const result = await processRenderJob({
+            id: fullRender.id,
+            business_id: fullRender.business_id,
+            story_id: fullRender.story_id,
+            script_id: fullRender.script_id,
+            template: fullRender.template,
+            background_type: fullRender.background_type,
+            background_id: fullRender.background_id,
+            render_status: 'PROCESSING'
+          });
+          
           console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Background render job completed for ${id}:`, result.status);
           
           if (result.status === 'COMPLETED' && result.outputUrl) {
@@ -306,21 +310,29 @@ router.post('/renders/:id/restart', async (req, res) => {
               .eq('id', id);
             console.log(`[POST /api/v2/orbix-network/renders/:id/restart] ❌ Render ${id} marked as FAILED:`, result.error);
           }
-        })
-        .catch(async (error) => {
+        } catch (error) {
+          // Ensure errors don't crash the server
           console.error(`[POST /api/v2/orbix-network/renders/:id/restart] ❌ Background render job failed for ${id}:`, error);
+          console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error type:`, error?.constructor?.name);
           console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error message:`, error.message);
           console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error stack:`, error.stack);
-          await supabaseClient
-            .from('orbix_renders')
-            .update({
-              render_status: 'FAILED',
-              error_message: error.message || 'Unknown error',
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', id);
-          console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} marked as FAILED due to error`);
-        });
+          
+          try {
+            await supabaseClient
+              .from('orbix_renders')
+              .update({
+                render_status: 'FAILED',
+                error_message: error.message || 'Unknown error',
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', id);
+            console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} marked as FAILED due to error`);
+          } catch (updateError) {
+            // Even if updating the database fails, don't crash
+            console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Failed to update render status after error:`, updateError);
+          }
+        }
+      }, 100); // Small delay to ensure the HTTP response is sent first
     } catch (processError) {
       console.error(`[POST /api/v2/orbix-network/renders/:id/restart] ❌ Failed to trigger render job:`, processError);
       console.error(`[POST /api/v2/orbix-network/renders/:id/restart] Error type:`, processError?.constructor?.name);
