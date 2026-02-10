@@ -58,6 +58,9 @@ router.get('/setup/status', async (req, res) => {
       background_random_mode: moduleSettings?.settings?.backgrounds?.random_mode || 'uniform',
       shock_score_threshold: moduleSettings?.settings?.scoring?.shock_score_threshold || 65,
       daily_video_cap: moduleSettings?.settings?.limits?.daily_video_cap || 5,
+      posting_window_start: moduleSettings?.settings?.posting_schedule?.start ?? '07:00',
+      posting_window_end: moduleSettings?.settings?.posting_schedule?.end ?? '20:00',
+      posting_timezone: moduleSettings?.settings?.posting_schedule?.timezone ?? 'America/New_York',
       current_step: setupState?.current_step || 1,
       completed_steps: setupState?.completed_steps || [],
       is_complete: isComplete,
@@ -225,6 +228,11 @@ router.post('/setup/complete', async (req, res) => {
       },
       limits: {
         daily_video_cap: setupState?.setup_data?.step4?.daily_video_cap || 5
+      },
+      posting_schedule: {
+        start: setupState?.setup_data?.step4?.posting_window_start ?? '07:00',
+        end: setupState?.setup_data?.step4?.posting_window_end ?? '20:00',
+        timezone: setupState?.setup_data?.step4?.posting_timezone ?? 'America/New_York'
       }
     };
     

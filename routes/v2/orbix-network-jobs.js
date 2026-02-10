@@ -645,7 +645,31 @@ router.post('/render', async (req, res) => {
 });
 
 /**
- * Run publish job for all businesses with active subscriptions
+ * Get current time in a timezone as minutes since midnight (00:00 in that zone).
+ */
+function getMinutesSinceMidnightInZone(timezone = 'America/New_York') {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+  const parts = formatter.formatToParts(now);
+  const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+  const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
+  return hour * 60 + minute;
+}
+
+/** Parse "HH:mm" to minutes since midnight. */
+function parseTimeToMinutes(timeStr) {
+  const [h, m] = (timeStr || '07:00').split(':').map(Number);
+  return (h || 7) * 60 + (m || 0);
+}
+
+/**
+ * Run publish job for all businesses with active subscriptions.
+ * Posts only between posting_window start and end (default 7am–8pm), with slots spread evenly by daily cap.
  */
 export async function runPublishJob() {
   try {
@@ -667,18 +691,63 @@ export async function runPublishJob() {
     
     for (const businessId of businessIds) {
       try {
-        // Get completed renders that haven't been published yet
+        // Respect daily video cap and posting window (7am–8pm by default, no overnight)
+        const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+        const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
+        const posting = moduleSettings?.settings?.posting_schedule || {};
+        const startStr = posting.start ?? '07:00';
+        const endStr = posting.end ?? '20:00';
+        const timezone = posting.timezone ?? 'America/New_York';
+        const startMinutes = parseTimeToMinutes(startStr);
+        const endMinutes = parseTimeToMinutes(endStr);
+
+        const today = new Date();
+        today.setUTCHours(0, 0, 0, 0);
+        const todayISO = today.toISOString();
+        const { data: todayPublishes, error: publishesCountError } = await supabaseClient
+          .from('orbix_publishes')
+          .select('id')
+          .eq('business_id', businessId)
+          .eq('publish_status', 'PUBLISHED')
+          .gte('posted_at', todayISO);
+        if (publishesCountError) {
+          console.error(`[Orbix Jobs] Error counting today's publishes for business ${businessId}:`, publishesCountError);
+          continue;
+        }
+        const publishesToday = todayPublishes?.length ?? 0;
+        const publishSlotsLeft = Math.max(0, dailyVideoCap - publishesToday);
+        if (publishSlotsLeft <= 0) {
+          console.log(`[Orbix Jobs] Business ${businessId} has reached daily publish cap (${publishesToday}/${dailyVideoCap}), skipping publish`);
+          continue;
+        }
+
+        // Only publish during posting window (e.g. 7am–8pm), not overnight
+        const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+        if (currentMinutes < startMinutes || currentMinutes > endMinutes) {
+          continue; // Outside window, skip silently (job runs every 15 min)
+        }
+
+        // Next slot: first at start, last at end, rest spread evenly. Only publish when current time >= next slot.
+        const windowMinutes = endMinutes - startMinutes;
+        const nextSlotMinutes = dailyVideoCap <= 1
+          ? startMinutes
+          : startMinutes + (windowMinutes * publishesToday / (dailyVideoCap - 1));
+        if (currentMinutes < nextSlotMinutes) {
+          continue; // Not time for the next post yet
+        }
+
+        // Get completed renders that haven't been published yet; schedule allows only one post per slot
         const { data: allRenders, error: rendersError } = await supabaseClient
           .from('orbix_renders')
           .select('*, orbix_stories(*), orbix_scripts(*)')
           .eq('business_id', businessId)
           .eq('render_status', 'COMPLETED')
-          .limit(10); // Get more to filter
+          .limit(10);
         
         if (rendersError) throw rendersError;
         
-        // Filter to only renders with output_url
-        const completedRenders = (allRenders || []).filter(r => r.output_url).slice(0, 5);
+        // Take at most 1 so we hit the next slot on a later run (spread evenly through the day)
+        const completedRenders = (allRenders || []).filter(r => r.output_url).slice(0, 1);
         
         if (!completedRenders || completedRenders.length === 0) continue;
         
