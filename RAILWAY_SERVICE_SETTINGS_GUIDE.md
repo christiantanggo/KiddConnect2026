@@ -63,6 +63,16 @@ Once you find Service Settings:
 3. **Save** the changes
 4. **Redeploy** (click "Redeploy" button or push a new commit)
 
+## Node.js version (Supabase / AWS SDK warnings)
+
+If logs show **Node.js 18** and warnings from `@supabase/supabase-js` or AWS SDK about upgrading to Node 20:
+
+1. The repo now has **`.nvmrc`** with `20` and **`package.json`** `engines.node = "20"` so Nixpacks should use Node 20 on the next build.
+2. If Railway still uses Node 18 after redeploying, set a **build variable**:
+   - Go to your **service** → **Variables** (or **Settings** → **Variables**).
+   - Add: **`NIXPACKS_NODE_VERSION`** = **`20`**.
+   - Redeploy so the build runs with Node 20.
+
 
 
 
