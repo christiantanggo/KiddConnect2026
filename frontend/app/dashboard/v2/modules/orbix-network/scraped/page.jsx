@@ -9,10 +9,12 @@ import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
 import { ArrowLeft, Loader, Play, RefreshCw, ExternalLink, AlertCircle } from 'lucide-react';
+import { useOrbixChannel } from '../OrbixChannelContext';
 
 export default function OrbixNetworkScrapedPage() {
   const router = useRouter();
   const { success, error: showErrorToast } = useToast();
+  const { currentChannelId, apiBody } = useOrbixChannel();
   const [loading, setLoading] = useState(true);
   const [sources, setSources] = useState([]);
   const [rawItemsBySource, setRawItemsBySource] = useState({});
@@ -174,7 +176,6 @@ export default function OrbixNetworkScrapedPage() {
                 </>
               )}
             </button>
-            </div>
           </div>
 
           {/* Summary */}
