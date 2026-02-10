@@ -1,14 +1,15 @@
 /**
  * Orbix Network Video Renderer Service
- * Renders videos using FFmpeg with studio backdrops and text overlays
+ * Renders videos using FFmpeg with studio backdrops, motion, hook text, captions, and music
  * 
  * Note: Requires FFmpeg to be installed on the system
- * Background assets (6 stills + 6 motion videos) must be in Supabase Storage
+ * Background assets (12 images) must be in Supabase Storage
+ * Music tracks must be in Supabase Storage bucket 'orbix-network-music'
  */
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { createWriteStream, unlink } from 'fs';
+import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { supabaseClient } from '../../config/database.js';
@@ -18,10 +19,41 @@ const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
 // Background asset configuration
-// All backgrounds start as images. System will animate some to create motion videos
 const TOTAL_BACKGROUNDS = 12; // 12 images total (IDs 1-12)
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_BACKGROUNDS || 'orbix-network-backgrounds';
+const MUSIC_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_MUSIC || 'orbix-network-music';
+const RENDERS_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_RENDERS || 'orbix-network-videos';
 const VIDEO_DURATION = 35; // Default video duration in seconds
+
+// Render configuration
+const RENDER_CONFIG = {
+  motion: {
+    enabled: true,
+    mode: 'random',
+    zoom_range: [1.00, 1.03],
+    pan_range: [0.00, 0.03],
+    fps: 30
+  },
+  hook: {
+    enabled: true,
+    fade_in_duration: 0.5,
+    fade_out_duration: 0.5,
+    max_length: 80
+  },
+  captions: {
+    enabled: true,
+    font_size: 48,
+    position: 'lower-third',
+    words_per_second: 2.5 // For timing estimation
+  },
+  music: {
+    enabled: true,
+    volume_db: -28,
+    fade_in_ms: 800,
+    fade_out_ms: 800,
+    start_delay_seconds: 0.5
+  }
+};
 
 /**
  * Select template based on story (A, B, or C)
@@ -29,129 +61,269 @@ const VIDEO_DURATION = 35; // Default video duration in seconds
  * @returns {string} Template ID ('A', 'B', or 'C')
  */
 export function selectTemplate(story) {
-  // Simple selection logic - can be enhanced
-  // Template A: headline + stat
-  // Template B: before/after
-  // Template C: impact bullets
-  
   const score = story.shock_score;
   if (score >= 80) {
-    return 'A'; // High impact - use headline + stat
+    return 'A'; // High impact
   } else if (score >= 65) {
-    return 'B'; // Medium-high - use before/after
+    return 'B'; // Medium-high
   } else {
-    return 'C'; // Medium - use impact bullets
+    return 'C'; // Medium
+  }
+}
+
+const BACKGROUND_IMAGE_EXT = /\.(png|jpg|jpeg|webp)$/i;
+
+/**
+ * List background image file names for a channel (storage path prefix: businessId/channelId/)
+ * @param {string} businessId
+ * @param {string} channelId
+ * @returns {Promise<string[]>} File names (e.g. ['image1.png']) or []
+ */
+export async function listChannelBackgrounds(businessId, channelId) {
+  if (!businessId || !channelId) return [];
+  try {
+    const prefix = `${businessId}/${channelId}`;
+    const { data: files, error } = await supabaseClient.storage
+      .from(STORAGE_BUCKET)
+      .list(prefix, { limit: 200 });
+    if (error) {
+      console.warn('[Orbix Video Renderer] listChannelBackgrounds:', error.message);
+      return [];
+    }
+    const names = (files || [])
+      .filter((f) => f.name && BACKGROUND_IMAGE_EXT.test(f.name))
+      .map((f) => f.name);
+    return names;
+  } catch (e) {
+    console.warn('[Orbix Video Renderer] listChannelBackgrounds error:', e?.message);
+    return [];
   }
 }
 
 /**
- * Select background (still or motion, random ID)
- * At render time: 50% chance of using image as-is (STILL), 50% chance of animating it (MOTION)
+ * Select background for a channel: use channel's images if any, else global Photo1-12.
  * @param {string} businessId - Business ID (for settings lookup)
- * @returns {Promise<Object>} Background selection { type: 'STILL'|'MOTION', id: number }
+ * @param {string|null} channelId - Orbix channel ID (for per-channel images)
+ * @returns {Promise<Object>} { type: 'MOTION', id: number, imageId: number, storagePath?: string }
  */
-export async function selectBackground(businessId) {
+export async function selectBackground(businessId, channelId = null) {
   try {
-    // Get settings to check randomization mode
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
     const randomMode = moduleSettings?.settings?.backgrounds?.random_mode || 'uniform';
-    
-    // Randomly select one of the 12 background images (1-12)
+
+    if (businessId && channelId) {
+      const channelFiles = await listChannelBackgrounds(businessId, channelId);
+      if (channelFiles.length > 0) {
+        const idx = Math.floor(Math.random() * channelFiles.length);
+        const name = channelFiles[idx];
+        const storagePath = `${businessId}/${channelId}/${name}`;
+        return {
+          type: 'MOTION',
+          id: idx + 1,
+          imageId: idx + 1,
+          storagePath
+        };
+      }
+    }
+
+    // Fallback: global images Photo1.png ... Photo12.png
     const imageId = Math.floor(Math.random() * TOTAL_BACKGROUNDS) + 1;
-    
-    // 50% chance of still (use image as-is) vs motion (animate the image)
-    const useStill = Math.random() < 0.5;
-    
     return {
-      type: useStill ? 'STILL' : 'MOTION',
-      id: imageId, // Same image ID, but type determines if we animate it
-      imageId: imageId // Store the source image ID
+      type: 'MOTION',
+      id: imageId,
+      imageId: imageId,
+      storagePath: null
     };
   } catch (error) {
     console.error('[Orbix Video Renderer] Error selecting background:', error);
-    // Default fallback
-    return { type: 'STILL', id: 1, imageId: 1 };
+    return { type: 'MOTION', id: 1, imageId: 1, storagePath: null };
   }
 }
 
 /**
- * Get background image URL from Supabase Storage
- * All backgrounds are stored as images, we'll animate them if needed
- * @param {number} imageId - Image ID (1-12)
- * @returns {Promise<string>} URL to background image
- */
-async function getBackgroundImageUrl(imageId) {
-  try {
-    const filename = `Photo${imageId}.png`; // Backgrounds are PNG images (Photo1.png, Photo2.png, etc.)
-    // Files are stored in root of bucket, not in a subfolder
-    
-    // Get public URL from Supabase Storage
-    const { data } = await supabaseClient.storage
-      .from(STORAGE_BUCKET)
-      .getPublicUrl(filename);
-    
-    return data.publicUrl;
-  } catch (error) {
-    console.error('[Orbix Video Renderer] Error getting background image URL:', error);
-    throw error;
-  }
-}
-
-/**
- * Animate a still image into a motion video with zoom/parallax effect
- * Creates a temporary MP4 file from the image
- * @param {string} imageUrl - URL to the source image
- * @param {number} duration - Video duration in seconds
+ * Apply 4-segment repeating motion pattern to a still image
+ * Pattern: (1) Zoom in, (2) Pan right-to-left, (3) Pan left-to-right, (4) Zoom out then in
+ * This pattern applies to ALL background images uniformly
+ * 
+ * @param {string} imagePath - Local path to image file
+ * @param {number} duration - Video duration in seconds (default 35)
  * @returns {Promise<string>} Path to generated motion video file
  */
-async function animateImageToVideo(imageUrl, duration = VIDEO_DURATION) {
+export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
   try {
-    // Download image to temp file
-    const axios = (await import('axios')).default;
-    const fs = await import('fs');
-    const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-    const imagePath = join(tmpdir(), `orbix-bg-${Date.now()}.jpg`);
-    await fs.promises.writeFile(imagePath, response.data);
-    
-    // Create output video path
     const videoPath = join(tmpdir(), `orbix-motion-${Date.now()}.mp4`);
+    const fps = RENDER_CONFIG.motion.fps;
+    // Full video length divided by 4 — no minimum; each segment = duration/4
+    const segmentDuration = Math.max(duration / 4, 1);
+    const segmentFrames = Math.round(segmentDuration * fps);
     
-    // FFmpeg command to animate image with subtle zoom/parallax
-    // Scale from 100% to 110% over duration (ken burns effect)
-    // Output: 1080x1920 (vertical), 35 seconds, MP4
-    const ffmpegCommand = `ffmpeg -loop 1 -i "${imagePath}" -vf "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,scale=1080*1.1:1920*1.1,zoompan=z='zoom+0.001':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${duration * 30}:s=1080x1920" -t ${duration} -pix_fmt yuv420p -c:v libx264 "${videoPath}"`;
+    // Scale image larger to allow for zooming and panning (1.5x scale for room to zoom/pan).
+    // Use scale-to-cover then crop so any aspect ratio is preserved (no stretching).
+    const scaleWidth = 1080 * 1.5; // 1620
+    const scaleHeight = 1920 * 1.5; // 2880
+    const outputWidth = 1080;
+    const outputHeight = 1920;
+    const scaleCover = `scale=${scaleWidth}:${scaleHeight}:force_original_aspect_ratio=increase,crop=${scaleWidth}:${scaleHeight}:(iw-${scaleWidth})/2:(ih-${scaleHeight})/2`;
+
+    // Linear zoom over segment (smoother): total zoom range 0.15 in segmentFrames frames
+    const zoomRangePerFrame = segmentFrames > 0 ? 0.15 / segmentFrames : 0.0005;
+
+    // A B A B pattern: Zoom in → Pan → Zoom out → Pan (alternating, different angles)
+    // Segment 1: Zoom in 1.0 → 1.15, linear in 'on' for smooth motion
+    const segment1Filter = `${scaleCover},zoompan=z='min(1.0+on*${zoomRangePerFrame},1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segmentFrames}:s=${outputWidth}x${outputHeight}`;
+
+    // Segment 2: Pan right-to-left, start from RIGHT + UPPER (different angle)
+    const segment2Zoom = 1.15;
+    const segment2StartX = scaleWidth - (outputWidth * segment2Zoom);
+    const segment2EndX = 0;
+    const segment2OffsetY = scaleHeight * 0.15;
+    const segment2Filter = `${scaleCover},crop=${outputWidth * segment2Zoom}:${outputHeight * segment2Zoom}:x='${segment2StartX}-(${segment2StartX}-${segment2EndX})*n/${segmentFrames}':y='${segment2OffsetY}+(ih/2-${outputHeight * segment2Zoom}/2-${segment2OffsetY})*n/${segmentFrames}',scale=${outputWidth}:${outputHeight}`;
+
+    // Segment 3: Zoom out 1.15 → 1.0, linear in 'on' for smooth motion
+    const segment3Filter = `${scaleCover},zoompan=z='max(1.15-on*${zoomRangePerFrame},1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segmentFrames}:s=${outputWidth}x${outputHeight}`;
+
+    // Segment 4: Pan left-to-right, start from LEFT + LOWER (different angle from seg 2)
+    const segment4Zoom = 1.15;
+    const segment4StartX = 0;
+    const segment4EndX = scaleWidth - (outputWidth * segment4Zoom);
+    const segment4OffsetY = scaleHeight * 0.65;
+    const segment4Filter = `${scaleCover},crop=${outputWidth * segment4Zoom}:${outputHeight * segment4Zoom}:x='${segment4StartX}+(${segment4EndX}-${segment4StartX})*n/${segmentFrames}':y='${segment4OffsetY}+(ih/2-${outputHeight * segment4Zoom}/2-${segment4OffsetY})*n/${segmentFrames}',scale=${outputWidth}:${outputHeight}`;
     
-    console.log('[Orbix Video Renderer] Animating image to video...');
-    console.log('[Orbix Video Renderer] FFmpeg command:', ffmpegCommand);
+    const segment1Path = join(tmpdir(), `orbix-segment1-${Date.now()}.mp4`);
+    const segment2Path = join(tmpdir(), `orbix-segment2-${Date.now()}.mp4`);
+    const segment3Path = join(tmpdir(), `orbix-segment3-${Date.now()}.mp4`);
+    const segment4Path = join(tmpdir(), `orbix-segment4-${Date.now()}.mp4`);
+    
+    console.log(`[Orbix Video Renderer] Applying 4-segment A-B-A-B motion (segment=${segmentDuration.toFixed(1)}s each, total=${duration}s)...`);
+    
+    // Segment 1: Zoom in
+    const segment1Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment1Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment1Path}"`;
+    await execAsync(segment1Command, { timeout: 2 * 60 * 1000 });
+    
+    // Segment 2: Pan right-to-left, upper angle
+    const segment2Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment2Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment2Path}"`;
+    await execAsync(segment2Command, { timeout: 2 * 60 * 1000 });
+    
+    // Segment 3: Zoom out
+    const segment3Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment3Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment3Path}"`;
+    await execAsync(segment3Command, { timeout: 2 * 60 * 1000 });
+    
+    // Segment 4: Pan left-to-right, lower angle
+    const segment4Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment4Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment4Path}"`;
+    await execAsync(segment4Command, { timeout: 2 * 60 * 1000 });
+    
+    const concatListPath = join(tmpdir(), `orbix-concat-${Date.now()}.txt`);
+    const fs = (await import('fs')).default;
+    await fs.promises.writeFile(concatListPath, 
+      `file '${segment1Path.replace(/\\/g, '/')}'\n` +
+      `file '${segment2Path.replace(/\\/g, '/')}'\n` +
+      `file '${segment3Path.replace(/\\/g, '/')}'\n` +
+      `file '${segment4Path.replace(/\\/g, '/')}'\n`
+    );
+    
+    // Use concat demuxer to join segments, then trim to exact duration
+    const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatListPath}" -c copy -t ${duration} -y "${videoPath}"`;
+    await execAsync(concatCommand, { timeout: 2 * 60 * 1000 });
+    
+    // Cleanup temporary segment files
     try {
-      const { stdout, stderr } = await execAsync(ffmpegCommand);
-      console.log('[Orbix Video Renderer] Animation completed successfully');
-    } catch (error) {
-      if (error.message && (error.message.includes('not recognized') || error.message.includes('not found'))) {
-        throw new Error('FFmpeg is not installed or not in your system PATH. Please install FFmpeg:\n\nWindows: Download from https://www.gyan.dev/ffmpeg/builds/ or use: choco install ffmpeg\nMac: brew install ffmpeg\nLinux: sudo apt-get install ffmpeg\n\nAfter installation, restart your development server.');
-      }
-      throw error;
+      await unlinkAsync(segment1Path);
+      await unlinkAsync(segment2Path);
+      await unlinkAsync(segment3Path);
+      await unlinkAsync(segment4Path);
+      await unlinkAsync(concatListPath);
+    } catch (cleanupError) {
+      console.warn('[Orbix Video Renderer] Warning: Could not cleanup temporary segment files:', cleanupError.message);
     }
     
-    // Clean up temp image
-    await unlinkAsync(imagePath);
-    
+    console.log(`[Orbix Video Renderer] 4-segment motion pattern applied successfully`);
     return videoPath;
+    
   } catch (error) {
-    console.error('[Orbix Video Renderer] Error animating image:', error);
+    if (error.code === 'ENOENT' || (error.message && (error.message.includes('not recognized') || error.message.includes('not found')))) {
+      throw new Error('FFmpeg is not installed or not in your system PATH. Please install FFmpeg:\n\nWindows: Download from https://www.gyan.dev/ffmpeg/builds/ or use: choco install ffmpeg\nMac: brew install ffmpeg\nLinux: sudo apt-get install ffmpeg\n\nAfter installation, restart your development server.');
+    }
+    console.error('[Orbix Video Renderer] Error applying motion to image:', error);
     throw error;
   }
 }
 
 /**
- * Generate text-to-speech audio for script using OpenAI TTS
- * @param {Object} script - Script object
- * @returns {Promise<string>} Path to audio file
+ * Get background image URL from Supabase Storage.
+ * Per-channel: use storagePath when set; otherwise legacy global Photo{backgroundId}.png.
+ * @param {number} backgroundId - Background image ID (1-12) for display/fallback
+ * @param {string|null} [backgroundStoragePath] - Per-channel path (e.g. businessId/channelId/file.png)
+ * @returns {Promise<string>} Public URL to the background image
  */
-async function generateAudio(script) {
+export async function getBackgroundImageUrl(backgroundId, backgroundStoragePath = null) {
+  try {
+    const path = backgroundStoragePath && backgroundStoragePath.trim()
+      ? backgroundStoragePath.trim()
+      : `Photo${backgroundId}.png`;
+
+    const result = supabaseClient.storage
+      .from(STORAGE_BUCKET)
+      .getPublicUrl(path);
+
+    if (!result?.data?.publicUrl) {
+      throw new Error(`Failed to generate public URL for background image: ${path}`);
+    }
+
+    return result.data.publicUrl;
+  } catch (error) {
+    console.error('[Orbix Video Renderer] Error getting background image URL:', error);
+    console.error('[Orbix Video Renderer] Background ID:', backgroundId, 'Path:', backgroundStoragePath || `Photo${backgroundId}.png`, 'Bucket:', STORAGE_BUCKET);
+    throw error;
+  }
+}
+
+/**
+ * Upload completed render video to Supabase Storage so it can be viewed when YouTube upload is skipped.
+ * Retries up to 3 times so every completed render gets a view link when possible.
+ * @param {string} businessId - Business ID
+ * @param {string} renderId - Render UUID
+ * @param {string} localPath - Path to the rendered .mp4 file
+ * @returns {Promise<string|null>} Public URL to the video, or null on failure
+ */
+export async function uploadRenderToStorage(businessId, renderId, localPath) {
+  const fs = await import('fs');
+  const maxAttempts = 3;
+  const delayMs = 1500;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const buffer = await fs.default.promises.readFile(localPath);
+      const remotePath = `${businessId}/${renderId}.mp4`;
+      const { data, error } = await supabaseClient.storage
+        .from(RENDERS_BUCKET)
+        .upload(remotePath, buffer, { contentType: 'video/mp4', upsert: true });
+      if (error) {
+        console.error(`[Orbix Video Renderer] Storage upload attempt ${attempt}/${maxAttempts} failed:`, error.message);
+        if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
+        continue;
+      }
+      const { data: urlData } = supabaseClient.storage.from(RENDERS_BUCKET).getPublicUrl(data.path);
+      const url = urlData?.publicUrl ?? null;
+      if (url) return url;
+    } catch (error) {
+      console.error(`[Orbix Video Renderer] Upload attempt ${attempt}/${maxAttempts} error:`, error?.message || error);
+      if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return null;
+}
+
+/**
+ * Generate audio from script using OpenAI TTS
+ * @param {Object} script - Script object with narration text
+ * @returns {Promise<{audioPath: string, duration: number}>} Audio file path and duration
+ */
+export async function generateAudio(script) {
   try {
     const OpenAI = (await import('openai')).default;
-    const fs = await import('fs');
+    const fs = (await import('fs')).default;
+    const { pipeline } = (await import('stream')).default;
+    const { promisify } = (await import('util')).default;
+    const pipelineAsync = promisify(pipeline);
     
     if (!process.env.OPENAI_API_KEY) {
       throw new Error('OPENAI_API_KEY not set');
@@ -159,48 +331,47 @@ async function generateAudio(script) {
     
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     
-    // Build script text from individual fields
-    // Script structure: hook, what_happened, why_it_matters, what_happens_next, cta_line
-    let scriptText = '';
+    // Build body text (no hook) and hook for TTS: voice speaks hook first, then body
+    const content = script.content_json
+      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+      : {};
+    const hookText = (script.hook || content.hook || '').trim();
+    let bodyText = content.narration || content.script || script.narration || '';
+    if (!bodyText) {
+      bodyText = [script.what_happened, script.why_it_matters, script.what_happens_next].filter(Boolean).join(' ');
+    }
+    const narrationText = hookText
+      ? (hookText + '. ' + (bodyText || '').trim()).trim()
+      : (bodyText || '').trim();
     
-    // Check if script has the new structure (individual fields) or old structure (script_text/text)
-    if (script.script_text || script.text) {
-      // Old structure - use script_text or text field
-      scriptText = script.script_text || script.text || '';
-    } else {
-      // New structure - build from individual fields
-      const parts = [];
-      
-      if (script.hook) parts.push(script.hook);
-      if (script.what_happened) parts.push(script.what_happened);
-      if (script.why_it_matters) parts.push(script.why_it_matters);
-      if (script.what_happens_next) parts.push(script.what_happens_next);
-      if (script.cta_line) parts.push(script.cta_line);
-      
-      scriptText = parts.join('. ');
+    if (!narrationText || narrationText.trim().length === 0) {
+      throw new Error('No narration text found in script');
     }
     
-    if (!scriptText || scriptText.trim().length === 0) {
-      throw new Error(`Script text is empty. Script object: ${JSON.stringify(script)}`);
-    }
-    
-    console.log(`[Orbix Video Renderer] Generating TTS audio for script (${scriptText.length} chars)...`);
-    console.log(`[Orbix Video Renderer] Script preview: ${scriptText.substring(0, 100)}...`);
+    const audioPath = join(tmpdir(), `orbix-audio-${Date.now()}.mp3`);
     
     // Generate speech using OpenAI TTS
-    const mp3 = await openai.audio.speech.create({
+    const response = await openai.audio.speech.create({
       model: 'tts-1',
-      voice: 'alloy', // Options: alloy, echo, fable, onyx, nova, shimmer
-      input: scriptText,
+      voice: 'alloy',
+      input: narrationText,
     });
     
-    // Save to temporary file
-    const audioPath = join(tmpdir(), `orbix-audio-${Date.now()}.mp3`);
-    const buffer = Buffer.from(await mp3.arrayBuffer());
+    // Save audio to file
+    const buffer = Buffer.from(await response.arrayBuffer());
     await fs.promises.writeFile(audioPath, buffer);
     
-    console.log(`[Orbix Video Renderer] Audio generated: ${audioPath}`);
-    return audioPath;
+    // Get audio duration using ffprobe
+    const { duration } = await execAsync(
+      `ffprobe -i "${audioPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+      { timeout: 10000 }
+    ).then(result => ({ duration: parseFloat(result.stdout.trim()) }))
+    .catch(() => ({ duration: 35 })); // Default to 35 seconds if ffprobe fails
+    
+    return {
+      audioPath,
+      duration: duration || 35
+    };
   } catch (error) {
     console.error('[Orbix Video Renderer] Error generating audio:', error);
     throw error;
@@ -208,377 +379,477 @@ async function generateAudio(script) {
 }
 
 /**
- * Render video using FFmpeg
- * @param {Object} renderJob - Render job from database
+ * Generate caption segments from script (body only — no hook).
+ * Segments are offset by estimated hook duration and scaled to fill (audioDuration - hookDuration)
+ * so captions align with when the body is spoken.
  * @param {Object} script - Script object
- * @param {Object} story - Story object
- * @param {Function} progressCallback - Optional callback for progress updates (0-1)
- * @returns {Promise<string>} Path to rendered video file
+ * @param {number} audioDuration - Total audio duration in seconds (from TTS)
+ * @returns {Array<{text: string, start: number, end: number}>} Caption segments
  */
-export async function renderVideo(renderJob, script, story, progressCallback = null) {
+export function generateCaptionSegments(script, audioDuration) {
   try {
-    console.log(`[Orbix Video Renderer] Starting render for job ${renderJob.id}`);
-    
-    if (progressCallback) progressCallback(0.1); // 10% - Starting
-    
-    // Get background image URL (all backgrounds are images)
-    const imageId = renderJob.background_id; // 1-12
-    const imageUrl = await getBackgroundImageUrl(imageId);
-    
-    if (progressCallback) progressCallback(0.2); // 20% - Background loaded
-    
-    // Download remote image to local file if needed
-    let backgroundLocalPath = imageUrl;
-    if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
-      console.log(`[Orbix Video Renderer] Downloading background image from ${imageUrl}...`);
-      const axios = (await import('axios')).default;
-      const fs = await import('fs');
-      const response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
-      backgroundLocalPath = join(tmpdir(), `orbix-bg-${Date.now()}.png`);
-      await fs.promises.writeFile(backgroundLocalPath, response.data);
-      console.log(`[Orbix Video Renderer] Background downloaded to ${backgroundLocalPath}`);
-    }
-    
-    if (progressCallback) progressCallback(0.25); // 25% - Background downloaded
-    
-    // If MOTION type, animate the image into a video first
-    let backgroundVideoPath;
-    if (renderJob.background_type === 'MOTION') {
-      backgroundVideoPath = await animateImageToVideo(backgroundLocalPath, script.duration_target_seconds || VIDEO_DURATION);
-      if (progressCallback) progressCallback(0.4); // 40% - Background animated
-    } else {
-      // For STILL, we'll use the image directly in FFmpeg (with loop)
-      backgroundVideoPath = null; // Will use image directly
-      if (progressCallback) progressCallback(0.3); // 30% - Background ready
-    }
-    
-    // Generate audio (text-to-speech)
-    const audioPath = await generateAudio(script);
-    if (progressCallback) progressCallback(0.5); // 50% - Audio generated
-    
-    // Create temporary output file
-    const outputPath = join(tmpdir(), `orbix-render-${renderJob.id}-${Date.now()}.mp4`);
-    
-    // Build FFmpeg command
-    // Use backgroundVideoPath if available (MOTION), otherwise use backgroundLocalPath (STILL)
-    const backgroundUrl = backgroundVideoPath || backgroundLocalPath;
-    const ffmpegCommand = buildFFmpegCommand(backgroundUrl, audioPath, script, story, renderJob.template, outputPath);
-    
-    if (progressCallback) progressCallback(0.6); // 60% - Command built
-    
-    // Execute FFmpeg with timeout and better error handling
-    console.log(`[Orbix Video Renderer] Executing FFmpeg command...`);
-    console.log(`[Orbix Video Renderer] FFmpeg command preview: ${ffmpegCommand.substring(0, 200)}...`);
-    
-    // Add timeout to prevent hanging (10 minutes max for video rendering)
-    const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-    const startTime = Date.now();
-    
-    // For long-running FFmpeg, we could monitor progress, but for now we'll estimate
-    // FFmpeg rendering typically takes the longest, so we'll simulate progress
-    const ffmpegPromise = execAsync(ffmpegCommand, { timeout: TIMEOUT_MS });
-    
-    // Simulate progress during FFmpeg execution (60% -> 90%)
-    const progressInterval = setInterval(() => {
-      if (progressCallback) {
-        // Estimate progress based on time (this is a rough estimate)
-        // In a real implementation, you'd parse FFmpeg output for actual progress
-        const elapsed = Date.now() - startTime;
-        const estimatedProgress = Math.min(0.9, 0.6 + (elapsed / 60000) * 0.3); // Assume ~1 minute for rendering
-        progressCallback(estimatedProgress);
-        console.log(`[Orbix Video Renderer] Estimated render progress: ${(estimatedProgress * 100).toFixed(1)}% (${(elapsed / 1000).toFixed(0)}s elapsed)`);
+    const content = script.content_json
+      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+      : {};
+    // Body only (no hook, no end question / Comment Now): captions = what_happened + why_it_matters only
+    let bodyText = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ');
+    if (!bodyText) {
+      const fullNarration = (content.narration || content.script || script.narration || '').trim();
+      const endQuestion = (script.what_happens_next || '').trim();
+      bodyText = fullNarration;
+      if (endQuestion && bodyText.toLowerCase().endsWith(endQuestion.toLowerCase())) {
+        bodyText = bodyText.slice(0, -endQuestion.length).replace(/[\s.]+$/, '').trim();
       }
-    }, 2000); // Update every 2 seconds
-    
-    let result;
-    try {
-      result = await ffmpegPromise;
-      clearInterval(progressInterval);
-      console.log(`[Orbix Video Renderer] FFmpeg command completed successfully (took ${((Date.now() - startTime) / 1000).toFixed(0)}s)`);
-    } catch (error) {
-      clearInterval(progressInterval);
-      console.error(`[Orbix Video Renderer] FFmpeg command failed:`, error.message);
-      console.error(`[Orbix Video Renderer] FFmpeg error code:`, error.code);
-      console.error(`[Orbix Video Renderer] FFmpeg stderr:`, error.stderr?.substring(0, 1000));
-      
-      // Provide helpful error message if FFmpeg is not installed
-      if (error.message && (error.message.includes('not recognized') || error.message.includes('not found'))) {
-        throw new Error('FFmpeg is not installed or not in your system PATH. Please install FFmpeg:\n\nWindows: Download from https://www.gyan.dev/ffmpeg/builds/ or use: choco install ffmpeg\nMac: brew install ffmpeg\nLinux: sudo apt-get install ffmpeg\n\nAfter installation, restart your development server.');
-      }
-      throw error;
     }
-    
-    const stdout = result.stdout;
-    const stderr = result.stderr;
-    
-    if (progressCallback) progressCallback(0.9); // 90% - FFmpeg complete
-    
-    // Log FFmpeg output
-    console.log(`[Orbix Video Renderer] FFmpeg stdout:`, stdout);
-    if (stderr) {
-      console.log(`[Orbix Video Renderer] FFmpeg stderr:`, stderr);
+    bodyText = (bodyText || '').trim();
+    const hookText = (script.hook || content.hook || '').trim();
+    if (hookText && bodyText.toLowerCase().startsWith(hookText.toLowerCase())) {
+      bodyText = bodyText.slice(hookText.length).replace(/^[\s.]+/, '').trim();
     }
-    
-    console.log(`[Orbix Video Renderer] Video rendered: ${outputPath}`);
-    if (progressCallback) progressCallback(1.0); // 100% - Complete
-    return outputPath;
-  } catch (error) {
-    console.error('[Orbix Video Renderer] Error rendering video:', error);
-    throw error;
-  }
-}
+    if (!bodyText) return [];
 
-/**
- * Build FFmpeg command for video rendering
- * @param {string} backgroundUrl - URL to background asset
- * @param {string} audioPath - Path to audio file
- * @param {Object} script - Script object
- * @param {Object} story - Story object
- * @param {string} template - Template ID ('A', 'B', or 'C')
- * @param {string} outputPath - Output file path
- * @returns {string} FFmpeg command
- */
-function buildFFmpegCommand(backgroundUrl, audioPath, script, story, template, outputPath) {
-  try {
-    // Determine if background is a video file or image URL
-    const isVideo = backgroundUrl.endsWith('.mp4') || backgroundUrl.endsWith('.mov') || backgroundUrl.startsWith('file://');
-    const isLocalFile = backgroundUrl.startsWith('/') || !backgroundUrl.startsWith('http');
-    
-    // Get story title and key points for text overlay
-    const title = story.title || 'Breaking News';
-    const headline = title.length > 60 ? title.substring(0, 57) + '...' : title;
-    
-    // Build FFmpeg command based on template
-    let videoFilter = '';
-    let textOverlay = '';
-    
-    if (isVideo) {
-      // Background is already a video (MOTION type)
-      videoFilter = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920[v]`;
-    } else {
-      // Background is an image (STILL type) - loop it
-      videoFilter = `[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,loop=loop=-1:size=1:start=0[v]`;
-    }
-    
-    // Add text overlay based on template
-    // Escape special characters for FFmpeg
-    const escapedHeadline = headline
-      .replace(/\\/g, '\\\\')
-      .replace(/'/g, "\\'")
-      .replace(/:/g, '\\:')
-      .replace(/\[/g, '\\[')
-      .replace(/\]/g, '\\]');
-    
-    // Use built-in font (DejaVu Sans) which is available on most systems
-    // Template A: Large headline at top
-    // Template B: Medium headline
-    // Template C: Smaller headline
-    const fontSize = template === 'A' ? 72 : template === 'B' ? 64 : 56;
-    const yPos = template === 'A' ? 100 : template === 'B' ? 150 : 200;
-    
-    textOverlay = `drawtext=text='${escapedHeadline}':fontsize=${fontSize}:fontcolor=white:x=(w-text_w)/2:y=${yPos}:box=1:boxcolor=black@0.5:boxborderw=10`;
-    
-    // Build the complete FFmpeg command
-    // Input 0: Background (image or video)
-    // Input 1: Audio file
-    let command;
-    
-    if (isVideo && isLocalFile) {
-      // Local video file
-      command = `ffmpeg -i "${backgroundUrl}" -i "${audioPath}" -filter_complex "${videoFilter};[v]${textOverlay}[vout]" -map "[vout]" -map 1:a -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k -shortest -pix_fmt yuv420p "${outputPath}"`;
-    } else if (!isVideo && !isLocalFile) {
-      // Remote image URL - need to download first (handled separately)
-      // For now, assume it's been downloaded to a local path
-      command = `ffmpeg -loop 1 -i "${backgroundUrl}" -i "${audioPath}" -filter_complex "${videoFilter};[v]${textOverlay}[vout]" -map "[vout]" -map 1:a -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k -shortest -pix_fmt yuv420p "${outputPath}"`;
-    } else {
-      // Local image file
-      command = `ffmpeg -loop 1 -i "${backgroundUrl}" -i "${audioPath}" -filter_complex "${videoFilter};[v]${textOverlay}[vout]" -map "[vout]" -map 1:a -c:v libx264 -preset medium -crf 23 -c:a aac -b:a 192k -shortest -pix_fmt yuv420p "${outputPath}"`;
-    }
-    
-    console.log(`[Orbix Video Renderer] FFmpeg command: ${command.substring(0, 200)}...`);
-    return command;
-  } catch (error) {
-    console.error('[Orbix Video Renderer] Error building FFmpeg command:', error);
-    throw error;
-  }
-}
+    // Estimate hook duration so we offset captions (hook is spoken first, no caption during it). Use 3.0 wps to match TTS.
+    const wordsPerSecond = 3.0;
+    const hookWords = hookText ? hookText.split(/\s+/).filter(Boolean).length : 0;
+    const hookDuration = Math.min(Math.max((hookWords / wordsPerSecond), 0.5), 10);
+    const bodyDuration = Math.max(audioDuration - hookDuration, 0.5);
+    // Caption only the body (no question); that part is spoken in the first (bodyOnlyWords/totalSpokenBodyWords) of body duration
+    const bodyOnlyWords = bodyText.split(/\s+/).filter(Boolean).length;
+    const questionWords = (script.what_happens_next || '').trim().split(/\s+/).filter(Boolean).length;
+    const totalSpokenBodyWords = bodyOnlyWords + questionWords;
+    const bodyDurationForCaptions = totalSpokenBodyWords > 0
+      ? bodyDuration * (bodyOnlyWords / totalSpokenBodyWords)
+      : bodyDuration;
 
-/**
- * Upload video to Supabase Storage
- * @param {string} videoPath - Local path to video file
- * @param {string} businessId - Business ID
- * @param {string} renderId - Render ID
- * @returns {Promise<string>} Public URL of uploaded video
- */
-export async function uploadToStorage(videoPath, businessId, renderId) {
-  try {
-    const filename = `render-${renderId}-${Date.now()}.mp4`;
-    const storagePath = `${businessId}/${filename}`;
-    
-    // Read file
-    const fs = await import('fs');
-    const videoBuffer = await fs.promises.readFile(videoPath);
-    
-    // Upload to Supabase Storage
-    const { data, error } = await supabaseClient.storage
-      .from('orbix-network-videos')
-      .upload(storagePath, videoBuffer, {
-        contentType: 'video/mp4',
-        upsert: false
+    const sentences = bodyText.match(/[^.!?]+[.!?]+/g) || [bodyText];
+    const totalBodyWords = bodyText.split(/\s+/).filter(Boolean).length;
+    if (totalBodyWords === 0) return [];
+
+    const segments = [];
+    let currentTime = hookDuration;
+
+    for (const sentence of sentences) {
+      const sentenceWords = sentence.split(/\s+/).filter(Boolean).length;
+      if (sentenceWords === 0) continue;
+      const segmentDuration = (sentenceWords / totalBodyWords) * bodyDurationForCaptions;
+      const endTime = Math.min(currentTime + segmentDuration, hookDuration + bodyDurationForCaptions);
+
+      segments.push({
+        text: sentence.trim(),
+        start: currentTime,
+        end: endTime
       });
-    
-    if (error) throw error;
-    
-    // Get public URL
-    const { data: urlData } = await supabaseClient.storage
-      .from('orbix-network-videos')
-      .getPublicUrl(storagePath);
-    
-    // Clean up local file
-    await unlinkAsync(videoPath);
-    
-    console.log(`[Orbix Video Renderer] Video uploaded: ${urlData.publicUrl}`);
-    return urlData.publicUrl;
+
+      currentTime = endTime + 0.05;
+      if (currentTime >= audioDuration) break;
+    }
+
+    // Clamp last segment end to sped-up caption window and audio duration
+    if (segments.length > 0) {
+      const maxEnd = Math.min(hookDuration + bodyDurationForCaptions, audioDuration);
+      if (segments[segments.length - 1].end > maxEnd) {
+        segments[segments.length - 1].end = maxEnd;
+      }
+    }
+
+    return segments;
   } catch (error) {
-    console.error('[Orbix Video Renderer] Error uploading video:', error);
+    console.error('[Orbix Video Renderer] Error generating caption segments:', error);
+    return [];
+  }
+}
+
+/** Words-per-second for TTS (match generateCaptionSegments). */
+const WPS = 3.0;
+
+/**
+ * Estimate audio duration in seconds from script (for caption generation when duration not stored).
+ * @param {Object} script - Script object (hook, what_happened, why_it_matters, what_happens_next or content_json)
+ * @returns {number} Estimated duration in seconds
+ */
+export function estimateAudioDurationFromScript(script) {
+  const content = script?.content_json
+    ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+    : {};
+  const hook = (script?.hook || content?.hook || '').trim();
+  const body = [script?.what_happened, script?.why_it_matters].filter(Boolean).join(' ');
+  const question = (script?.what_happens_next || '').trim();
+  const totalWords = [hook, body, question]
+    .join(' ')
+    .split(/\s+/)
+    .filter(Boolean).length;
+  return Math.max(5, totalWords / WPS);
+}
+
+/**
+ * Convert caption segments to SRT format for YouTube captions upload.
+ * @param {Array<{text: string, start: number, end: number}>} segments
+ * @returns {string} SRT content
+ */
+export function captionSegmentsToSrt(segments) {
+  if (!segments?.length) return '';
+  const formatTime = (s) => {
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const ms = Math.round((sec % 1) * 1000);
+    const ss = Math.floor(sec);
+    return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(ss).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+  };
+  return segments
+    .map((seg, i) => {
+      const start = formatTime(seg.start);
+      const end = formatTime(seg.end);
+      return `${i + 1}\n${start} --> ${end}\n${(seg.text || '').trim()}\n`;
+    })
+    .join('\n');
+}
+
+/**
+ * Word-wrap text to fit screen width (fewer chars per line for larger font).
+ * Returns string with ASS line breaks \\N between lines.
+ */
+function wrapHookText(text, maxCharsPerLine = 22) {
+  const words = (text || '').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  const lines = [];
+  let current = '';
+  for (const w of words) {
+    const next = current ? current + ' ' + w : w;
+    if (next.length <= maxCharsPerLine) {
+      current = next;
+    } else {
+      if (current) lines.push(current);
+      current = w.length <= maxCharsPerLine ? w : w.substring(0, maxCharsPerLine);
+    }
+  }
+  if (current) lines.push(current);
+  return lines.join('\\N');
+}
+
+/** Format seconds as ASS time HH:MM:SS.cc */
+function formatASSTimeFromSeconds(seconds) {
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = seconds % 60;
+  const cs = Math.round((s % 1) * 100);
+  const sec = Math.floor(s);
+  return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+/**
+ * Generate ASS file for hook only: center of screen, Arial Bold, all caps, wraps to screen width.
+ * Hook is visible only for hookDurationSeconds (while TTS is saying the hook).
+ * @param {string} hookTextAllCaps - Hook text (caller must pass already uppercased)
+ * @param {number} hookDurationSeconds - How long the hook is spoken (seconds); hook text is shown only during this time
+ * @returns {Promise<string>} Path to ASS file
+ */
+export async function generateHookOnlyASSFile(hookTextAllCaps, hookDurationSeconds) {
+  const fs = (await import('fs')).default;
+  const assPath = join(tmpdir(), `orbix-hook-only-${Date.now()}.ass`);
+  const hookFontSize = 114; // 76 * 1.5 (50% larger)
+  const centerX = 540;
+  const centerY = 960;
+  const assContent = `[Script Info]
+Title: Orbix Hook
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Hook,Arial,${hookFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+  const hookStart = '0:00:00.00';
+  const hookEnd = formatASSTimeFromSeconds(Math.max(hookDurationSeconds, 0.5));
+  const wrapped = wrapHookText(hookTextAllCaps || '');
+  const line = `Dialogue: 0,${hookStart},${hookEnd},Hook,,0,0,0,,{\\an5\\pos(${centerX},${centerY})}${wrapped}\n`;
+  await fs.promises.writeFile(assPath, assContent + line, 'utf8');
+  return assPath;
+}
+
+/**
+ * Generate ASS subtitle file
+ * @param {Array} captionSegments - Caption segments with timing
+ * @param {string} captionY - Caption Y position (e.g., 'h-120')
+ * @param {string} hookText - Hook text to display
+ * @param {number} hookFontSize - Hook text font size
+ * @param {number} hookY - Hook text Y position
+ * @param {number} audioDuration - Audio duration in seconds
+ * @param {number} [targetDuration] - Video length (audioDuration + tail). If provided with endQuestionText, adds end-question line until end.
+ * @param {string} [endQuestionText] - End question + " COMMENT NOW" shown in hook style
+ * @param {number} [endQuestionStartSeconds] - When the question starts being spoken (so it appears on screen then). If omitted, uses audioDuration+1.
+ * @returns {Promise<string>} Path to ASS file
+ */
+export async function generateASSSubtitleFile(captionSegments, captionY, hookText, hookFontSize, hookY, audioDuration, targetDuration = null, endQuestionText = null, endQuestionStartSeconds = null) {
+  try {
+    const fs = (await import('fs')).default;
+    const assPath = join(tmpdir(), `orbix-subtitles-${Date.now()}.ass`);
+    
+    // Parse caption Y position
+    const captionYValue = captionY === 'h-100' ? 1820 : captionY === 'h-120' ? 1800 : captionY === 'h-140' ? 1780 : 1800;
+    
+    const endQuestionFontSize = 114; // Same as hook (Arial Bold, center)
+    const centerX = 540;
+    const centerY = 960;
+    
+    // ASS file header - PlayRes must match video size (1080x1920). EndQuestion style = same as hook (114pt, center)
+    let assContent = `[Script Info]
+Title: Orbix Network Video
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Hook,Arial,${hookFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+Style: Caption,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+Style: EndQuestion,Arial,${endQuestionFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+    
+    // Add hook text (displayed for entire duration)
+    if (hookText && hookText.trim()) {
+      const hookStart = '0:00:00.00';
+      const hours = Math.floor(audioDuration / 3600);
+      const minutes = Math.floor((audioDuration % 3600) / 60);
+      const seconds = audioDuration % 60;
+      const hookEnd = `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds.toFixed(2)).padStart(5, '0')}`;
+      
+      assContent += `Dialogue: 0,${hookStart},${hookEnd},Hook,,0,0,0,,{\\an2\\pos(540,${hookY})}${hookText}\n`;
+    }
+    
+    // Add caption segments
+    for (const segment of captionSegments) {
+      const startTime = formatASSTime(segment.start);
+      const endTime = formatASSTime(segment.end);
+      assContent += `Dialogue: 0,${startTime},${endTime},Caption,,0,0,0,,{\\an2\\pos(540,${captionYValue})}${segment.text}\n`;
+    }
+    
+    // End question + " COMMENT NOW" in hook style — show when question is spoken (endQuestionStartSeconds) through end of video
+    if (endQuestionText != null && endQuestionText !== '' && targetDuration != null && targetDuration > audioDuration) {
+      const endQuestionDisplay = (endQuestionText.trim() + ' COMMENT NOW').toUpperCase();
+      const wrapped = wrapHookText(endQuestionDisplay);
+      const startSeconds = endQuestionStartSeconds != null && endQuestionStartSeconds < targetDuration
+        ? endQuestionStartSeconds
+        : audioDuration + 1;
+      const startTime = formatASSTimeFromSeconds(startSeconds);
+      const endTime = formatASSTimeFromSeconds(targetDuration);
+      assContent += `Dialogue: 0,${startTime},${endTime},EndQuestion,,0,0,0,,{\\an5\\pos(${centerX},${centerY})}${wrapped}\n`;
+    }
+    
+    await fs.promises.writeFile(assPath, assContent);
+    return assPath;
+  } catch (error) {
+    console.error('[Orbix Video Renderer] Error generating ASS file:', error);
     throw error;
   }
 }
 
 /**
- * Update render progress in database
- * @param {string} renderId - Render ID
- * @param {number} progress - Progress percentage (0-100)
+ * Format time for ASS file (HH:MM:SS.mm)
  */
-async function updateRenderProgress(renderId, progress) {
+function formatASSTime(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = seconds % 60;
+  const wholeSecs = Math.floor(secs);
+  const centiseconds = Math.floor((secs - wholeSecs) * 100);
+  
+  return `${hours}:${String(minutes).padStart(2, '0')}:${String(wholeSecs).padStart(2, '0')}.${String(centiseconds).padStart(2, '0')}`;
+}
+
+/**
+ * Get random music track for business
+ * @param {string} businessId - Business ID
+ * @returns {Promise<{name: string, url: string} | null>} Music track info
+ */
+export async function getRandomMusicTrack(businessId) {
   try {
-    await supabaseClient
-      .from('orbix_renders')
-      .update({ 
-        progress_percentage: Math.max(0, Math.min(100, Math.round(progress))),
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', renderId);
-    console.log(`[Orbix Video Renderer] Updated progress for render ${renderId}: ${Math.round(progress)}%`);
+    // Get music tracks from database (if stored) or return null
+    // For now, return null (music is optional)
+    return null;
   } catch (error) {
-    // If progress_percentage column doesn't exist, just update updated_at
-    if (error.message && (error.message.includes('progress_percentage') || error.message.includes('schema cache'))) {
-      console.log(`[Orbix Video Renderer] Progress column not found, skipping progress update for render ${renderId} (${Math.round(progress)}%)`);
-      try {
-        await supabaseClient
-          .from('orbix_renders')
-          .update({ 
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', renderId);
-      } catch (updateError) {
-        console.error(`[Orbix Video Renderer] Error updating timestamp for render ${renderId}:`, updateError.message);
-      }
-    } else {
-      console.error(`[Orbix Video Renderer] Error updating progress for render ${renderId}:`, error.message);
-    }
-    // Don't throw - progress updates are non-critical
+    console.error('[Orbix Video Renderer] Error getting music track:', error);
+    return null;
   }
 }
 
 /**
- * Process a render job (select template, background, render, upload)
- * @param {Object} renderJob - Render job from database
- * @returns {Promise<Object>} Updated render job with output URL
+ * Prepare music track (download and prepare for mixing)
+ * @param {string} url - Music track URL
+ * @param {number} duration - Target duration in seconds
+ * @returns {Promise<string | null>} Path to prepared music file
  */
-export async function processRenderJob(renderJob) {
-  console.log(`[Orbix Video Renderer] ========== PROCESS RENDER JOB START ==========`);
-  console.log(`[Orbix Video Renderer] Render ID: ${renderJob.id}`);
-  console.log(`[Orbix Video Renderer] Story ID: ${renderJob.story_id}`);
-  console.log(`[Orbix Video Renderer] Script ID: ${renderJob.script_id}`);
+export async function prepareMusicTrack(url, duration) {
+  try {
+    const axios = (await import('axios')).default;
+    const fs = (await import('fs')).default;
+    
+    const musicPath = join(tmpdir(), `orbix-music-${Date.now()}.mp3`);
+    
+    // Download music file
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    await fs.promises.writeFile(musicPath, response.data);
+    
+    // Trim/fade music to match duration
+    const trimmedPath = join(tmpdir(), `orbix-music-trimmed-${Date.now()}.mp3`);
+    const ffmpegCommand = `ffmpeg -i "${musicPath}" -t ${duration} -af "afade=t=in:st=0:d=0.8,afade=t=out:st=${duration - 0.8}:d=0.8" -y "${trimmedPath}"`;
+    await execAsync(ffmpegCommand, { timeout: 30000 });
+    
+    // Cleanup original
+    await unlinkAsync(musicPath).catch(() => {});
+    
+    return trimmedPath;
+  } catch (error) {
+    console.error('[Orbix Video Renderer] Error preparing music track:', error);
+    return null;
+  }
+}
+
+/**
+ * Process a render job through all steps
+ * Orchestrates the complete video rendering pipeline
+ */
+export async function processRenderJob(render) {
+  console.log(`[processRenderJob] Starting render job for render ${render.id}`);
   
   try {
-    // Progress: 0% - Starting
-    console.log(`[Orbix Video Renderer] Setting progress to 0%...`);
-    await updateRenderProgress(renderJob.id, 0);
+    // Import step functions
+    const { 
+      step3Background, 
+      step4Voice, 
+      step5HookText, 
+      step6Captions, 
+      step7Metadata, 
+      step8YouTubeUpload 
+    } = await import('./render-steps.js');
     
-    // Get story and script (10% progress)
-    console.log(`[Orbix Video Renderer] Fetching story ${renderJob.story_id}...`);
+    // Fetch story and script from database
     const { data: story, error: storyError } = await supabaseClient
       .from('orbix_stories')
       .select('*')
-      .eq('id', renderJob.story_id)
+      .eq('id', render.story_id)
       .single();
     
-    if (storyError) {
-      throw new Error(`Failed to fetch story: ${storyError.message}`);
+    if (storyError || !story) {
+      throw new Error(`Story not found: ${storyError?.message || 'Story ID: ' + render.story_id}`);
     }
-    console.log(`[Orbix Video Renderer] Story fetched:`, story ? 'found' : 'not found');
     
-    console.log(`[Orbix Video Renderer] Fetching script ${renderJob.script_id}...`);
     const { data: script, error: scriptError } = await supabaseClient
       .from('orbix_scripts')
       .select('*')
-      .eq('id', renderJob.script_id)
+      .eq('id', render.script_id)
       .single();
     
-    if (scriptError) {
-      throw new Error(`Failed to fetch script: ${scriptError.message}`);
-    }
-    console.log(`[Orbix Video Renderer] Script fetched:`, script ? 'found' : 'not found');
-    
-    if (!story || !script) {
-      throw new Error('Story or script not found');
+    if (scriptError || !script) {
+      throw new Error(`Script not found: ${scriptError?.message || 'Script ID: ' + render.script_id}`);
     }
     
-    console.log(`[Orbix Video Renderer] Setting progress to 10%...`);
-    await updateRenderProgress(renderJob.id, 10);
+    console.log(`[processRenderJob] Story and script loaded for render ${render.id}`);
     
-    // Render video (10% -> 80% progress)
-    // This is the longest step, so we'll simulate progress during rendering
-    console.log(`[Orbix Video Renderer] Starting renderVideo...`);
-    const videoPath = await renderVideo(renderJob, script, story, (progress) => {
-      // Progress callback: 10% + (progress * 70%) = 10% to 80%
-      const totalProgress = 10 + (progress * 0.7);
-      console.log(`[Orbix Video Renderer] Render progress: ${totalProgress.toFixed(1)}%`);
-      updateRenderProgress(renderJob.id, totalProgress);
-    });
+    // Generate audio first so we know duration; video length = audioDuration + 5 seconds (end question + Comment Now stay on until end)
+    const audioResult = await generateAudio(script);
+    const preGeneratedAudioPath = audioResult.audioPath;
+    const audioDuration = audioResult.duration;
+    const targetDuration = audioDuration + 5;
+    console.log(`[processRenderJob] Audio generated: ${audioDuration.toFixed(1)}s, target video length: ${targetDuration.toFixed(1)}s`);
     
-    console.log(`[Orbix Video Renderer] renderVideo completed. Video path: ${videoPath}`);
-    console.log(`[Orbix Video Renderer] Setting progress to 80%...`);
-    await updateRenderProgress(renderJob.id, 80);
-    
-    // Upload to storage (80% -> 95% progress)
-    console.log(`[Orbix Video Renderer] Uploading to storage...`);
-    const outputUrl = await uploadToStorage(videoPath, renderJob.business_id, renderJob.id);
-    console.log(`[Orbix Video Renderer] Upload completed. Output URL: ${outputUrl}`);
-    
-    console.log(`[Orbix Video Renderer] Setting progress to 95%...`);
-    await updateRenderProgress(renderJob.id, 95);
-    
-    // Finalize (95% -> 100%)
-    console.log(`[Orbix Video Renderer] Setting progress to 100%...`);
-    await updateRenderProgress(renderJob.id, 100);
-    
-    console.log(`[Orbix Video Renderer] ========== PROCESS RENDER JOB SUCCESS ==========`);
-    return {
-      outputUrl,
-      status: 'COMPLETED'
-    };
-  } catch (error) {
-    console.error('[Orbix Video Renderer] ========== PROCESS RENDER JOB ERROR ==========');
-    console.error(`[Orbix Video Renderer] Render ID: ${renderJob.id}`);
-    console.error(`[Orbix Video Renderer] Error type: ${error?.constructor?.name}`);
-    console.error(`[Orbix Video Renderer] Error message: ${error.message}`);
-    console.error(`[Orbix Video Renderer] Error stack:`, error.stack);
-    console.error(`[Orbix Video Renderer] Full error:`, error);
-    
-    // Update progress to show failure
     try {
-      await updateRenderProgress(renderJob.id, 0); // Reset on failure
-    } catch (progressError) {
-      console.error(`[Orbix Video Renderer] Failed to update progress on error:`, progressError);
+    // STEP 3: Background motion render (length = targetDuration)
+    console.log(`[processRenderJob] Starting Step 3: Background motion`);
+    const step3Result = await step3Background(render.id, render, script, story, targetDuration);
+    console.log(`[processRenderJob] Step 3 completed: ${step3Result.outputPath}`);
+    
+    // STEP 4: Voice and music addition (use pre-generated audio, output length = targetDuration)
+    console.log(`[processRenderJob] Starting Step 4: Voice and music`);
+    const step4Result = await step4Voice(render.id, render, script, story, step3Result.outputPath, {
+      audioPath: preGeneratedAudioPath,
+      audioDuration,
+      targetDuration
+    });
+    console.log(`[processRenderJob] Step 4 completed: ${step4Result.outputPath}, audio duration: ${step4Result.audioDuration}`);
+    
+    // STEP 5: Hook text addition (pass step 4 output so we never use stale DB path on re-render)
+    console.log(`[processRenderJob] Starting Step 5: Hook text`);
+    const step5Result = await step5HookText(render.id, render, script, story, render.template, step4Result.outputPath, step4Result.audioDuration);
+    console.log(`[processRenderJob] Step 5 completed: ${step5Result.outputPath}`);
+    
+    // STEP 6: Captions addition (pass step 5 output so we never use stale DB path on re-render)
+    console.log(`[processRenderJob] Starting Step 6: Captions`);
+    const step6Result = await step6Captions(render.id, render, script, story, render.template, step5Result.outputPath, step4Result.audioDuration, targetDuration);
+    console.log(`[processRenderJob] Step 6 completed: ${step6Result.outputPath}`);
+    
+    // STEP 7: Metadata generation
+    console.log(`[processRenderJob] Starting Step 7: Metadata`);
+    await step7Metadata(render.id, render, script, story);
+    console.log(`[processRenderJob] Step 7 completed`);
+    
+    // STEP 8: YouTube upload (optional - may be skipped if channel not connected)
+    console.log(`[processRenderJob] Starting Step 8: YouTube upload`);
+    const step8Result = await step8YouTubeUpload(render.id, render, step6Result.outputPath);
+    console.log(`[processRenderJob] Step 8 completed`, step8Result?.skipped ? '(skipped)' : step8Result?.url);
+
+    // We do NOT mark COMPLETED until we have a view URL — so every completed render always has a View button
+    let outputUrl = step8Result?.url ?? null;
+    if (!outputUrl && render.business_id) {
+      outputUrl = await uploadRenderToStorage(render.business_id, render.id, step6Result.outputPath);
+      if (outputUrl) console.log(`[processRenderJob] Video uploaded to storage for viewing`);
+    }
+    if (!outputUrl) {
+      throw new Error('Video rendered but view link could not be created (YouTube and storage upload failed). Please try Restart Render.');
+    }
+
+    // Mark render as completed; jobs route will set output_url from return value
+    await supabaseClient
+      .from('orbix_renders')
+      .update({
+        render_status: 'COMPLETED',
+        render_step: 'COMPLETED',
+        step_progress: 100,
+        step_completed_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', render.id);
+
+    console.log(`[processRenderJob] Render ${render.id} completed successfully`);
+
+    return {
+      status: 'COMPLETED',
+      outputUrl,
+      renderId: render.id
+    };
+    } finally {
+      try { if (preGeneratedAudioPath) await unlinkAsync(preGeneratedAudioPath); } catch (e) { /* ignore */ }
+    }
+  } catch (error) {
+    console.error(`[processRenderJob] Error processing render ${render.id}:`, error);
+    console.error(`[processRenderJob] Error message:`, error.message);
+    console.error(`[processRenderJob] Error stack:`, error.stack);
+    
+    // Mark render as failed
+    try {
+      await supabaseClient
+        .from('orbix_renders')
+        .update({
+          render_status: 'FAILED',
+          step_error: error.message,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', render.id);
+    } catch (updateError) {
+      console.error(`[processRenderJob] Failed to update render status:`, updateError);
     }
     
     return {
       status: 'FAILED',
-      error: error.message
+      error: error.message,
+      renderId: render.id
     };
   }
 }
-

@@ -48,16 +48,21 @@ const retryRequest = async (config, retries = 2) => {
   }
 };
 
+// Throttle network error logs when backend is down (avoid console flood from polling)
+let lastNetworkErrorLog = 0;
+const NETWORK_ERROR_LOG_INTERVAL_MS = 30000;
+
 // Handle auth errors and rate limiting
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    // Log network errors for debugging
+    // Log network errors for debugging, but only once per 30s to avoid console flood
     if (error.code === 'ECONNREFUSED' || error.code === 'ERR_NETWORK' || !error.response) {
-      console.error('[API] Network error:', error.message);
-      console.error('[API] API URL:', API_URL);
-      console.error('[API] Full error:', error);
-      // Don't redirect on network errors - let the component handle it
+      const now = Date.now();
+      if (now - lastNetworkErrorLog >= NETWORK_ERROR_LOG_INTERVAL_MS) {
+        lastNetworkErrorLog = now;
+        console.error('[API] Network error: backend unreachable at', API_URL, '-', error.message);
+      }
       return Promise.reject(new Error(`Unable to connect to server. Please check that the backend is running at ${API_URL}`));
     }
     
@@ -380,37 +385,58 @@ export const reviewsAPI = {
   }),
 };
 
-// Orbix Network API (v2)
+// Orbix Network API (v2). Channel-scoped methods require channel_id in params or body.
 export const orbixNetworkAPI = {
+  // Channels (no channel_id required)
+  getChannels: () => api.get('/v2/orbix-network/channels'),
+  createChannel: (data) => api.post('/v2/orbix-network/channels', data),
+  updateChannel: (id, data) => api.patch(`/v2/orbix-network/channels/${id}`, data),
+  deleteChannel: (id) => api.delete(`/v2/orbix-network/channels/${id}`),
   getSetupStatus: () => api.get('/v2/orbix-network/setup/status'),
   startSetup: () => api.post('/v2/orbix-network/setup/start'),
   saveSetup: (step, stepData) => api.post('/v2/orbix-network/setup/save', { step, stepData }),
   completeSetup: () => api.post('/v2/orbix-network/setup/complete'),
   getStories: (params) => api.get('/v2/orbix-network/stories', { params }),
-  getStory: (id) => api.get(`/v2/orbix-network/stories/${id}`),
+  getStory: (id, params) => api.get(`/v2/orbix-network/stories/${id}`, { params }),
   getRenders: (params) => api.get('/v2/orbix-network/renders', { params }),
-  getRender: (id) => api.get(`/v2/orbix-network/renders/${id}`),
-  deleteRender: (id) => api.delete(`/v2/orbix-network/renders/${id}`),
-  restartRender: (id) => api.post(`/v2/orbix-network/renders/${id}/restart`),
+  getPipeline: (params) => api.get('/v2/orbix-network/pipeline', { params }),
+  getRender: (id, params) => api.get(`/v2/orbix-network/renders/${id}`, { params }),
+  deleteRender: (id, params) => api.delete(`/v2/orbix-network/renders/${id}`, { params }),
+  cancelRender: (id, params) => api.delete(`/v2/orbix-network/renders/${id}`, { params }),
+  restartRender: (id, params) => api.post(`/v2/orbix-network/renders/${id}/restart`, {}, { params }),
+  uploadRenderToYoutube: (id, params) => api.post(`/v2/orbix-network/renders/${id}/upload-youtube`, {}, { params }),
   getPublishes: (params) => api.get('/v2/orbix-network/publishes', { params }),
   getRawItems: (params) => api.get('/v2/orbix-network/raw-items', { params }),
-  getSources: () => api.get('/v2/orbix-network/sources'),
-  addSource: (data) => api.post('/v2/orbix-network/sources', data),
-  updateSource: (id, data) => api.put(`/v2/orbix-network/sources/${id}`, data),
-  deleteSource: (id) => api.delete(`/v2/orbix-network/sources/${id}`),
-  getReviewQueue: () => api.get('/v2/orbix-network/review-queue'),
-  approveStory: (id) => api.post(`/v2/orbix-network/stories/${id}/approve`),
-  rejectStory: (id) => api.post(`/v2/orbix-network/stories/${id}/reject`),
-  editScriptHook: (id, hook) => api.post(`/v2/orbix-network/stories/${id}/script/edit-hook`, { hook }),
+  getSources: (params) => api.get('/v2/orbix-network/sources', { params }),
+  addSource: (data) => api.post('/v2/orbix-network/sources', data), // include channel_id in data
+  updateSource: (id, data, params) => api.put(`/v2/orbix-network/sources/${id}`, data, { params }),
+  deleteSource: (id, params) => api.delete(`/v2/orbix-network/sources/${id}`, { params }),
+  getReviewQueue: (params) => api.get('/v2/orbix-network/review-queue', { params }),
+  approveStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/approve`, {}, { params }),
+  rejectStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/reject`, {}, { params }),
+  generateScriptForStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/generate-script`, {}, { params }),
+  startRenderForStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/start-render`, {}, { params }),
+  forceRenderStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/force-render`, {}, { params }),
+  editScriptHook: (id, hook, params) => api.post(`/v2/orbix-network/stories/${id}/script/edit-hook`, { hook }, { params }),
   getAnalytics: (params) => api.get('/v2/orbix-network/analytics', { params }),
-  getYoutubeAuthUrl: () => api.get('/v2/orbix-network/youtube/auth-url'),
-  getYoutubeChannel: () => api.get('/v2/orbix-network/youtube/channel'),
-  disconnectYoutube: () => api.post('/v2/orbix-network/youtube/disconnect'),
-  triggerScrapeJob: () => api.post('/v2/orbix-network/jobs/scrape'),
+  getYoutubeAuthUrl: (params) => api.get('/v2/orbix-network/youtube/auth-url', { params }),
+  getYoutubeChannel: (params) => api.get('/v2/orbix-network/youtube/channel', { params }),
+  disconnectYoutube: (data) => api.post('/v2/orbix-network/youtube/disconnect', data || {}),
+  getBackgrounds: (params) => api.get('/v2/orbix-network/backgrounds', { params }),
+  uploadBackground: (formData) => api.post('/v2/orbix-network/backgrounds', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000
+  }),
+  triggerScrapeJob: (body) => api.post('/v2/orbix-network/jobs/scrape', body ?? {}, { timeout: 120000 }),
+  cleanupOldData: (olderThanDays = 10, params) => api.post('/v2/orbix-network/cleanup', { older_than_days: olderThanDays }, { params }),
   triggerProcessJob: () => api.post('/v2/orbix-network/jobs/process'),
   triggerReviewQueueJob: () => api.post('/v2/orbix-network/jobs/review-queue'),
   triggerRenderJob: () => api.post('/v2/orbix-network/jobs/render'),
+  triggerAutomatedPipeline: () => api.post('/v2/orbix-network/jobs/automated-pipeline'),
   triggerPublishJob: () => api.post('/v2/orbix-network/jobs/publish'),
+  forceProcessRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/force-process`, {}, { params }),
+  forceScoreRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/force-score`, {}, { params }),
+  allowStoryRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/allow-story`, {}, { params }),
 };
 
 // Contacts API

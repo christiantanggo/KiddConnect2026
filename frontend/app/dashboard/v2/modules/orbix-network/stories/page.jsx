@@ -8,31 +8,40 @@ import V2AppShell from '@/components/V2AppShell';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
-import { ArrowLeft, Loader, Filter, X, CheckCircle } from 'lucide-react';
+import { useOrbixChannel } from '../OrbixChannelContext';
+import { ArrowLeft, Loader, Filter, X, CheckCircle, Video, Trash2 } from 'lucide-react';
 
 export default function OrbixNetworkStoriesPage() {
   const router = useRouter();
   const { success, error: showErrorToast } = useToast();
+  const { currentChannelId, apiParams } = useOrbixChannel();
   const [loading, setLoading] = useState(true);
   const [stories, setStories] = useState([]);
   const [selectedStory, setSelectedStory] = useState(null);
   const [filters, setFilters] = useState({
     category: '',
-    status: ''
+    status: '',
+    days: 'all' // 'all' | '30' | '7' - see past scraped stories
   });
+  const [cleaningUp, setCleaningUp] = useState(false);
 
   useEffect(() => {
+    if (!currentChannelId) {
+      setLoading(false);
+      setStories([]);
+      return;
+    }
     loadStories();
-  }, [filters]);
+  }, [filters, currentChannelId]);
 
   const loadStories = async () => {
     try {
       setLoading(true);
-      const params = {};
+      const params = { limit: 200 };
       if (filters.category) params.category = filters.category;
       if (filters.status) params.status = filters.status;
-      
-      const response = await orbixNetworkAPI.getStories({ ...params, limit: 100 });
+      if (filters.days !== 'all') params.days = filters.days;
+      const response = await orbixNetworkAPI.getStories({ ...params, ...apiParams() });
       setStories(response.data.stories || []);
     } catch (error) {
       console.error('Failed to load stories:', error);
@@ -109,6 +118,18 @@ export default function OrbixNetworkStoriesPage() {
     }
   };
 
+  const handleForceRender = async (storyId) => {
+    try {
+      await orbixNetworkAPI.forceRenderStory(storyId, apiParams());
+      success('Render created and processing started');
+      loadStories();
+    } catch (error) {
+      console.error('Failed to force render:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to force render');
+    }
+  };
+
   if (loading) {
     return (
       <AuthGuard>
@@ -141,8 +162,18 @@ export default function OrbixNetworkStoriesPage() {
           </div>
 
           {/* Filters */}
-          <div className="bg-white rounded-lg shadow p-4 flex gap-4 items-center">
+          <div className="bg-white rounded-lg shadow p-4 flex flex-wrap gap-4 items-center">
             <Filter className="w-5 h-5 text-gray-500" />
+            <select
+              value={filters.days}
+              onChange={(e) => setFilters({ ...filters, days: e.target.value })}
+              className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+              title="Show stories from this time range (including past scraped)"
+            >
+              <option value="all">All time</option>
+              <option value="30">Last 30 days</option>
+              <option value="7">Last 7 days</option>
+            </select>
             <select
               value={filters.category}
               onChange={(e) => setFilters({ ...filters, category: e.target.value })}
@@ -155,7 +186,6 @@ export default function OrbixNetworkStoriesPage() {
               <option value="laws-rules">Laws & Rules</option>
               <option value="money-markets">Money & Markets</option>
             </select>
-            
             <select
               value={filters.status}
               onChange={(e) => setFilters({ ...filters, status: e.target.value })}
@@ -169,15 +199,27 @@ export default function OrbixNetworkStoriesPage() {
               <option value="PUBLISHED">Published</option>
             </select>
 
-            {(filters.category || filters.status) && (
+            {(filters.category || filters.status || filters.days !== 'all') && (
               <button
-                onClick={() => setFilters({ category: '', status: '' })}
+                onClick={() => setFilters({ category: '', status: '', days: 'all' })}
                 className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900 flex items-center gap-1"
               >
                 <X className="w-4 h-4" />
                 Clear Filters
               </button>
             )}
+            <div className="ml-auto flex items-center gap-2">
+              <span className="text-sm text-gray-500">Cleanup:</span>
+              <button
+                onClick={handleCleanupOld}
+                disabled={cleaningUp}
+                className="px-3 py-2 text-sm bg-red-50 text-red-700 rounded-lg hover:bg-red-100 disabled:opacity-50 flex items-center gap-1"
+                title="Delete stories and scraped items older than 10 days"
+              >
+                {cleaningUp ? <Loader className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                Delete 10+ days old
+              </button>
+            </div>
           </div>
 
           {/* Stories List */}
@@ -187,9 +229,9 @@ export default function OrbixNetworkStoriesPage() {
                 <div className="text-center py-12">
                   <p className="text-gray-500 text-lg mb-2">No stories found</p>
                   <p className="text-gray-400 text-sm">
-                    {filters.category || filters.status 
-                      ? 'Try adjusting your filters'
-                      : 'Stories will appear here once processing begins'}
+                    {filters.category || filters.status || filters.days !== 'all'
+                      ? 'Try adjusting your filters or choose “All time” to see past scraped stories.'
+                      : 'Stories will appear here once scraping and processing have run.'}
                   </p>
                 </div>
               ) : (
@@ -284,9 +326,9 @@ export default function OrbixNetworkStoriesPage() {
                     <p className="text-gray-600">{formatDate(selectedStory.created_at)}</p>
                   </div>
 
-                  {/* Approve button for rejected stories */}
-                  {selectedStory.status === 'REJECTED' && (
-                    <div className="flex gap-4 pt-4 border-t border-gray-200">
+                  {/* Action buttons */}
+                  <div className="flex gap-4 pt-4 border-t border-gray-200">
+                    {selectedStory.status === 'REJECTED' && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -297,8 +339,20 @@ export default function OrbixNetworkStoriesPage() {
                         <CheckCircle className="w-5 h-5" />
                         Approve Story
                       </button>
-                    </div>
-                  )}
+                    )}
+                    {(selectedStory.status === 'APPROVED' || selectedStory.status === 'PENDING') && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleForceRender(selectedStory.id);
+                        }}
+                        className="flex-1 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center justify-center gap-2"
+                      >
+                        <Video className="w-5 h-5" />
+                        Force Render (Test)
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

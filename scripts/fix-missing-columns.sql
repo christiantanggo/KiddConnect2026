@@ -76,3 +76,6 @@ CREATE INDEX IF NOT EXISTS idx_call_sessions_vapi_call_id ON call_sessions(vapi_
 
 
 
+
+
+

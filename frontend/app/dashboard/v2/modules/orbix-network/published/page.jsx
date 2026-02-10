@@ -8,18 +8,57 @@ import V2AppShell from '@/components/V2AppShell';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
-import { ArrowLeft, Loader, Youtube, ExternalLink, Eye, ThumbsUp, MessageCircle } from 'lucide-react';
+import { useOrbixChannel } from '../OrbixChannelContext';
+import { ArrowLeft, Loader, Youtube, ExternalLink, Eye, ThumbsUp, MessageCircle, X, Upload, RefreshCw } from 'lucide-react';
 
 export default function OrbixNetworkPublishedPage() {
   const router = useRouter();
-  const { error: showErrorToast } = useToast();
+  const { success, error: showErrorToast } = useToast();
+  const { currentChannelId, apiParams } = useOrbixChannel();
   const [loading, setLoading] = useState(true);
   const [publishes, setPublishes] = useState([]);
   const [platformFilter, setPlatformFilter] = useState('');
+  const [selectedPublish, setSelectedPublish] = useState(null);
+  const [reuploading, setReuploading] = useState(false);
+  const [rerendering, setRerendering] = useState(false);
+  const [uploadMetadata, setUploadMetadata] = useState(null);
+  const [loadingMetadata, setLoadingMetadata] = useState(false);
 
   useEffect(() => {
+    if (!currentChannelId) {
+      setLoading(false);
+      setPublishes([]);
+      return;
+    }
     loadPublishes();
-  }, [platformFilter]);
+  }, [platformFilter, currentChannelId]);
+
+  useEffect(() => {
+    if (!selectedPublish?.render_id) {
+      setUploadMetadata(null);
+      return;
+    }
+    let cancelled = false;
+    setLoadingMetadata(true);
+    setUploadMetadata(null);
+    orbixNetworkAPI.getRender(selectedPublish.render_id, apiParams())
+      .then((res) => {
+        if (cancelled) return;
+        const r = res.data?.render;
+        setUploadMetadata({
+          title: r?.youtube_title ?? selectedPublish.title ?? '',
+          description: r?.youtube_description ?? selectedPublish.description ?? '',
+          hashtags: r?.hashtags ?? ''
+        });
+      })
+      .catch(() => {
+        if (!cancelled) setUploadMetadata({ title: selectedPublish.title ?? '', description: selectedPublish.description ?? '', hashtags: '' });
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingMetadata(false);
+      });
+    return () => { cancelled = true; };
+  }, [selectedPublish?.id, selectedPublish?.render_id]);
 
   const loadPublishes = async () => {
     try {
@@ -27,7 +66,7 @@ export default function OrbixNetworkPublishedPage() {
       const params = {};
       if (platformFilter) params.platform = platformFilter;
       
-      const response = await orbixNetworkAPI.getPublishes({ ...params, limit: 100 });
+      const response = await orbixNetworkAPI.getPublishes({ ...params, ...apiParams(), limit: 100 });
       setPublishes(response.data.publishes || []);
     } catch (error) {
       console.error('Failed to load published videos:', error);
@@ -72,6 +111,40 @@ export default function OrbixNetworkPublishedPage() {
       hour: '2-digit',
       minute: '2-digit'
     });
+  };
+
+  const handleReRender = async () => {
+    if (!selectedPublish?.render_id) return;
+    try {
+      setRerendering(true);
+      await orbixNetworkAPI.restartRender(selectedPublish.render_id, apiParams());
+      success('Re-render started — the video will process in the pipeline. Re-upload when it completes.');
+      setSelectedPublish(null);
+      loadPublishes();
+    } catch (error) {
+      console.error('Re-render failed:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Re-render failed');
+    } finally {
+      setRerendering(false);
+    }
+  };
+
+  const handleReuploadYouTube = async () => {
+    if (!selectedPublish?.render_id) return;
+    try {
+      setReuploading(true);
+      await orbixNetworkAPI.uploadRenderToYoutube(selectedPublish.render_id, apiParams());
+      success('Re-uploaded to YouTube');
+      setSelectedPublish(null);
+      loadPublishes();
+    } catch (error) {
+      console.error('Re-upload failed:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Re-upload to YouTube failed');
+    } finally {
+      setReuploading(false);
+    }
   };
 
   if (loading) {
@@ -132,7 +205,11 @@ export default function OrbixNetworkPublishedPage() {
               ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                   {publishes.map((publish) => (
-                    <div key={publish.id} className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow">
+                    <div
+                      key={publish.id}
+                      onClick={() => setSelectedPublish(publish)}
+                      className="border border-gray-200 rounded-lg overflow-hidden hover:shadow-lg transition-shadow cursor-pointer"
+                    >
                       <div className="p-4">
                         <div className="flex justify-between items-start mb-3">
                           <div className="flex items-center gap-2">
@@ -174,6 +251,7 @@ export default function OrbixNetworkPublishedPage() {
                             href={`https://www.youtube.com/watch?v=${publish.platform_video_id}`}
                             target="_blank"
                             rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
                             className="w-full px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-center text-sm flex items-center justify-center gap-2"
                           >
                             <ExternalLink className="w-4 h-4" />
@@ -188,6 +266,114 @@ export default function OrbixNetworkPublishedPage() {
             </div>
           </div>
         </div>
+
+        {/* Published video detail modal */}
+        {selectedPublish && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !reuploading && !rerendering && setSelectedPublish(null)}>
+            <div className="bg-white rounded-xl shadow-xl max-w-lg w-full max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="p-6">
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex items-center gap-2">
+                    {selectedPublish.platform === 'YOUTUBE' && <Youtube className="w-6 h-6 text-red-600" />}
+                    <span className="text-sm font-medium text-gray-600">{selectedPublish.platform}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => !reuploading && !rerendering && setSelectedPublish(null)}
+                    className="p-1 rounded hover:bg-gray-100 text-gray-500"
+                    aria-label="Close"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <h2 className="text-xl font-semibold mb-4">{selectedPublish.title}</h2>
+
+                <div className="mb-6">
+                  <h3 className="text-sm font-semibold text-gray-700 mb-2">What will be used on re-upload</h3>
+                  {loadingMetadata ? (
+                    <div className="flex items-center gap-2 text-gray-500 text-sm py-2">
+                      <Loader className="w-4 h-4 animate-spin" />
+                      Loading…
+                    </div>
+                  ) : (
+                    <div className="space-y-4 text-sm border border-gray-200 rounded-lg p-4 bg-gray-50">
+                      <div>
+                        <div className="font-medium text-gray-600 mb-1">Title</div>
+                        <div className="text-gray-900 whitespace-pre-wrap">{uploadMetadata?.title || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-600 mb-1">Description</div>
+                        <div className="text-gray-900 whitespace-pre-wrap max-h-32 overflow-y-auto">{uploadMetadata?.description || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="font-medium text-gray-600 mb-1">Hashtags</div>
+                        <div className="text-gray-900 whitespace-pre-wrap">{uploadMetadata?.hashtags || '—'}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="text-sm text-gray-500 mb-6">
+                  Published: {formatDate(selectedPublish.posted_at || selectedPublish.created_at)}
+                  {selectedPublish.platform_video_id && (
+                    <div className="mt-1">
+                      <a
+                        href={`https://www.youtube.com/watch?v=${selectedPublish.platform_video_id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-red-600 hover:underline"
+                      >
+                        Watch on YouTube
+                      </a>
+                    </div>
+                  )}
+                </div>
+                {selectedPublish.render_id && (
+                  <div className="space-y-3">
+                    <button
+                      type="button"
+                      onClick={handleReRender}
+                      disabled={rerendering || reuploading}
+                      className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                      {rerendering ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" />
+                          Starting re-render…
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-4 h-4" />
+                          Re-Render
+                        </>
+                      )}
+                    </button>
+                    {selectedPublish.platform === 'YOUTUBE' && (
+                      <button
+                        type="button"
+                        onClick={handleReuploadYouTube}
+                        disabled={reuploading || rerendering}
+                        className="w-full px-4 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {reuploading ? (
+                          <>
+                            <Loader className="w-4 h-4 animate-spin" />
+                            Re-uploading…
+                          </>
+                        ) : (
+                          <>
+                            <Upload className="w-4 h-4" />
+                            Re-upload to YouTube
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </V2AppShell>
     </AuthGuard>
   );

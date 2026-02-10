@@ -8,11 +8,13 @@ import V2AppShell from '@/components/V2AppShell';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
+import { useOrbixChannel } from '../OrbixChannelContext';
 import { ArrowLeft, Loader, CheckCircle, XCircle, Edit, X } from 'lucide-react';
 
 export default function OrbixNetworkReviewPage() {
   const router = useRouter();
   const { success, error: showErrorToast } = useToast();
+  const { currentChannelId, apiParams } = useOrbixChannel();
   const [loading, setLoading] = useState(true);
   const [items, setItems] = useState([]);
   const [selectedItem, setSelectedItem] = useState(null);
@@ -20,13 +22,18 @@ export default function OrbixNetworkReviewPage() {
   const [hookText, setHookText] = useState('');
 
   useEffect(() => {
+    if (!currentChannelId) {
+      setLoading(false);
+      setItems([]);
+      return;
+    }
     loadReviewQueue();
-  }, []);
+  }, [currentChannelId]);
 
   const loadReviewQueue = async () => {
     try {
       setLoading(true);
-      const response = await orbixNetworkAPI.getReviewQueue();
+      const response = await orbixNetworkAPI.getReviewQueue(apiParams());
       console.log('[Review Queue] API Response:', response.data);
       setItems(response.data.items || []);
       console.log('[Review Queue] Items set:', response.data.items?.length || 0, 'items');
@@ -41,7 +48,7 @@ export default function OrbixNetworkReviewPage() {
 
   const handleApprove = async (storyId) => {
     try {
-      await orbixNetworkAPI.approveStory(storyId);
+      await orbixNetworkAPI.approveStory(storyId, apiParams());
       success('Story approved');
       loadReviewQueue();
       setSelectedItem(null);
@@ -67,7 +74,7 @@ export default function OrbixNetworkReviewPage() {
 
   const handleEditHook = async (storyId) => {
     try {
-      await orbixNetworkAPI.editScriptHook(storyId, hookText);
+      await orbixNetworkAPI.editScriptHook(storyId, hookText, apiParams());
       success('Script hook updated');
       setEditingHook(false);
       loadReviewQueue();

@@ -28,6 +28,20 @@ router.get('/setup/status', async (req, res) => {
       .eq('module_key', MODULE_KEY)
       .maybeSingle();
     
+    // If setup state says incomplete, still treat as complete when business has at least one channel
+    // (e.g. user disconnected one channel but still has another - don't force wizard)
+    let isComplete = setupState?.is_complete || false;
+    if (!isComplete) {
+      const { data: channels } = await supabaseClient
+        .from('orbix_channels')
+        .select('id')
+        .eq('business_id', businessId)
+        .limit(1);
+      if (channels && channels.length > 0) {
+        isComplete = true;
+      }
+    }
+    
     // Get existing business data for auto-fill
     const business = await Business.findById(businessId);
     
@@ -46,13 +60,13 @@ router.get('/setup/status', async (req, res) => {
       daily_video_cap: moduleSettings?.settings?.limits?.daily_video_cap || 5,
       current_step: setupState?.current_step || 1,
       completed_steps: setupState?.completed_steps || [],
-      is_complete: setupState?.is_complete || false,
+      is_complete: isComplete,
       setup_data: setupState?.setup_data || {}
     };
     
     res.json({
       setup_status: {
-        is_complete: existingData.is_complete,
+        is_complete: isComplete,
         current_step: existingData.current_step,
         completed_steps: existingData.completed_steps
       },
@@ -204,7 +218,7 @@ router.post('/setup/complete', async (req, res) => {
         enable_rumble: setupState?.setup_data?.step4?.enable_rumble || false
       },
       scoring: {
-        shock_score_threshold: setupState?.setup_data?.step3?.shock_score_threshold || 65
+        shock_score_threshold: setupState?.setup_data?.step3?.shock_score_threshold ?? 45
       },
       backgrounds: {
         random_mode: setupState?.setup_data?.step5?.background_random_mode || 'uniform'

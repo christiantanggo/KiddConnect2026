@@ -72,3 +72,6 @@ WHERE u.business_id IS NOT NULL AND u.deleted_at IS NULL;
 Both counts should be equal if migration was successful.
 
 
+
+
+

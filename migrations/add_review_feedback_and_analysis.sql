@@ -31,3 +31,6 @@ CREATE INDEX IF NOT EXISTS idx_reviews_outputs_risk_level ON reviews_outputs(ris
 CREATE INDEX IF NOT EXISTS idx_reviews_outputs_crisis_detected ON reviews_outputs(crisis_detected);
 
 
+
+
+

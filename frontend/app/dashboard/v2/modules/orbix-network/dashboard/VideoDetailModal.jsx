@@ -1,0 +1,738 @@
+'use client';
+
+import { useState, useEffect } from 'react';
+import { X, RefreshCw, Loader, CheckCircle2, XCircle, Clock, AlertCircle, Play, Youtube } from 'lucide-react';
+import { orbixNetworkAPI } from '@/lib/api';
+import { useToast } from '@/components/ToastProvider';
+import { useOrbixChannel } from '../OrbixChannelContext';
+
+export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onForceProcess }) {
+  const { success, error: showErrorToast } = useToast();
+  const { apiParams } = useOrbixChannel();
+  const [loading, setLoading] = useState(false);
+  const [uploadingYouTube, setUploadingYouTube] = useState(false);
+  const [details, setDetails] = useState(null);
+  const [logs, setLogs] = useState([]);
+  
+  // Check if this is a raw item (has raw_item_id but no story_id)
+  const isRawItem = item.raw_item_id && !item.story_id;
+
+  useEffect(() => {
+    if (isOpen && item) {
+      setDetails(null);
+      setLogs([]);
+      loadDetails();
+    }
+  }, [isOpen, item]);
+
+  const loadDetails = async () => {
+    if (isRawItem) {
+      setDetails(item);
+      setLogs([]);
+      return;
+    }
+
+    if (!item.render_id) {
+      if (item.story_id) {
+        try {
+          setLoading(true);
+          const response = await orbixNetworkAPI.getStory(item.story_id, apiParams());
+          setDetails(response.data.story);
+        } catch (error) {
+          console.error('Error loading story details:', error);
+          setDetails(item);
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        setDetails(item);
+      }
+      setLogs([]);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const [renderRes, storyRes] = await Promise.all([
+        orbixNetworkAPI.getRender(item.render_id, apiParams()),
+        item.story_id ? orbixNetworkAPI.getStory(item.story_id, apiParams()) : null
+      ]);
+      const render = renderRes.data.render;
+      const story = storyRes?.data?.story;
+      setLogs(render.step_logs || []);
+      setDetails({
+        ...render,
+        orbix_scripts: story?.orbix_scripts ?? render.orbix_scripts
+      });
+    } catch (error) {
+      console.error('Error loading render details:', error);
+      showErrorToast('Failed to load render details');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForceProcess = async () => {
+    if (!isRawItem || !item.raw_item_id) return;
+    
+    try {
+      setLoading(true);
+      await orbixNetworkAPI.forceProcessRawItem(item.raw_item_id, apiParams());
+      success('Raw item processed into story successfully');
+      onClose(); // Close modal immediately
+      if (onForceProcess) {
+        // Reload data after a brief delay to ensure story is in database
+        setTimeout(() => {
+          onForceProcess();
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error force processing raw item:', error);
+      showErrorToast(error.response?.data?.error || 'Failed to process raw item');
+      setLoading(false);
+    }
+  };
+
+  const handleGenerateScript = async () => {
+    if (!item.story_id) {
+      console.error('[Modal] handleGenerateScript: No story_id provided');
+      return;
+    }
+    
+    console.log('[Modal] ========== handleGenerateScript START ==========');
+    console.log('[Modal] Story ID:', item.story_id);
+    
+    try {
+      setLoading(true);
+      console.log('[Modal] Calling API: generateScriptForStory');
+      const startTime = Date.now();
+      const response = await orbixNetworkAPI.generateScriptForStory(item.story_id, apiParams());
+      const duration = Date.now() - startTime;
+      console.log(`[Modal] API call completed in ${duration}ms:`, response.data);
+      
+      success('Script generated successfully');
+      
+      // Reload details to show updated script status
+      console.log('[Modal] Reloading story details...');
+      await loadDetails();
+      console.log('[Modal] Details reloaded');
+      
+      if (onForceProcess) {
+        console.log('[Modal] Triggering pipeline reload in 1 second...');
+        // Also reload the pipeline
+        setTimeout(() => {
+          console.log('[Modal] Executing pipeline reload callback');
+          onForceProcess();
+        }, 1000);
+      }
+      
+      console.log('[Modal] ========== handleGenerateScript SUCCESS ==========');
+    } catch (error) {
+      console.error('[Modal] ========== handleGenerateScript ERROR ==========');
+      console.error('[Modal] Error:', error);
+      console.error('[Modal] Error response:', error.response?.data);
+      console.error('[Modal] Error stack:', error.stack);
+      showErrorToast(error.response?.data?.error || error.response?.data?.message || 'Failed to generate script');
+    } finally {
+      setLoading(false);
+      console.log('[Modal] Loading state reset');
+    }
+  };
+
+  const handleStartRender = async () => {
+    if (!item.story_id) return;
+    
+    console.log('[Modal] ========== handleStartRender START ==========');
+    console.log('[Modal] Story ID:', item.story_id);
+    
+    try {
+      setLoading(true);
+      console.log('[Modal] Calling API: startRenderForStory');
+      const startTime = Date.now();
+      const response = await orbixNetworkAPI.startRenderForStory(item.story_id, apiParams());
+      const duration = Date.now() - startTime;
+      console.log(`[Modal] API call completed in ${duration}ms:`, response.data);
+      
+      success('Render started successfully');
+      
+      // Close modal and reload pipeline
+      onClose();
+      if (onForceProcess) {
+        console.log('[Modal] Triggering pipeline reload in 1 second...');
+        setTimeout(() => {
+          console.log('[Modal] Executing pipeline reload callback');
+          onForceProcess();
+        }, 1000);
+      }
+      
+      console.log('[Modal] ========== handleStartRender SUCCESS ==========');
+    } catch (error) {
+      console.error('[Modal] ========== handleStartRender ERROR ==========');
+      console.error('[Modal] Error:', error);
+      console.error('[Modal] Error response:', error.response?.data);
+      console.error('[Modal] Error stack:', error.stack);
+      showErrorToast(error.response?.data?.error || error.response?.data?.message || 'Failed to start render');
+    } finally {
+      setLoading(false);
+      console.log('[Modal] Loading state reset');
+    }
+  };
+
+  const handleRestart = async () => {
+    if (!item.render_id) return;
+    
+    try {
+      setLoading(true);
+      await orbixNetworkAPI.restartRender(item.render_id, apiParams());
+      success('Render restarted successfully');
+      if (onRestart) {
+        onRestart();
+      }
+      // Reload details after restart
+      setTimeout(() => {
+        loadDetails();
+      }, 1000);
+    } catch (error) {
+      console.error('Error restarting render:', error);
+      showErrorToast('Failed to restart render');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCancelRender = async () => {
+    if (!item.render_id) return;
+    
+    if (!confirm('Are you sure you want to cancel this render? This action cannot be undone.')) {
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      await orbixNetworkAPI.cancelRender(item.render_id, apiParams());
+      success('Render cancelled successfully');
+      onClose();
+      if (onForceProcess) {
+        // Reload pipeline after cancellation
+        setTimeout(() => {
+          onForceProcess();
+        }, 500);
+      }
+    } catch (error) {
+      console.error('Error cancelling render:', error);
+      showErrorToast(error.response?.data?.error || 'Failed to cancel render');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleForceUploadYouTube = async () => {
+    if (!item.render_id) return;
+    console.log('[Modal] ========== handleForceUploadYouTube START ==========');
+    console.log('[Modal] render_id=', item.render_id);
+    try {
+      setUploadingYouTube(true);
+      console.log('[Modal] Calling API: uploadRenderToYoutube');
+      const startTime = Date.now();
+      const response = await orbixNetworkAPI.uploadRenderToYoutube(item.render_id, apiParams());
+      const duration = Date.now() - startTime;
+      console.log('[Modal] uploadRenderToYoutube completed in', duration, 'ms', response.data);
+      success('Uploaded to YouTube');
+      await loadDetails();
+      if (onForceProcess) onForceProcess();
+      console.log('[Modal] ========== handleForceUploadYouTube SUCCESS ==========');
+    } catch (error) {
+      console.error('[Modal] ========== handleForceUploadYouTube ERROR ==========');
+      console.error('[Modal] Error:', error?.message, error?.response?.data);
+      showErrorToast(error?.response?.data?.error || 'Failed to upload to YouTube');
+    } finally {
+      setUploadingYouTube(false);
+    }
+  };
+
+  const getStepName = (step) => {
+    const stepNames = {
+      'PENDING': 'Waiting to start',
+      'STEP_3_BACKGROUND': 'Step 3: Background',
+      'STEP_4_VOICE': 'Step 4: Voice',
+      'STEP_5_HOOK_TEXT': 'Step 5: Hook Text',
+      'STEP_6_CAPTIONS': 'Step 6: Captions',
+      'STEP_7_METADATA': 'Step 7: Metadata',
+      'STEP_8_YOUTUBE_UPLOAD': 'Step 8: YouTube Upload',
+      'COMPLETED': 'Completed',
+      'FAILED': 'Failed'
+    };
+    return stepNames[step] || step || 'Unknown';
+  };
+
+  const getStatusIcon = (status) => {
+    if (status === 'COMPLETED') return <CheckCircle2 className="w-5 h-5 text-green-600" />;
+    if (status === 'FAILED') return <XCircle className="w-5 h-5 text-red-600" />;
+    if (status === 'PROCESSING') return <Loader className="w-5 h-5 text-blue-600 animate-spin" />;
+    return <Clock className="w-5 h-5 text-gray-400" />;
+  };
+
+  if (!isOpen || !item) return null;
+
+  const currentStep = details?.render_step || item.render_step;
+  const stepProgress = details?.step_progress !== undefined ? details.step_progress : item.step_progress;
+  const renderStatus = details?.render_status || item.render_status;
+
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between p-6 border-b border-gray-200">
+          <div className="flex-1">
+            <h2 className="text-2xl font-bold">{item.story_title}</h2>
+            <div className="flex gap-2 mt-2">
+              <span className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
+                {item.story_category}
+              </span>
+              {item.render_id && (
+                <span className="px-2 py-1 text-xs bg-gray-100 text-gray-800 rounded">
+                  Render #{item.render_id.substring(0, 8)}
+                </span>
+              )}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
+          {!isRawItem && details === null && loading && (
+            <div className="flex justify-center py-12">
+              <Loader className="w-8 h-8 animate-spin text-blue-600" />
+            </div>
+          )}
+          {/* Raw Item Info */}
+          {isRawItem && (
+            <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+              <div className="flex items-center gap-3 mb-3">
+                <h3 className="text-lg font-semibold">Raw Item - Ready to Process</h3>
+                <span className="px-2 py-1 text-xs bg-purple-100 text-purple-800 rounded font-semibold">
+                  Score: {item.story_shock_score || 'N/A'}
+                </span>
+              </div>
+              <p className="text-sm text-gray-600">
+                This item has a shock score of {item.story_shock_score} and is ready to be processed into a story.
+                Click "Force Process into Story" to create a story from this raw item.
+              </p>
+            </div>
+          )}
+          
+          {/* Step 2: Story Creation Info (PENDING stories without renders) */}
+          {!item.render_id && item.story_status === 'PENDING' && (details != null || !item.story_id) && (
+            <div className="bg-yellow-50 rounded-lg p-4 border border-yellow-200">
+              <div className="flex items-center gap-3 mb-3">
+                <Clock className="w-5 h-5 text-yellow-600" />
+                <h3 className="text-lg font-semibold">Story Creation - Waiting for Script Generation</h3>
+              </div>
+              <p className="text-sm text-gray-600 mb-2">
+                This story is in the creation phase. It needs a script to be generated before it can proceed to rendering.
+              </p>
+              {details?.orbix_scripts && details.orbix_scripts.length > 0 ? (
+                <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
+                  <p className="text-sm text-green-800 mb-3">
+                    ✓ Script has been generated (ID: {details.orbix_scripts[0].id?.substring(0, 8)}...)
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={handleStartRender}
+                      disabled={loading}
+                      className="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                    >
+                      {loading ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" />
+                          Starting...
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-4 h-4" />
+                          Start Render
+                        </>
+                      )}
+                    </button>
+                    <button
+                      onClick={handleGenerateScript}
+                      disabled={loading}
+                      className="px-4 py-2 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                      title="Regenerate the script with new copy"
+                    >
+                      {loading ? (
+                        <>
+                          <Loader className="w-4 h-4 animate-spin" />
+                          Rewriting...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw className="w-4 h-4" />
+                          Rewrite
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
+                  <p className="text-sm text-red-800 mb-2">
+                    ⚠ Script has NOT been generated yet. This may be why the story is stuck.
+                  </p>
+                  <button
+                    onClick={handleGenerateScript}
+                    disabled={loading}
+                    className="px-3 py-1.5 bg-red-600 text-white text-sm rounded hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader className="w-3 h-3 animate-spin" />
+                        Generating...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-3 h-3" />
+                        Force Generate Script
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+              <div className="mt-3 pt-3 border-t border-yellow-200">
+                <p className="text-xs text-gray-500">
+                  Status: {item.story_status} | Story ID: {item.story_id?.substring(0, 8)}...
+                </p>
+              </div>
+            </div>
+          )}
+          
+          {/* Current Step Info */}
+          {item.render_id && (
+            <div className="bg-gray-50 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-lg font-semibold">Current Step</h3>
+                  {getStatusIcon(renderStatus)}
+                </div>
+                <div className="text-right">
+                  <p className="text-sm text-gray-600">Progress</p>
+                  <p className="text-2xl font-bold">{stepProgress || 0}%</p>
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <p className="font-medium">{getStepName(currentStep)}</p>
+                
+                {/* Progress Bar */}
+                {(renderStatus === 'PENDING' || renderStatus === 'PROCESSING') && (
+                  <div className="w-full bg-gray-200 rounded-full h-3">
+                    <div
+                      className="bg-blue-600 h-3 rounded-full transition-all"
+                      style={{ width: `${stepProgress || 0}%` }}
+                    />
+                  </div>
+                )}
+                
+                {/* Error Message */}
+                {renderStatus === 'FAILED' && (details?.step_error || item.step_error) && (
+                  <div className="bg-red-50 border border-red-200 rounded p-3">
+                    <div className="flex items-start gap-2">
+                      <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-medium text-red-800">Error</p>
+                        <p className="text-sm text-red-700">{details?.step_error || item.step_error}</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Step Logs */}
+          {logs.length > 0 && (
+            <div>
+              <h3 className="text-lg font-semibold mb-3">Step Logs</h3>
+              <div className="bg-gray-900 text-green-400 font-mono text-sm rounded-lg p-4 max-h-96 overflow-y-auto">
+                {logs.map((log, idx) => (
+                  <div key={idx} className="mb-1">
+                    <span className="text-gray-500">
+                      {new Date(log.timestamp).toLocaleTimeString()}
+                    </span>
+                    {' '}
+                    <span className={`
+                      ${log.event === 'ERROR' ? 'text-red-400' : ''}
+                      ${log.event === 'COMPLETE' ? 'text-green-400' : ''}
+                      ${log.event === 'PROGRESS' ? 'text-blue-400' : ''}
+                    `}>
+                      [{log.event}] {log.message}
+                    </span>
+                    {log.data && (
+                      <div className="text-gray-400 text-xs ml-4 mt-1">
+                        {JSON.stringify(log.data, null, 2)}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Story Script Content */}
+          {details?.orbix_scripts && details.orbix_scripts.length > 0 && item.story_id && (
+            <div>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <h3 className="text-lg font-semibold">Story Script</h3>
+                {!isRawItem && (
+                  <button
+                    onClick={handleGenerateScript}
+                    disabled={loading}
+                    className="px-3 py-1.5 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                    title="Regenerate the script"
+                  >
+                    {loading ? (
+                      <Loader className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4" />
+                        Rewrite
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+              <div className="bg-gray-50 rounded-lg p-4 space-y-4">
+                {details.orbix_scripts[0].hook && (
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700 mb-1">Hook</p>
+                    <p className="text-base text-gray-900">{details.orbix_scripts[0].hook}</p>
+                  </div>
+                )}
+                {details.orbix_scripts[0].what_happened && (
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700 mb-1">What Happened</p>
+                    <p className="text-base text-gray-900">{details.orbix_scripts[0].what_happened}</p>
+                  </div>
+                )}
+                {details.orbix_scripts[0].why_it_matters && (
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700 mb-1">Why It Matters</p>
+                    <p className="text-base text-gray-900">{details.orbix_scripts[0].why_it_matters}</p>
+                  </div>
+                )}
+                {details.orbix_scripts[0].what_happens_next && (
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700 mb-1">What Happens Next</p>
+                    <p className="text-base text-gray-900">{details.orbix_scripts[0].what_happens_next}</p>
+                  </div>
+                )}
+                {details.orbix_scripts[0].cta_line && (
+                  <div>
+                    <p className="text-sm font-semibold text-gray-700 mb-1">Call to Action</p>
+                    <p className="text-base text-gray-900">{details.orbix_scripts[0].cta_line}</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Story Info */}
+          <div>
+            <h3 className="text-lg font-semibold mb-3">Story Information</h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-sm text-gray-600">Shock Score</p>
+                <p className="text-xl font-bold">{item.story_shock_score || 0}/100</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Status</p>
+                <p className="text-lg font-medium">{item.story_status}</p>
+              </div>
+              <div>
+                <p className="text-sm text-gray-600">Category</p>
+                <p className="text-lg font-medium">{item.story_category}</p>
+              </div>
+              {item.render_id && (
+                <div>
+                  <p className="text-sm text-gray-600">Render Status</p>
+                  <p className="text-lg font-medium">{renderStatus}</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Output Video - completed renders have a view link; ?v= cache-bust so re-renders show new video */}
+          {renderStatus === 'COMPLETED' && (
+            <div>
+              <h3 className="text-lg font-semibold mb-3">Output Video</h3>
+              {(details?.output_url || item?.output_url) ? (
+                <a
+                  href={`${details?.output_url || item?.output_url}${(details?.output_url || item?.output_url).includes('?') ? '&' : '?'}v=${encodeURIComponent(details?.updated_at || item?.updated_at || '')}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-700 underline"
+                >
+                  View Video →
+                </a>
+              ) : (
+                <p className="text-sm text-gray-600">View link not saved for this render. Use <strong>View Render</strong> below to open if available, or <strong>Restart Render</strong> to generate a new video with a link.</p>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between p-6 border-t border-gray-200 bg-gray-50">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-gray-700 hover:bg-gray-200 rounded-lg transition-colors"
+          >
+            Close
+          </button>
+          
+          <div className="flex gap-2">
+            {/* Render Actions - only show if render exists */}
+            {item.render_id && (
+              <>
+                {/* View Render - show on EVERY completed render (opens video when we have URL) */}
+                {renderStatus === 'COMPLETED' && (
+                  (details?.output_url || item?.output_url) ? (
+                    <a
+                      href={`${details?.output_url || item?.output_url}${(details?.output_url || item?.output_url).includes('?') ? '&' : '?'}v=${encodeURIComponent(details?.updated_at || item?.updated_at || '')}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2 transition-colors"
+                    >
+                      <Play className="w-4 h-4" />
+                      View Render
+                    </a>
+                  ) : (
+                    <button
+                      onClick={handleRestart}
+                      disabled={loading}
+                      className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 flex items-center gap-2 transition-colors"
+                    >
+                      {loading ? <Loader className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                      View Render (restart to generate link)
+                    </button>
+                  )
+                )}
+                
+                {/* Re-Render - for completed videos, re-run pipeline to apply code/setting changes */}
+                {renderStatus === 'COMPLETED' && (
+                  <button
+                    onClick={handleRestart}
+                    disabled={loading}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 flex items-center gap-2 transition-colors"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Re-rendering...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4" />
+                        Re-Render
+                      </>
+                    )}
+                  </button>
+                )}
+                {/* Force upload to YouTube - for completed videos */}
+                {renderStatus === 'COMPLETED' && (
+                  <button
+                    onClick={handleForceUploadYouTube}
+                    disabled={uploadingYouTube || loading}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 flex items-center gap-2 transition-colors"
+                  >
+                    {uploadingYouTube ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Uploading...
+                      </>
+                    ) : (
+                      <>
+                        <Youtube className="w-4 h-4" />
+                        Force upload to YouTube
+                      </>
+                    )}
+                  </button>
+                )}
+                
+                {/* Restart Render - show if failed or processing */}
+                {(renderStatus === 'FAILED' || renderStatus === 'PROCESSING') && (
+                  <button
+                    onClick={handleRestart}
+                    disabled={loading}
+                    className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Restarting...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="w-4 h-4" />
+                        Restart Render
+                      </>
+                    )}
+                  </button>
+                )}
+                
+                {/* Cancel Render - show if PENDING or PROCESSING */}
+                {(renderStatus === 'PENDING' || renderStatus === 'PROCESSING') && (
+                  <button
+                    onClick={handleCancelRender}
+                    disabled={loading}
+                    className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                  >
+                    {loading ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Cancelling...
+                      </>
+                    ) : (
+                      <>
+                        <X className="w-4 h-4" />
+                        Cancel Render
+                      </>
+                    )}
+                  </button>
+                )}
+              </>
+            )}
+            
+            {/* Raw Item Action */}
+            {isRawItem && (
+              <button
+                onClick={handleForceProcess}
+                disabled={loading}
+                className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+              >
+                {loading ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Processing...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    Force Process into Story
+                  </>
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+

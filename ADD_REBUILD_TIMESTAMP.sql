@@ -16,3 +16,6 @@ COMMENT ON COLUMN businesses.vapi_assistant_rebuilt_at IS 'Timestamp of when the
 
 
 
+
+
+

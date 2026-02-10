@@ -18,17 +18,26 @@ export default function OrbixNetworkScrapedPage() {
   const [rawItemsBySource, setRawItemsBySource] = useState({});
   const [runningScrape, setRunningScrape] = useState(false);
   const [selectedSourceId, setSelectedSourceId] = useState(null);
+  const [timeRange, setTimeRange] = useState('all'); // 'all' | '30' | '7'
 
   useEffect(() => {
+    if (!currentChannelId) {
+      setLoading(false);
+      setSources([]);
+      setRawItemsBySource({});
+      return;
+    }
     loadData();
-  }, []);
+  }, [timeRange, currentChannelId]);
 
   const loadData = async () => {
     try {
       setLoading(true);
+      const params = { limit: 2000 };
+      if (timeRange !== 'all') params.days = timeRange;
       const [sourcesRes, rawItemsRes] = await Promise.all([
         orbixNetworkAPI.getSources(),
-        orbixNetworkAPI.getRawItems({ limit: 1000 }) // Get more items to group by source
+        orbixNetworkAPI.getRawItems(params)
       ]);
       
       const sourcesList = sourcesRes.data.sources || [];
@@ -59,29 +68,14 @@ export default function OrbixNetworkScrapedPage() {
   const handleScrape = async () => {
     try {
       setRunningScrape(true);
-      const response = await orbixNetworkAPI.triggerScrapeJob();
-      
-      // Show detailed results
-      if (response.data?.results) {
-        const result = response.data.results[0];
-        if (result) {
-          const message = result.error 
-            ? `Scrape failed: ${result.error}`
-            : `Scraped ${result.scraped || 0} items from ${result.enabled_sources || 0} source(s). Saved ${result.saved || 0} items.`;
-          if (result.error) {
-            showErrorToast(message);
-          } else {
-            success(message);
-          }
-        }
+      const response = await orbixNetworkAPI.triggerScrapeJob(apiBody());
+      const msg = response.data?.message || 'Scrape completed.';
+      if (response.data?.success === false) {
+        showErrorToast(response.data?.error || msg);
       } else {
-        success('Scrape job completed successfully');
+        success(msg);
       }
-      
-      // Reload data after a short delay
-      setTimeout(() => {
-        loadData();
-      }, 2000);
+      await loadData();
     } catch (error) {
       console.error('Failed to trigger scrape:', error);
       const errorInfo = handleAPIError(error);
@@ -108,12 +102,27 @@ export default function OrbixNetworkScrapedPage() {
       'PROCESSED': 'bg-green-100 text-green-800',
       'DISCARDED': 'bg-red-100 text-red-800'
     };
-    
     return (
       <span className={`px-2 py-1 text-xs font-medium rounded ${statusColors[status] || 'bg-gray-100 text-gray-800'}`}>
         {status}
       </span>
     );
+  };
+
+  const formatItemDate = (item) => {
+    const dateStr = item.published_at || item.created_at;
+    if (!dateStr) return null;
+    let date;
+    if (dateStr.includes('Z') || dateStr.includes('+') || dateStr.includes('-', 10)) {
+      date = new Date(dateStr);
+    } else {
+      date = new Date(dateStr + 'Z');
+    }
+    return date.toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
   };
 
   if (loading) {
@@ -165,6 +174,7 @@ export default function OrbixNetworkScrapedPage() {
                 </>
               )}
             </button>
+            </div>
           </div>
 
           {/* Summary */}
@@ -271,9 +281,14 @@ export default function OrbixNetworkScrapedPage() {
                         {items.slice(0, 20).map((item) => (
                           <div key={item.id} className="border-b border-gray-100 pb-4 last:border-0 last:pb-0">
                             <div className="flex flex-col">
-                              <div className="flex items-start justify-between mb-2">
+                              <div className="flex items-start justify-between gap-3 mb-2">
                                 <p className="font-medium text-sm flex-1 line-clamp-2">{item.title || 'Untitled'}</p>
-                                <div className="ml-4">
+                                <div className="flex items-center gap-2 flex-shrink-0">
+                                  {formatItemDate(item) && (
+                                    <span className="text-xs text-gray-600 whitespace-nowrap" title={item.published_at ? 'Article publish date' : 'When we scraped this item'}>
+                                      {item.published_at ? 'Published' : 'Scraped'}: {formatItemDate(item)}
+                                    </span>
+                                  )}
                                   {getStatusBadge(item.status)}
                                 </div>
                               </div>
@@ -291,25 +306,6 @@ export default function OrbixNetworkScrapedPage() {
                               )}
                               {item.snippet && (
                                 <p className="text-xs text-gray-600 mt-2 line-clamp-2">{item.snippet}</p>
-                              )}
-                              {item.published_at && (
-                                <p className="text-xs text-gray-500 mt-1">
-                                  Published: {(() => {
-                                    if (!item.published_at) return 'N/A';
-                                    let date;
-                                    const dateStr = item.published_at;
-                                    if (dateStr.includes('Z') || dateStr.includes('+') || dateStr.includes('-', 10)) {
-                                      date = new Date(dateStr);
-                                    } else {
-                                      date = new Date(dateStr + 'Z');
-                                    }
-                                    return date.toLocaleDateString('en-US', {
-                                      year: 'numeric',
-                                      month: 'short',
-                                      day: 'numeric'
-                                    });
-                                  })()}
-                                </p>
                               )}
                             </div>
                           </div>

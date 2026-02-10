@@ -95,3 +95,6 @@ Since you already have Stripe working perfectly:
 **Recommendation:** Continue with Stripe for now. It's simpler, gives you more control, and works great for your business model.
 
 
+
+
+

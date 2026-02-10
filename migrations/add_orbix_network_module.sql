@@ -53,3 +53,6 @@ INSERT INTO role_permissions (role, permission_key) VALUES
   ('staff', 'use_module')
 ON CONFLICT (role, permission_key) DO NOTHING;
 
+
+
+

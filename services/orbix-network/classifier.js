@@ -46,7 +46,7 @@ export async function classifyStory(rawItem) {
 4. laws-rules: Laws, regulations, or rules that quietly changed everything
 5. money-markets: Money and market shocks (NOT stock picks or financial advice)
 
-Return ONLY the category key (e.g., "ai-automation"). If the story doesn't clearly fit any category, return "REJECT".`;
+Return ONLY the category key (e.g., "ai-automation"). When in doubt, prefer the closest category rather than REJECT. Use REJECT only if the story has nothing to do with power shifts, tech, business, or markets.`;
 
     const userPrompt = `Title: ${rawItem.title}
 
@@ -54,7 +54,7 @@ Snippet: ${rawItem.snippet || 'No snippet available'}
 
 URL: ${rawItem.url}
 
-Classify this story into one of the 5 categories. Return only the category key, or "REJECT" if it doesn't fit.`;
+Classify this story into one of the 5 categories. Return only the category key. Use REJECT only if it clearly doesn't fit any category.`;
 
     const completion = await getOpenAIClient().chat.completions.create({
       model: 'gpt-4o-mini',
@@ -170,67 +170,134 @@ export async function processRawItem(businessId, rawItem) {
   try {
     // Get threshold from settings
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
-    const threshold = moduleSettings?.settings?.scoring?.shock_score_threshold || 65;
+    const threshold = moduleSettings?.settings?.scoring?.shock_score_threshold ?? 45;
     
-    // Classify
-    const category = await classifyStory(rawItem);
-    if (!category) {
-      // Mark raw item as discarded
+    // Use pre-calculated shock score from raw item (calculated during scraping)
+    const shockScore = rawItem.shock_score;
+    const category = rawItem.category;
+    const factorsJson = rawItem.factors_json;
+    
+    // If shock score wasn't calculated during scraping, calculate it now
+    if (!shockScore || !category) {
+      console.log(`[Classifier] Shock score not pre-calculated for raw item ${rawItem.id}, calculating now...`);
+      
+      // Classify
+      const classifiedCategory = await classifyStory(rawItem);
+      if (!classifiedCategory) {
+        // Mark raw item as discarded
+        await supabaseClient
+          .from('orbix_raw_items')
+          .update({
+            status: 'DISCARDED',
+            discard_reason: 'Failed classification'
+          })
+          .eq('id', rawItem.id);
+        return null;
+      }
+      
+      // Score
+      const scoreResult = await scoreShock({
+        category: classifiedCategory,
+        title: rawItem.title,
+        snippet: rawItem.snippet,
+        url: rawItem.url
+      });
+      
+      // Update raw item with calculated score
       await supabaseClient
         .from('orbix_raw_items')
         .update({
-          status: 'DISCARDED',
-          discard_reason: 'Failed classification'
+          category: classifiedCategory,
+          shock_score: scoreResult.score,
+          factors_json: scoreResult.factors
         })
         .eq('id', rawItem.id);
-      return null;
-    }
-    
-    // Score
-    const scoreResult = await scoreShock({
-      category,
-      title: rawItem.title,
-      snippet: rawItem.snippet,
-      url: rawItem.url
-    });
-    
-    // Check threshold
-    if (!shouldProcess(scoreResult, threshold)) {
-      // Mark raw item as discarded
+      
+      // Check threshold
+      if (!shouldProcess(scoreResult, threshold)) {
+        // Mark raw item as discarded
+        await supabaseClient
+          .from('orbix_raw_items')
+          .update({
+            status: 'DISCARDED',
+            discard_reason: `Score too low: ${scoreResult.score} < ${threshold}`
+          })
+          .eq('id', rawItem.id);
+        return null;
+      }
+      
+      // Use the newly calculated values
+      const finalCategory = classifiedCategory;
+      const finalScore = scoreResult.score;
+      const finalFactors = scoreResult.factors;
+      
+      // Create story (channel_id from raw item for multi-channel support)
+      const { data: story, error } = await supabaseClient
+        .from('orbix_stories')
+        .insert({
+          business_id: businessId,
+          channel_id: rawItem.channel_id ?? null,
+          raw_item_id: rawItem.id,
+          category: finalCategory,
+          shock_score: finalScore,
+          factors_json: finalFactors ?? {},
+          status: 'PENDING'
+        })
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      // Mark raw item as processed
       await supabaseClient
         .from('orbix_raw_items')
-        .update({
-          status: 'DISCARDED',
-          discard_reason: `Score too low: ${scoreResult.score} < ${threshold}`
-        })
+        .update({ status: 'PROCESSED' })
         .eq('id', rawItem.id);
-      return null;
+      
+      console.log(`[Orbix Classifier] Created story: ${story.id} (score: ${finalScore})`);
+      return story;
+    } else {
+      // Use pre-calculated values
+      // Check threshold (skip for evergreen categories: psychology, money — they always pass)
+      const isEvergreen = category === 'psychology' || category === 'money';
+      if (!isEvergreen && shockScore < threshold) {
+        // Mark raw item as discarded
+        await supabaseClient
+          .from('orbix_raw_items')
+          .update({
+            status: 'DISCARDED',
+            discard_reason: `Score too low: ${shockScore} < ${threshold}`
+          })
+          .eq('id', rawItem.id);
+        return null;
+      }
+
+      // Create story using pre-calculated values (channel_id from raw item)
+      const { data: story, error } = await supabaseClient
+        .from('orbix_stories')
+        .insert({
+          business_id: businessId,
+          channel_id: rawItem.channel_id ?? null,
+          raw_item_id: rawItem.id,
+          category: category,
+          shock_score: shockScore,
+          factors_json: factorsJson ?? {},
+          status: 'PENDING'
+        })
+        .select()
+        .single();
+      
+      if (error) throw error;
+      
+      // Mark raw item as processed
+      await supabaseClient
+        .from('orbix_raw_items')
+        .update({ status: 'PROCESSED' })
+        .eq('id', rawItem.id);
+      
+      console.log(`[Orbix Classifier] Created story: ${story.id} (score: ${shockScore})`);
+      return story;
     }
-    
-    // Create story
-    const { data: story, error } = await supabaseClient
-      .from('orbix_stories')
-      .insert({
-        business_id: businessId,
-        raw_item_id: rawItem.id,
-        category: category,
-        shock_score: scoreResult.score,
-        factors_json: scoreResult.factors,
-        status: 'QUEUED'
-      })
-      .select()
-      .single();
-    
-    if (error) throw error;
-    
-    // Mark raw item as processed
-    await supabaseClient
-      .from('orbix_raw_items')
-      .update({ status: 'PROCESSED' })
-      .eq('id', rawItem.id);
-    
-    console.log(`[Orbix Classifier] Created story: ${story.id} (score: ${scoreResult.score})`);
-    return story;
   } catch (error) {
     console.error('[Orbix Classifier] Error processing raw item:', error);
     throw error;

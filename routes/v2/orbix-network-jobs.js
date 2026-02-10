@@ -13,6 +13,7 @@ import { generateAndSaveScript } from '../../services/orbix-network/script-gener
 import { processRenderJob, selectTemplate, selectBackground } from '../../services/orbix-network/video-renderer.js';
 import { publishVideo } from '../../services/orbix-network/youtube-publisher.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { runAutomatedPipeline } from '../../services/orbix-network/pipeline-scheduler.js';
 
 const router = express.Router();
 
@@ -53,23 +54,39 @@ export async function runScrapeJob() {
     
     for (const businessId of businessIds) {
       try {
+        console.log(`[Orbix Jobs] Scraping sources for business ${businessId}...`);
         const result = await scrapeAllSources(businessId);
         totalScraped += result.scraped || 0;
         totalSaved += result.saved || 0;
         if (result.source_results) {
           sourceResults.push(...result.source_results);
         }
+        console.log(`[Orbix Jobs] Business ${businessId} results:`, {
+          scraped: result.scraped,
+          saved: result.saved,
+          duplicates_skipped: result.duplicates_skipped,
+          sources_processed: result.sources_processed
+        });
       } catch (error) {
         console.error(`[Orbix Jobs] Error scraping for business ${businessId}:`, error.message);
+        console.error(`[Orbix Jobs] Error stack:`, error.stack);
         // Continue with next business
       }
     }
+    
+    console.log(`[Orbix Jobs] ========== SCRAPE JOB COMPLETE ==========`);
+    console.log(`[Orbix Jobs] Businesses processed: ${businessIds.length}`);
+    console.log(`[Orbix Jobs] Total items found: ${totalScraped}`);
+    console.log(`[Orbix Jobs] Total items saved: ${totalSaved}`);
+    console.log(`[Orbix Jobs] Total duplicates skipped: ${totalScraped - totalSaved}`);
+    console.log(`[Orbix Jobs] ==========================================`);
     
     return {
       success: true,
       businesses_processed: businessIds.length,
       total_scraped: totalScraped,
       total_saved: totalSaved,
+      duplicates_skipped: totalScraped - totalSaved,
       source_results: sourceResults
     };
   } catch (error) {
@@ -80,15 +97,49 @@ export async function runScrapeJob() {
 
 /**
  * POST /api/v2/orbix-network/jobs/scrape
- * Scrape all enabled sources for all businesses with active subscriptions
+ * Scrape sources. If body.channel_id and active_business_id, scrape only that channel for that business.
+ * Otherwise scrape all businesses with active subscriptions (scheduled job behavior).
  */
 router.post('/scrape', async (req, res) => {
   try {
-    const result = await runScrapeJob();
-    res.json(result);
+    const businessId = req.active_business_id;
+    const channelId = req.body?.channel_id ?? null;
+
+    let result;
+    if (businessId && channelId) {
+      result = await scrapeAllSources(businessId, channelId);
+      result = {
+        total_scraped: result.scraped ?? 0,
+        total_saved: result.saved ?? 0,
+        duplicates_skipped: (result.scraped ?? 0) - (result.saved ?? 0),
+        source_results: result.source_results ?? []
+      };
+    } else {
+      result = await runScrapeJob();
+    }
+
+    const results = [{
+      scraped: result.total_scraped ?? 0,
+      saved: result.total_saved ?? 0,
+      duplicates_skipped: result.duplicates_skipped ?? 0,
+      enabled_sources: result.source_results?.length ?? 0,
+      error: result.error ?? null
+    }];
+    res.json({
+      success: true,
+      message: (result.total_saved ?? 0) === 0 && (result.total_scraped ?? 0) > 0
+        ? `Scrape found ${result.total_scraped} items; all were already in the database (duplicates skipped).`
+        : `Scraped ${result.total_scraped} items, saved ${result.total_saved} new.`,
+      status: 'completed',
+      results
+    });
   } catch (error) {
     console.error('[Orbix Jobs] Scrape job error:', error);
-    res.status(500).json({ error: 'Scrape job failed', message: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      message: 'Scrape job failed'
+    });
   }
 });
 
@@ -389,9 +440,10 @@ export async function runRenderJob() {
             
             if (existingRender) continue; // Already has render
             
-            // Select template and background
+            // Select template and background (per-channel images when channel has uploads)
             const template = selectTemplate(story);
-            const backgroundSelection = await selectBackground(businessId);
+            const channelId = story.channel_id ?? null;
+            const backgroundSelection = await selectBackground(businessId, channelId);
             
             // Create render job
             const { data: render, error: renderError } = await supabaseClient
@@ -403,6 +455,7 @@ export async function runRenderJob() {
                 template: template,
                 background_type: backgroundSelection.type,
                 background_id: backgroundSelection.id,
+                background_storage_path: backgroundSelection.storagePath ?? null,
                 render_status: 'PENDING'
               })
               .select()
@@ -422,6 +475,22 @@ export async function runRenderJob() {
           }
         }
         
+        // Reset any stuck PROCESSING renders to PENDING so they can be picked up
+        const { data: stuckReset, error: resetError } = await supabaseClient
+          .from('orbix_renders')
+          .update({
+            render_status: 'PENDING',
+            error_message: null,
+            step_error: null,
+            updated_at: new Date().toISOString()
+          })
+          .eq('business_id', businessId)
+          .eq('render_status', 'PROCESSING')
+          .select('id');
+        if (!resetError && stuckReset?.length > 0) {
+          console.log(`[Orbix Jobs] Reset ${stuckReset.length} stuck PROCESSING render(s) to PENDING for business ${businessId}`);
+        }
+
         // Process pending renders (limited for now - rendering is resource-intensive)
         console.log(`[Orbix Jobs] Checking for pending renders for business ${businessId}...`);
         const { data: pendingRenders, error: rendersError } = await supabaseClient
@@ -489,17 +558,17 @@ export async function runRenderJob() {
                 error: result?.error || null
               });
               
-              if (result.status === 'COMPLETED' && result.outputUrl) {
-                // Update render with output URL and mark as COMPLETED
+              if (result.status === 'COMPLETED') {
+                const updatePayload = {
+                  render_status: 'COMPLETED',
+                  completed_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString()
+                };
+                if (result.outputUrl) updatePayload.output_url = result.outputUrl;
                 console.log(`[Orbix Jobs] Updating render ${render.id} to COMPLETED...`);
                 await supabaseClient
                   .from('orbix_renders')
-                  .update({
-                    render_status: 'COMPLETED',
-                    output_url: result.outputUrl,
-                    completed_at: new Date().toISOString(),
-                    updated_at: new Date().toISOString()
-                  })
+                  .update(updatePayload)
                   .eq('id', render.id);
                 
                 totalRendersProcessed++;
@@ -624,31 +693,28 @@ export async function runPublishJob() {
           if (existingPublish) continue; // Already published
           
           try {
-            // Get module settings for publishing preferences
-            const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
-            
-            if (!moduleSettings?.settings?.youtube?.access_token) {
-              console.log(`[Orbix Jobs] YouTube not connected for business ${businessId}`);
-              continue; // Skip if YouTube not connected
-            }
-            
-            // Build video metadata
             const story = render.orbix_stories;
             const script = render.orbix_scripts;
+            const orbixChannelId = story?.channel_id || null;
+            const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+            const byChannel = moduleSettings?.settings?.youtube_by_channel || {};
+            const legacyYt = moduleSettings?.settings?.youtube;
+            const hasCreds = (orbixChannelId && byChannel[orbixChannelId]?.access_token) || legacyYt?.access_token;
+            if (!hasCreds) {
+              console.log(`[Orbix Jobs] YouTube not connected for business ${businessId}${orbixChannelId ? ` channel ${orbixChannelId}` : ''}`);
+              continue;
+            }
             
             const title = script?.hook || story?.title || 'Orbix Network Video';
             const description = `${script?.what_happened || ''}\n\n${script?.why_it_matters || ''}\n\n${script?.what_happens_next || ''}`.trim();
+            const publishOptions = orbixChannelId ? { orbixChannelId } : {};
             
-            // Publish to YouTube
             const publishResult = await publishVideo(
               businessId,
               render.id,
               render.output_url,
-              {
-                title: title,
-                description: description,
-                tags: [story?.category || 'news']
-              }
+              { title, description, tags: [story?.category || 'news'] },
+              publishOptions
             );
             
             // Create publish record
@@ -764,6 +830,27 @@ router.post('/analytics', async (req, res) => {
   } catch (error) {
     console.error('[Orbix Jobs] Analytics job error:', error);
     res.status(500).json({ error: 'Analytics job failed', message: error.message });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/jobs/automated-pipeline
+ * Run the full automated pipeline: scrape → process → filter → render (only one video per run)
+ */
+router.post('/automated-pipeline', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    
+    if (!businessId) {
+      return res.status(400).json({ error: 'Business ID required' });
+    }
+    
+    console.log(`[Orbix Jobs] Running automated pipeline for business ${businessId}`);
+    const result = await runAutomatedPipeline(businessId);
+    res.json(result);
+  } catch (error) {
+    console.error('[Orbix Jobs] Automated pipeline error:', error);
+    res.status(500).json({ error: 'Automated pipeline failed', message: error.message });
   }
 });
 

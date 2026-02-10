@@ -6,7 +6,7 @@ import express from "express";
 import { CallSession } from "../models/CallSession.js";
 import { Business } from "../models/Business.js";
 import { Message } from "../models/Message.js";
-import { getCallSummary, forwardCallToBusiness } from "../services/vapi.js";
+import { getCallSummary, forwardCallToBusiness, getVapiClient } from "../services/vapi.js";
 import { checkMinutesAvailable, recordCallUsage } from "../services/usage.js";
 import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail } from "../services/notifications.js";
 import { isBusinessOpenAtTime } from "../utils/businessHours.js";
@@ -564,32 +564,88 @@ router.get("/webhook/diagnostic", async (req, res) => {
 });
 
 /**
+ * Handle VAPI assistant-request: return assistant config so the call can be answered.
+ * Used when the phone number has assistantId=null and a server URL (dynamic assistant selection).
+ * Must respond within ~7.5s or the call fails ("could not be reached").
+ */
+async function handleAssistantRequest(body, res) {
+  const phoneNumber =
+    body?.message?.phoneNumber ||
+    body?.message?.destinationNumber ||
+    body?.message?.call?.phoneNumber ||
+    body?.call?.phoneNumber ||
+    body?.phoneNumber;
+  const existingAssistantId =
+    body?.message?.assistant?.id || body?.call?.assistant?.id || body?.assistantId;
+
+  console.log("[VAPI Webhook] assistant-request: phoneNumber=%s existingAssistantId=%s", phoneNumber || "none", existingAssistantId || "none");
+
+  let assistantId = existingAssistantId;
+  if (!assistantId && phoneNumber) {
+    const business = await Business.findByPhoneNumber(phoneNumber);
+    if (business?.vapi_assistant_id) {
+      assistantId = business.vapi_assistant_id;
+      console.log("[VAPI Webhook] assistant-request: resolved assistant from phone -> business", business.id, assistantId);
+    }
+  }
+
+  if (!assistantId) {
+    console.error("[VAPI Webhook] assistant-request: no assistantId and could not resolve from phone number");
+    res.status(200).json({ received: true });
+    return { sent: true };
+  }
+
+  const vapiClient = getVapiClient();
+  const assistantResponse = await vapiClient.get(`/assistant/${assistantId}`);
+  const assistant = assistantResponse.data;
+  if (!assistant) {
+    console.error("[VAPI Webhook] assistant-request: assistant not found in VAPI", assistantId);
+    res.status(200).json({ received: true });
+    return { sent: true };
+  }
+
+  console.log("[VAPI Webhook] assistant-request: returning assistant config for", assistantId);
+  res.status(200).json({ assistant });
+  return { sent: true };
+}
+
+/**
  * VAPI Webhook Handler
- * Handles call-start, call-end, transfer-started, transfer-failed, call-returned events
- * 
- * CRITICAL: Respond IMMEDIATELY - do NOT wait for DB operations
- * VAPI needs a fast response to answer calls properly
+ * Handles assistant-request (MUST respond with assistant config), call-start, call-end, etc.
+ *
+ * CRITICAL: assistant-request expects a synchronous response with assistant config;
+ * other events get 200 immediately then process async.
  */
 router.post("/webhook", async (req, res) => {
-  // 🔥 IMMEDIATE LOG - First thing we do (comprehensive)
   const eventType = req.body?.type || req.body?.event || req.body?.message?.type;
   const callId = req.body?.call?.id || req.body?.message?.call?.id;
   const assistantId = req.body?.call?.assistant?.id || req.body?.message?.assistant?.id;
   const businessId = req.body?.call?.assistant?.metadata?.businessId || req.body?.message?.assistant?.metadata?.businessId;
-  
+
   console.log(`🔥🔥🔥 INBOUND WEBHOOK HIT 🔥🔥🔥`);
   console.log(`🔥 Event Type: ${eventType || 'unknown'}`);
   console.log(`🔥 Call ID: ${callId || 'N/A'}`);
   console.log(`🔥 Assistant ID: ${assistantId || 'N/A'}`);
   console.log(`🔥 Business ID: ${businessId || 'N/A'}`);
   console.log(`🔥 Timestamp: ${new Date().toISOString()}`);
-  
-  // RESPOND IMMEDIATELY - Don't wait for anything
-  // This tells VAPI we received the webhook
+
+  // assistant-request REQUIRES a response with assistant config (VAPI will fail the call otherwise)
+  if (eventType === "assistant-request") {
+    try {
+      const result = await handleAssistantRequest(req.body, res);
+      if (result.sent) return;
+      // If handler didn't send, fall through to 200
+    } catch (err) {
+      console.error("[VAPI Webhook] assistant-request handler error:", err);
+      res.status(500).json({ error: "assistant-request failed", message: err.message });
+      return;
+    }
+  }
+
+  // For all other events: respond immediately so VAPI doesn't time out
   res.status(200).json({ received: true });
-  
-  // Now process asynchronously (don't await - let it run in background)
-  // Use setImmediate to ensure response is sent first
+
+  // Process asynchronously (don't await - let it run in background)
   setImmediate(async () => {
     const webhookId = `webhook_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     try {

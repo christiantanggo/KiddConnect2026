@@ -8,19 +8,38 @@ import V2AppShell from '@/components/V2AppShell';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
-import { Loader, TrendingUp, Video, FileText, Eye, Play, RefreshCw, X, XCircle, RotateCw } from 'lucide-react';
+import { useOrbixChannel } from '../OrbixChannelContext';
+import { Loader, TrendingUp, Video, FileText, Eye, Play, RefreshCw, X, XCircle, RotateCw, AlertTriangle } from 'lucide-react';
+import PipelineView from './PipelineView';
+import VideoDetailModal from './VideoDetailModal';
+import OrbixChannelSelector from '../OrbixChannelSelector';
+
+// Renders in PROCESSING/PENDING longer than this are treated as "stuck" - we stop polling and show a cancel option
+const STUCK_RENDER_MINUTES = 60;
+function isRenderStuck(r) {
+  if (r.render_status !== 'PENDING' && r.render_status !== 'PROCESSING') return false;
+  const updated = r.updated_at || r.created_at;
+  if (!updated) return true;
+  const updatedAt = new Date(updated);
+  const cutoff = new Date(Date.now() - STUCK_RENDER_MINUTES * 60 * 1000);
+  return updatedAt < cutoff;
+}
 
 export default function OrbixNetworkDashboard() {
   const router = useRouter();
   const { success, error: showErrorToast } = useToast();
+  const { currentChannelId, apiParams, apiBody, channels, loading: channelsLoading } = useOrbixChannel();
   const [loading, setLoading] = useState(true);
   const [rawItems, setRawItems] = useState([]);
   const [stories, setStories] = useState([]);
   const [renders, setRenders] = useState([]);
   const [publishes, setPublishes] = useState([]);
+  const [pipeline, setPipeline] = useState([]);
   const [selectedRender, setSelectedRender] = useState(null);
   const [renderDetails, setRenderDetails] = useState(null);
   const [loadingRenderDetails, setLoadingRenderDetails] = useState(false);
+  const [selectedVideo, setSelectedVideo] = useState(null);
+  const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
   const [stats, setStats] = useState({
     totalRawItems: 0,
     totalStories: 0,
@@ -30,28 +49,33 @@ export default function OrbixNetworkDashboard() {
   });
   const [runningJobs, setRunningJobs] = useState({
     scrape: false,
+    pipeline: false,
     process: false,
     reviewQueue: false,
     render: false,
     publish: false
   });
+  const [cancellingStuck, setCancellingStuck] = useState(false);
   const isLoadingDataRef = useRef(false); // Prevent concurrent loadDashboardData calls
   const rateLimitedRef = useRef(false); // Track if we're rate limited
+  const serverUnreachableRef = useRef(false); // When true, stop polling to avoid console flood
   const autoRefreshIntervalRef = useRef(null); // Store interval reference
   const hasCheckedSetupRef = useRef(false); // Prevent multiple setup checks
   const isCheckingSetupRef = useRef(false); // Prevent concurrent setup checks
 
   useEffect(() => {
-    // Only check setup once on mount
-    // Add a small delay to stagger requests and avoid hitting rate limits on initial load
     if (!hasCheckedSetupRef.current && !isCheckingSetupRef.current) {
       hasCheckedSetupRef.current = true;
-      // Delay by 500ms to let other components (header, sidebar) make their requests first
-      setTimeout(() => {
-        checkSetupAndLoadData();
-      }, 500);
+      setTimeout(() => checkSetupAndLoadData(), 500);
     }
   }, []);
+
+  // When channel is selected (or changes), load dashboard data if setup is already complete
+  useEffect(() => {
+    if (!currentChannelId || isCheckingSetupRef.current || isLoadingDataRef.current) return;
+    if (!hasCheckedSetupRef.current) return;
+    loadDashboardData();
+  }, [currentChannelId]);
 
   // Ref to track current renders for interval callback
   const rendersRef = useRef(renders);
@@ -59,74 +83,43 @@ export default function OrbixNetworkDashboard() {
     rendersRef.current = renders;
   }, [renders]);
 
-  // Auto-refresh dashboard data every 5 seconds if there are PENDING or PROCESSING renders
+  // Auto-refresh every 5s only for renders that are actually in progress (not stuck)
   useEffect(() => {
-    // Calculate active renders
-    const hasActiveRenders = renders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-    const activeCount = renders.filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING').length;
-    
-    console.log('[Orbix Dashboard] Auto-refresh effect - hasActiveRenders:', hasActiveRenders, 'active count:', activeCount, 'total renders:', renders.length, 'rateLimited:', rateLimitedRef.current);
-    
-    // ALWAYS clear existing interval first - we'll set up a new one if needed
+    const activeRenders = renders.filter(r =>
+      (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+    );
+    const hasActiveRenders = activeRenders.length > 0;
+
     if (autoRefreshIntervalRef.current) {
-      console.log('[Orbix Dashboard] CLEARING existing auto-refresh interval');
       clearInterval(autoRefreshIntervalRef.current);
       autoRefreshIntervalRef.current = null;
     }
-    
-    // Don't set up auto-refresh if rate limited
-    if (rateLimitedRef.current) {
-      console.log('[Orbix Dashboard] Rate limited - NOT setting up auto-refresh');
-      return;
-    }
-    
-    // Only set up interval if there are active renders
-    if (!hasActiveRenders) {
-      console.log('[Orbix Dashboard] No active renders - NOT setting up auto-refresh interval (STOPPING)');
-      return;
-    }
-    
-    console.log('[Orbix Dashboard] Setting up auto-refresh interval (5 seconds) - active renders detected');
+    if (rateLimitedRef.current || !hasActiveRenders) return;
+
     autoRefreshIntervalRef.current = setInterval(() => {
-      // Check if there are still active renders using ref (current state)
       const currentRenders = rendersRef.current;
-      const currentActiveRenders = currentRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-      
-      if (!currentActiveRenders) {
-        console.log('[Orbix Dashboard] No more active renders detected - STOPPING auto-refresh interval');
+      const stillActive = currentRenders.some(r =>
+        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+      );
+      if (!stillActive) {
         if (autoRefreshIntervalRef.current) {
           clearInterval(autoRefreshIntervalRef.current);
           autoRefreshIntervalRef.current = null;
         }
         return;
       }
-      
-      // Don't refresh if already loading or rate limited
-      if (isLoadingDataRef.current) {
-        console.log('[Orbix Dashboard] Auto-refresh skipped - already loading data');
-        return;
-      }
-      if (rateLimitedRef.current) {
-        console.log('[Orbix Dashboard] Auto-refresh skipped - rate limited, clearing interval');
-        if (autoRefreshIntervalRef.current) {
-          clearInterval(autoRefreshIntervalRef.current);
-          autoRefreshIntervalRef.current = null;
-        }
-        return;
-      }
-      
-      console.log('[Orbix Dashboard] Auto-refresh triggered - checking render status only...');
+      if (isLoadingDataRef.current || rateLimitedRef.current || serverUnreachableRef.current) return;
       checkRenderStatus();
+      refreshPipelineData();
     }, 5000);
-    
+
     return () => {
-      console.log('[Orbix Dashboard] Cleaning up auto-refresh interval (unmount/effect change)');
       if (autoRefreshIntervalRef.current) {
         clearInterval(autoRefreshIntervalRef.current);
         autoRefreshIntervalRef.current = null;
       }
     };
-  }, [renders.map(r => `${r.id}-${r.render_status}`).join(',')]); // Re-run when renders or their statuses change
+  }, [renders.map(r => `${r.id}-${r.render_status}-${r.updated_at || r.created_at}`).join(',')]);
 
   const checkSetupAndLoadData = async () => {
     // Prevent concurrent calls
@@ -159,9 +152,11 @@ export default function OrbixNetworkDashboard() {
         return;
       }
       
-      // Setup complete - load dashboard data
-      console.log('[Orbix Dashboard] Setup complete - loading dashboard data');
-      await loadDashboardData();
+      // Setup complete - load dashboard data only when a channel is selected
+      if (currentChannelId) {
+        console.log('[Orbix Dashboard] Setup complete - loading dashboard data');
+        await loadDashboardData();
+      }
       console.log('[Orbix Dashboard] ========== CHECK SETUP SUCCESS ==========');
     } catch (error) {
       console.error('[Orbix Dashboard] ========== CHECK SETUP ERROR ==========');
@@ -195,138 +190,54 @@ export default function OrbixNetworkDashboard() {
     }
   };
 
-  // Lightweight function to check render status only (no page reload)
   const checkRenderStatus = async () => {
-    // Don't check if rate limited
-    if (rateLimitedRef.current) {
-      console.log('[Orbix Dashboard] checkRenderStatus skipped - rate limited');
-      return;
-    }
-    
+    if (rateLimitedRef.current) return;
     try {
-      console.log('[Orbix Dashboard] ========== CHECK RENDER STATUS START ==========');
-      
-      // Only fetch renders - don't reload everything
-      const rendersRes = await orbixNetworkAPI.getRenders({ limit: 5 });
+      const rendersRes = await orbixNetworkAPI.getRenders({ ...apiParams(), limit: 20 });
       const newRenders = rendersRes.data.renders || [];
-      
-      // Get previous renders state
       const previousRenders = rendersRef.current;
-      
-      // Log current render states with full details
-      console.log('[Orbix Dashboard] Previous renders count:', previousRenders.length);
-      const previousActiveRenders = previousRenders.filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-      console.log('[Orbix Dashboard] Previous active renders count:', previousActiveRenders.length);
-      previousActiveRenders.forEach(r => {
-        console.log(`[Orbix Dashboard] Previous active render ID ${r.id}:`, {
-          status: r.render_status,
-          story_id: r.story_id,
-          created_at: r.created_at,
-          updated_at: r.updated_at,
-          progress: r.progress,
-          error_message: r.error_message
-        });
+      const hadActiveRenders = previousRenders.some(r =>
+        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+      );
+      const hasActiveRenders = newRenders.some(r =>
+        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+      );
+      const statusChanged = previousRenders.some(prev => {
+        const next = newRenders.find(r => r.id === prev.id);
+        return next && (next.render_status !== prev.render_status || (next.updated_at !== prev.updated_at && (next.progress !== undefined && next.progress !== prev.progress)));
       });
-      
-      console.log('[Orbix Dashboard] New renders count:', newRenders.length);
-      const newActiveRenders = newRenders.filter(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-      console.log('[Orbix Dashboard] New active renders count:', newActiveRenders.length);
-      newActiveRenders.forEach(r => {
-        console.log(`[Orbix Dashboard] New active render ID ${r.id}:`, {
-          status: r.render_status,
-          story_id: r.story_id,
-          created_at: r.created_at,
-          updated_at: r.updated_at,
-          progress: r.progress,
-          error_message: r.error_message
-        });
-      });
-      
-      // Log all renders (including completed/failed) for comparison
-      console.log('[Orbix Dashboard] All previous renders:', previousRenders.map(r => ({
-        id: r.id,
-        status: r.render_status,
-        updated_at: r.updated_at
-      })));
-      console.log('[Orbix Dashboard] All new renders:', newRenders.map(r => ({
-        id: r.id,
-        status: r.render_status,
-        updated_at: r.updated_at
-      })));
-      
-      // Check status changes
-      const hadActiveRenders = previousRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-      const hasActiveRenders = newRenders.some(r => r.render_status === 'PENDING' || r.render_status === 'PROCESSING');
-      
-      console.log('[Orbix Dashboard] Had active renders:', hadActiveRenders);
-      console.log('[Orbix Dashboard] Has active renders:', hasActiveRenders);
-      
-      // Check for status changes in individual renders
-      let statusChanged = false;
-      previousRenders.forEach(prevRender => {
-        const newRender = newRenders.find(r => r.id === prevRender.id);
-        if (newRender) {
-          if (newRender.render_status !== prevRender.render_status) {
-            statusChanged = true;
-            console.log(`[Orbix Dashboard] ⚠️ RENDER STATUS CHANGED: ID ${prevRender.id}`);
-            console.log(`[Orbix Dashboard]   Status: ${prevRender.render_status} → ${newRender.render_status}`);
-            if (newRender.progress !== undefined && newRender.progress !== prevRender.progress) {
-              console.log(`[Orbix Dashboard]   Progress: ${prevRender.progress || 0}% → ${newRender.progress}%`);
-            }
-            if (newRender.error_message) {
-              console.log(`[Orbix Dashboard]   Error: ${newRender.error_message}`);
-            }
-            if (newRender.updated_at !== prevRender.updated_at) {
-              console.log(`[Orbix Dashboard]   Updated: ${prevRender.updated_at} → ${newRender.updated_at}`);
-            }
-          } else if (newRender.render_status === 'PENDING' || newRender.render_status === 'PROCESSING') {
-            // Even if status hasn't changed, check if updated_at changed (render is still processing)
-            if (newRender.updated_at !== prevRender.updated_at) {
-              console.log(`[Orbix Dashboard] Render ${prevRender.id} still ${newRender.render_status} - updated_at changed: ${prevRender.updated_at} → ${newRender.updated_at}`);
-            }
-            if (newRender.progress !== undefined && newRender.progress !== prevRender.progress) {
-              console.log(`[Orbix Dashboard] ⚡ Render ${prevRender.id} progress updated: ${prevRender.progress || 0}% → ${newRender.progress}%`);
-            }
-          }
-        }
-      });
-      
-      if (!statusChanged && hasActiveRenders) {
-        console.log('[Orbix Dashboard] ⚠️ No status changes detected - renders may be stuck in', 
-          newActiveRenders.map(r => `${r.render_status} (ID: ${r.id})`).join(', '));
-      }
-      
-      // Only update renders state (not loading, not other data)
       setRenders(newRenders);
-      
-      // If renders completed/failed, reload full dashboard data once
-      if (hadActiveRenders && !hasActiveRenders) {
-        console.log('[Orbix Dashboard] All renders completed/failed - reloading full dashboard data');
-        // Load full dashboard data in background without setting loading state
-        loadDashboardData();
-      }
-      
-      console.log('[Orbix Dashboard] ========== CHECK RENDER STATUS SUCCESS ==========');
+      serverUnreachableRef.current = false; // Backend is reachable
+      if (hadActiveRenders && !hasActiveRenders) loadDashboardData();
     } catch (error) {
-      console.error('[Orbix Dashboard] ========== CHECK RENDER STATUS ERROR ==========');
-      console.error('[Orbix Dashboard] Error:', error);
-      console.error('[Orbix Dashboard] Error response:', error?.response);
-      console.error('[Orbix Dashboard] Error status:', error?.response?.status);
-      
       if (error?.response?.status === 429) {
-        console.warn('[Orbix Dashboard] Rate limited during render status check');
         rateLimitedRef.current = true;
-        
-        // Clear auto-refresh interval
         if (autoRefreshIntervalRef.current) {
           clearInterval(autoRefreshIntervalRef.current);
           autoRefreshIntervalRef.current = null;
         }
-        
-        // Clear rate limit after 60 seconds
-        setTimeout(() => {
-          rateLimitedRef.current = false;
-        }, 60000);
+        setTimeout(() => { rateLimitedRef.current = false; }, 60000);
+      }
+    }
+  };
+
+  const refreshPipelineData = async () => {
+    if (isLoadingDataRef.current || rateLimitedRef.current) return;
+    try {
+      const pipelineRes = await orbixNetworkAPI.getPipeline({ ...apiParams(), limit: 20 });
+      setPipeline(pipelineRes.data.pipeline || []);
+      serverUnreachableRef.current = false; // Backend is reachable
+    } catch (error) {
+      if (error?.response?.status === 429) {
+        rateLimitedRef.current = true;
+        setTimeout(() => { rateLimitedRef.current = false; }, 60000);
+      }
+      if (error?.code === 'ERR_NETWORK' || error?.message?.includes('Unable to connect')) {
+        serverUnreachableRef.current = true;
+        if (autoRefreshIntervalRef.current) {
+          clearInterval(autoRefreshIntervalRef.current);
+          autoRefreshIntervalRef.current = null;
+        }
       }
     }
   };
@@ -350,13 +261,13 @@ export default function OrbixNetworkDashboard() {
     try {
       setLoading(true);
       
-      // Load raw items, stories, renders, and publishes in parallel
-      console.log('[Orbix Dashboard] Fetching dashboard data in parallel...');
-      const [rawItemsRes, storiesRes, rendersRes, publishesRes] = await Promise.all([
-        orbixNetworkAPI.getRawItems({ limit: 10 }),
-        orbixNetworkAPI.getStories({ limit: 10 }),
-        orbixNetworkAPI.getRenders({ limit: 5 }),
-        orbixNetworkAPI.getPublishes({ limit: 5 })
+      const params = apiParams();
+      const [rawItemsRes, storiesRes, rendersRes, publishesRes, pipelineRes] = await Promise.all([
+        orbixNetworkAPI.getRawItems({ ...params, limit: 10 }),
+        orbixNetworkAPI.getStories({ ...params, limit: 10 }),
+        orbixNetworkAPI.getRenders({ ...params, limit: 5 }),
+        orbixNetworkAPI.getPublishes({ ...params, limit: 5 }),
+        orbixNetworkAPI.getPipeline({ ...params, limit: 20 })
       ]);
       
       console.log('[Orbix Dashboard] Dashboard data fetched successfully');
@@ -364,6 +275,7 @@ export default function OrbixNetworkDashboard() {
       setStories(storiesRes.data.stories || []);
       setRenders(rendersRes.data.renders || []);
       setPublishes(publishesRes.data.publishes || []);
+      setPipeline(pipelineRes.data.pipeline || []);
       
       // Calculate stats
       setStats({
@@ -374,12 +286,11 @@ export default function OrbixNetworkDashboard() {
         totalViews: publishesRes.data.publishes?.reduce((sum, p) => sum + (p.views || 0), 0) || 0
       });
       
-      // If we were rate limited before, clear it now
       if (rateLimitedRef.current) {
         console.log('[Orbix Dashboard] Rate limit cleared - requests successful');
         rateLimitedRef.current = false;
       }
-      
+      serverUnreachableRef.current = false; // Backend is reachable again
       console.log('[Orbix Dashboard] ========== LOAD DASHBOARD DATA SUCCESS ==========');
     } catch (error) {
       console.error('[Orbix Dashboard] ========== LOAD DASHBOARD DATA ERROR ==========');
@@ -415,11 +326,32 @@ export default function OrbixNetworkDashboard() {
       if (errorInfo.redirect) {
         router.push(errorInfo.redirect);
       }
+      if (error?.code === 'ERR_NETWORK' || error?.message?.includes('Unable to connect')) {
+        serverUnreachableRef.current = true;
+        if (autoRefreshIntervalRef.current) {
+          clearInterval(autoRefreshIntervalRef.current);
+          autoRefreshIntervalRef.current = null;
+        }
+      }
     } finally {
       setLoading(false);
       isLoadingDataRef.current = false;
       console.log('[Orbix Dashboard] loadDashboardData complete - loading flag reset');
     }
+  };
+
+  const getStepName = (step) => {
+    const stepNames = {
+      'PENDING': 'Waiting to start',
+      'STEP_3_BACKGROUND_VOICE': 'Step 3: Background + Voice',
+      'STEP_4_HOOK_TEXT': 'Step 4: Hook Text',
+      'STEP_5_CAPTIONS': 'Step 5: Captions',
+      'STEP_6_METADATA': 'Step 6: Metadata',
+      'STEP_7_YOUTUBE_UPLOAD': 'Step 7: YouTube Upload',
+      'COMPLETED': 'Completed',
+      'FAILED': 'Failed'
+    };
+    return stepNames[step] || step || 'Unknown';
   };
 
   const getStatusBadge = (status) => {
@@ -489,7 +421,7 @@ export default function OrbixNetworkDashboard() {
     setLoadingRenderDetails(true);
     
     try {
-      const response = await orbixNetworkAPI.getRender(render.id);
+      const response = await orbixNetworkAPI.getRender(render.id, apiParams());
       setRenderDetails(response.data.render);
     } catch (error) {
       console.error('Failed to load render details:', error);
@@ -501,15 +433,32 @@ export default function OrbixNetworkDashboard() {
 
   const handleCancelRender = async (renderId) => {
     try {
-      await orbixNetworkAPI.deleteRender(renderId);
+      await orbixNetworkAPI.deleteRender(renderId, apiParams());
       success('Render cancelled');
       setSelectedRender(null);
       setRenderDetails(null);
-      loadDashboardData(); // Reload data to refresh the list
+      loadDashboardData();
     } catch (error) {
-      console.error('Failed to cancel render:', error);
       const errorInfo = handleAPIError(error);
       showErrorToast(errorInfo.message || 'Failed to cancel render');
+    }
+  };
+
+  const stuckRenders = renders.filter(r => isRenderStuck(r));
+  const handleCancelAllStuck = async () => {
+    if (stuckRenders.length === 0) return;
+    try {
+      setCancellingStuck(true);
+      for (const r of stuckRenders) {
+        await orbixNetworkAPI.deleteRender(r.id);
+      }
+      success(`Cancelled ${stuckRenders.length} stuck render(s).`);
+      await loadDashboardData();
+    } catch (error) {
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to cancel stuck renders');
+    } finally {
+      setCancellingStuck(false);
     }
   };
 
@@ -523,7 +472,7 @@ export default function OrbixNetworkDashboard() {
       console.log('[Orbix Dashboard] Calling orbixNetworkAPI.restartRender...');
       const startTime = Date.now();
       
-      const response = await orbixNetworkAPI.restartRender(renderId);
+      const response = await orbixNetworkAPI.restartRender(renderId, apiParams());
       
       const duration = Date.now() - startTime;
       console.log('[Orbix Dashboard] restartRender API call completed in', duration, 'ms');
@@ -658,17 +607,31 @@ export default function OrbixNetworkDashboard() {
     );
   }
 
+  const noChannel = !channelsLoading && !currentChannelId;
+
   return (
     <AuthGuard>
       <V2AppShell>
         <div className="p-6 space-y-6">
+          {noChannel ? (
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
+              <p className="text-gray-600 mb-2">
+                {channels?.length === 0
+                  ? 'Create your first channel using the dropdown above to get started.'
+                  : 'Select a channel from the dropdown above to view its dashboard.'}
+              </p>
+            </div>
+          ) : (
+            <>
           {/* Header */}
-          <div className="flex justify-between items-center">
+          <div className="flex flex-wrap justify-between items-center gap-4">
             <div>
               <h1 className="text-3xl font-bold mb-2">Orbix Network</h1>
               <p className="text-gray-600">Automated video news network</p>
             </div>
-            <div className="flex gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="text-sm text-gray-600">Channel:</span>
+              <OrbixChannelSelector />
               <Link
                 href="/dashboard/v2/modules/orbix-network/stories"
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
@@ -684,14 +647,42 @@ export default function OrbixNetworkDashboard() {
             <p className="text-sm text-gray-600 mb-4">
               Manually trigger background jobs for testing. Jobs normally run automatically on a schedule.
             </p>
-            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-              <Link
-                href="/dashboard/v2/modules/orbix-network/scraped"
-                className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-center"
+            <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+              <button
+                onClick={() => triggerJob('scrape', () => orbixNetworkAPI.triggerScrapeJob(apiBody()))}
+                disabled={runningJobs.scrape}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                <Play className="w-4 h-4" />
-                Scrape & View
-              </Link>
+                {runningJobs.scrape ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Scraping...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    Scrape
+                  </>
+                )}
+              </button>
+              
+              <button
+                onClick={() => triggerJob('pipeline', orbixNetworkAPI.triggerAutomatedPipeline)}
+                disabled={runningJobs.pipeline}
+                className="flex items-center justify-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                {runningJobs.pipeline ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Running...
+                  </>
+                ) : (
+                  <>
+                    <Play className="w-4 h-4" />
+                    Full Pipeline
+                  </>
+                )}
+              </button>
               
               <button
                 onClick={() => triggerJob('process', orbixNetworkAPI.triggerProcessJob)}
@@ -730,13 +721,7 @@ export default function OrbixNetworkDashboard() {
               </button>
               
               <button
-                onClick={() => {
-                  console.log('[Orbix Dashboard] ========== RENDER BUTTON CLICKED ==========');
-                  console.log('[Orbix Dashboard] Button clicked at:', new Date().toISOString());
-                  console.log('[Orbix Dashboard] Running jobs state:', runningJobs);
-                  console.log('[Orbix Dashboard] Calling triggerJob with render...');
-                  triggerJob('render', orbixNetworkAPI.triggerRenderJob);
-                }}
+                onClick={() => triggerJob('render', orbixNetworkAPI.triggerRenderJob)}
                 disabled={runningJobs.render}
                 className="flex items-center justify-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
@@ -772,6 +757,26 @@ export default function OrbixNetworkDashboard() {
               </button>
             </div>
           </div>
+
+          {/* Stuck renders banner - stop polling and offer cancel */}
+          {stuckRenders.length > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-center justify-between flex-wrap gap-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
+                <p className="text-amber-800 text-sm">
+                  <strong>{stuckRenders.length} render(s)</strong> have been in progress for over {STUCK_RENDER_MINUTES} minutes and may be stuck. Cancel them to clear the queue.
+                </p>
+              </div>
+              <button
+                onClick={handleCancelAllStuck}
+                disabled={cancellingStuck}
+                className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 text-sm font-medium flex items-center gap-2"
+              >
+                {cancellingStuck ? <Loader className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
+                Cancel stuck renders
+              </button>
+            </div>
+          )}
 
           {/* Stats Cards */}
           <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
@@ -826,191 +831,33 @@ export default function OrbixNetworkDashboard() {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Recent Raw Items */}
-            <div className="bg-white rounded-lg shadow">
-              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
-                <h2 className="text-xl font-semibold">Recent Raw Items</h2>
-              </div>
-              <div className="p-6">
-                {rawItems.length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">No raw items yet. Run the Scrape job to fetch news items.</p>
-                ) : (
-                  <div className="space-y-4">
-                    {rawItems.slice(0, 5).map((item) => (
-                      <div key={item.id} className="border-b border-gray-100 pb-4 last:border-0 last:pb-0">
-                        <div className="flex flex-col">
-                          <p className="font-medium text-sm line-clamp-2 mb-2">{item.title || 'Untitled'}</p>
-                          <div className="flex gap-2 mb-2">
-                            <span className={`px-2 py-1 text-xs rounded ${
-                              item.status === 'NEW' ? 'bg-yellow-100 text-yellow-800' :
-                              item.status === 'PROCESSED' ? 'bg-green-100 text-green-800' :
-                              'bg-gray-100 text-gray-800'
-                            }`}>
-                              {item.status}
-                            </span>
-                          </div>
-                          {item.url && (
-                            <a
-                              href={item.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-xs text-blue-600 hover:text-blue-700 break-all"
-                              title={item.url}
-                            >
-                              {item.url}
-                            </a>
-                          )}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
+          {/* Pipeline View - Steps as Columns, Videos as Rows */}
+          <PipelineView 
+            pipeline={pipeline}
+            onVideoClick={(item) => {
+              setSelectedVideo(item);
+              setIsVideoModalOpen(true);
+            }}
+            onRefresh={loadDashboardData}
+          />
 
-            {/* Recent Stories */}
-            <div className="bg-white rounded-lg shadow">
-              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
-                <h2 className="text-xl font-semibold">Recent Stories</h2>
-                <Link
-                  href="/dashboard/v2/modules/orbix-network/stories"
-                  className="text-sm text-blue-600 hover:text-blue-700"
-                >
-                  View All →
-                </Link>
-              </div>
-              <div className="p-6">
-                {stories.length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">No stories yet</p>
-                ) : (
-                  <div className="space-y-4">
-                    {stories.slice(0, 5).map((story) => {
-                      // Determine navigation path based on status
-                      const isQueued = story.status === 'PENDING' || story.status === 'QUEUED';
-                      const storyPath = isQueued 
-                        ? '/dashboard/v2/modules/orbix-network/review'
-                        : '/dashboard/v2/modules/orbix-network/stories';
-                      
-                      return (
-                        <Link
-                          key={story.id}
-                          href={storyPath}
-                          className="block border-b border-gray-100 pb-4 last:border-0 last:pb-0 hover:bg-gray-50 -mx-2 px-2 rounded transition-colors cursor-pointer"
-                        >
-                          <div className="flex justify-between items-start mb-2">
-                            <div className="flex-1">
-                              <p className="font-medium text-sm line-clamp-2">{story.title || 'Untitled Story'}</p>
-                              <div className="flex gap-2 mt-2">
-                                {getCategoryBadge(story.category)}
-                                {getStatusBadge(story.status)}
-                              </div>
-                            </div>
-                            <div className="text-right ml-4">
-                              <p className="text-xs text-gray-500">Score</p>
-                              <p className="text-sm font-semibold">{story.shock_score}/100</p>
-                            </div>
-                          </div>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Recent Renders */}
-            <div className="bg-white rounded-lg shadow">
-              <div className="p-6 border-b border-gray-200 flex justify-between items-center">
-                <h2 className="text-xl font-semibold">Recent Renders</h2>
-                <Link
-                  href="/dashboard/v2/modules/orbix-network/renders"
-                  className="text-sm text-blue-600 hover:text-blue-700"
-                >
-                  View All →
-                </Link>
-              </div>
-              <div className="p-6">
-                {renders.length === 0 ? (
-                  <p className="text-gray-500 text-center py-8">No renders yet</p>
-                ) : (
-                  <div className="space-y-4">
-                    {renders.slice(0, 5).map((render) => {
-                      const canClick = ['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'].includes(render.render_status);
-                      const isFailed = render.render_status === 'FAILED';
-                      const isCompleted = render.render_status === 'COMPLETED';
-                      
-                      return (
-                        <div
-                          key={render.id}
-                          className={`border-b border-gray-100 pb-4 last:border-0 last:pb-0 ${canClick ? 'cursor-pointer hover:bg-gray-50' : ''} -mx-2 px-2 rounded transition-colors`}
-                          onClick={canClick ? () => handleRenderClick(render) : undefined}
-                        >
-                          <div className="flex justify-between items-center">
-                            <div className="flex-1">
-                              <div className="flex gap-2 mb-2 items-center">
-                                {getStatusBadge(render.render_status)}
-                                <span className="text-xs text-gray-500">
-                                  Template {render.template} • {render.background_type}
-                                </span>
-                              </div>
-                              {/* Progress Bar for PENDING or PROCESSING renders */}
-                              {(render.render_status === 'PENDING' || render.render_status === 'PROCESSING') && (
-                                <div className="mt-2 mb-2">
-                                  <div className="flex justify-between items-center mb-1">
-                                    <span className="text-xs text-gray-600">Progress</span>
-                                    <span className="text-xs font-medium text-gray-700">
-                                      {render.progress_percentage || 0}%
-                                    </span>
-                                  </div>
-                                  <div className="w-full bg-gray-200 rounded-full h-2">
-                                    <div
-                                      className={`h-2 rounded-full transition-all duration-300 ${
-                                        render.render_status === 'PROCESSING' 
-                                          ? 'bg-blue-600' 
-                                          : 'bg-gray-400'
-                                      }`}
-                                      style={{ width: `${render.progress_percentage || 0}%` }}
-                                    />
-                                  </div>
-                                  {render.render_status === 'PENDING' && render.progress_percentage === 0 && (
-                                    <p className="text-xs text-gray-500 mt-1">Waiting to start...</p>
-                                  )}
-                                </div>
-                              )}
-                              {render.output_url && (
-                                <a
-                                  href={render.output_url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-sm text-blue-600 hover:text-blue-700"
-                                  onClick={(e) => e.stopPropagation()}
-                                >
-                                  View Video →
-                                </a>
-                              )}
-                              {(isFailed || isCompleted) && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    handleRestartRender(render.id);
-                                  }}
-                                  className="mt-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 flex items-center gap-1"
-                                >
-                                  <RotateCw className="w-3 h-3" />
-                                  Restart
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          {/* Video Detail Modal */}
+          {isVideoModalOpen && (
+            <VideoDetailModal
+              item={selectedVideo}
+              isOpen={isVideoModalOpen}
+              onClose={() => {
+                setIsVideoModalOpen(false);
+                setSelectedVideo(null);
+              }}
+              onRestart={() => {
+                loadDashboardData();
+              }}
+              onForceProcess={() => {
+                loadDashboardData();
+              }}
+            />
+          )}
 
           {/* Published Videos */}
           <div className="bg-white rounded-lg shadow">
@@ -1123,9 +970,15 @@ export default function OrbixNetworkDashboard() {
                           <h3 className="font-semibold text-lg mb-2">Render Progress</h3>
                           <div className="space-y-2">
                             <div className="flex justify-between items-center">
-                              <span className="text-sm text-gray-600">Progress</span>
+                              <span className="text-sm text-gray-600">
+                                {(renderDetails.render_step || selectedRender.render_step) 
+                                  ? getStepName(renderDetails.render_step || selectedRender.render_step)
+                                  : 'Progress'}
+                              </span>
                               <span className="text-sm font-medium text-gray-700">
-                                {renderDetails.progress_percentage || selectedRender.progress_percentage || 0}%
+                                {(renderDetails.step_progress !== undefined || selectedRender.step_progress !== undefined)
+                                  ? (renderDetails.step_progress !== undefined ? renderDetails.step_progress : selectedRender.step_progress)
+                                  : (renderDetails.progress_percentage || selectedRender.progress_percentage || 0)}%
                               </span>
                             </div>
                             <div className="w-full bg-gray-200 rounded-full h-3">
@@ -1136,16 +989,47 @@ export default function OrbixNetworkDashboard() {
                                     : 'bg-gray-400'
                                 }`}
                                 style={{ 
-                                  width: `${renderDetails.progress_percentage || selectedRender.progress_percentage || 0}%` 
+                                  width: `${(renderDetails.step_progress !== undefined || selectedRender.step_progress !== undefined)
+                                    ? (renderDetails.step_progress !== undefined ? renderDetails.step_progress : selectedRender.step_progress)
+                                    : (renderDetails.progress_percentage || selectedRender.progress_percentage || 0)}%` 
                                 }}
                               />
                             </div>
                             {(renderDetails.render_status === 'PENDING' || selectedRender.render_status === 'PENDING') && 
-                             (renderDetails.progress_percentage === 0 || selectedRender.progress_percentage === 0) && (
+                             ((renderDetails.step_progress === 0 || selectedRender.step_progress === 0) || 
+                              (renderDetails.progress_percentage === 0 || selectedRender.progress_percentage === 0)) && (
                               <p className="text-sm text-gray-500 mt-1">Waiting to start processing...</p>
                             )}
                             {(renderDetails.render_status === 'PROCESSING' || selectedRender.render_status === 'PROCESSING') && (
-                              <p className="text-sm text-gray-500 mt-1">Rendering video... This may take a few minutes.</p>
+                              <p className="text-sm text-gray-500 mt-1">
+                                {(renderDetails.render_step || selectedRender.render_step)
+                                  ? `${getStepName(renderDetails.render_step || selectedRender.render_step)} in progress...`
+                                  : 'Rendering video... This may take a few minutes.'}
+                              </p>
+                            )}
+                            {/* Step Logs */}
+                            {((renderDetails.step_logs && renderDetails.step_logs.length > 0) || 
+                              (selectedRender.step_logs && selectedRender.step_logs.length > 0)) && (
+                              <div className="mt-4">
+                                <h4 className="text-sm font-semibold text-gray-700 mb-2">Recent Activity</h4>
+                                <div className="bg-gray-50 rounded p-3 max-h-40 overflow-y-auto">
+                                  {(renderDetails.step_logs || selectedRender.step_logs || []).slice(-5).map((log, idx) => (
+                                    <div key={idx} className="text-xs text-gray-600 mb-1">
+                                      <span className="font-mono text-gray-400">
+                                        {new Date(log.timestamp).toLocaleTimeString()}
+                                      </span>
+                                      {' '}
+                                      <span className={`${
+                                        log.event === 'ERROR' ? 'text-red-600' :
+                                        log.event === 'COMPLETE' ? 'text-green-600' :
+                                        'text-gray-700'
+                                      }`}>
+                                        [{log.event}] {log.message}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1188,6 +1072,8 @@ export default function OrbixNetworkDashboard() {
                 </div>
               </div>
             </div>
+          )}
+            </>
           )}
         </div>
       </V2AppShell>

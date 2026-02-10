@@ -37,3 +37,6 @@ export const requireLegalAcceptance = async (req, res, next) => {
   }
 };
 
+
+
+

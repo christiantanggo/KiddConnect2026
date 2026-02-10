@@ -1,4 +1,5 @@
 import express from 'express';
+import multer from 'multer';
 import { authenticate } from '../../middleware/auth.js';
 import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
 import { supabaseClient } from '../../config/database.js';
@@ -6,26 +7,165 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { google } from 'googleapis';
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20MB for background images
 router.use(authenticate);
 router.use(requireBusinessContext);
 
 const MODULE_KEY = 'orbix-network';
 
+/** Get and validate channel_id from query (required for channel-scoped routes). Returns channelId or throws with .status 400/404. */
+async function requireChannelId(req) {
+  const channelId = req.query.channel_id || req.body?.channel_id;
+  if (!channelId) {
+    const err = new Error('channel_id is required (query or body)');
+    err.status = 400;
+    throw err;
+  }
+  const businessId = req.active_business_id;
+  const { data: channel, error } = await supabaseClient
+    .from('orbix_channels')
+    .select('id')
+    .eq('id', channelId)
+    .eq('business_id', businessId)
+    .single();
+  if (error || !channel) {
+    const err = new Error('Invalid or unauthorized channel');
+    err.status = 404;
+    throw err;
+  }
+  return channelId;
+}
+
+/** Use in catch block: res.status(error.status || 500).json({ error: error.message }) */
+function channelErrorStatus(error) {
+  return error?.status || 500;
+}
+
+/**
+ * GET /api/v2/orbix-network/channels
+ * List all channels for the active business.
+ */
+router.get('/channels', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const { data: channels, error } = await supabaseClient
+      .from('orbix_channels')
+      .select('id, name, created_at')
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json({ channels: channels || [] });
+  } catch (error) {
+    console.error('[GET /api/v2/orbix-network/channels] Error:', error);
+    res.status(error.status || 500).json({ error: error.message || 'Failed to fetch channels' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/channels
+ * Create a new channel. Body: { name }
+ */
+router.post('/channels', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const name = req.body?.name?.trim() || 'New Channel';
+    const { data: channel, error } = await supabaseClient
+      .from('orbix_channels')
+      .insert({ business_id: businessId, name })
+      .select('id, name, created_at')
+      .single();
+    if (error) throw error;
+    res.status(201).json({ channel });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/channels] Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to create channel' });
+  }
+});
+
+/**
+ * PATCH /api/v2/orbix-network/channels/:id
+ * Update channel name.
+ */
+router.patch('/channels/:id', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const { id } = req.params;
+    const name = req.body?.name?.trim();
+    if (!name) return res.status(400).json({ error: 'name is required' });
+    const { data: channel, error } = await supabaseClient
+      .from('orbix_channels')
+      .update({ name, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .select('id, name, created_at')
+      .single();
+    if (error) throw error;
+    if (!channel) return res.status(404).json({ error: 'Channel not found' });
+    res.json({ channel });
+  } catch (error) {
+    console.error('[PATCH /api/v2/orbix-network/channels/:id] Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to update channel' });
+  }
+});
+
+/**
+ * DELETE /api/v2/orbix-network/channels/:id
+ * Delete a channel and its data (sources, raw items, stories cascade or manual).
+ */
+router.delete('/channels/:id', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const { id } = req.params;
+    const { data: channel, error: fetchError } = await supabaseClient
+      .from('orbix_channels')
+      .select('id')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .single();
+    if (fetchError || !channel) return res.status(404).json({ error: 'Channel not found' });
+    await supabaseClient.from('orbix_sources').delete().eq('channel_id', id);
+    await supabaseClient.from('orbix_raw_items').delete().eq('channel_id', id);
+    const { data: storyIds } = await supabaseClient.from('orbix_stories').select('id').eq('channel_id', id);
+    for (const s of storyIds || []) {
+      await supabaseClient.from('orbix_scripts').delete().eq('story_id', s.id);
+      await supabaseClient.from('orbix_review_queue').delete().eq('story_id', s.id);
+      await supabaseClient.from('orbix_renders').delete().eq('story_id', s.id);
+    }
+    await supabaseClient.from('orbix_stories').delete().eq('channel_id', id);
+    await supabaseClient.from('orbix_channels').delete().eq('id', id);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[DELETE /api/v2/orbix-network/channels/:id] Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to delete channel' });
+  }
+});
+
 /**
  * GET /api/v2/orbix-network/stories
- * List stories (with filters)
+ * List stories (with filters). Requires query.channel_id. Use days=7|30|all to see past scraped stories.
  */
 router.get('/stories', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
-    const { category, status, limit = 50, offset = 0 } = req.query;
-    
+    const { category, status, limit = 50, offset = 0, days } = req.query;
+
     let query = supabaseClient
       .from('orbix_stories')
       .select('*')
       .eq('business_id', businessId)
+      .eq('channel_id', channelId)
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .range(offset, offset + (parseInt(limit, 10) || 50) - 1);
+    
+    if (days && days !== 'all') {
+      const d = parseInt(days, 10);
+      if (!isNaN(d) && d > 0) {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - d);
+        query = query.gte('created_at', cutoff.toISOString());
+      }
+    }
     
     if (category) {
       query = query.eq('category', category);
@@ -42,173 +182,198 @@ router.get('/stories', async (req, res) => {
     res.json({ stories: stories || [] });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/stories] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch stories' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch stories' });
   }
 });
 
 /**
  * GET /api/v2/orbix-network/stories/:id
- * Get story details
+ * Get story details. Requires query.channel_id.
  */
 router.get('/stories/:id', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
-    
+
     const { data: story, error } = await supabaseClient
       .from('orbix_stories')
-      .select('*')
+      .select(`
+        *,
+        orbix_scripts (*)
+      `)
       .eq('id', id)
       .eq('business_id', businessId)
+      .eq('channel_id', channelId)
       .single();
     
     if (error) throw error;
-    
     if (!story) {
       return res.status(404).json({ error: 'Story not found' });
     }
-    
     res.json({ story });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/stories/:id] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch story' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch story' });
   }
 });
 
 /**
  * GET /api/v2/orbix-network/renders
- * List renders
+ * List renders. Requires query.channel_id (filtered via story -> channel).
  */
 router.get('/renders', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { status, limit = 50, offset = 0 } = req.query;
-    
+
+    const { data: channelStories } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId);
+    const storyIds = (channelStories || []).map((s) => s.id);
+    if (storyIds.length === 0) {
+      return res.json({ renders: [] });
+    }
+
     let query = supabaseClient
       .from('orbix_renders')
       .select('*')
       .eq('business_id', businessId)
+      .in('story_id', storyIds)
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-    
+      .range(parseInt(offset) || 0, (parseInt(offset) || 0) + (parseInt(limit) || 50) - 1);
+
     if (status) {
       query = query.eq('render_status', status);
     }
-    
     const { data: renders, error } = await query;
-    
     if (error) throw error;
-    
     res.json({ renders: renders || [] });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/renders] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch renders' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch renders' });
   }
 });
 
 /**
  * GET /api/v2/orbix-network/renders/:id
- * Get render details (including video URL, story, script)
+ * Get render details. Requires query.channel_id (render must belong to channel via story).
  */
 router.get('/renders/:id', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
-    
+
     const { data: render, error } = await supabaseClient
       .from('orbix_renders')
-      .select('*, orbix_stories(*), orbix_scripts(*)')
+      .select('*, orbix_stories!inner(*), orbix_scripts(*)')
       .eq('id', id)
       .eq('business_id', businessId)
+      .eq('orbix_stories.channel_id', channelId)
       .single();
-    
+
     if (error) throw error;
-    
     if (!render) {
       return res.status(404).json({ error: 'Render not found' });
     }
-    
     res.json({ render });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/renders/:id] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch render' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch render' });
   }
 });
 
 /**
  * DELETE /api/v2/orbix-network/renders/:id
- * Cancel/delete a render (only if PENDING or PROCESSING)
+ * Cancel/delete a render. Requires query.channel_id. Only PENDING or PROCESSING.
  */
 router.delete('/renders/:id', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
-    
-    // Get render to check status
+
     const { data: render, error: getError } = await supabaseClient
       .from('orbix_renders')
-      .select('render_status')
+      .select('render_status, story_id')
       .eq('id', id)
       .eq('business_id', businessId)
       .single();
-    
+
     if (getError) throw getError;
-    
     if (!render) {
       return res.status(404).json({ error: 'Render not found' });
     }
-    
-    // Only allow cancellation of PENDING or PROCESSING renders
+
+    const { data: story } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('id', render.story_id)
+      .eq('channel_id', channelId)
+      .single();
+    if (!story) {
+      return res.status(404).json({ error: 'Render not found' });
+    }
+
     if (render.render_status !== 'PENDING' && render.render_status !== 'PROCESSING') {
       return res.status(400).json({ error: 'Can only cancel PENDING or PROCESSING renders' });
     }
-    
-    // Delete the render
+
     const { error: deleteError } = await supabaseClient
       .from('orbix_renders')
       .delete()
       .eq('id', id)
       .eq('business_id', businessId);
-    
+
     if (deleteError) throw deleteError;
-    
     res.json({ success: true });
   } catch (error) {
     console.error('[DELETE /api/v2/orbix-network/renders/:id] Error:', error);
-    res.status(500).json({ error: 'Failed to cancel render' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to cancel render' });
   }
 });
 
 /**
  * POST /api/v2/orbix-network/renders/:id/restart
- * Restart a render (reset status to PENDING, clear output/error fields)
- * Works for COMPLETED or FAILED renders
+ * Restart a render. Requires query.channel_id. Works for COMPLETED, FAILED, or PROCESSING (stuck).
  */
 router.post('/renders/:id/restart', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
-    
-    // Get render to check status
+
     const { data: render, error: getError } = await supabaseClient
       .from('orbix_renders')
-      .select('render_status')
+      .select('render_status, story_id')
       .eq('id', id)
       .eq('business_id', businessId)
       .single();
     
     if (getError) throw getError;
-    
     if (!render) {
       return res.status(404).json({ error: 'Render not found' });
     }
-    
-    // Only allow restarting COMPLETED or FAILED renders
-    if (render.render_status !== 'COMPLETED' && render.render_status !== 'FAILED') {
-      return res.status(400).json({ error: 'Can only restart COMPLETED or FAILED renders' });
+
+    const { data: story } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('id', render.story_id)
+      .eq('channel_id', channelId)
+      .single();
+    if (!story) {
+      return res.status(404).json({ error: 'Render not found' });
     }
-    
-    // Get full render with story and script for processing
+
+    const allowedStatuses = ['COMPLETED', 'FAILED', 'PROCESSING'];
+    if (!allowedStatuses.includes(render.render_status)) {
+      return res.status(400).json({ error: 'Can only restart COMPLETED, FAILED, or stuck PROCESSING renders' });
+    }
+
     const { data: fullRender, error: fullRenderError } = await supabaseClient
       .from('orbix_renders')
       .select('*, orbix_stories(*), orbix_scripts(*)')
@@ -218,13 +383,22 @@ router.post('/renders/:id/restart', async (req, res) => {
     
     if (fullRenderError) throw fullRenderError;
     
-    // Reset render status to PENDING and clear output/error fields
-    // Note: progress_percentage column may not exist if migration hasn't run yet
+    // Reset render and clear ALL step paths so the pipeline runs from step 3 with no stale paths
     const updateData = {
       render_status: 'PENDING',
       output_url: null,
       error_message: null,
+      step_error: null,
       completed_at: null,
+      render_step: null,
+      step_progress: null,
+      step_started_at: null,
+      step_completed_at: null,
+      step_logs: null,
+      video_step3_path: null,
+      video_step4_voice_path: null,
+      video_step4_path: null,
+      video_step5_path: null,
       updated_at: new Date().toISOString()
     };
     
@@ -283,20 +457,22 @@ router.post('/renders/:id/restart', async (req, res) => {
             template: fullRender.template,
             background_type: fullRender.background_type,
             background_id: fullRender.background_id,
+            background_storage_path: fullRender.background_storage_path ?? null,
             render_status: 'PROCESSING'
           });
           
           console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Background render job completed for ${id}:`, result.status);
           
-          if (result.status === 'COMPLETED' && result.outputUrl) {
+          if (result.status === 'COMPLETED') {
+            const updatePayload = {
+              render_status: 'COMPLETED',
+              completed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            if (result.outputUrl) updatePayload.output_url = result.outputUrl;
             await supabaseClient
               .from('orbix_renders')
-              .update({
-                render_status: 'COMPLETED',
-                output_url: result.outputUrl,
-                completed_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              })
+              .update(updatePayload)
               .eq('id', id);
             console.log(`[POST /api/v2/orbix-network/renders/:id/restart] ✅ Render ${id} marked as COMPLETED`);
           } else {
@@ -349,11 +525,8 @@ router.post('/renders/:id/restart', async (req, res) => {
     res.json({ render: updatedRender });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error:', error);
-    console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error type:', error?.constructor?.name);
-    console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error message:', error.message);
-    console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error stack:', error.stack);
-    res.status(500).json({ 
-      error: 'Failed to restart render',
+    res.status(channelErrorStatus(error)).json({
+      error: error.message || 'Failed to restart render',
       details: error.message,
       stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
     });
@@ -361,51 +534,204 @@ router.post('/renders/:id/restart', async (req, res) => {
 });
 
 /**
+ * Build YouTube title, description, hashtags from story + script (same logic as step7Metadata; psychology uses dedicated rules).
+ */
+async function buildMetadataFromRender(renderId, story, script) {
+  const { buildYouTubeMetadata } = await import('../../services/orbix-network/youtube-metadata.js');
+  return buildYouTubeMetadata(story, script, renderId);
+}
+
+/**
+ * POST /api/v2/orbix-network/renders/:id/upload-youtube
+ * Force upload a completed render's video to YouTube. Requires channel_id. Uses render output_url (or step5 path).
+ * Backfills title/description/hashtags if missing. Appends hashtags to description. Uploads SRT captions after publish.
+ */
+router.post('/renders/:id/upload-youtube', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { id } = req.params;
+    console.log('[POST /renders/:id/upload-youtube] START renderId=', id, 'businessId=', businessId);
+    const { data: render, error: getError } = await supabaseClient
+      .from('orbix_renders')
+      .select('id, business_id, story_id, script_id, output_url, video_step5_path, youtube_title, youtube_description, hashtags')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .single();
+    if (getError) throw getError;
+    if (!render) {
+      console.log('[POST /renders/:id/upload-youtube] 404 render not found');
+      return res.status(404).json({ error: 'Render not found' });
+    }
+    const videoUrlOrPath = render.output_url || render.video_step5_path;
+    if (!videoUrlOrPath) {
+      console.log('[POST /renders/:id/upload-youtube] 400 no output_url or video_step5_path');
+      return res.status(400).json({ error: 'No video URL or path available for this render' });
+    }
+
+    let title = render.youtube_title || '';
+    let description = render.youtube_description || '';
+    let hashtags = (render.hashtags || '').trim();
+    if (!title || !description || !hashtags) {
+      const { data: story } = await supabaseClient.from('orbix_stories').select('*').eq('id', render.story_id).single();
+      const { data: script } = await supabaseClient.from('orbix_scripts').select('*').eq('id', render.script_id).single();
+      if (story && script) {
+        const built = await buildMetadataFromRender(id, story, script);
+        title = title || built.title;
+        description = description || built.description;
+        hashtags = hashtags || built.hashtags;
+        await supabaseClient
+          .from('orbix_renders')
+          .update({ youtube_title: title, youtube_description: description, hashtags, updated_at: new Date().toISOString() })
+          .eq('id', id)
+          .eq('business_id', businessId);
+        console.log('[POST /renders/:id/upload-youtube] Backfilled metadata title=', title?.slice(0, 40), 'hashtags=', hashtags?.slice(0, 40));
+      }
+    }
+
+    const tags = (hashtags || '')
+      .split(/\s+/)
+      .filter(t => t.startsWith('#') && t.length > 1)
+      .map(t => t.replace(/^#/, ''))
+      .slice(0, 15);
+    const descriptionForYouTube = (description || '').trim() + (hashtags ? '\n\n' + hashtags.trim() : '');
+    const metadata = {
+      title: title || 'Orbix Short',
+      description: descriptionForYouTube,
+      tags
+    };
+    let orbixChannelId = null;
+    if (render.story_id) {
+      const { data: storyRow } = await supabaseClient.from('orbix_stories').select('channel_id').eq('id', render.story_id).single();
+      orbixChannelId = storyRow?.channel_id || null;
+    }
+    const publishOptions = orbixChannelId ? { orbixChannelId } : {};
+    console.log('[POST /renders/:id/upload-youtube] Calling publishVideo title=', metadata.title?.slice(0, 40), 'orbixChannelId=', orbixChannelId || 'legacy');
+    const { publishVideo, uploadCaptions } = await import('../../services/orbix-network/youtube-publisher.js');
+    const result = await publishVideo(businessId, id, videoUrlOrPath, metadata, publishOptions);
+    console.log('[POST /renders/:id/upload-youtube] SUCCESS videoId=', result.videoId);
+
+    try {
+      const { data: script } = await supabaseClient.from('orbix_scripts').select('*').eq('id', render.script_id).single();
+      if (script) {
+        const { generateCaptionSegments, estimateAudioDurationFromScript, captionSegmentsToSrt } = await import('../../services/orbix-network/video-renderer.js');
+        const estimatedDuration = estimateAudioDurationFromScript(script);
+        const segments = generateCaptionSegments(script, estimatedDuration);
+        if (segments.length > 0) {
+          const srt = captionSegmentsToSrt(segments);
+          await uploadCaptions(businessId, result.videoId, srt, 'en', 'English', publishOptions);
+          console.log('[POST /renders/:id/upload-youtube] Captions uploaded segments=', segments.length);
+        } else {
+          console.log('[POST /renders/:id/upload-youtube] No caption segments generated, skipping captions');
+        }
+      } else {
+        console.log('[POST /renders/:id/upload-youtube] No script for captions, skipping');
+      }
+    } catch (captionErr) {
+      console.error('[POST /renders/:id/upload-youtube] Caption upload failed (video already published)', captionErr?.message);
+    }
+
+    await supabaseClient
+      .from('orbix_renders')
+      .update({ output_url: result.url, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('business_id', businessId);
+    res.json({ url: result.url, videoId: result.videoId });
+  } catch (error) {
+    const status = error?.response?.status;
+    const data = error?.response?.data;
+    const ytMessage = data?.error?.message || error?.message;
+    const reason = data?.error?.errors?.[0]?.reason;
+    console.error('[POST /renders/:id/upload-youtube] ERROR', error?.message, data);
+
+    if (status === 400 || reason === 'uploadLimitExceeded') {
+      const msg = reason === 'uploadLimitExceeded'
+        ? "YouTube's daily upload limit reached. Try again tomorrow or verify your channel to increase the limit."
+        : (ytMessage || 'YouTube rejected the upload.');
+      return res.status(400).json({ error: msg });
+    }
+    res.status(500).json({ error: error?.message || 'YouTube upload failed' });
+  }
+});
+
+/**
  * GET /api/v2/orbix-network/publishes
- * List published videos
+ * List published videos. Requires query.channel_id (filtered via render -> story -> channel).
  */
 router.get('/publishes', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { platform, limit = 50, offset = 0 } = req.query;
-    
+
+    const { data: channelStories } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId);
+    const storyIds = (channelStories || []).map((s) => s.id);
+    if (storyIds.length === 0) {
+      return res.json({ publishes: [] });
+    }
+    const { data: channelRenders } = await supabaseClient
+      .from('orbix_renders')
+      .select('id')
+      .eq('business_id', businessId)
+      .in('story_id', storyIds);
+    const renderIds = (channelRenders || []).map((r) => r.id);
+    if (renderIds.length === 0) {
+      return res.json({ publishes: [] });
+    }
+
     let query = supabaseClient
       .from('orbix_publishes')
       .select('*')
       .eq('business_id', businessId)
+      .in('render_id', renderIds)
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
-    
+      .range(parseInt(offset) || 0, (parseInt(offset) || 0) + (parseInt(limit) || 50) - 1);
+
     if (platform) {
       query = query.eq('platform', platform);
     }
-    
     const { data: publishes, error } = await query;
-    
     if (error) throw error;
-    
     res.json({ publishes: publishes || [] });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/publishes] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch publishes' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch publishes' });
   }
 });
 
 /**
  * GET /api/v2/orbix-network/raw-items
- * List raw items (scraped but not yet processed)
+ * List raw items. Requires query.channel_id. Use days=7|30|all to filter by age.
  */
 router.get('/raw-items', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
-    const { status, source_id, limit = 50, offset = 0 } = req.query;
-    
+    const { status, source_id, limit = 50, offset = 0, days } = req.query;
+
+    const parsedLimit = Math.min(parseInt(limit) || 50, 2000);
+    const parsedOffset = parseInt(offset) || 0;
+
     let query = supabaseClient
       .from('orbix_raw_items')
       .select('*, orbix_sources(name, url, type)')
       .eq('business_id', businessId)
+      .eq('channel_id', channelId)
       .order('created_at', { ascending: false })
-      .range(offset, offset + limit - 1);
+      .range(parsedOffset, parsedOffset + parsedLimit - 1);
+
+    if (days && days !== 'all') {
+      const d = parseInt(days, 10);
+      if (!isNaN(d) && d > 0) {
+        const cutoff = new Date();
+        cutoff.setDate(cutoff.getDate() - d);
+        query = query.gte('created_at', cutoff.toISOString());
+      }
+    }
     
     if (status) {
       query = query.eq('status', status);
@@ -417,57 +743,157 @@ router.get('/raw-items', async (req, res) => {
     
     const { data: rawItems, error } = await query;
     
-    if (error) throw error;
-    
+    if (error) {
+      console.error('[GET /api/v2/orbix-network/raw-items] Query error:', error);
+      throw error;
+    }
     res.json({ raw_items: rawItems || [] });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/raw-items] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch raw items' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch raw items' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/cleanup
+ * Delete stories and raw items older than N days for the channel. Requires body.channel_id or query.channel_id.
+ */
+router.post('/cleanup', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const older_than_days = parseInt(req.body?.older_than_days ?? req.query?.older_than_days ?? 10, 10);
+    if (older_than_days < 1) {
+      return res.status(400).json({ error: 'older_than_days must be at least 1' });
+    }
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - older_than_days);
+    const cutoffIso = cutoff.toISOString();
+
+    const { data: oldStories } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .lt('created_at', cutoffIso);
+    const storyIds = (oldStories || []).map((s) => s.id);
+
+    let deletedRenders = 0;
+    let deletedScripts = 0;
+    let deletedStories = 0;
+    if (storyIds.length > 0) {
+      const { data: deletedRendersData } = await supabaseClient
+        .from('orbix_renders')
+        .delete()
+        .eq('business_id', businessId)
+        .in('story_id', storyIds)
+        .select('id');
+      deletedRenders = deletedRendersData?.length ?? 0;
+      const { data: deletedScriptsData } = await supabaseClient
+        .from('orbix_scripts')
+        .delete()
+        .eq('business_id', businessId)
+        .in('story_id', storyIds)
+        .select('id');
+      deletedScripts = deletedScriptsData?.length ?? 0;
+      const { data: deletedStoriesData } = await supabaseClient
+        .from('orbix_stories')
+        .delete()
+        .eq('business_id', businessId)
+        .eq('channel_id', channelId)
+        .lt('created_at', cutoffIso)
+        .select('id');
+      deletedStories = deletedStoriesData?.length ?? 0;
+    }
+
+    const { data: deletedRawData } = await supabaseClient
+      .from('orbix_raw_items')
+      .delete()
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .lt('created_at', cutoffIso)
+      .select('id');
+    const deletedRawItems = deletedRawData?.length ?? 0;
+
+    res.json({
+      success: true,
+      deleted: {
+        stories: deletedStories,
+        scripts: deletedScripts,
+        renders: deletedRenders,
+        raw_items: deletedRawItems
+      },
+      message: `Deleted ${deletedStories} stories, ${deletedRawItems} raw items (older than ${older_than_days} days).`
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/cleanup] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Cleanup failed' });
   }
 });
 
 /**
  * GET /api/v2/orbix-network/sources
- * List sources
+ * List sources. If query.channel_id is provided, filter by channel; otherwise return all sources for the business (e.g. legacy setup page).
  */
 router.get('/sources', async (req, res) => {
   try {
     const businessId = req.active_business_id;
-    
-    const { data: sources, error } = await supabaseClient
+    const channelId = req.query.channel_id || req.body?.channel_id;
+
+    let query = supabaseClient
       .from('orbix_sources')
       .select('*')
       .eq('business_id', businessId)
       .order('created_at', { ascending: false });
-    
+    if (channelId) {
+      const { data: channel, error: chError } = await supabaseClient
+        .from('orbix_channels')
+        .select('id')
+        .eq('id', channelId)
+        .eq('business_id', businessId)
+        .single();
+      if (chError || !channel) {
+        return res.status(404).json({ error: 'Invalid or unauthorized channel' });
+      }
+      query = query.eq('channel_id', channelId);
+    }
+
+    const { data: sources, error } = await query;
     if (error) throw error;
-    
     res.json({ sources: sources || [] });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/sources] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch sources' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch sources' });
   }
 });
 
 /**
  * POST /api/v2/orbix-network/sources
- * Add a new source
+ * Add a new source. Requires body.channel_id or query.channel_id.
  */
 router.post('/sources', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { type, url, name, enabled, fetch_interval_minutes, category_hint } = req.body;
-    
-    if (!type || !url || !name) {
-      return res.status(400).json({ error: 'type, url, and name are required' });
+
+    if (!type || !name) {
+      return res.status(400).json({ error: 'type and name are required' });
     }
-    
+    const effectiveUrl = (type.toUpperCase() === 'WIKIPEDIA' && !url)
+      ? 'https://en.wikipedia.org/wiki/Psychology'
+      : url;
+    if (!effectiveUrl) {
+      return res.status(400).json({ error: 'url is required for this source type' });
+    }
+
     const { data: source, error } = await supabaseClient
       .from('orbix_sources')
       .insert({
         business_id: businessId,
-        type: type.toUpperCase(), // RSS or HTML
-        url,
+        channel_id: channelId,
+        type: type.toUpperCase(),
+        url: effectiveUrl,
         name,
         enabled: enabled !== false,
         fetch_interval_minutes: fetch_interval_minutes || 60,
@@ -475,22 +901,22 @@ router.post('/sources', async (req, res) => {
       })
       .select()
       .single();
-    
+
     if (error) throw error;
-    
     res.json({ source });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/sources] Error:', error);
-    res.status(500).json({ error: 'Failed to add source', message: error.message });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to add source' });
   }
 });
 
 /**
  * PUT /api/v2/orbix-network/sources/:id
- * Update a source
+ * Update a source. Requires query.channel_id.
  */
 router.put('/sources/:id', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
     const { type, url, name, enabled, fetch_interval_minutes, category_hint } = req.body;
@@ -509,86 +935,381 @@ router.put('/sources/:id', async (req, res) => {
       .update(updateData)
       .eq('id', id)
       .eq('business_id', businessId)
+      .eq('channel_id', channelId)
       .select()
       .single();
-    
+
     if (error) throw error;
-    
     res.json({ source });
   } catch (error) {
     console.error('[PUT /api/v2/orbix-network/sources/:id] Error:', error);
-    res.status(500).json({ error: 'Failed to update source', message: error.message });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to update source' });
   }
 });
 
 /**
  * DELETE /api/v2/orbix-network/sources/:id
- * Delete a source
+ * Delete a source. Requires query.channel_id.
  */
 router.delete('/sources/:id', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
-    
+
     const { error } = await supabaseClient
       .from('orbix_sources')
       .delete()
       .eq('id', id)
-      .eq('business_id', businessId);
-    
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId);
+
     if (error) throw error;
-    
     res.json({ success: true });
   } catch (error) {
     console.error('[DELETE /api/v2/orbix-network/sources/:id] Error:', error);
-    res.status(500).json({ error: 'Failed to delete source' });
+    res.status(channelErrorStatus(error)).json({ error: 'Failed to delete source' });
   }
 });
 
 /**
  * GET /api/v2/orbix-network/review-queue
- * Get pending items in review queue
+ * Get pending items in review queue. Requires query.channel_id (filtered via story -> channel).
  */
 router.get('/review-queue', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
-    
+
+    const { data: channelStories } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId);
+    const storyIds = (channelStories || []).map((s) => s.id);
+    if (storyIds.length === 0) {
+      return res.json({ items: [] });
+    }
+
     const { data: queueItems, error } = await supabaseClient
       .from('orbix_review_queue')
       .select('*, orbix_stories(*), orbix_scripts(*)')
       .eq('business_id', businessId)
+      .in('story_id', storyIds)
       .eq('status', 'PENDING')
       .order('created_at', { ascending: true });
-    
+
     if (error) throw error;
-    
     res.json({ items: queueItems || [] });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/review-queue] Error:', error);
-    res.status(500).json({ error: 'Failed to fetch review queue' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch review queue' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/stories/:id/generate-script
+ * Force generate script for a story (useful for stuck stories)
+ */
+router.post('/stories/:id/generate-script', async (req, res) => {
+  const startTime = Date.now();
+  const storyId = req.params.id;
+
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+
+    const { data: story, error: storyError } = await supabaseClient
+      .from('orbix_stories')
+      .select('*')
+      .eq('id', storyId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+    
+    if (storyError) {
+      console.error(`[Generate Script API] ERROR: Story fetch failed:`, storyError);
+      return res.status(404).json({ error: 'Story not found', details: storyError.message });
+    }
+    
+    if (!story) {
+      console.error(`[Generate Script API] ERROR: Story not found (no data returned)`);
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    
+    console.log(`[Generate Script API] ✓ Story found:`, {
+      id: story.id,
+      status: story.status,
+      raw_item_id: story.raw_item_id,
+      category: story.category,
+      shock_score: story.shock_score
+    });
+    
+    // If script already exists, delete it so we can regenerate (Rewrite flow)
+    console.log(`[Generate Script API] Step 2: Checking for existing script...`);
+    const { data: existingScript, error: scriptCheckError } = await supabaseClient
+      .from('orbix_scripts')
+      .select('id, created_at')
+      .eq('story_id', storyId)
+      .single();
+    
+    if (scriptCheckError && scriptCheckError.code !== 'PGRST116') {
+      console.error(`[Generate Script API] ERROR: Script check failed:`, scriptCheckError);
+    } else if (existingScript) {
+      console.log(`[Generate Script API] Deleting existing script for rewrite:`, existingScript.id);
+      const { error: deleteError } = await supabaseClient
+        .from('orbix_scripts')
+        .delete()
+        .eq('id', existingScript.id)
+        .eq('story_id', storyId)
+        .eq('business_id', businessId);
+      if (deleteError) {
+        console.error(`[Generate Script API] ERROR: Failed to delete existing script:`, deleteError);
+        return res.status(500).json({ error: 'Failed to replace existing script', details: deleteError.message });
+      }
+      console.log(`[Generate Script API] ✓ Existing script removed, proceeding with generation...`);
+    } else {
+      console.log(`[Generate Script API] ✓ No existing script found, proceeding with generation...`);
+    }
+    
+    // Generate script for the story
+    console.log(`[Generate Script API] Step 3: Importing generateAndSaveScript function...`);
+    const { generateAndSaveScript } = await import('../../services/orbix-network/script-generator.js');
+    console.log(`[Generate Script API] ✓ Function imported`);
+    
+    console.log(`[Generate Script API] Step 4: Calling generateAndSaveScript...`);
+    const scriptGenerationStartTime = Date.now();
+    
+    try {
+      const script = await generateAndSaveScript(businessId, story);
+      const scriptGenerationDuration = Date.now() - scriptGenerationStartTime;
+      
+      console.log(`[Generate Script API] ✓ Script generated successfully in ${scriptGenerationDuration}ms`);
+      console.log(`[Generate Script API] Script details:`, {
+        id: script?.id,
+        story_id: script?.story_id,
+        created_at: script?.created_at
+      });
+      
+      // Verify script was saved
+      console.log(`[Generate Script API] Step 5: Verifying script was saved to database...`);
+      const { data: verifiedScript, error: verifyError } = await supabaseClient
+        .from('orbix_scripts')
+        .select('*')
+        .eq('id', script.id)
+        .single();
+      
+      if (verifyError) {
+        console.error(`[Generate Script API] ⚠ WARNING: Script verification failed:`, verifyError);
+      } else {
+        console.log(`[Generate Script API] ✓ Script verified in database`);
+      }
+      
+      const totalDuration = Date.now() - startTime;
+      console.log(`[Generate Script API] ========== SUCCESS (${totalDuration}ms) ==========`);
+      
+      res.json({ 
+        success: true, 
+        script: script,
+        message: 'Script generated successfully',
+        duration: totalDuration
+      });
+    } catch (scriptError) {
+      const scriptGenerationDuration = Date.now() - scriptGenerationStartTime;
+      console.error(`[Generate Script API] ERROR: Script generation failed after ${scriptGenerationDuration}ms:`, scriptError);
+      console.error(`[Generate Script API] Error stack:`, scriptError.stack);
+      res.status(500).json({ 
+        error: 'Failed to generate script', 
+        message: scriptError.message,
+        details: scriptError.stack
+      });
+    }
+  } catch (error) {
+    const totalDuration = Date.now() - startTime;
+    console.error(`[Generate Script API] ========== ERROR (${totalDuration}ms) ==========`);
+    console.error(`[Generate Script API] Error:`, error);
+    console.error(`[Generate Script API] Error stack:`, error.stack);
+    res.status(500).json({ error: 'Failed to generate script', message: error.message, stack: error.stack });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/stories/:id/start-render
+ * Create and start a render for a story (from Step 2)
+ */
+router.post('/stories/:id/start-render', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const storyId = req.params.id;
+
+    const { data: story, error: storyError } = await supabaseClient
+      .from('orbix_stories')
+      .select('*')
+      .eq('id', storyId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+    
+    if (storyError || !story) {
+      console.error(`[Start Render API] ERROR: Story not found:`, storyError);
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    
+    console.log(`[Start Render API] ✓ Story found:`, {
+      id: story.id,
+      status: story.status,
+      shock_score: story.shock_score
+    });
+    
+    // Check if script exists
+    const { data: script, error: scriptError } = await supabaseClient
+      .from('orbix_scripts')
+      .select('id')
+      .eq('story_id', storyId)
+      .single();
+    
+    if (scriptError || !script) {
+      console.error(`[Start Render API] ERROR: Script not found for story:`, scriptError);
+      return res.status(400).json({ error: 'Script not found for this story. Please generate a script first.' });
+    }
+    
+    console.log(`[Start Render API] ✓ Script found:`, script.id);
+    
+    // Check if render already exists
+    const { data: existingRender, error: renderCheckError } = await supabaseClient
+      .from('orbix_renders')
+      .select('id, render_status')
+      .eq('story_id', storyId)
+      .eq('business_id', businessId)
+      .single();
+    
+    if (existingRender) {
+      console.log(`[Start Render API] ⚠ Render already exists:`, existingRender.id);
+      return res.status(400).json({ 
+        error: 'Render already exists for this story',
+        render_id: existingRender.id,
+        render_status: existingRender.render_status
+      });
+    }
+    
+    // Select template and background (per-channel images when channel has uploads)
+    console.log(`[Start Render API] Step 1: Selecting template and background...`);
+    const { selectTemplate, selectBackground } = await import('../../services/orbix-network/video-renderer.js');
+    const template = selectTemplate(story);
+    const backgroundSelection = await selectBackground(businessId, channelId);
+    
+    console.log(`[Start Render API] ✓ Template: ${template}, Background ID: ${backgroundSelection.id}`);
+    
+    // Create render record - set to STEP_3_BACKGROUND_VIDEO immediately so it shows in Step 3
+    console.log(`[Start Render API] Step 2: Creating render record...`);
+    const { data: render, error: renderError } = await supabaseClient
+      .from('orbix_renders')
+      .insert({
+        business_id: businessId,
+        story_id: storyId,
+        script_id: script.id,
+        template: template,
+        background_type: backgroundSelection.type,
+        background_id: backgroundSelection.id,
+        background_storage_path: backgroundSelection.storagePath ?? null,
+        render_status: 'PROCESSING', // Set to PROCESSING immediately
+        render_step: 'STEP_3_BACKGROUND' // Set to Step 3 immediately
+      })
+      .select()
+      .single();
+    
+    if (renderError) {
+      console.error(`[Start Render API] ERROR: Failed to create render:`, renderError);
+      return res.status(500).json({ error: 'Failed to create render', details: renderError.message });
+    }
+    
+    console.log(`[Start Render API] ✓ Render created:`, render.id);
+    
+    // Start the render job in the background
+    console.log(`[Start Render API] Step 3: Starting render job in background...`);
+    const { processRenderJob } = await import('../../services/orbix-network/video-renderer.js');
+    console.log(`[Start Render API] ✓ processRenderJob imported successfully`);
+    
+    // Use setImmediate or process.nextTick to ensure it runs in the next event loop cycle
+    setImmediate(async () => {
+      try {
+        console.log(`[Start Render API] ========== STARTING BACKGROUND RENDER JOB ==========`);
+        console.log(`[Start Render API] Render ID: ${render.id}`);
+        console.log(`[Start Render API] Render data:`, JSON.stringify({
+          id: render.id,
+          story_id: render.story_id,
+          script_id: render.script_id,
+          template: render.template,
+          background_id: render.background_id,
+          render_status: render.render_status,
+          render_step: render.render_step
+        }));
+        console.log(`[Start Render API] Calling processRenderJob...`);
+        
+        await processRenderJob(render);
+        
+        console.log(`[Start Render API] ✓ Background render job completed for render ${render.id}`);
+      } catch (error) {
+        console.error(`[Start Render API] ========== BACKGROUND RENDER JOB ERROR ==========`);
+        console.error(`[Start Render API] Render ID: ${render.id}`);
+        console.error(`[Start Render API] Error message:`, error.message);
+        console.error(`[Start Render API] Error stack:`, error.stack);
+        console.error(`[Start Render API] Full error:`, error);
+        
+        // Update render status to FAILED
+        try {
+          await supabaseClient
+            .from('orbix_renders')
+            .update({
+              render_status: 'FAILED',
+              step_error: error.message,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', render.id);
+          console.log(`[Start Render API] ✓ Render status updated to FAILED`);
+        } catch (updateError) {
+          console.error(`[Start Render API] ❌ Failed to update render status:`, updateError);
+        }
+      }
+    });
+    
+    console.log(`[Start Render API] ========== SUCCESS ==========`);
+    
+    res.json({
+      success: true,
+      render: render,
+      message: 'Render started successfully'
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/stories/:id/start-render] Error:', error);
+    res.status(500).json({ 
+      error: 'Failed to start render', 
+      message: error.message 
+    });
   }
 });
 
 /**
  * POST /api/v2/orbix-network/stories/:id/approve
- * Approve a story (move to approved status)
+ * Approve a story. Requires query or body channel_id.
  */
 router.post('/stories/:id/approve', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
-    
-    // Update story status
+
     const { error: storyError } = await supabaseClient
       .from('orbix_stories')
       .update({ status: 'APPROVED' })
       .eq('id', id)
-      .eq('business_id', businessId);
-    
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId);
+
     if (storyError) throw storyError;
-    
-    // Update review queue if exists
-    const { error: queueError } = await supabaseClient
+
+    await supabaseClient
       .from('orbix_review_queue')
       .update({
         status: 'APPROVED',
@@ -596,36 +1317,34 @@ router.post('/stories/:id/approve', async (req, res) => {
       })
       .eq('story_id', id)
       .eq('business_id', businessId);
-    
-    // Queue error is not critical, continue
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/stories/:id/approve] Error:', error);
-    res.status(500).json({ error: 'Failed to approve story' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to approve story' });
   }
 });
 
 /**
  * POST /api/v2/orbix-network/stories/:id/reject
- * Reject a story
+ * Reject a story. Requires query or body channel_id.
  */
 router.post('/stories/:id/reject', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
-    
-    // Update story status
+
     const { error: storyError } = await supabaseClient
       .from('orbix_stories')
       .update({ status: 'REJECTED' })
       .eq('id', id)
-      .eq('business_id', businessId);
-    
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId);
+
     if (storyError) throw storyError;
-    
-    // Update review queue if exists
-    const { error: queueError } = await supabaseClient
+
+    await supabaseClient
       .from('orbix_review_queue')
       .update({
         status: 'REJECTED',
@@ -633,40 +1352,45 @@ router.post('/stories/:id/reject', async (req, res) => {
       })
       .eq('story_id', id)
       .eq('business_id', businessId);
-    
-    // Queue error is not critical, continue
-    
+
     res.json({ success: true });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/stories/:id/reject] Error:', error);
-    res.status(500).json({ error: 'Failed to reject story' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to reject story' });
   }
 });
 
 /**
  * POST /api/v2/orbix-network/stories/:id/script/edit-hook
- * Edit the hook (opening line) of a script
+ * Edit the hook (opening line) of a script. Requires query or body channel_id.
  */
 router.post('/stories/:id/script/edit-hook', async (req, res) => {
   try {
+    const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
     const { hook } = req.body;
-    
+
     if (!hook || typeof hook !== 'string') {
       return res.status(400).json({ error: 'Hook text is required' });
     }
-    
-    // Get script for this story
+
+    const { data: story } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+    if (!story) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+
     const { data: script, error: scriptError } = await supabaseClient
       .from('orbix_scripts')
       .select('*')
       .eq('story_id', id)
       .single();
-    
-    if (scriptError || !script) {
-      return res.status(404).json({ error: 'Script not found for this story' });
-    }
     
     // Update script hook
     const scriptContent = script.content_json || {};
@@ -679,11 +1403,502 @@ router.post('/stories/:id/script/edit-hook', async (req, res) => {
       .eq('story_id', id);
     
     if (updateError) throw updateError;
-    
     res.json({ success: true });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/stories/:id/script/edit-hook] Error:', error);
-    res.status(500).json({ error: 'Failed to edit script hook' });
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to edit script hook' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/raw-items/:id/force-score
+ * Run classifier + shock scorer on a raw item and save score (no story created).
+ * Use when background scoring never ran or failed.
+ */
+router.post('/raw-items/:id/force-score', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const rawItemId = req.params.id;
+
+    const { data: rawItem, error: rawItemError } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*')
+      .eq('id', rawItemId)
+      .eq('business_id', businessId)
+      .single();
+
+    if (rawItemError || !rawItem) {
+      return res.status(404).json({ error: 'Raw item not found' });
+    }
+
+    if (rawItem.status !== 'NEW' && rawItem.status !== 'DISCARDED') {
+      return res.status(400).json({ error: 'Raw item has already been processed' });
+    }
+
+    const { classifyStory, scoreShock } = await import('../../services/orbix-network/classifier.js');
+
+    const category = await classifyStory(rawItem);
+    if (!category || category === 'REJECT') {
+      if (rawItem.status === 'NEW') {
+        await supabaseClient
+          .from('orbix_raw_items')
+          .update({ status: 'DISCARDED', discard_reason: 'Classification rejected' })
+          .eq('id', rawItemId)
+          .eq('business_id', businessId);
+      }
+      return res.json({
+        success: true,
+        discarded: true,
+        message: 'Item was rejected by classifier',
+        raw_item: (await supabaseClient.from('orbix_raw_items').select('*').eq('id', rawItemId).eq('business_id', businessId).eq('channel_id', channelId).single()).data
+      });
+    }
+
+    const scoreResult = await scoreShock({
+      category,
+      title: rawItem.title,
+      snippet: rawItem.snippet,
+      url: rawItem.url
+    });
+
+    const { data: updated, error: updateError } = await supabaseClient
+      .from('orbix_raw_items')
+      .update({
+        category,
+        shock_score: scoreResult.score,
+        factors_json: scoreResult.factors || null
+      })
+      .eq('id', rawItemId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    res.json({
+      success: true,
+      raw_item: updated,
+      message: `Scored: ${scoreResult.score}/100 (${category})`
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/raw-items/:id/force-score] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to score raw item' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/raw-items/:id/force-process
+ * Force process a raw item into a story (bypasses automated pipeline)
+ */
+router.post('/raw-items/:id/force-process', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const rawItemId = req.params.id;
+
+    const { data: rawItem, error: rawItemError } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*')
+      .eq('id', rawItemId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+    
+    if (rawItemError || !rawItem) {
+      return res.status(404).json({ error: 'Raw item not found' });
+    }
+    
+    if (rawItem.status !== 'NEW') {
+      return res.status(400).json({ error: 'Raw item has already been processed' });
+    }
+    
+    // Process the raw item into a story
+    const { processRawItem } = await import('../../services/orbix-network/classifier.js');
+    const { generateAndSaveScript } = await import('../../services/orbix-network/script-generator.js');
+    
+    const story = await processRawItem(businessId, rawItem);
+    
+    if (!story) {
+      return res.status(400).json({ error: 'Failed to create story from raw item (score may be too low)' });
+    }
+    
+    // Mark this story as manually forced by the user
+    await supabaseClient
+      .from('orbix_stories')
+      .update({ is_manual_force: true })
+      .eq('id', story.id);
+    
+    // Generate script for the story (this happens automatically in pipeline, but we need it here too)
+    try {
+      await generateAndSaveScript(businessId, story);
+    } catch (scriptError) {
+      console.error('[Force Process] Error generating script:', scriptError);
+      // Don't fail the request, script generation can happen later
+    }
+    
+    // Fetch updated story with is_manual_force flag
+    const { data: updatedStory } = await supabaseClient
+      .from('orbix_stories')
+      .select('*')
+      .eq('id', story.id)
+      .single();
+    
+    res.json({ 
+      success: true, 
+      story: updatedStory || story,
+      message: 'Raw item processed into story successfully' 
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/raw-items/:id/force-process] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to force process raw item' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/raw-items/:id/allow-story
+ * Promote a DISCARDED raw item into a story (ignore threshold) so it appears in the pipeline.
+ */
+router.post('/raw-items/:id/allow-story', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const rawItemId = req.params.id;
+
+    const { data: rawItem, error: rawItemError } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*')
+      .eq('id', rawItemId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+
+    if (rawItemError || !rawItem) {
+      return res.status(404).json({ error: 'Raw item not found' });
+    }
+
+    if (rawItem.status !== 'DISCARDED') {
+      return res.status(400).json({ error: 'Only discarded items can be allowed as story. Use Force process for NEW items.' });
+    }
+
+    const { classifyStory, scoreShock } = await import('../../services/orbix-network/classifier.js');
+    const { generateAndSaveScript } = await import('../../services/orbix-network/script-generator.js');
+
+    let category = rawItem.category;
+    let shockScore = rawItem.shock_score;
+    let factorsJson = rawItem.factors_json;
+
+    if (!category || shockScore == null) {
+      const classified = await classifyStory(rawItem);
+      if (!classified) {
+        return res.status(400).json({ error: 'Item was rejected by classifier and cannot be allowed as story' });
+      }
+      category = classified;
+      const scoreResult = await scoreShock({
+        category,
+        title: rawItem.title,
+        snippet: rawItem.snippet,
+        url: rawItem.url
+      });
+      shockScore = scoreResult.score;
+      factorsJson = scoreResult.factors || null;
+      await supabaseClient
+        .from('orbix_raw_items')
+        .update({ category, shock_score: shockScore, factors_json: factorsJson })
+        .eq('id', rawItemId)
+        .eq('business_id', businessId)
+        .eq('channel_id', channelId);
+    }
+
+    const { data: story, error: storyError } = await supabaseClient
+      .from('orbix_stories')
+      .insert({
+        business_id: businessId,
+        channel_id: channelId,
+        raw_item_id: rawItem.id,
+        category,
+        shock_score: shockScore,
+        factors_json: factorsJson,
+        status: 'PENDING',
+        is_manual_force: true
+      })
+      .select()
+      .single();
+
+    if (storyError) throw storyError;
+
+    await supabaseClient
+      .from('orbix_raw_items')
+      .update({ status: 'PROCESSED' })
+      .eq('id', rawItemId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId);
+
+    try {
+      await generateAndSaveScript(businessId, story);
+    } catch (scriptError) {
+      console.error('[Allow Story] Error generating script:', scriptError);
+    }
+
+    res.json({
+      success: true,
+      story,
+      message: 'Story allowed and added to pipeline'
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/raw-items/:id/allow-story] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to allow story' });
+  }
+});
+
+/**
+ * GET /api/v2/orbix-network/pipeline
+ * Get pipeline view - raw items for Step 1, single active story for Steps 2-7. Requires query.channel_id.
+ */
+router.get('/pipeline', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { limit = 100, offset = 0 } = req.query;
+
+    const threshold = (await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY))?.settings?.scoring?.shock_score_threshold ?? 45;
+
+    const rawItemSelect = 'id, title, snippet, url, status, category, shock_score, factors_json, discard_reason, created_at';
+    const { data: eligibleRawItems, error: rawItemsError } = await supabaseClient
+      .from('orbix_raw_items')
+      .select(rawItemSelect)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('status', 'NEW')
+      .or(`shock_score.gte.${threshold},shock_score.is.null`)
+      .order('shock_score', { ascending: false, nullsFirst: false })
+      .range(offset, offset + limit - 1);
+
+    if (rawItemsError) throw rawItemsError;
+
+    const discardedSince = new Date();
+    discardedSince.setDate(discardedSince.getDate() - 7);
+    const { data: discardedRawItems, error: discardedError } = await supabaseClient
+      .from('orbix_raw_items')
+      .select(rawItemSelect)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('status', 'DISCARDED')
+      .gte('created_at', discardedSince.toISOString())
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (discardedError) throw discardedError;
+
+    const { data: automatedStory, error: automatedError } = await supabaseClient
+      .from('orbix_stories')
+      .select(`
+        *,
+        orbix_renders (
+          id,
+          render_status,
+          render_step,
+          step_progress,
+          step_error,
+          step_logs,
+          created_at,
+          updated_at,
+          completed_at,
+          output_url
+        ),
+        orbix_scripts (
+          id,
+          created_at
+        )
+      `)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('status', 'PENDING')
+      .or('is_manual_force.is.null,is_manual_force.eq.false')
+      .order('shock_score', { ascending: false, nullsLast: true })
+      .limit(1);
+
+    if (automatedError) throw automatedError;
+
+    const { data: forcedStories, error: forcedError } = await supabaseClient
+      .from('orbix_stories')
+      .select(`
+        *,
+        orbix_renders (
+          id,
+          render_status,
+          render_step,
+          step_progress,
+          step_error,
+          step_logs,
+          created_at,
+          updated_at,
+          completed_at,
+          output_url
+        ),
+        orbix_scripts (
+          id,
+          created_at
+        )
+      `)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('status', 'PENDING')
+      .eq('is_manual_force', true)
+      .order('created_at', { ascending: false });
+
+    if (forcedError) throw forcedError;
+
+    const automatedStoryList = automatedStory && automatedStory.length > 0 ? [automatedStory[0]] : [];
+    const forcedStoryList = forcedStories || [];
+    const automatedId = automatedStoryList.length > 0 ? automatedStoryList[0].id : null;
+    const uniqueForcedStories = forcedStoryList.filter(s => s.id !== automatedId);
+    const pendingStories = [...automatedStoryList, ...uniqueForcedStories];
+
+    const { data: activeStories, error: storiesError } = await supabaseClient
+      .from('orbix_stories')
+      .select(`
+        *,
+        orbix_renders (
+          id,
+          render_status,
+          render_step,
+          step_progress,
+          step_error,
+          step_logs,
+          created_at,
+          updated_at,
+          completed_at,
+          output_url
+        )
+      `)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .in('status', ['APPROVED', 'RENDERED', 'PUBLISHED'])
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (storiesError) throw storiesError;
+    
+    // Transform raw items to pipeline format (Step 1): NEW items first, then DISCARDED (rejected)
+    const toStep1Row = (rawItem, rejected = false) => {
+      const score = rawItem.shock_score;
+      const numScore = (score != null && score !== '') ? Number(score) : null;
+      return {
+      raw_item_id: rawItem.id,
+      story_id: null,
+      story_title: rawItem.title || 'Untitled',
+      story_status: null,
+      story_category: rawItem.category,
+      story_shock_score: (numScore >= 0 && numScore <= 100) ? numScore : null,
+      shock_score: (numScore >= 0 && numScore <= 100) ? numScore : null, // allow frontend to read either key
+      story_created_at: rawItem.created_at,
+      render_id: null,
+      render_status: null,
+      render_step: null,
+      step_progress: null,
+      step_error: null,
+      step_logs: null,
+      output_url: null,
+      render_created_at: null,
+      render_updated_at: null,
+      rejected: rejected || false,
+      discard_reason: rejected ? (rawItem.discard_reason || 'Rejected') : null
+    };
+    };
+    const rawItemsPipeline = [
+      ...(eligibleRawItems || []).map(r => toStep1Row(r, false)),
+      ...(discardedRawItems || []).map(r => toStep1Row(r, true))
+    ];
+    
+    // Get raw item IDs from pending stories to fetch titles
+    const pendingRawItemIds = (pendingStories || [])
+      .map(s => s.raw_item_id)
+      .filter(id => id !== null);
+    
+    // Fetch raw items for titles
+    let rawItemTitlesMap = {};
+    if (pendingRawItemIds.length > 0) {
+      const { data: rawItems, error: rawItemsError } = await supabaseClient
+        .from('orbix_raw_items')
+        .select('id, title')
+        .in('id', pendingRawItemIds);
+      
+      if (!rawItemsError && rawItems) {
+        rawItemTitlesMap = rawItems.reduce((acc, item) => {
+          acc[item.id] = item.title;
+          return acc;
+        }, {});
+      }
+    }
+    
+    // Transform pending stories to pipeline format (Step 2)
+    const pendingStoriesPipeline = (pendingStories || []).map(story => {
+      const render = story.orbix_renders && story.orbix_renders.length > 0 
+        ? story.orbix_renders[0] 
+        : null;
+      
+      const script = story.orbix_scripts && story.orbix_scripts.length > 0 
+        ? story.orbix_scripts[0] 
+        : null;
+      
+      // Get title from raw item
+      const title = story.raw_item_id ? (rawItemTitlesMap[story.raw_item_id] || 'Untitled') : 'Untitled';
+      
+      return {
+        raw_item_id: story.raw_item_id || null,
+        story_id: story.id,
+        story_title: title,
+        story_status: story.status, // PENDING
+        story_category: story.category,
+        story_shock_score: story.shock_score,
+        story_created_at: story.created_at,
+        script_id: script?.id || null, // Include script_id to check if script exists
+        render_id: render?.id || null,
+        render_status: render?.render_status || null,
+        render_step: render?.render_step || null,
+        step_progress: render?.step_progress || null,
+        step_error: render?.step_error || null,
+        step_logs: render?.step_logs || null,
+        output_url: render?.output_url || null,
+        render_created_at: render?.created_at || null,
+        render_updated_at: render?.updated_at || null
+      };
+    });
+    
+    // Transform active stories to pipeline format (Steps 3-7)
+    const activeStoriesPipeline = (activeStories || []).map(story => {
+      const render = story.orbix_renders && story.orbix_renders.length > 0 
+        ? story.orbix_renders[0] 
+        : null;
+      
+      return {
+        raw_item_id: story.raw_item_id || null,
+        story_id: story.id,
+        story_title: story.title || 'Untitled',
+        story_status: story.status,
+        story_category: story.category,
+        story_shock_score: story.shock_score,
+        story_created_at: story.created_at,
+        render_id: render?.id || null,
+        render_status: render?.render_status || null,
+        render_step: render?.render_step || null,
+        step_progress: render?.step_progress || null,
+        step_error: render?.step_error || null,
+        step_logs: render?.step_logs || null,
+        output_url: render?.output_url || null,
+        render_created_at: render?.created_at || null,
+        render_updated_at: render?.updated_at || null
+      };
+    });
+    
+    // Combine: raw items (Step 1), pending stories (Step 2), then active stories (Steps 3-7)
+    const pipeline = [...rawItemsPipeline, ...pendingStoriesPipeline, ...activeStoriesPipeline];
+    
+    res.json({ pipeline });
+  } catch (error) {
+    console.error('[GET /api/v2/orbix-network/pipeline] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch pipeline data' });
   }
 });
 
@@ -736,11 +1951,13 @@ router.get('/analytics', async (req, res) => {
 
 /**
  * GET /api/v2/orbix-network/youtube/auth-url
- * Get YouTube OAuth authorization URL
+ * Optional query: channel_id = Orbix channel (per-channel YouTube), from_setup = redirect back to setup wizard after OAuth.
  */
 router.get('/youtube/auth-url', async (req, res) => {
   try {
     const businessId = req.active_business_id;
+    const orbixChannelId = req.query.channel_id || null;
+    const fromSetup = req.query.from_setup === 'true' || req.query.from_setup === true;
     
     if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET || !process.env.YOUTUBE_REDIRECT_URI) {
       return res.status(500).json({ 
@@ -755,17 +1972,18 @@ router.get('/youtube/auth-url', async (req, res) => {
       process.env.YOUTUBE_REDIRECT_URI
     );
     
-    // Generate authorization URL
     const scopes = [
       'https://www.googleapis.com/auth/youtube.upload',
       'https://www.googleapis.com/auth/youtube.readonly'
     ];
+    let state = orbixChannelId ? `${businessId}:${orbixChannelId}` : businessId;
+    if (fromSetup) state = `${state}:setup`;
     
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: scopes,
-      prompt: 'consent', // Force consent screen to get refresh token
-      state: businessId // Include business ID in state for callback verification
+      prompt: 'consent',
+      state
     });
     
     res.json({ auth_url: authUrl });
@@ -782,27 +2000,26 @@ router.get('/youtube/auth-url', async (req, res) => {
 
 /**
  * GET /api/v2/orbix-network/youtube/channel
- * Get connected YouTube channel information
+ * Get connected YouTube channel. Optional query channel_id = Orbix channel (per-channel); omit for legacy.
  */
 router.get('/youtube/channel', async (req, res) => {
   try {
     const businessId = req.active_business_id;
-    
+    const orbixChannelId = req.query.channel_id || null;
+
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
-    
-    if (!moduleSettings?.settings?.youtube?.channel_id) {
-      return res.json({ 
-        connected: false,
-        channel: null
-      });
+    const settings = moduleSettings?.settings || {};
+    const yt = orbixChannelId && settings.youtube_by_channel?.[orbixChannelId]
+      ? settings.youtube_by_channel[orbixChannelId]
+      : settings.youtube;
+
+    if (!yt?.channel_id) {
+      return res.json({ connected: false, channel: null });
     }
-    
+
     res.json({
       connected: true,
-      channel: {
-        id: moduleSettings.settings.youtube.channel_id,
-        title: moduleSettings.settings.youtube.channel_title || ''
-      }
+      channel: { id: yt.channel_id, title: yt.channel_title || '' }
     });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/channel] Error:', error);
@@ -812,32 +2029,95 @@ router.get('/youtube/channel', async (req, res) => {
 
 /**
  * POST /api/v2/orbix-network/youtube/disconnect
- * Disconnect YouTube account
+ * Disconnect YouTube. Body or query channel_id = Orbix channel (disconnect that channel only); omit for legacy single disconnect.
  */
 router.post('/youtube/disconnect', async (req, res) => {
   try {
     const businessId = req.active_business_id;
+    const orbixChannelId = req.body?.channel_id || req.query?.channel_id || null;
     
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
     if (!moduleSettings) {
       return res.json({ success: true });
     }
     
-    const settings = moduleSettings.settings || {};
-    settings.youtube = {
-      channel_id: '',
-      channel_title: '',
-      access_token: '',
-      refresh_token: '',
-      token_expiry: null
-    };
+    const settings = { ...(moduleSettings.settings || {}) };
+    if (orbixChannelId) {
+      settings.youtube_by_channel = settings.youtube_by_channel || {};
+      delete settings.youtube_by_channel[orbixChannelId];
+    } else {
+      settings.youtube = {
+        channel_id: '',
+        channel_title: '',
+        access_token: '',
+        refresh_token: '',
+        token_expiry: null
+      };
+    }
     
     await ModuleSettings.update(businessId, MODULE_KEY, settings);
-    
     res.json({ success: true });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/youtube/disconnect] Error:', error);
     res.status(500).json({ error: 'Failed to disconnect YouTube' });
+  }
+});
+
+/**
+ * GET /api/v2/orbix-network/backgrounds
+ * List background images for a channel. Requires query channel_id.
+ */
+router.get('/backgrounds', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { listChannelBackgrounds } = await import('../../services/orbix-network/video-renderer.js');
+    const names = await listChannelBackgrounds(businessId, channelId);
+    const bucket = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_BACKGROUNDS || 'orbix-network-backgrounds';
+    const items = names.map((name) => {
+      const path = `${businessId}/${channelId}/${name}`;
+      const { data } = supabaseClient.storage.from(bucket).getPublicUrl(path);
+      return { name, path, url: data?.publicUrl };
+    });
+    res.json({ backgrounds: items });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    console.error('[GET /api/v2/orbix-network/backgrounds] Error:', error);
+    res.status(500).json({ error: 'Failed to list backgrounds' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/backgrounds
+ * Upload a background image for a channel. Requires body channel_id and multipart file (field: file).
+ */
+router.post('/backgrounds', upload.single('file'), async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    if (!req.file || !req.file.buffer) {
+      return res.status(400).json({ error: 'No file uploaded. Use multipart field "file".' });
+    }
+    const ext = (req.file.originalname && /\.(png|jpg|jpeg|webp)$/i.test(req.file.originalname))
+      ? req.file.originalname.replace(/.*\./i, '').toLowerCase()
+      : 'png';
+    const name = `bg_${Date.now()}.${ext}`;
+    const path = `${businessId}/${channelId}/${name}`;
+    const bucket = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_BACKGROUNDS || 'orbix-network-backgrounds';
+    const contentType = req.file.mimetype?.startsWith('image/') ? req.file.mimetype : `image/${ext}`;
+    const { data, error } = await supabaseClient.storage
+      .from(bucket)
+      .upload(path, req.file.buffer, { contentType, upsert: true });
+    if (error) {
+      console.error('[POST /api/v2/orbix-network/backgrounds] Upload error:', error);
+      return res.status(500).json({ error: error.message || 'Upload failed' });
+    }
+    const { data: urlData } = supabaseClient.storage.from(bucket).getPublicUrl(data.path);
+    res.status(201).json({ name, path: data.path, url: urlData?.publicUrl });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    console.error('[POST /api/v2/orbix-network/backgrounds] Error:', error);
+    res.status(500).json({ error: 'Failed to upload background' });
   }
 });
 

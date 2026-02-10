@@ -110,3 +110,6 @@ If you want to try ClickBank again:
 **The product IS software** - you're selling AI receptionist software. Telnyx is just infrastructure (like AWS for web apps). Make sure your ClickBank listing emphasizes SOFTWARE, not services.
 
 
+
+
+

@@ -25,9 +25,55 @@ import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
 import helmet from "helmet";
+import fs from "fs";
+import path from "path";
 
 // Load environment variables FIRST
 dotenv.config();
+
+// Crash log file - so you can see why the server died even when the terminal scrolls away
+const CRASH_LOG_PATH = path.join(process.cwd(), 'server-crash.log');
+function writeCrashLog(label, detail) {
+  try {
+    const line = `[${new Date().toISOString()}] ${label} ${String(detail)}\n`;
+    fs.appendFileSync(CRASH_LOG_PATH, line);
+  } catch (e) {
+    console.error('[CrashLog] writeCrashLog failed:', e?.message || e);
+  }
+}
+function writeCrashLogFull(label, error) {
+  const msg = error?.message ?? String(error);
+  writeCrashLog(label, msg);
+  try {
+    const stack = error?.stack || String(error);
+    fs.appendFileSync(CRASH_LOG_PATH, (stack && stack !== msg ? stack + '\n' : '') + '---\n');
+  } catch (e) {
+    console.error('[CrashLog] writeCrashLogFull failed:', e?.message || e);
+  }
+}
+
+// Log EVERY process exit (code + signal) so we know why the process stopped
+process.on('exit', (code, signal) => {
+  const line = `[${new Date().toISOString()}] PROCESS_EXIT code=${code} signal=${signal || 'none'}\n`;
+  try {
+    fs.appendFileSync(CRASH_LOG_PATH, line);
+  } catch (_) {
+    // exit handler must be sync; can't throw
+  }
+});
+
+// Log non-zero process.exit() so we can see who called exit (server-crash.log)
+const _exit = process.exit;
+process.exit = function (code) {
+  if (code !== 0 && code !== undefined) {
+    writeCrashLog('process.exit() called with code', code);
+    const stack = new Error().stack;
+    try {
+      fs.appendFileSync(CRASH_LOG_PATH, (stack || '') + '\n---\n');
+    } catch (_) {}
+  }
+  _exit.call(process, code);
+};
 
 const PORT = Number(process.env.PORT || 5001);
 const app = express();
@@ -158,6 +204,23 @@ app.use((req, _res, next) => {
 });
 
 // Health check - ALWAYS works
+// Root: API has no UI here — use the frontend for the app
+app.get("/", (_req, res) => {
+  const port = process.env.PORT || 5001;
+  res.type("html").status(200).send(`
+    <!DOCTYPE html>
+    <html><head><meta charset="utf-8"><title>Tavari API</title></head>
+    <body style="font-family:sans-serif;max-width:520px;margin:2rem auto;padding:0 1rem;">
+      <h1>Tavari API</h1>
+      <p>This is the backend. There is no app UI at this URL.</p>
+      <p><strong>To use the app locally:</strong> run the frontend, then open:</p>
+      <p><a href="http://localhost:3000">http://localhost:3000</a></p>
+      <p>From project root: <code>cd frontend && npm run dev</code></p>
+      <p><a href="/health">Health check</a> · <a href="/ready">Ready</a></p>
+    </body></html>
+  `);
+});
+
 app.get("/health", (_req, res) => {
   res.status(200).json({
     status: "ok",
@@ -516,9 +579,9 @@ try {
     }
   };
   
-  // Run immediately on startup (in case there are queued messages)
-  processQueuedSMSJob();
-  
+  // Run immediately on startup (in case there are queued messages) - .catch() prevents unhandled rejection
+  processQueuedSMSJob().catch((e) => console.error('[Server] Queued SMS job failed:', e?.message || e));
+
   // Then run every 5 minutes
   queuedSMSInterval = setInterval(processQueuedSMSJob, 5 * 60 * 1000); // 5 minutes
   
@@ -556,18 +619,20 @@ try {
     }
   };
   
-  // Run immediately on startup (in case there are expired sales)
-  updateExpiredSalePricesJob();
-  
+  // Run immediately on startup - .catch() prevents unhandled rejection killing the process
+  updateExpiredSalePricesJob().catch((e) => console.error('[Server] Expired sale prices job failed:', e?.message || e));
+
   // Schedule to run daily at 2 AM
   const scheduleNextRun = () => {
     const msUntilNext = getMsUntil2AM();
     console.log(`[Server] Next expired sale prices check scheduled in ${Math.round(msUntilNext / 1000 / 60)} minutes (at 2 AM)`);
-    
+
     setTimeout(() => {
-      updateExpiredSalePricesJob();
-      // After first run, schedule to run every 24 hours
-      expiredSalePricesInterval = setInterval(updateExpiredSalePricesJob, 24 * 60 * 60 * 1000); // 24 hours
+      updateExpiredSalePricesJob().catch((e) => console.error('[Server] Expired sale prices job failed:', e?.message || e));
+      expiredSalePricesInterval = setInterval(
+        () => updateExpiredSalePricesJob().catch((e) => console.error('[Server] Expired sale prices job failed:', e?.message || e)),
+        24 * 60 * 60 * 1000
+      );
     }, msUntilNext);
   };
   
@@ -614,12 +679,14 @@ try {
     console.log(`[Server] Next assistant rebuild scheduled in ${Math.round(msUntilNext / 1000 / 60)} minutes (at 3 AM)`);
     
     setTimeout(() => {
-      rebuildAllAssistantsJob();
-      // After first run, schedule to run every 24 hours
-      rebuildAssistantsInterval = setInterval(rebuildAllAssistantsJob, 24 * 60 * 60 * 1000); // 24 hours
+      rebuildAllAssistantsJob().catch((e) => console.error('[Server] Assistant rebuild job failed:', e?.message || e));
+      rebuildAssistantsInterval = setInterval(
+        () => rebuildAllAssistantsJob().catch((e) => console.error('[Server] Assistant rebuild job failed:', e?.message || e)),
+        24 * 60 * 60 * 1000
+      );
     }, msUntilNext);
   };
-  
+
   scheduleNextRebuild();
   
   console.log('✅ Daily assistant rebuild scheduled (runs daily at 3 AM)');
@@ -639,6 +706,9 @@ try {
     runAnalyticsJob
   } = await import('./routes/v2/orbix-network-jobs.js');
   
+  // Wrapper so any promise rejection from the job is never unhandled (keeps process alive)
+  const runSafe = (fn, name) => () => { fn().catch((e) => console.error(`[Orbix Jobs] ${name} unhandled:`, e?.message || e)); };
+
   // 1. Scrape News (every hour)
   const scrapeJob = async () => {
     try {
@@ -647,12 +717,9 @@ try {
     } catch (error) {
       console.error('[Orbix Jobs] Scrape job error:', error.message);
       console.error('[Orbix Jobs] Scrape job error stack:', error.stack);
-      // Don't crash the server - just log the error
     }
   };
-  // Don't run immediately on startup - wait for first interval to avoid startup crashes
-  // scrapeJob(); // Commented out to prevent startup crashes
-  orbixNetworkIntervals.scrape = setInterval(scrapeJob, 60 * 60 * 1000); // Every hour
+  orbixNetworkIntervals.scrape = setInterval(runSafe(scrapeJob, 'Scrape'), 60 * 60 * 1000); // Every hour
   console.log('✅ Orbix Network scrape job scheduled (runs every hour)');
   
   // 2. Process Stories (every 15 minutes)
@@ -666,9 +733,7 @@ try {
       // Don't crash the server - just log the error
     }
   };
-  // Don't run immediately on startup - wait for first interval
-  // processJob(); // Commented out to prevent startup crashes
-  orbixNetworkIntervals.process = setInterval(processJob, 15 * 60 * 1000); // Every 15 minutes
+  orbixNetworkIntervals.process = setInterval(runSafe(processJob, 'Process'), 15 * 60 * 1000); // Every 15 minutes
   console.log('✅ Orbix Network process job scheduled (runs every 15 minutes)');
   
   // 3. Process Review Queue (every 5 minutes)
@@ -704,9 +769,7 @@ try {
       // Don't crash the server - just log the error
     }
   };
-  // Don't run immediately on startup - wait for first interval
-  // renderJob(); // Commented out to prevent startup crashes
-  orbixNetworkIntervals.render = setInterval(renderJob, 10 * 60 * 1000); // Every 10 minutes
+  orbixNetworkIntervals.render = setInterval(runSafe(renderJob, 'Render'), 10 * 60 * 1000); // Every 10 minutes
   console.log('✅ Orbix Network render job scheduled (runs every 10 minutes)');
   
   // 5. Publish Videos (every 15 minutes)
@@ -744,12 +807,12 @@ try {
       console.error('[Orbix Jobs] Analytics job error:', error.message);
     }
   };
-  
+
   const scheduleAnalytics = () => {
     const msUntilNext = getMsUntil2AM();
     setTimeout(() => {
-      analyticsJob();
-      orbixNetworkIntervals.analytics = setInterval(analyticsJob, 24 * 60 * 60 * 1000); // 24 hours
+      analyticsJob().catch((e) => console.error('[Orbix Jobs] Analytics job failed:', e?.message || e));
+      orbixNetworkIntervals.analytics = setInterval(runSafe(analyticsJob, 'Analytics'), 24 * 60 * 60 * 1000); // 24 hours
     }, msUntilNext);
   };
   scheduleAnalytics();
@@ -761,35 +824,60 @@ try {
 
 // Start server
 const server = app.listen(PORT, '0.0.0.0', () => {
+  const localUrl = `http://localhost:${PORT}`;
   console.log('\n' + '='.repeat(60));
+  writeCrashLog('SERVER_STARTED', localUrl);
   console.log('🚀 TAVARI SERVER - VAPI VERSION');
   console.log('='.repeat(60));
-  console.log(`✅ Server running on port ${PORT}`);
-  console.log(`   Health: http://localhost:${PORT}/health`);
-  console.log(`   Ready: http://localhost:${PORT}/ready`);
-  console.log(`   VAPI Webhook: http://localhost:${PORT}/api/vapi/webhook`);
+  console.log(`   LOCAL URL:  ${localUrl}`);
+  console.log(`   Health:     ${localUrl}/health`);
+  console.log(`   Ready:      ${localUrl}/ready`);
+  console.log(`   VAPI Webhook: ${localUrl}/api/vapi/webhook`);
+  console.log('='.repeat(60));
+  console.log(`   If the server dies, check: ${CRASH_LOG_PATH}`);
   console.log('='.repeat(60) + '\n');
 });
 
-// Graceful shutdown
-process.on("SIGTERM", () => {
-  console.log("SIGTERM received, shutting down gracefully...");
-  server.close(() => {
-    console.log("Server closed");
+// Graceful shutdown (SIGTERM from process manager, or SIGINT from Ctrl+C)
+function gracefulShutdown(signal) {
+  console.log(`[Server] ${signal} received, shutting down gracefully...`);
+  if (server && typeof server.close === 'function') {
+    server.close(() => {
+      console.log('[Server] HTTP server closed');
+      process.exit(0);
+    });
+    // Force exit after 10s if close doesn't complete
+    setTimeout(() => {
+      console.error('[Server] Forced exit after shutdown timeout');
+      process.exit(1);
+    }, 10000);
+  } else {
     process.exit(0);
-  });
+  }
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+// Keep the process alive on uncaught errors - log to FILE first so you have a record if the process dies
+process.on('uncaughtException', (error) => {
+  writeCrashLogFull('UNCAUGHT_EXCEPTION', error);
+  try {
+    console.error('[Server] ❌ Uncaught Exception (server will keep running):', error?.message || error);
+    if (error?.stack) console.error('[Server] Stack:', error.stack);
+  } catch (e) {
+    console.error('[Server] Uncaught Exception (log failed):', String(error));
+  }
 });
 
-// Handle uncaught errors - log but don't crash immediately
-process.on("uncaughtException", (error) => {
-  console.error("❌ Uncaught Exception:", error);
-  console.error("Stack:", error.stack);
-  // Don't exit - let the server keep running
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("❌ Unhandled Rejection:", reason);
-  // Don't exit - let the server keep running
+process.on('unhandledRejection', (reason, promise) => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  writeCrashLogFull('UNHANDLED_REJECTION', err);
+  try {
+    console.error('[Server] ❌ Unhandled Rejection (server will keep running):', reason);
+  } catch (e) {
+    console.error('[Server] Unhandled Rejection (log failed)');
+  }
 });
 
 export default app;

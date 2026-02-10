@@ -29,6 +29,7 @@ function OrbixNetworkSetupWizardContent() {
   const [connectingYouTube, setConnectingYouTube] = useState(false);
   const [sources, setSources] = useState([]);
   const [loadingSources, setLoadingSources] = useState(false);
+  const [setupChannelId, setSetupChannelId] = useState(null);
   const [formData, setFormData] = useState({
     step1: {}, // YouTube API Setup
     step2: {}, // Source Configuration (optional)
@@ -40,27 +41,33 @@ function OrbixNetworkSetupWizardContent() {
   useEffect(() => {
     loadSetupStatus();
     checkYoutubeConnection();
-    
+
     // Check for OAuth callback params
     const youtubeConnected = searchParams.get('youtube_connected');
     const error = searchParams.get('error');
-    
+
     if (youtubeConnected === 'true') {
       success('YouTube account connected successfully!');
       checkYoutubeConnection();
-      // Remove query param
       router.replace('/modules/orbix-network/setup');
     } else if (error) {
       if (error === 'youtube_oauth_denied') {
         showErrorToast('YouTube connection was cancelled');
       } else if (error === 'youtube_not_configured') {
         showErrorToast('YouTube OAuth is not configured. Please contact support.');
+      } else if (error === 'invalid_grant') {
+        showErrorToast('YouTube connection failed (invalid_grant). In Google Cloud Console, add the exact redirect URL from your server logs to Credentials → your OAuth client → Authorized redirect URIs. Then try connecting again.');
       } else {
         showErrorToast('Failed to connect YouTube account');
       }
       router.replace('/modules/orbix-network/setup');
     }
   }, [searchParams]);
+
+  // Re-check YouTube status when we have a channel (per-channel connection)
+  useEffect(() => {
+    if (setupChannelId) checkYoutubeConnection();
+  }, [setupChannelId]);
 
   const loadSetupStatus = async () => {
     try {
@@ -73,6 +80,22 @@ function OrbixNetworkSetupWizardContent() {
       if (response.data.setup_status?.is_complete) {
         router.push('/dashboard/v2/modules/orbix-network/dashboard');
         return;
+      }
+      
+      // Ensure we have at least one channel so Step 1 YouTube connects to it (per-channel)
+      try {
+        const { data: channelsData } = await orbixNetworkAPI.getChannels();
+        const channels = channelsData?.channels || [];
+        if (channels.length > 0) {
+          setSetupChannelId(channels[0].id);
+        } else {
+          const createRes = await orbixNetworkAPI.createChannel({ name: 'Default' });
+          if (createRes.data?.channel?.id) {
+            setSetupChannelId(createRes.data.channel.id);
+          }
+        }
+      } catch (channelErr) {
+        console.error('Failed to ensure channel for setup:', channelErr);
       }
       
       // Pre-fill form with existing data
@@ -186,9 +209,11 @@ function OrbixNetworkSetupWizardContent() {
     }
   };
 
+  const youtubeParams = () => (setupChannelId ? { channel_id: setupChannelId, from_setup: true } : { from_setup: true });
+
   const checkYoutubeConnection = async () => {
     try {
-      const response = await orbixNetworkAPI.getYoutubeChannel();
+      const response = await orbixNetworkAPI.getYoutubeChannel(youtubeParams());
       setYoutubeConnected(response.data.connected);
       setYoutubeChannel(response.data.channel);
     } catch (error) {
@@ -200,7 +225,7 @@ function OrbixNetworkSetupWizardContent() {
   const handleConnectYouTube = async () => {
     try {
       setConnectingYouTube(true);
-      const response = await orbixNetworkAPI.getYoutubeAuthUrl();
+      const response = await orbixNetworkAPI.getYoutubeAuthUrl(youtubeParams());
       // Redirect to YouTube OAuth
       window.location.href = response.data.auth_url;
     } catch (error) {
@@ -211,16 +236,41 @@ function OrbixNetworkSetupWizardContent() {
     }
   };
 
+  // Ensure we have a channel for step 2 (fetch or create Default)
   useEffect(() => {
-    if (currentStep === 2) {
-      loadSources();
-    }
+    if (currentStep !== 2) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await orbixNetworkAPI.getChannels();
+        const channels = data?.channels || [];
+        if (cancelled) return;
+        if (channels.length > 0) {
+          setSetupChannelId(channels[0].id);
+          return;
+        }
+        const createRes = await orbixNetworkAPI.createChannel({ name: 'Default' });
+        if (cancelled) return;
+        setSetupChannelId(createRes.data?.channel?.id || null);
+      } catch (err) {
+        console.error('Failed to ensure channel for setup:', err);
+        if (!cancelled) showErrorToast('Failed to load channels');
+      }
+    })();
+    return () => { cancelled = true; };
   }, [currentStep]);
 
+  useEffect(() => {
+    if (currentStep === 2 && setupChannelId) {
+      loadSources();
+    }
+  }, [currentStep, setupChannelId]);
+
   const loadSources = async () => {
+    if (!setupChannelId) return;
     try {
       setLoadingSources(true);
-      const response = await orbixNetworkAPI.getSources();
+      const response = await orbixNetworkAPI.getSources({ channel_id: setupChannelId });
       setSources(response.data.sources || []);
     } catch (error) {
       console.error('Failed to load sources:', error);
@@ -231,8 +281,12 @@ function OrbixNetworkSetupWizardContent() {
   };
 
   const handleAddSource = async (sourceData) => {
+    if (!setupChannelId) {
+      showErrorToast('Channel not ready. Please wait a moment.');
+      throw new Error('Channel not ready');
+    }
     try {
-      const response = await orbixNetworkAPI.addSource(sourceData);
+      const response = await orbixNetworkAPI.addSource({ ...sourceData, channel_id: setupChannelId });
       await loadSources();
       success('Source added successfully');
       return response.data.source;
@@ -245,8 +299,9 @@ function OrbixNetworkSetupWizardContent() {
   };
 
   const handleDeleteSource = async (sourceId) => {
+    if (!setupChannelId) return;
     try {
-      await orbixNetworkAPI.deleteSource(sourceId);
+      await orbixNetworkAPI.deleteSource(sourceId, { channel_id: setupChannelId });
       await loadSources();
       success('Source deleted successfully');
     } catch (error) {
@@ -284,7 +339,7 @@ function OrbixNetworkSetupWizardContent() {
             <div>
               <h2 className="text-2xl font-bold mb-2">YouTube API Setup</h2>
               <p className="text-gray-600 mb-6">
-                Connect your YouTube account to enable automatic video publishing to YouTube Shorts.
+                Connect your YouTube account for this channel to enable automatic video publishing to YouTube Shorts. You can connect different YouTube accounts for other channels later in Settings.
               </p>
             </div>
 
@@ -331,7 +386,7 @@ function OrbixNetworkSetupWizardContent() {
 
             <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
               <p className="text-sm text-gray-600">
-                <strong>Note:</strong> You can skip this step and connect YouTube later from the settings page.
+                <strong>Note:</strong> This connects YouTube for your default channel. You can skip this step or connect more channels to different YouTube accounts later from Orbix Network → Settings.
               </p>
             </div>
           </div>
@@ -598,15 +653,22 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    
-    if (!formData.name || !formData.url) {
-      showErrorToast('Please fill in all required fields');
+    const isWikipedia = formData.type === 'WIKIPEDIA';
+    const defaultName = isWikipedia ? (formData.category_hint === 'money' ? 'Money (Wikipedia)' : 'Psychology (Wikipedia)') : '';
+    const name = (formData.name || '').trim() || defaultName;
+    const url = (formData.url || '').trim();
+    if (!name) {
+      showErrorToast('Source name is required');
+      return;
+    }
+    if (!isWikipedia && !url) {
+      showErrorToast('URL is required for this source type');
       return;
     }
 
     try {
       setAdding(true);
-      await onAddSource(formData);
+      await onAddSource({ ...formData, name, url: url || undefined });
       setFormData({
         name: '',
         url: '',
@@ -666,26 +728,35 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
                 Source Type *
               </label>
               <select
-                value={formData.type}
-                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                value={formData.type === 'WIKIPEDIA' && formData.category_hint === 'money' ? 'WIKIPEDIA_MONEY' : formData.type}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (v === 'WIKIPEDIA_MONEY') {
+                    setFormData({ ...formData, type: 'WIKIPEDIA', category_hint: 'money' });
+                  } else {
+                    setFormData({ ...formData, type: v, category_hint: v === 'WIKIPEDIA' ? null : '' });
+                  }
+                }}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
               >
                 <option value="RSS">RSS Feed</option>
                 <option value="HTML">HTML Page</option>
+                <option value="WIKIPEDIA">Wikipedia (Psychology)</option>
+                <option value="WIKIPEDIA_MONEY">Wikipedia (Money)</option>
               </select>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                URL *
+                URL {formData.type !== 'WIKIPEDIA' ? '*' : '(optional for Wikipedia)'}
               </label>
               <input
                 type="url"
                 value={formData.url}
                 onChange={(e) => setFormData({ ...formData, url: e.target.value })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-                placeholder="https://example.com/feed.xml"
-                required
+                placeholder={formData.type === 'WIKIPEDIA' ? (formData.category_hint === 'money' ? 'Uses default money categories' : 'Uses default psychology categories') : 'https://example.com/feed.xml'}
+                required={formData.type !== 'WIKIPEDIA'}
               />
             </div>
 
