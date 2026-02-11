@@ -90,16 +90,20 @@ const allowedOrigins = [
   process.env.FRONTEND_URL,
 ].filter(Boolean); // Remove undefined values
 
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  if (process.env.FRONTEND_URL === '*') return true;
+  if (process.env.NODE_ENV !== 'production') return true;
+  // Allow Vercel deployment URLs in production (deployed frontend)
+  if (origin.endsWith('.vercel.app') && (origin.startsWith('https://') || origin.startsWith('http://'))) return true;
+  return false;
+}
+
 // CRITICAL: Handle OPTIONS preflight requests FIRST, before any other middleware
 app.options('*', (req, res) => {
   const origin = req.headers.origin;
-  
-  // Check if origin should be allowed
-  const isAllowed = 
-    !origin || // No origin (like Postman, curl)
-    allowedOrigins.includes(origin) ||
-    process.env.FRONTEND_URL === "*" ||
-    process.env.NODE_ENV !== 'production';
+  const isAllowed = isOriginAllowed(origin);
   
   if (isAllowed && origin) {
     res.header('Access-Control-Allow-Origin', origin);
@@ -121,27 +125,9 @@ app.use(helmet({
 // CORS middleware configuration - must come after OPTIONS handler
 const corsOptions = {
   origin: function (origin, callback) {
-    // Allow requests with no origin (like mobile apps or curl requests)
-    if (!origin) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
-    
-    // Check if origin is in allowed list
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-    
-    // If FRONTEND_URL is set to "*", allow all origins
-    if (process.env.FRONTEND_URL === "*") {
-      return callback(null, true);
-    }
-    
-    // In development, allow all origins for easier testing
-    if (process.env.NODE_ENV !== 'production') {
-      return callback(null, true);
-    }
-    
-    // In production, only allow origins from the allowed list
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -157,19 +143,10 @@ app.use(cors(corsOptions));
 // Additional CORS headers middleware - ensures headers are set on all responses
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  
-  if (origin) {
-    const isAllowed = 
-      allowedOrigins.includes(origin) ||
-      process.env.FRONTEND_URL === "*" ||
-      process.env.NODE_ENV !== 'production';
-    
-    if (isAllowed) {
-      res.header('Access-Control-Allow-Origin', origin);
-      res.header('Access-Control-Allow-Credentials', 'true');
-    }
+  if (origin && isOriginAllowed(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Access-Control-Allow-Credentials', 'true');
   }
-  
   next();
 });
 
@@ -702,6 +679,7 @@ try {
     runProcessJob,
     runReviewQueueJob,
     runRenderJob,
+    processOnePendingRender,
     runPublishJob,
     runAnalyticsJob
   } = await import('./routes/v2/orbix-network-jobs.js');
@@ -771,7 +749,13 @@ try {
   };
   orbixNetworkIntervals.render = setInterval(runSafe(renderJob, 'Render'), 10 * 60 * 1000); // Every 10 minutes
   console.log('✅ Orbix Network render job scheduled (runs every 10 minutes)');
-  
+
+  // When no separate worker is running, the web server picks up PENDING renders every 30s so local/single-service still works
+  if (process.env.RUN_ORBIX_WORKER !== 'true') {
+    orbixNetworkIntervals.processPending = setInterval(runSafe(() => processOnePendingRender(), 'ProcessOne'), 30 * 1000);
+    console.log('✅ Orbix Network: web server will process PENDING renders every 30s (no separate worker)');
+  }
+
   // 5. Publish Videos (every 15 minutes)
   const publishJob = async () => {
     try {
