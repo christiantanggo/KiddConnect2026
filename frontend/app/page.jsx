@@ -293,7 +293,7 @@ export default function TavariAILandingPage() {
               </Link>
             </div>
           </div>
-          <p className="text-center text-xs text-gray-500 mt-4">Deployed February 9 2026 V1</p>
+          <p className="text-center text-xs text-gray-500 mt-4">Deployed February 12 2026 v1</p>
         </div>
       </footer>
     </div>
