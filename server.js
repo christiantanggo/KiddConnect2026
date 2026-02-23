@@ -75,6 +75,22 @@ process.exit = function (code) {
   _exit.call(process, code);
 };
 
+// Catch uncaught exceptions so they are written to server-crash.log before process dies
+process.on('uncaughtException', (err) => {
+  writeCrashLogFull('uncaughtException', err);
+  console.error('[CRASH] uncaughtException:', err?.message, err?.stack);
+  _exit(1);
+});
+
+// Catch unhandled promise rejections so they are written to server-crash.log
+process.on('unhandledRejection', (reason, promise) => {
+  writeCrashLog('unhandledRejection', String(reason));
+  try {
+    fs.appendFileSync(CRASH_LOG_PATH, (reason && (reason.stack || reason.message)) ? String(reason.stack || reason.message) + '\n---\n' : '---\n');
+  } catch (_) {}
+  console.error('[CRASH] unhandledRejection:', reason);
+});
+
 const PORT = Number(process.env.PORT || 5001);
 const app = express();
 
@@ -452,6 +468,15 @@ try {
     console.warn('⚠️  Orbix Network job routes not loaded:', orbixJobError.message);
     console.warn('⚠️  This is likely due to Node.js 18 incompatibility. Orbix Network jobs will not be available.');
   }
+
+  // Emergency Network (separate stream — does not touch existing agent)
+  try {
+    const v2EmergencyNetworkRoutes = (await import("./routes/v2/emergency-network.js")).default;
+    app.use("/api/v2/emergency-network", v2EmergencyNetworkRoutes);
+    console.log('✅ Emergency Network routes loaded at /api/v2/emergency-network');
+  } catch (emergencyError) {
+    console.warn('⚠️  Emergency Network routes not loaded:', emergencyError.message);
+  }
   
   // V2 routes health check
   app.get("/api/v2/health", (_req, res) => {
@@ -468,6 +493,7 @@ try {
         notifications: "/api/v2/notifications",
         reviews: "/api/v2/reviews (optional - requires openai package)",
         orbixNetwork: "/api/v2/orbix-network",
+        emergencyNetwork: "/api/v2/emergency-network",
         webhooks: {
           stripe: "/api/v2/webhooks/stripe",
           clickbank: "/api/v2/webhooks/clickbank"
@@ -675,132 +701,67 @@ try {
 let orbixNetworkIntervals = {};
 try {
   const {
-    runScrapeJob,
-    runProcessJob,
-    runReviewQueueJob,
-    runRenderJob,
+    runScheduledPipelineCheck,
     processOnePendingRender,
+    processOneYouTubeUpload,
     runPublishJob,
-    runAnalyticsJob
+    runScheduledAnalyticsCheck
   } = await import('./routes/v2/orbix-network-jobs.js');
   
   // Wrapper so any promise rejection from the job is never unhandled (keeps process alive)
   const runSafe = (fn, name) => () => { fn().catch((e) => console.error(`[Orbix Jobs] ${name} unhandled:`, e?.message || e)); };
 
-  // 1. Scrape News (every hour)
-  const scrapeJob = async () => {
+  // 1. Scheduled Pipeline: scrape → process → review → render at fixed times in each business's timezone.
+  // Pipeline runs 1 hour before each post: 7am, 10am, 1pm, 4pm, 7pm. Posts at 8am, 11am, 2pm, 5pm, 8pm.
+  // Uses posting_schedule.timezone from settings (NOT UTC). Check every 5 minutes.
+  const scheduledPipelineJob = async () => {
     try {
-      console.log('[Orbix Jobs] Running scrape job...');
-      await runScrapeJob();
+      const result = await runScheduledPipelineCheck();
+      if (result?.pipelines_run > 0) {
+        console.log('[Orbix Jobs] Scheduled pipeline ran for', result.pipelines_run, 'business(es)');
+      }
     } catch (error) {
-      console.error('[Orbix Jobs] Scrape job error:', error.message);
-      console.error('[Orbix Jobs] Scrape job error stack:', error.stack);
+      console.error('[Orbix Jobs] Scheduled pipeline error:', error.message);
     }
   };
-  orbixNetworkIntervals.scrape = setInterval(runSafe(scrapeJob, 'Scrape'), 60 * 60 * 1000); // Every hour
-  console.log('✅ Orbix Network scrape job scheduled (runs every hour)');
-  
-  // 2. Process Stories (every 15 minutes)
-  const processJob = async () => {
-    try {
-      console.log('[Orbix Jobs] Running process job...');
-      await runProcessJob();
-    } catch (error) {
-      console.error('[Orbix Jobs] Process job error:', error.message);
-      console.error('[Orbix Jobs] Process job error stack:', error.stack);
-      // Don't crash the server - just log the error
-    }
-  };
-  orbixNetworkIntervals.process = setInterval(runSafe(processJob, 'Process'), 15 * 60 * 1000); // Every 15 minutes
-  console.log('✅ Orbix Network process job scheduled (runs every 15 minutes)');
-  
-  // 3. Process Review Queue (every 5 minutes)
-  const reviewQueueJob = async () => {
-    try {
-      console.log('[Orbix Jobs] Running review queue job...');
-      await runReviewQueueJob();
-    } catch (error) {
-      console.error('[Orbix Jobs] Review queue job error:', error.message);
-      console.error('[Orbix Jobs] Review queue job error stack:', error.stack);
-      // Don't crash the server - just log the error
-    }
-  };
-  // Don't run immediately on startup - wait for first interval
-  // reviewQueueJob(); // Commented out to prevent startup crashes
-  orbixNetworkIntervals.reviewQueue = setInterval(reviewQueueJob, 5 * 60 * 1000); // Every 5 minutes
-  console.log('✅ Orbix Network review queue job scheduled (runs every 5 minutes)');
-  
-  // 4. Render Videos (every 10 minutes)
-  const renderJob = async () => {
-    try {
-      console.log('[Orbix Jobs] ========== RENDER JOB TRIGGERED (SCHEDULED) ==========');
-      console.log('[Orbix Jobs] Running render job at:', new Date().toISOString());
-      const result = await runRenderJob();
-      console.log('[Orbix Jobs] Render job completed:', result);
-      console.log('[Orbix Jobs] ========== RENDER JOB FINISHED ==========');
-    } catch (error) {
-      console.error('[Orbix Jobs] ========== RENDER JOB ERROR (SCHEDULED) ==========');
-      console.error('[Orbix Jobs] Render job error:', error.message);
-      console.error('[Orbix Jobs] Render job error stack:', error.stack);
-      console.error('[Orbix Jobs] Full error:', error);
-      console.error('[Orbix Jobs] ========== END RENDER JOB ERROR ==========');
-      // Don't crash the server - just log the error
-    }
-  };
-  orbixNetworkIntervals.render = setInterval(runSafe(renderJob, 'Render'), 10 * 60 * 1000); // Every 10 minutes
-  console.log('✅ Orbix Network render job scheduled (runs every 10 minutes)');
+  orbixNetworkIntervals.scheduledPipeline = setInterval(runSafe(scheduledPipelineJob, 'ScheduledPipeline'), 5 * 60 * 1000); // Every 5 minutes
+  console.log('✅ Orbix Network scheduled pipeline (7am, 10am, 1pm, 4pm, 7pm in business timezone)');
 
-  // When no separate worker is running, the web server picks up PENDING renders every 30s so local/single-service still works
+  // When no separate worker is running, the web server picks up PENDING renders every 30s and READY_FOR_UPLOAD uploads
   if (process.env.RUN_ORBIX_WORKER !== 'true') {
-    orbixNetworkIntervals.processPending = setInterval(runSafe(() => processOnePendingRender(), 'ProcessOne'), 30 * 1000);
-    console.log('✅ Orbix Network: web server will process PENDING renders every 30s (no separate worker)');
+    const uploadDelayMs = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0;
+    const processPendingWithUpload = async () => {
+      const result = await processOnePendingRender();
+      if (result.processed && result.status === 'RENDER_COMPLETE') {
+        if (uploadDelayMs > 0) {
+          console.log('[Orbix Jobs] Render READY_FOR_UPLOAD, pausing', uploadDelayMs / 1000, 's before YouTube upload...');
+          await new Promise((r) => setTimeout(r, uploadDelayMs));
+        }
+        const uploadResult = await processOneYouTubeUpload();
+        if (uploadResult.processed) {
+          console.log('[Orbix Jobs] YouTube upload', uploadResult.status, uploadResult.renderId);
+        }
+      }
+    };
+    orbixNetworkIntervals.processPending = setInterval(runSafe(processPendingWithUpload, 'ProcessOne'), 30 * 1000);
+    // Also drain READY_FOR_UPLOAD every 45s in case a render completed but the 30s follow-up didn't run (e.g. restart)
+    orbixNetworkIntervals.youtubeUpload = setInterval(runSafe(processOneYouTubeUpload, 'YouTubeUpload'), 45 * 1000);
+    console.log('✅ Orbix Network: web server will process PENDING renders every 30s and YouTube uploads every 45s (no separate worker)');
   }
 
-  // 5. Publish Videos (every 15 minutes)
-  const publishJob = async () => {
-    try {
-      console.log('[Orbix Jobs] Running publish job...');
-      await runPublishJob();
-    } catch (error) {
-      console.error('[Orbix Jobs] Publish job error:', error.message);
-      console.error('[Orbix Jobs] Publish job error stack:', error.stack);
-      // Don't crash the server - just log the error
-    }
-  };
-  // Don't run immediately on startup - wait for first interval
-  // publishJob(); // Commented out to prevent startup crashes
-  orbixNetworkIntervals.publish = setInterval(publishJob, 15 * 60 * 1000); // Every 15 minutes
-  console.log('✅ Orbix Network publish job scheduled (runs every 15 minutes)');
+  // 5. Publish Videos (every 5 minutes) — fixed post times 8am, 11am, 2pm, 5pm, 8pm in business timezone
+  orbixNetworkIntervals.publish = setInterval(runSafe(() => runPublishJob(), 'Publish'), 5 * 60 * 1000);
+  console.log('✅ Orbix Network publish job (8am, 11am, 2pm, 5pm, 8pm in business timezone)');
   
-  // 6. Fetch Analytics (daily at 2 AM)
-  const getMsUntil2AM = () => {
-    const now = new Date();
-    const next2AM = new Date();
-    next2AM.setHours(2, 0, 0, 0);
-    if (now >= next2AM) {
-      next2AM.setDate(next2AM.getDate() + 1);
-    }
-    return next2AM.getTime() - now.getTime();
-  };
-  
-  const analyticsJob = async () => {
-    try {
-      console.log('[Orbix Jobs] Running analytics job...');
-      await runAnalyticsJob();
-    } catch (error) {
-      console.error('[Orbix Jobs] Analytics job error:', error.message);
+  // 6. Fetch Analytics (daily at 2 AM in each business's timezone — NOT UTC)
+  const analyticsCheckJob = async () => {
+    const result = await runScheduledAnalyticsCheck();
+    if (result?.analytics_run > 0) {
+      console.log('[Orbix Jobs] Analytics ran for', result.analytics_run, 'business(es) at 2am local');
     }
   };
-
-  const scheduleAnalytics = () => {
-    const msUntilNext = getMsUntil2AM();
-    setTimeout(() => {
-      analyticsJob().catch((e) => console.error('[Orbix Jobs] Analytics job failed:', e?.message || e));
-      orbixNetworkIntervals.analytics = setInterval(runSafe(analyticsJob, 'Analytics'), 24 * 60 * 60 * 1000); // 24 hours
-    }, msUntilNext);
-  };
-  scheduleAnalytics();
-  console.log('✅ Orbix Network analytics job scheduled (runs daily at 2 AM)');
+  orbixNetworkIntervals.analytics = setInterval(runSafe(analyticsCheckJob, 'Analytics'), 30 * 60 * 1000); // Every 30 min to catch 2am windows
+  console.log('✅ Orbix Network analytics (daily at 2am in business timezone)');
   
 } catch (error) {
   console.warn('⚠️  Could not start Orbix Network scheduled jobs:', error.message);

@@ -398,6 +398,8 @@ export const orbixNetworkAPI = {
   completeSetup: () => api.post('/v2/orbix-network/setup/complete'),
   getStories: (params) => api.get('/v2/orbix-network/stories', { params }),
   getStory: (id, params) => api.get(`/v2/orbix-network/stories/${id}`, { params }),
+  deleteStory: (id, params, { delete_raw_item } = {}) =>
+    api.delete(`/v2/orbix-network/stories/${id}`, { params: { ...params, ...(delete_raw_item ? { delete_raw_item: 'true' } : {}) } }),
   getRenders: (params) => api.get('/v2/orbix-network/renders', { params }),
   getPipeline: (params) => api.get('/v2/orbix-network/pipeline', { params }),
   getRender: (id, params) => api.get(`/v2/orbix-network/renders/${id}`, { params }),
@@ -407,12 +409,14 @@ export const orbixNetworkAPI = {
   uploadRenderToYoutube: (id, params) => api.post(`/v2/orbix-network/renders/${id}/upload-youtube`, {}, { params }),
   getPublishes: (params) => api.get('/v2/orbix-network/publishes', { params }),
   getRawItems: (params) => api.get('/v2/orbix-network/raw-items', { params }),
+  deleteRawItem: (id, params) => api.delete(`/v2/orbix-network/raw-items/${id}`, { params }),
   getSources: (params) => api.get('/v2/orbix-network/sources', { params }),
   addSource: (data) => api.post('/v2/orbix-network/sources', data), // include channel_id in data
   updateSource: (id, data, params) => api.put(`/v2/orbix-network/sources/${id}`, data, { params }),
   deleteSource: (id, params) => api.delete(`/v2/orbix-network/sources/${id}`, { params }),
   getReviewQueue: (params) => api.get('/v2/orbix-network/review-queue', { params }),
   approveStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/approve`, {}, { params }),
+  approveAllStories: (params) => api.post('/v2/orbix-network/stories/approve-all', {}, { params }),
   rejectStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/reject`, {}, { params }),
   generateScriptForStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/generate-script`, {}, { params }),
   startRenderForStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/start-render`, {}, { params }),
@@ -427,6 +431,11 @@ export const orbixNetworkAPI = {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 60000
   }),
+  getMusic: (params) => api.get('/v2/orbix-network/music', { params }),
+  uploadMusic: (formData) => api.post('/v2/orbix-network/music', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000
+  }),
   triggerScrapeJob: (body) => api.post('/v2/orbix-network/jobs/scrape', body ?? {}, { timeout: 120000 }),
   cleanupOldData: (olderThanDays = 10, params) => api.post('/v2/orbix-network/cleanup', { older_than_days: olderThanDays }, { params }),
   triggerProcessJob: () => api.post('/v2/orbix-network/jobs/process'),
@@ -437,6 +446,28 @@ export const orbixNetworkAPI = {
   forceProcessRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/force-process`, {}, { params }),
   forceScoreRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/force-score`, {}, { params }),
   allowStoryRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/allow-story`, {}, { params }),
+  allowAllRawItems: (params) => api.post('/v2/orbix-network/raw-items/allow-all', {}, { params }),
+};
+
+// Emergency Network API (v2). Requires X-Active-Business-Id for admin routes.
+function emergencyNetworkHeaders() {
+  if (typeof window === 'undefined') return {};
+  const id = localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
+  return id ? { 'X-Active-Business-Id': id } : {};
+}
+export const emergencyNetworkAPI = {
+  getConfig: () => api.get('/v2/emergency-network/config', { headers: emergencyNetworkHeaders() }),
+  getPhoneNumbers: () => api.get('/v2/emergency-network/phone-numbers', { headers: emergencyNetworkHeaders() }),
+  createAgent: () => api.post('/v2/emergency-network/create-agent', {}, { headers: emergencyNetworkHeaders() }),
+  updateConfig: (data) => api.put('/v2/emergency-network/config', data, { headers: emergencyNetworkHeaders() }),
+  getRequests: () => api.get('/v2/emergency-network/requests', { headers: emergencyNetworkHeaders() }),
+  updateRequest: (id, data) => api.patch(`/v2/emergency-network/requests/${id}`, data, { headers: emergencyNetworkHeaders() }),
+  getProviders: () => api.get('/v2/emergency-network/providers', { headers: emergencyNetworkHeaders() }),
+  createProvider: (data) => api.post('/v2/emergency-network/providers', data, { headers: emergencyNetworkHeaders() }),
+  updateProvider: (id, data) => api.patch(`/v2/emergency-network/providers/${id}`, data, { headers: emergencyNetworkHeaders() }),
+  deleteProvider: (id) => api.delete(`/v2/emergency-network/providers/${id}`, { headers: emergencyNetworkHeaders() }),
+  getDispatchLog: (requestId) => api.get('/v2/emergency-network/dispatch-log', { params: requestId ? { request_id: requestId } : {}, headers: emergencyNetworkHeaders() }),
+  getAnalytics: () => api.get('/v2/emergency-network/analytics', { headers: emergencyNetworkHeaders() }),
 };
 
 // Contacts API

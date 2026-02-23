@@ -7,12 +7,15 @@ on:
       - master
     paths:
       - 'server.js'
+      - 'start.js'
       - 'routes/**'
       - 'services/**'
       - 'models/**'
       - 'middleware/**'
       - 'config/**'
+      - 'utils/**'
       - 'package.json'
+      - 'railway.json'
       - '.github/workflows/deploy-backend.yml'
   workflow_dispatch:
 
@@ -28,7 +31,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
           cache: 'npm'
 
       - name: Install dependencies

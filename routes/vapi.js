@@ -569,16 +569,49 @@ router.get("/webhook/diagnostic", async (req, res) => {
  * Must respond within ~7.5s or the call fails ("could not be reached").
  */
 async function handleAssistantRequest(body, res) {
-  const phoneNumber =
+  // Number that was CALLED (destination) — may be under different keys depending on VAPI payload
+  const destinationNumber =
     body?.message?.phoneNumber ||
     body?.message?.destinationNumber ||
+    body?.message?.destination ||
     body?.message?.call?.phoneNumber ||
+    body?.message?.call?.destinationNumber ||
     body?.call?.phoneNumber ||
-    body?.phoneNumber;
+    body?.call?.destinationNumber ||
+    body?.phoneNumber ||
+    body?.destinationNumber ||
+    body?.destination;
+  const phoneNumber = destinationNumber; // alias for rest of handler
   const existingAssistantId =
     body?.message?.assistant?.id || body?.call?.assistant?.id || body?.assistantId;
 
-  console.log("[VAPI Webhook] assistant-request: phoneNumber=%s existingAssistantId=%s", phoneNumber || "none", existingAssistantId || "none");
+  console.log("[VAPI Webhook] assistant-request: destinationNumber=%s existingAssistantId=%s", destinationNumber || "none", existingAssistantId || "none");
+  if (!destinationNumber && (body?.message || body?.call)) {
+    console.log("[VAPI Webhook] assistant-request: body.message keys=%s body.call keys=%s", Object.keys(body?.message || {}).join(","), Object.keys(body?.call || {}).join(","));
+  }
+
+  // EMERGENCY NETWORK: separate stream — dedicated number(s) route to Emergency assistant only; existing agent untouched
+  if (phoneNumber) {
+    const { isEmergencyNumber, getEmergencyAssistantId, getEmergencyConfig } = await import("../services/emergency-network/config.js");
+    const emergencyId = await getEmergencyAssistantId();
+    const config = await getEmergencyConfig();
+    const isEmergency = await isEmergencyNumber(phoneNumber);
+    console.log("[VAPI Webhook] assistant-request: emergency check number=%s isEmergency=%s emergencyId=%s configNumbers=%j", phoneNumber, isEmergency, emergencyId || "none", (config?.emergency_phone_numbers || []).slice(0, 5));
+    if (isEmergency && emergencyId) {
+      const vapiClient = getVapiClient();
+      try {
+        const assistantResponse = await vapiClient.get(`/assistant/${emergencyId}`);
+        const assistant = assistantResponse.data;
+        if (assistant) {
+          console.log("[VAPI Webhook] assistant-request: emergency number -> returning Emergency Network assistant", emergencyId);
+          res.status(200).json({ assistant });
+          return { sent: true };
+        }
+      } catch (err) {
+        console.warn("[VAPI Webhook] assistant-request: emergency assistant fetch failed", err?.message || err);
+      }
+    }
+  }
 
   let assistantId = existingAssistantId;
   if (!assistantId && phoneNumber) {

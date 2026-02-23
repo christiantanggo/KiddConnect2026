@@ -8,7 +8,7 @@
     "node": "20"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node start.js",
     "dev": "node --watch server.js",
     "dev:clean": "powershell -ExecutionPolicy Bypass -File ./start-dev.ps1",
     "kill-port": "powershell -ExecutionPolicy Bypass -File ./kill-port.ps1",
@@ -19,6 +19,7 @@
     "migrate:legacy-users": "node scripts/migrate-legacy-users.js",
     "check:migration-status": "node scripts/check-user-migration-status.js",
     "test:vapi": "node scripts/test-vapi-connection.js",
+    "test:hook": "node scripts/test-orbix-hook-rewriter.js",
     "test:phone": "node scripts/test-phone-provisioning.js",
     "test:key": "node scripts/test-vapi-key-direct.js",
     "test:phone-direct": "node scripts/test-vapi-phone-direct.js",
@@ -53,7 +54,8 @@
     "fix:minutes": "node scripts/fix-business-minutes.js",
     "backfill:invoices": "node scripts/backfill-invoices.js",
     "auto-commit": "node -e \"require('child_process').execSync('git add -A && git commit -m \\\"Auto-commit: Update files\\\" && git push origin main', {stdio: 'inherit'})\"",
-    "deploy": "npm run auto-commit"
+    "deploy": "npm run auto-commit",
+    "worker:orbix": "node scripts/orbix-render-worker.js"
   },
   "keywords": [
     "ai",
