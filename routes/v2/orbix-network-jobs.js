@@ -4,6 +4,8 @@
  */
 
 import express from 'express';
+import { toZonedTime, fromZonedTime } from 'date-fns-tz';
+import { startOfDay } from 'date-fns';
 import { authenticate } from '../../middleware/auth.js';
 import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
 import { supabaseClient } from '../../config/database.js';
@@ -107,22 +109,24 @@ router.post('/scrape', async (req, res) => {
 
     let result;
     if (businessId && channelId) {
-      result = await scrapeAllSources(businessId, channelId);
+      const raw = await scrapeAllSources(businessId, channelId);
       result = {
-        total_scraped: result.scraped ?? 0,
-        total_saved: result.saved ?? 0,
-        duplicates_skipped: (result.scraped ?? 0) - (result.saved ?? 0),
-        source_results: result.source_results ?? []
+        total_scraped: raw.scraped ?? 0,
+        total_saved: raw.saved ?? 0,
+        duplicates_skipped: raw.duplicates_skipped ?? (raw.scraped ?? 0) - (raw.saved ?? 0),
+        source_results: raw.source_results ?? [],
+        sources_processed: raw.sources_processed ?? 0
       };
     } else {
       result = await runScrapeJob();
     }
 
+    const enabledSources = (result.source_results?.length ?? 0) || (result.sources_processed ?? 0);
     const results = [{
       scraped: result.total_scraped ?? 0,
       saved: result.total_saved ?? 0,
       duplicates_skipped: result.duplicates_skipped ?? 0,
-      enabled_sources: result.source_results?.length ?? 0,
+      enabled_sources: enabledSources,
       error: result.error ?? null
     }];
     res.json({
@@ -370,18 +374,14 @@ export async function runRenderJob() {
     
     const businessIds = subscriptions.map(s => s.business_id);
     let totalRendersCreated = 0;
-    let totalRendersProcessed = 0;
-    
+
     for (const businessId of businessIds) {
       try {
-        // Get module settings to check daily video cap
+        // Get module settings to check daily video cap (use posting timezone so "today" matches user's day)
         const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
         const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap || 5;
-        
-        // Check how many renders were completed today (since midnight UTC)
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const todayISO = today.toISOString();
+        const postingTz = moduleSettings?.settings?.posting_schedule?.timezone ?? 'America/New_York';
+        const todayISO = getStartOfTodayISOInZone(postingTz);
         
         const { data: todayRenders, error: rendersCountError } = await supabaseClient
           .from('orbix_renders')
@@ -491,138 +491,20 @@ export async function runRenderJob() {
           console.log(`[Orbix Jobs] Reset ${stuckReset.length} stuck PROCESSING render(s) to PENDING for business ${businessId}`);
         }
 
-        // Process pending renders (limited for now - rendering is resource-intensive)
-        console.log(`[Orbix Jobs] Checking for pending renders for business ${businessId}...`);
-        const { data: pendingRenders, error: rendersError } = await supabaseClient
-          .from('orbix_renders')
-          .select('*, orbix_stories(*), orbix_scripts(*)')
-          .eq('business_id', businessId)
-          .eq('render_status', 'PENDING')
-          .limit(1); // Process 1 at a time (rendering is resource-intensive)
-        
-        if (rendersError) {
-          console.error(`[Orbix Jobs] Error fetching pending renders for business ${businessId}:`, rendersError);
-          throw rendersError;
-        }
-        
-        console.log(`[Orbix Jobs] Found ${pendingRenders?.length || 0} pending renders for business ${businessId}`);
-        if (pendingRenders && pendingRenders.length > 0) {
-          console.log(`[Orbix Jobs] Pending render IDs:`, pendingRenders.map(r => r.id));
-        }
-        
-        if (pendingRenders && pendingRenders.length > 0) {
-          for (const render of pendingRenders) {
-            console.log(`[Orbix Jobs] ========== PROCESSING RENDER ${render.id} ==========`);
-            console.log(`[Orbix Jobs] Render details:`, {
-              id: render.id,
-              story_id: render.story_id,
-              script_id: render.script_id,
-              business_id: render.business_id,
-              current_status: render.render_status,
-              created_at: render.created_at,
-              updated_at: render.updated_at
-            });
-            
-            try {
-              // Update status to PROCESSING
-              console.log(`[Orbix Jobs] Updating render ${render.id} to PROCESSING...`);
-              const { error: updateError } = await supabaseClient
-                .from('orbix_renders')
-                .update({ 
-                  render_status: 'PROCESSING',
-                  updated_at: new Date().toISOString()
-                })
-                .eq('id', render.id);
-              
-              if (updateError) {
-                throw new Error(`Failed to update render status: ${updateError.message}`);
-              }
-              
-              console.log(`[Orbix Jobs] Render ${render.id} status updated to PROCESSING`);
-              console.log(`[Orbix Jobs] Calling processRenderJob for render ${render.id}...`);
-              const startTime = Date.now();
-              
-              // Process the render with timeout (30 minutes max)
-              const processPromise = processRenderJob(render);
-              const timeoutPromise = new Promise((_, reject) => 
-                setTimeout(() => reject(new Error('Render timeout after 30 minutes')), 30 * 60 * 1000)
-              );
-              
-              const result = await Promise.race([processPromise, timeoutPromise]);
-              const duration = Date.now() - startTime;
-              
-              console.log(`[Orbix Jobs] processRenderJob completed for render ${render.id} in ${duration}ms`);
-              console.log(`[Orbix Jobs] Result:`, {
-                status: result?.status,
-                outputUrl: result?.outputUrl ? 'present' : 'missing',
-                error: result?.error || null
-              });
-              
-              if (result.status === 'COMPLETED') {
-                const updatePayload = {
-                  render_status: 'COMPLETED',
-                  completed_at: new Date().toISOString(),
-                  updated_at: new Date().toISOString()
-                };
-                if (result.outputUrl) updatePayload.output_url = result.outputUrl;
-                console.log(`[Orbix Jobs] Updating render ${render.id} to COMPLETED...`);
-                await supabaseClient
-                  .from('orbix_renders')
-                  .update(updatePayload)
-                  .eq('id', render.id);
-                
-                totalRendersProcessed++;
-                console.log(`[Orbix Jobs] ✅ Render ${render.id} completed successfully`);
-              } else {
-                // Mark as FAILED
-                console.log(`[Orbix Jobs] Updating render ${render.id} to FAILED (result status: ${result?.status})`);
-                await supabaseClient
-                  .from('orbix_renders')
-                  .update({
-                    render_status: 'FAILED',
-                    error_message: result?.error || 'Unknown error during rendering',
-                    updated_at: new Date().toISOString()
-                  })
-                  .eq('id', render.id);
-                
-                console.error(`[Orbix Jobs] ❌ Render ${render.id} failed:`, result?.error || 'No error message');
-              }
-            } catch (renderError) {
-              console.error(`[Orbix Jobs] ❌ ERROR processing render ${render.id}:`, renderError);
-              console.error(`[Orbix Jobs] Error message:`, renderError.message);
-              console.error(`[Orbix Jobs] Error stack:`, renderError.stack);
-              
-              // Mark as FAILED
-              await supabaseClient
-                .from('orbix_renders')
-                .update({
-                  render_status: 'FAILED',
-                  error_message: renderError.message || 'Unknown error',
-                  updated_at: new Date().toISOString()
-                })
-                .eq('id', render.id);
-              
-              console.error(`[Orbix Jobs] Render ${render.id} marked as FAILED`);
-            }
-            
-            console.log(`[Orbix Jobs] ========== FINISHED PROCESSING RENDER ${render.id} ==========`);
-          }
-        }
-        
+        // Actual rendering is done by the dedicated worker (scripts/orbix-render-worker.js).
+        // Web server only creates PENDING jobs and resets stuck PROCESSING so worker can retry.
       } catch (error) {
         console.error(`[Orbix Jobs] Error processing renders for business ${businessId}:`, error.message);
         // Continue with next business
       }
     }
     
-    console.log('[Orbix Jobs] ========== RENDER JOB COMPLETE ==========');
+    console.log('[Orbix Jobs] ========== RENDER JOB (CREATE+RESET) COMPLETE ==========');
     console.log('[Orbix Jobs] Renders created:', totalRendersCreated);
-    console.log('[Orbix Jobs] Renders processed:', totalRendersProcessed);
-    
+
     return {
       success: true,
-      renders_created: totalRendersCreated,
-      renders_processed: totalRendersProcessed
+      renders_created: totalRendersCreated
     };
   } catch (error) {
     console.error('[Orbix Jobs] Render job error:', error);
@@ -631,8 +513,150 @@ export async function runRenderJob() {
 }
 
 /**
+ * Run the full pipeline on an already-claimed render (status PROCESSING). Shared by processOnePendingRender and processRenderById.
+ */
+async function runPipelineOnClaimedRender(render) {
+  try {
+    const { writeProgressLog, setCurrentRender } = await import('../../utils/crash-and-progress-log.js');
+    writeProgressLog('PIPELINE_CLAIMED', { renderId: render.id, story_id: render.story_id });
+    setCurrentRender(render.id, 'PIPELINE_START');
+  } catch (_) { /* progress log non-fatal */ }
+
+  try {
+    const processPromise = processRenderJob(render);
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('Render timeout after 30 minutes')), 30 * 60 * 1000)
+    );
+    const result = await Promise.race([processPromise, timeoutPromise]);
+
+    if (result.status === 'COMPLETED') {
+      await supabaseClient
+        .from('orbix_renders')
+        .update({
+          render_status: 'COMPLETED',
+          completed_at: new Date().toISOString(),
+          output_url: result.outputUrl ?? undefined,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', render.id);
+      console.log(`[Orbix Process] Pipeline COMPLETED render id=${render.id} output_url=${result.outputUrl ? 'set' : 'n/a'}`);
+      return { processed: true, renderId: render.id, status: 'COMPLETED' };
+    }
+
+    if (result.status === 'RENDER_COMPLETE') {
+      console.log(`[Orbix Process] Render READY_FOR_UPLOAD id=${render.id} (YouTube upload in separate job)`);
+      return { processed: true, renderId: render.id, status: 'RENDER_COMPLETE' };
+    }
+
+    await supabaseClient
+      .from('orbix_renders')
+      .update({
+        render_status: 'FAILED',
+        error_message: result?.error || 'Unknown error',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', render.id);
+    console.error(`[Orbix Process] Pipeline FAILED render id=${render.id} error="${result?.error || 'Unknown'}"`);
+    return { processed: true, renderId: render.id, status: 'FAILED' };
+  } catch (err) {
+    try {
+      const { writeProgressLog, setCurrentRender } = await import('../../utils/crash-and-progress-log.js');
+      writeProgressLog('PIPELINE_THREW', { renderId: render.id, error: err?.message, stack: err?.stack?.split('\n').slice(0, 8) });
+      setCurrentRender(render.id, `THREW_${(err?.message || '').slice(0, 40)}`);
+    } catch (_) { /* non-fatal */ }
+    console.error(`[Orbix Process] Pipeline threw render id=${render.id} error="${err.message}" stack=${err.stack?.split('\n')[1]?.trim() || 'n/a'}`);
+    await supabaseClient
+      .from('orbix_renders')
+      .update({
+        render_status: 'FAILED',
+        error_message: err.message || 'Unknown error',
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', render.id);
+    return { processed: true, renderId: render.id, status: 'FAILED' };
+  }
+}
+
+/**
+ * Process one PENDING render. Safe to call from both the dedicated worker and the web server
+ * (when no worker is running). Uses atomic claim: only the first caller to set PENDING→PROCESSING wins.
+ */
+export async function processOnePendingRender() {
+  const { data: pending } = await supabaseClient
+    .from('orbix_renders')
+    .select('*')
+    .eq('render_status', 'PENDING')
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!pending) {
+    return { processed: false };
+  }
+
+  const render = pending;
+  console.log(`[Orbix Process] Found PENDING render id=${render.id} story_id=${render.story_id || 'n/a'} created_at=${render.created_at}`);
+
+  const { data: claimed, error: updateError } = await supabaseClient
+    .from('orbix_renders')
+    .update({ render_status: 'PROCESSING', updated_at: new Date().toISOString() })
+    .eq('id', render.id)
+    .eq('render_status', 'PENDING')
+    .select()
+    .maybeSingle();
+
+  if (updateError || !claimed) {
+    if (!claimed) {
+      console.log(`[Orbix Process] Could not claim render id=${render.id} (already claimed by another process)`);
+      return { processed: false };
+    }
+    console.error(`[Orbix Process] Failed to set PROCESSING for render id=${render.id}:`, updateError?.message);
+    return { processed: false };
+  }
+
+  console.log(`[Orbix Process] Claimed render id=${render.id} — starting pipeline (story ${render.story_id})`);
+  return runPipelineOnClaimedRender(claimed);
+}
+
+/**
+ * Process a specific render by ID immediately. Used when Restart Render or Force Render is clicked
+ * so the flow runs right away instead of waiting for the scheduled poll.
+ * @param {string} renderId - UUID of the render to process
+ * @returns {{ processed: boolean, renderId?: string, status?: string, error?: string }}
+ */
+export async function processRenderById(renderId) {
+  const { data: render, error: fetchError } = await supabaseClient
+    .from('orbix_renders')
+    .select('*')
+    .eq('id', renderId)
+    .single();
+
+  if (fetchError || !render) {
+    return { processed: false, error: 'Render not found' };
+  }
+  if (render.render_status !== 'PENDING') {
+    return { processed: false, error: `Render is ${render.render_status}, not PENDING` };
+  }
+
+  const { data: claimed, error: updateError } = await supabaseClient
+    .from('orbix_renders')
+    .update({ render_status: 'PROCESSING', updated_at: new Date().toISOString() })
+    .eq('id', renderId)
+    .eq('render_status', 'PENDING')
+    .select()
+    .maybeSingle();
+
+  if (updateError || !claimed) {
+    return { processed: false, error: 'Could not claim render (already claimed or state changed)' };
+  }
+
+  console.log(`[Orbix Process] Processing render id=${renderId} immediately (restart/force-render)`);
+  return runPipelineOnClaimedRender(claimed);
+}
+
+/**
  * POST /api/v2/orbix-network/jobs/render
- * Process render queue: render approved stories into videos
+ * Process render queue: render approved stories into videos (stops before YouTube upload; video saved to storage as READY_FOR_UPLOAD).
  */
 router.post('/render', async (req, res) => {
   try {
@@ -643,6 +667,221 @@ router.post('/render', async (req, res) => {
     res.status(500).json({ error: 'Render job failed', message: error.message });
   }
 });
+
+const YOUTUBE_UPLOAD_MAX_ATTEMPTS = 3;
+const YOUTUBE_UPLOAD_RETRY_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_RETRY_DELAY_MS) || 5_000;
+
+/**
+ * Process one READY_FOR_UPLOAD render: upload video (from output_url storage) to YouTube.
+ * Safe to retry on failure without re-rendering. Retries up to 3 times with delay between attempts.
+ * Uses atomic claim (READY_FOR_UPLOAD → PROCESSING + STEP_8) so only one process runs upload per render.
+ */
+export async function processOneYouTubeUpload() {
+  const { data: ready } = await supabaseClient
+    .from('orbix_renders')
+    .select('*')
+    .eq('render_status', 'READY_FOR_UPLOAD')
+    .not('output_url', 'is', null)
+    .order('updated_at', { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  if (!ready) {
+    return { processed: false };
+  }
+
+  const render = ready;
+  const videoUrl = render.output_url;
+
+  // Atomic claim: only we run upload; others will skip this render
+  const { data: claimed, error: claimError } = await supabaseClient
+    .from('orbix_renders')
+    .update({
+      render_status: 'PROCESSING',
+      render_step: 'STEP_8_YOUTUBE_UPLOAD',
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', render.id)
+    .eq('render_status', 'READY_FOR_UPLOAD')
+    .select()
+    .maybeSingle();
+
+  if (claimError || !claimed) {
+    if (!claimed) {
+      console.log(`[Orbix YouTube] Render id=${render.id} already claimed by another process, skipping`);
+    }
+    return { processed: false };
+  }
+
+  const claimedRender = claimed;
+  console.log(`[Orbix YouTube] Claimed READY_FOR_UPLOAD render id=${claimedRender.id} videoUrl=${videoUrl ? 'set' : 'MISSING'} (max ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts)`);
+
+  const { step8YouTubeUpload } = await import('../../services/orbix-network/render-steps.js');
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= YOUTUBE_UPLOAD_MAX_ATTEMPTS; attempt++) {
+    try {
+      const step8Result = await step8YouTubeUpload(claimedRender.id, claimedRender, videoUrl);
+      if (step8Result?.skipped) {
+        console.log(`[Orbix YouTube] Upload skipped for render id=${claimedRender.id}`);
+        return { processed: true, renderId: claimedRender.id, status: 'SKIPPED' };
+      }
+      const youtubeUrl = step8Result?.url ?? null;
+      if (!youtubeUrl) {
+        throw new Error('Step 8 returned no URL');
+      }
+      await supabaseClient
+        .from('orbix_renders')
+        .update({
+          render_status: 'COMPLETED',
+          render_step: 'COMPLETED',
+          step_progress: 100,
+          step_completed_at: new Date().toISOString(),
+          step_error: null,
+          output_url: youtubeUrl,
+          completed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', claimedRender.id);
+      console.log(`[Orbix YouTube] Upload COMPLETED render id=${claimedRender.id} url=${youtubeUrl} (attempt ${attempt})`);
+      return { processed: true, renderId: claimedRender.id, status: 'COMPLETED', url: youtubeUrl };
+    } catch (err) {
+      lastError = err;
+      console.error(`[Orbix YouTube] Upload attempt ${attempt}/${YOUTUBE_UPLOAD_MAX_ATTEMPTS} FAILED render id=${claimedRender.id} error="${err.message}" code=${err?.code || 'n/a'}`);
+      if (attempt < YOUTUBE_UPLOAD_MAX_ATTEMPTS) {
+        console.log(`[Orbix YouTube] Retrying in ${YOUTUBE_UPLOAD_RETRY_DELAY_MS / 1000}s...`);
+        await new Promise((r) => setTimeout(r, YOUTUBE_UPLOAD_RETRY_DELAY_MS));
+      }
+    }
+  }
+
+  const errorMessage = lastError?.message || 'Unknown error';
+  const fullMessage = `Failed after ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts: ${errorMessage}`;
+  console.error(`[Orbix YouTube] Upload FAILED after ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts render id=${claimedRender.id} lastError="${errorMessage}"`);
+  // Set back to READY_FOR_UPLOAD so next interval can retry (and step_error for UI)
+  await supabaseClient
+    .from('orbix_renders')
+    .update({
+      render_status: 'READY_FOR_UPLOAD',
+      render_step: 'STEP_7_METADATA',
+      step_error: fullMessage,
+      updated_at: new Date().toISOString()
+    })
+    .eq('id', claimedRender.id);
+  return { processed: true, renderId: claimedRender.id, status: 'FAILED', error: fullMessage };
+}
+
+/**
+ * Run YouTube upload job: process READY_FOR_UPLOAD queue (one per call, or loop until empty).
+ * Call after render job with optional 30s delay to avoid upload hangs.
+ */
+export async function runYouTubeUploadJob() {
+  let processed = 0;
+  let last = null;
+  while (true) {
+    const result = await processOneYouTubeUpload();
+    if (!result.processed) break;
+    processed++;
+    last = result;
+  }
+  return {
+    success: true,
+    processed,
+    last: last ?? null
+  };
+}
+
+const YOUTUBE_UPLOAD_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0; // 0 = start upload immediately after render
+
+/**
+ * Process one PENDING render; if it completes as READY_FOR_UPLOAD, wait 30s then run one YouTube upload.
+ * Used so a single manual "Force Render" runs the full pipeline (render → 30s → upload) without another process.
+ */
+export async function runOneRenderThenUpload() {
+  const result = await processOnePendingRender();
+  if (result.processed && result.status === 'RENDER_COMPLETE') {
+    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
+      console.log('[Orbix Jobs] runOneRenderThenUpload: render complete, pausing', YOUTUBE_UPLOAD_DELAY_MS / 1000, 's before upload...');
+      await new Promise((r) => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
+    }
+    const uploadResult = await processOneYouTubeUpload();
+    if (uploadResult.processed) {
+      console.log('[Orbix Jobs] runOneRenderThenUpload: upload', uploadResult.status, uploadResult.renderId);
+    }
+    return { render: result, upload: uploadResult };
+  }
+  return { render: result, upload: null };
+}
+
+/**
+ * Process a specific render by ID, then run YouTube upload if it completes as READY_FOR_UPLOAD.
+ * Used by Force Render so the full flow runs immediately.
+ */
+export async function runRenderByIdThenUpload(renderId) {
+  const result = await processRenderById(renderId);
+  if (result.processed && result.status === 'RENDER_COMPLETE') {
+    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
+      console.log('[Orbix Jobs] runRenderByIdThenUpload: render complete, pausing', YOUTUBE_UPLOAD_DELAY_MS / 1000, 's before upload...');
+      await new Promise((r) => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
+    }
+    const uploadResult = await processOneYouTubeUpload();
+    if (uploadResult.processed) {
+      console.log('[Orbix Jobs] runRenderByIdThenUpload: upload', uploadResult.status, uploadResult.renderId);
+    }
+    return { render: result, upload: uploadResult };
+  }
+  return { render: result, upload: null };
+}
+
+/**
+ * POST /api/v2/orbix-network/jobs/youtube-upload
+ * Process READY_FOR_UPLOAD queue: upload stored videos to YouTube (run after /render, e.g. after 30s delay).
+ */
+router.post('/youtube-upload', async (req, res) => {
+  try {
+    const result = await runYouTubeUploadJob();
+    res.json(result);
+  } catch (error) {
+    console.error('[Orbix Jobs] YouTube upload job error:', error);
+    res.status(500).json({ error: 'YouTube upload job failed', message: error.message });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/jobs/pipeline
+ * Run render job (steps 3–7, stop before YouTube), wait 30s, then run YouTube upload job.
+ * Single endpoint for cron; avoids upload hanging the render process.
+ */
+router.post('/pipeline', async (req, res) => {
+  try {
+    const renderResult = await runRenderJob();
+    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
+      console.log('[Orbix Jobs] Pipeline: render phase done, pausing', YOUTUBE_UPLOAD_DELAY_MS / 1000, 's before YouTube upload...');
+      await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
+    }
+    const uploadResult = await runYouTubeUploadJob();
+    res.json({
+      success: true,
+      render: renderResult,
+      upload: uploadResult
+    });
+  } catch (error) {
+    console.error('[Orbix Jobs] Pipeline error:', error);
+    res.status(500).json({ error: 'Pipeline failed', message: error.message });
+  }
+});
+
+/**
+ * Start of today (midnight) in the given timezone, as ISO string for DB comparison.
+ * Used so "today" for daily caps matches the user's calendar day, not UTC.
+ */
+function getStartOfTodayISOInZone(timezone = 'America/New_York') {
+  const now = new Date();
+  const localDate = toZonedTime(now, timezone);
+  const startOfLocalDay = startOfDay(localDate);
+  const startUtc = fromZonedTime(startOfLocalDay, timezone);
+  return startUtc.toISOString();
+}
 
 /**
  * Get current time in a timezone as minutes since midnight (00:00 in that zone).
@@ -665,6 +904,88 @@ function getMinutesSinceMidnightInZone(timezone = 'America/New_York') {
 function parseTimeToMinutes(timeStr) {
   const [h, m] = (timeStr || '07:00').split(':').map(Number);
   return (h || 7) * 60 + (m || 0);
+}
+
+/** Default fixed post times (5/day): 8am, 11am, 2pm, 5pm, 8pm. Times in minutes since midnight. */
+const DEFAULT_POST_SLOT_MINUTES = [8 * 60, 11 * 60, 14 * 60, 17 * 60, 20 * 60]; // 480, 660, 840, 1020, 1200
+
+/** Default pipeline run times (1 hour before each post): 7am, 10am, 1pm, 4pm, 7pm. */
+const DEFAULT_PIPELINE_RUN_MINUTES = [7 * 60, 10 * 60, 13 * 60, 16 * 60, 19 * 60]; // 420, 600, 780, 960, 1140
+
+/** Get post slot times in minutes. Uses posting_schedule.slot_times if set, else default for daily cap 5. */
+function getPostSlotMinutes(posting, dailyVideoCap) {
+  const slotTimes = posting?.slot_times;
+  if (Array.isArray(slotTimes) && slotTimes.length > 0) {
+    return slotTimes.map(t => parseTimeToMinutes(typeof t === 'string' ? t : String(t)));
+  }
+  if (dailyVideoCap === 5) return DEFAULT_POST_SLOT_MINUTES;
+  return null; // fallback to spread-evenly
+}
+
+/** Get pipeline run times in minutes (1 hour before each post slot). */
+function getPipelineRunMinutes(posting, dailyVideoCap) {
+  const postMinutes = getPostSlotMinutes(posting, dailyVideoCap);
+  if (postMinutes && postMinutes.length > 0) {
+    return postMinutes.map(m => Math.max(0, m - 60)); // 1 hour earlier
+  }
+  if (dailyVideoCap === 5) return DEFAULT_PIPELINE_RUN_MINUTES;
+  return null;
+}
+
+/** Check if current time (minutes since midnight in TZ) is within WINDOW_MINS of any of the target minutes. */
+function isWithinRunWindow(currentMinutes, targetMinutesArray, windowMins = 5) {
+  if (!targetMinutesArray || targetMinutesArray.length === 0) return false;
+  for (const target of targetMinutesArray) {
+    if (Math.abs(currentMinutes - target) <= windowMins) return true;
+  }
+  return false;
+}
+
+/**
+ * Scheduled pipeline check: runs full pipeline (scrape→process→render) at fixed times in each business's timezone.
+ * Pipeline run times: 7:00, 10:00, 13:00, 16:00, 19:00 (1 hour before posts at 8, 11, 14, 17, 20).
+ * Uses posting_schedule.timezone from settings — NOT UTC.
+ */
+export async function runScheduledPipelineCheck() {
+  try {
+    const { data: subscriptions, error: subError } = await supabaseClient
+      .from('subscriptions')
+      .select('business_id')
+      .eq('module_key', 'orbix-network')
+      .eq('status', 'active');
+    if (subError) throw subError;
+    if (!subscriptions || subscriptions.length === 0) return { success: true, pipelines_run: 0 };
+
+    const businessIds = subscriptions.map(s => s.business_id);
+    let pipelinesRun = 0;
+
+    for (const businessId of businessIds) {
+      try {
+        const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+        const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
+        const posting = moduleSettings?.settings?.posting_schedule || {};
+        const timezone = posting.timezone ?? 'America/New_York';
+        const pipelineRunMinutes = getPipelineRunMinutes(posting, dailyVideoCap);
+        if (!pipelineRunMinutes || pipelineRunMinutes.length === 0) continue;
+
+        const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+        if (!isWithinRunWindow(currentMinutes, pipelineRunMinutes, 5)) continue;
+
+        console.log(`[Orbix Jobs] Scheduled pipeline run for business ${businessId} at ${timezone} (current ${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')})`);
+        // Process review queue so items past auto-approve time become APPROVED before pipeline selects stories
+        await runReviewQueueJob();
+        await runAutomatedPipeline(businessId);
+        pipelinesRun++;
+      } catch (error) {
+        console.error(`[Orbix Jobs] Scheduled pipeline error for business ${businessId}:`, error.message);
+      }
+    }
+
+    return { success: true, pipelines_run: pipelinesRun };
+  } catch (error) {
+    console.error('[Orbix Jobs] runScheduledPipelineCheck error:', error);
+    throw error;
+  }
 }
 
 /**
@@ -701,9 +1022,8 @@ export async function runPublishJob() {
         const startMinutes = parseTimeToMinutes(startStr);
         const endMinutes = parseTimeToMinutes(endStr);
 
-        const today = new Date();
-        today.setUTCHours(0, 0, 0, 0);
-        const todayISO = today.toISOString();
+        // "Today" in the posting timezone so daily cap matches user's calendar day
+        const todayISO = getStartOfTodayISOInZone(timezone);
         const { data: todayPublishes, error: publishesCountError } = await supabaseClient
           .from('orbix_publishes')
           .select('id')
@@ -716,24 +1036,32 @@ export async function runPublishJob() {
         }
         const publishesToday = todayPublishes?.length ?? 0;
         const publishSlotsLeft = Math.max(0, dailyVideoCap - publishesToday);
+        const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+        const slotMinutes = getPostSlotMinutes(posting, dailyVideoCap);
+        const nextSlotMinutes = slotMinutes && publishesToday < slotMinutes.length
+          ? slotMinutes[publishesToday]
+          : (dailyVideoCap <= 1
+            ? startMinutes
+            : startMinutes + ((endMinutes - startMinutes) * publishesToday / Math.max(1, dailyVideoCap - 1)));
+        const currentTimeStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
+        const nextSlotStr = `${Math.floor(nextSlotMinutes / 60)}:${String(Math.round(nextSlotMinutes) % 60).padStart(2, '0')}`;
+        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${publishesToday}/${dailyVideoCap} nextSlot=${nextSlotStr}`);
+
         if (publishSlotsLeft <= 0) {
-          console.log(`[Orbix Jobs] Business ${businessId} has reached daily publish cap (${publishesToday}/${dailyVideoCap}), skipping publish`);
+          console.log(`[Orbix Publish] Business ${businessId}: skip - daily cap reached (${publishesToday}/${dailyVideoCap})`);
           continue;
         }
 
         // Only publish during posting window (e.g. 7am–8pm), not overnight
-        const currentMinutes = getMinutesSinceMidnightInZone(timezone);
         if (currentMinutes < startMinutes || currentMinutes > endMinutes) {
-          continue; // Outside window, skip silently (job runs every 15 min)
+          console.log(`[Orbix Publish] Business ${businessId}: skip - outside window (now ${currentTimeStr}, window ${startStr}-${endStr})`);
+          continue;
         }
 
-        // Next slot: first at start, last at end, rest spread evenly. Only publish when current time >= next slot.
-        const windowMinutes = endMinutes - startMinutes;
-        const nextSlotMinutes = dailyVideoCap <= 1
-          ? startMinutes
-          : startMinutes + (windowMinutes * publishesToday / (dailyVideoCap - 1));
+        // Next slot: fixed times (8,11,14,17,20) when slot_times/daily cap 5, else spread evenly. Uses timezone from settings.
         if (currentMinutes < nextSlotMinutes) {
-          continue; // Not time for the next post yet
+          console.log(`[Orbix Publish] Business ${businessId}: skip - not yet slot time (now ${currentTimeStr}, next slot ${nextSlotStr})`);
+          continue;
         }
 
         // Get completed renders that haven't been published yet; schedule allows only one post per slot
@@ -749,7 +1077,12 @@ export async function runPublishJob() {
         // Take at most 1 so we hit the next slot on a later run (spread evenly through the day)
         const completedRenders = (allRenders || []).filter(r => r.output_url).slice(0, 1);
         
-        if (!completedRenders || completedRenders.length === 0) continue;
+        if (!completedRenders || completedRenders.length === 0) {
+          const totalCompleted = (allRenders || []).length;
+          const withUrl = (allRenders || []).filter(r => r.output_url).length;
+          console.log(`[Orbix Publish] Business ${businessId}: skip - no publishable render (completed=${totalCompleted}, with output_url=${withUrl})`);
+          continue;
+        }
         
         // Check if already published
         for (const render of completedRenders) {
@@ -842,6 +1175,87 @@ export async function runPublishJob() {
 }
 
 /**
+ * GET /api/v2/orbix-network/jobs/publish-diagnostics
+ * Returns why publish might be skipping (for current business). Use to debug "nothing posted".
+ */
+router.get('/publish-diagnostics', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+    const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
+    const posting = moduleSettings?.settings?.posting_schedule || {};
+    const timezone = posting.timezone ?? 'America/New_York';
+    const startStr = posting.start ?? '07:00';
+    const endStr = posting.end ?? '20:00';
+    const startMinutes = parseTimeToMinutes(startStr);
+    const endMinutes = parseTimeToMinutes(endStr);
+    const todayISO = getStartOfTodayISOInZone(timezone);
+    const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+    const windowMinutes = endMinutes - startMinutes;
+    const { data: todayPublishes } = await supabaseClient
+      .from('orbix_publishes')
+      .select('id')
+      .eq('business_id', businessId)
+      .eq('publish_status', 'PUBLISHED')
+      .gte('posted_at', todayISO);
+    const publishesToday = todayPublishes?.length ?? 0;
+    const slotMinutes = getPostSlotMinutes(posting, dailyVideoCap);
+    const nextSlotMinutes = slotMinutes && publishesToday < slotMinutes.length
+      ? slotMinutes[publishesToday]
+      : (dailyVideoCap <= 1 ? startMinutes : startMinutes + (windowMinutes * publishesToday / Math.max(1, dailyVideoCap - 1)));
+    const currentTimeStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
+    const nextSlotStr = `${Math.floor(nextSlotMinutes / 60)}:${String(Math.round(nextSlotMinutes) % 60).padStart(2, '0')}`;
+    const inWindow = currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+    const atOrPastSlot = currentMinutes >= nextSlotMinutes;
+    const { data: completedRenders } = await supabaseClient
+      .from('orbix_renders')
+      .select('id, output_url, orbix_stories(channel_id)')
+      .eq('business_id', businessId)
+      .eq('render_status', 'COMPLETED');
+    const withUrl = (completedRenders || []).filter(r => r.output_url);
+    const { data: alreadyPublished } = await supabaseClient
+      .from('orbix_publishes')
+      .select('render_id')
+      .eq('business_id', businessId);
+    const publishedRenderIds = new Set((alreadyPublished || []).map(p => p.render_id));
+    const publishable = withUrl.filter(r => !publishedRenderIds.has(r.id));
+    const byChannel = moduleSettings?.settings?.youtube_by_channel || {};
+    const channelsWithYoutube = Object.keys(byChannel).filter(cid => byChannel[cid]?.access_token);
+    let skipReason = null;
+    if (publishesToday >= dailyVideoCap) skipReason = 'Daily cap reached';
+    else if (!inWindow) skipReason = 'Outside posting window (7am–8pm)';
+    else if (!atOrPastSlot) skipReason = 'Not yet next slot time';
+    else if (publishable.length === 0) skipReason = withUrl.length === 0 ? 'No completed renders with output_url' : 'All completed renders already published';
+    else if (publishable.length > 0) {
+      const chId = publishable[0].orbix_stories?.channel_id;
+      const hasYt = chId && byChannel[chId]?.access_token;
+      if (!hasYt) skipReason = `YouTube not connected for channel ${chId || 'null'}`;
+    }
+    res.json({
+      business_id: businessId,
+      timezone,
+      current_time_in_zone: currentTimeStr,
+      posting_window: `${startStr}–${endStr}`,
+      publishes_today: publishesToday,
+      daily_video_cap: dailyVideoCap,
+      next_slot_time: nextSlotStr,
+      in_posting_window: inWindow,
+      at_or_past_next_slot: atOrPastSlot,
+      completed_renders_total: (completedRenders || []).length,
+      completed_renders_with_output_url: withUrl.length,
+      publishable_count: publishable.length,
+      youtube_connected_channel_ids: channelsWithYoutube,
+      skip_reason: skipReason,
+      would_post_now: !skipReason && publishable.length > 0
+    });
+  } catch (error) {
+    console.error('[Orbix Jobs] Publish diagnostics error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
  * POST /api/v2/orbix-network/jobs/publish
  * Publish completed renders to YouTube
  */
@@ -856,27 +1270,67 @@ router.post('/publish', async (req, res) => {
 });
 
 /**
- * Run analytics job for all businesses with active subscriptions
+ * Scheduled analytics check: runs analytics at 2:00 AM in each business's timezone.
+ * Uses posting_schedule.timezone from settings — NOT UTC.
  */
-export async function runAnalyticsJob() {
+export async function runScheduledAnalyticsCheck() {
   try {
-    // Get all businesses with active subscriptions
     const { data: subscriptions, error: subError } = await supabaseClient
       .from('subscriptions')
       .select('business_id')
       .eq('module_key', 'orbix-network')
       .eq('status', 'active');
-    
     if (subError) throw subError;
-    
-    if (!subscriptions || subscriptions.length === 0) {
-      return { success: true, videos_updated: 0 };
+    if (!subscriptions || subscriptions.length === 0) return { success: true, analytics_run: 0 };
+
+    const businessIds = subscriptions.map(s => s.business_id);
+    let analyticsRun = 0;
+
+    for (const businessId of businessIds) {
+      try {
+        const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+        const posting = moduleSettings?.settings?.posting_schedule || {};
+        const timezone = posting.timezone ?? 'America/New_York';
+        const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+        // 2:00 AM = 120 minutes; allow 5-min window (2:00-2:05)
+        if (currentMinutes < 120 || currentMinutes > 125) continue;
+
+        console.log(`[Orbix Jobs] Scheduled analytics run for business ${businessId} at ${timezone} (2am)`);
+        await runAnalyticsJob(businessId);
+        analyticsRun++;
+      } catch (error) {
+        console.error(`[Orbix Jobs] Scheduled analytics error for business ${businessId}:`, error.message);
+      }
     }
-    
-    // TODO: Implement analytics fetching from YouTube API
-    // This will require YouTube Analytics API access
+
+    return { success: true, analytics_run: analyticsRun };
+  } catch (error) {
+    console.error('[Orbix Jobs] runScheduledAnalyticsCheck error:', error);
+    throw error;
+  }
+}
+
+/**
+ * Run analytics job for a specific business. When businessId is omitted, runs for all (backwards compat).
+ */
+export async function runAnalyticsJob(businessId = null) {
+  try {
+    let businessIds = [];
+    if (businessId) {
+      businessIds = [businessId];
+    } else {
+      const { data: subscriptions, error: subError } = await supabaseClient
+        .from('subscriptions')
+        .select('business_id')
+        .eq('module_key', 'orbix-network')
+        .eq('status', 'active');
+      if (subError) throw subError;
+      businessIds = (subscriptions || []).map(s => s.business_id);
+    }
+    if (businessIds.length === 0) return { success: true, videos_updated: 0 };
+
+    // TODO: Implement analytics fetching from YouTube API per businessId
     // For now, return success
-    
     return {
       success: true,
       message: 'Analytics job placeholder - implementation pending',

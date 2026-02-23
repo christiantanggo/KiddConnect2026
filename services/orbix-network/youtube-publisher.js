@@ -7,6 +7,10 @@ import { google } from 'googleapis';
 import axios from 'axios';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { writeProgressLog } from '../../utils/crash-and-progress-log.js';
+
+/** Error code used when YouTube upload should be skipped (env missing or not connected). Callers must treat as non-fatal. */
+export const SKIP_YOUTUBE_UPLOAD_CODE = 'SKIP_YOUTUBE_UPLOAD';
 
 /**
  * Get YouTube credentials for a business (and optionally a specific Orbix channel).
@@ -17,39 +21,62 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
  */
 async function getYouTubeClient(businessId, orbixChannelId = null) {
   try {
+    writeProgressLog('YT_GETCLIENT_START', { businessId, orbixChannelId: orbixChannelId || 'legacy' });
     console.log('[YouTube Publisher] getYouTubeClient businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
     const hasClientId = !!process.env.YOUTUBE_CLIENT_ID;
     const hasClientSecret = !!process.env.YOUTUBE_CLIENT_SECRET;
     const hasRedirectUri = !!process.env.YOUTUBE_REDIRECT_URI;
     if (!hasClientId || !hasClientSecret || !hasRedirectUri) {
       console.error('[YouTube Publisher] Missing env: YOUTUBE_CLIENT_ID=', hasClientId, 'YOUTUBE_CLIENT_SECRET=', hasClientSecret, 'YOUTUBE_REDIRECT_URI=', hasRedirectUri);
-      throw new Error('YouTube OAuth not configured (missing YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REDIRECT_URI).');
+      const where = process.env.RUN_ORBIX_WORKER === 'true' ? 'Add them to the render worker environment (same as web API).' : 'Add them to your .env file and restart the server. On Railway, set them in the service Environment. Go to Orbix Network → Settings and click Connect YouTube to see the exact .env lines.';
+      const err = new Error('YouTube OAuth not configured (missing YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REDIRECT_URI). ' + where);
+      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+      throw err;
     }
+    writeProgressLog('YT_GETCLIENT_ENV_OK', { businessId });
 
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+    writeProgressLog('YT_GETCLIENT_SETTINGS_DONE', { businessId, hasSettings: !!moduleSettings });
     if (!moduleSettings) {
       console.error('[YouTube Publisher] No module settings found for businessId=', businessId, 'module=orbix-network');
-      throw new Error('YouTube not connected. Please connect your YouTube account in settings.');
+      const err = new Error('YouTube not connected. Please connect your YouTube account in settings.');
+      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+      throw err;
     }
     const settings = moduleSettings.settings || {};
     const byChannel = settings.youtube_by_channel || {};
+    const channelIds = Object.keys(byChannel || {});
+    console.log('[YouTube Publisher] orbixChannelId=', orbixChannelId || 'legacy', 'stored channel keys=', channelIds.join(',') || 'none');
+
     let yt = null;
     let usePerChannel = false;
     if (orbixChannelId && byChannel[orbixChannelId]?.access_token) {
       yt = byChannel[orbixChannelId];
       usePerChannel = true;
+      console.log('[YouTube Publisher] Using per-channel YouTube for channel=', orbixChannelId, 'youtube_channel_id=', yt.channel_id || 'n/a');
     }
     if (!yt && settings.youtube?.access_token) {
       yt = settings.youtube;
+      console.log('[YouTube Publisher] Using legacy settings.youtube youtube_channel_id=', yt?.channel_id || 'n/a');
     }
     if (!yt || !yt.access_token) {
       const msg = usePerChannel
         ? 'YouTube not connected for this channel. Connect in Orbix Network → Settings for this channel.'
         : 'YouTube not connected. Please connect your YouTube account in settings.';
       if (yt?.channel_id) {
-        throw new Error('YouTube was connected but credentials are missing or expired. Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.');
+        console.error('[YouTube Publisher] Credentials missing or expired businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
+        const err = new Error('YouTube was connected but credentials are missing or expired. Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.');
+        err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+        throw err;
       }
-      throw new Error(msg);
+      if (orbixChannelId && channelIds.length > 0) {
+        console.error('[YouTube Publisher] Channel not in youtube_by_channel businessId=', businessId, 'orbixChannelId=', orbixChannelId, 'availableKeys=', channelIds.join(', '));
+      } else {
+        console.error('[YouTube Publisher] No YouTube connection businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
+      }
+      const err = new Error(msg);
+      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+      throw err;
     }
     if (!yt.refresh_token) {
       console.warn('[YouTube Publisher] No refresh_token for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'n/a');
@@ -86,6 +113,7 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
       }
     });
 
+    writeProgressLog('YT_GETCLIENT_READY', { businessId });
     console.log('[YouTube Publisher] OAuth client created for businessId=', businessId, 'youtube_channel_id=', yt.channel_id || 'n/a');
     return oauth2Client;
   } catch (error) {
@@ -150,9 +178,11 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
 
   try {
     const isUrl = isVideoUrl(videoUrlOrPath);
+    writeProgressLog('YT_PUBLISH_START', { renderId, businessId, inputType: isUrl ? 'url' : 'path' });
     console.log('[YouTube Publisher] publishVideo start', { businessId, renderId, orbixChannelId, title: metadata?.title, inputType: isUrl ? 'url' : 'path' });
 
     const auth = await getYouTubeClient(businessId, orbixChannelId);
+    writeProgressLog('YT_PUBLISH_AUTH_DONE', { renderId });
     const youtube = google.youtube({ version: 'v3', auth });
 
     if (isUrl) {
@@ -172,7 +202,19 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
 
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
     const visibility = moduleSettings?.settings?.publishing?.youtube_visibility || 'public';
-    console.log('[YouTube Publisher] Calling YouTube API videos.insert visibility=', visibility);
+    writeProgressLog('YT_PUBLISH_UPLOAD_START', { renderId, visibility });
+    // Log full metadata sent so removals can be correlated (YouTube removes are policy-side, not from our app)
+    const snippetLog = {
+      title: metadata.title || '(empty)',
+      titleLength: (metadata.title || '').length,
+      descriptionLength: (metadata.description || '').length,
+      tagCount: (metadata.tags || []).length,
+      tags: (metadata.tags || []).slice(0, 5),
+      visibility,
+      categoryId: '24'
+    };
+    console.log('[YouTube Publisher] videos.insert request', snippetLog);
+    writeProgressLog('YT_PUBLISH_METADATA', { renderId, ...snippetLog });
 
     const response = await youtube.videos.insert({
       part: ['snippet', 'status'],
@@ -194,12 +236,13 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
     });
 
     const videoId = response.data.id;
+    writeProgressLog('YT_PUBLISH_UPLOAD_DONE', { renderId, videoId });
 
     if (shouldUnlink) {
       await fs.default.promises.unlink(videoPath).catch(() => {});
     }
 
-    console.log(`[YouTube Publisher] Video published: ${videoId}`);
+    console.log('[YouTube Publisher] Video published successfully renderId=', renderId, 'videoId=', videoId, 'url=https://www.youtube.com/watch?v=' + videoId);
 
     return {
       videoId,
@@ -215,12 +258,19 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
       }
     }
     const responseData = error.response?.data;
+    const status = error.response?.status;
+    const apiError = responseData?.error;
+    const isAuthError = status === 401 || status === 403
+      || apiError?.code === 401 || apiError?.code === 403
+      || error.message?.includes('invalid_grant')
+      || (apiError?.errors && apiError.errors.some(e => e.reason === 'authError' || e.reason === 'forbidden'));
+
     console.error('[YouTube Publisher] publishVideo failed', {
       renderId,
       businessId,
       message: error.message,
       code: error.code,
-      status: error.response?.status,
+      status,
       responseData: responseData ? JSON.stringify(responseData) : undefined
     });
     if (responseData?.error?.message) {
@@ -230,6 +280,12 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
           console.error('[YouTube Publisher] YouTube API error[' + i + ']:', e.reason, e.message);
         });
       }
+    }
+
+    if (isAuthError) {
+      const err = new Error('YouTube credentials invalid or expired. Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.');
+      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+      throw err;
     }
     throw error;
   }

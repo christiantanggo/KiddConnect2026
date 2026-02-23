@@ -73,6 +73,23 @@ If logs show **Node.js 18** and warnings from `@supabase/supabase-js` or AWS SDK
    - Add: **`NIXPACKS_NODE_VERSION`** = **`20`**.
    - Redeploy so the build runs with Node 20.
 
+---
+
+## Orbix render worker (second service)
+
+Video rendering runs in a **separate process** so the web server doesn’t get killed by FFmpeg. Add a second Railway service that runs only the worker.
+
+1. In your Railway project, click **"+ New"** → **"Empty Service"** (or **"Add service"**).
+2. In the new service, open **Settings** → **Source** (or **Connect Repo**):
+   - Connect the **same GitHub repo** as your web backend.
+   - Same branch (e.g. `main`). Same root directory (leave empty).
+3. **Variables**: Copy the same env vars as your web service (Supabase, etc.), then add:
+   - **`RUN_ORBIX_WORKER`** = **`true`**
+   You must include **YouTube** vars on the worker or uploads will be skipped: **`YOUTUBE_CLIENT_ID`**, **`YOUTUBE_CLIENT_SECRET`**, **`YOUTUBE_REDIRECT_URI`** (same values as the web API).
+4. **No public domain**: Do not add a domain or expose a port for the worker. It has no HTTP server.
+5. **Memory** (recommended): In the worker service’s plan/settings, give it **more memory** than the web service (e.g. 1 GB) so FFmpeg has room.
+6. Deploy. Worker logs should show: `[Orbix Worker] Started. Poll interval: 15000 ms`
+
 
 
 

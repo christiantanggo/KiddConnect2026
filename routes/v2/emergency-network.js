@@ -242,7 +242,15 @@ router.put('/config', express.json(), async (req, res) => {
       .from('emergency_network_config')
       .upsert({ key: 'settings', value: newValue, updated_at: new Date().toISOString() }, { onConflict: 'key' });
 
-    if (upsertErr) return res.status(500).json({ error: upsertErr.message });
+    if (upsertErr) {
+      const msg = upsertErr.message || 'Database error';
+      const isMissingTable = msg.includes('relation') && msg.includes('does not exist') || upsertErr.code === '42P01';
+      return res.status(500).json({
+        error: isMissingTable
+          ? 'Emergency config table missing. Run migration: migrations/add_emergency_network.sql'
+          : msg,
+      });
+    }
     invalidateEmergencyConfigCache();
     res.json(await getEmergencyConfig());
   } catch (err) {

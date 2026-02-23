@@ -12,7 +12,7 @@ import { processRawItem } from './classifier.js';
 import { supabaseClient } from '../../config/database.js';
 import { selectTemplate, selectBackground } from './video-renderer.js';
 
-const EVERGREEN_CATEGORIES = ['psychology', 'money'];
+const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia'];
 
 /**
  * Try to create and queue a render for one story. Returns { rendered: 0|1, render_id? }.
@@ -54,15 +54,7 @@ async function tryRenderStory(businessId, story) {
     .select()
     .single();
   if (renderError) throw renderError;
-  console.log(`[Pipeline Scheduler] Created render ${render.id} for story ${story.id} (${story.category})`);
-  const { processRenderJob } = await import('./video-renderer.js');
-  setTimeout(async () => {
-    try {
-      await processRenderJob(render);
-    } catch (error) {
-      console.error(`[Pipeline Scheduler] Error processing render job:`, error);
-    }
-  }, 100);
+  console.log(`[Pipeline Scheduler] Created render ${render.id} for story ${story.id} (${story.category}) – worker will process`);
   return { rendered: 1, render_id: render.id };
 }
 
@@ -106,6 +98,16 @@ export async function runAutomatedPipeline(businessId) {
     }
     
     console.log(`[Pipeline Scheduler] Processed ${processedStories.length} stories`);
+
+    // Generate scripts for newly created stories (so they can be rendered this run)
+    for (const story of processedStories) {
+      try {
+        const { generateAndSaveScript } = await import('./script-generator.js');
+        await generateAndSaveScript(businessId, story);
+      } catch (scriptErr) {
+        console.error(`[Pipeline Scheduler] Script generation failed for story ${story.id}:`, scriptErr?.message);
+      }
+    }
     
     const { ModuleSettings } = await import('../../models/v2/ModuleSettings.js');
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
@@ -120,7 +122,7 @@ export async function runAutomatedPipeline(businessId) {
       .select('*')
       .eq('business_id', businessId)
       .eq('status', 'APPROVED')
-      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.money`)
+      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.money,category.eq.trivia,category.eq.facts`)
       .order('shock_score', { ascending: false });
     
     if (storiesError1) throw storiesError1;

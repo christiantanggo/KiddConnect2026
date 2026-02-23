@@ -18,16 +18,16 @@ const keyGenerator = (req) => {
 // General API rate limiter
 export const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 200, // Increased limit: 200 requests per 15 minutes (was 100)
+  max: 500, // 500 requests per 15 min (dashboard polling + Orbix can be heavy)
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator, // Use custom key generator
   skip: (req) => {
     // Skip rate limiting for health checks, CORS preflight requests, and kiosk routes
-    return req.path === '/health' || 
-           req.path === '/ready' || 
-           req.method === 'OPTIONS' ||
-           req.path.startsWith('/kiosk'); // Kiosk routes have their own limiter
+    if (req.path === '/health' || req.path === '/ready' || req.method === 'OPTIONS' || req.path.startsWith('/kiosk')) return true;
+    // Orbix dashboard setup check is read-only and called on every load - don't burn the limit
+    if (req.path.includes('orbix-network/setup/status')) return true;
+    return false;
   },
   // Return JSON error instead of HTML
   handler: (req, res) => {

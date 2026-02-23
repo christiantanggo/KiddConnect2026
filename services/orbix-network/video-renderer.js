@@ -12,8 +12,10 @@ import { promisify } from 'util';
 import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
@@ -72,6 +74,38 @@ export function selectTemplate(story) {
 }
 
 const BACKGROUND_IMAGE_EXT = /\.(png|jpg|jpeg|webp)$/i;
+const MUSIC_EXT = /\.(mp3|m4a|wav|aac)$/i;
+
+/**
+ * List music track file names for a channel (storage path prefix: businessId/channelId/)
+ * @param {string} businessId
+ * @param {string} channelId
+ * @returns {Promise<Array<{name: string, path: string, url: string}>>}
+ */
+export async function listChannelMusicTracks(businessId, channelId) {
+  if (!businessId || !channelId) return [];
+  try {
+    const prefix = `${businessId}/${channelId}`;
+    const { data: files, error } = await supabaseClient.storage
+      .from(MUSIC_BUCKET)
+      .list(prefix, { limit: 200 });
+    if (error) {
+      console.warn('[Orbix Video Renderer] listChannelMusicTracks:', error.message);
+      return [];
+    }
+    const items = (files || [])
+      .filter((f) => f.name && MUSIC_EXT.test(f.name))
+      .map((f) => {
+        const path = `${prefix}/${f.name}`;
+        const { data } = supabaseClient.storage.from(MUSIC_BUCKET).getPublicUrl(path);
+        return { name: f.name, path, url: data?.publicUrl };
+      });
+    return items;
+  } catch (e) {
+    console.warn('[Orbix Video Renderer] listChannelMusicTracks error:', e?.message);
+    return [];
+  }
+}
 
 /**
  * List background image file names for a channel (storage path prefix: businessId/channelId/)
@@ -101,7 +135,31 @@ export async function listChannelBackgrounds(businessId, channelId) {
 }
 
 /**
+ * Pick a random index in [0, length) using crypto for better entropy (avoids same choice in rapid succession).
+ * @param {number} length - Length of the list (must be > 0)
+ * @returns {number} Index in [0, length)
+ */
+function randomIndex(length) {
+  if (length <= 0) return 0;
+  if (length === 1) return 0;
+  return randomInt(length);
+}
+
+/**
+ * Shuffle array in place (Fisher-Yates) and return it, so rapid successive calls get different orders.
+ * Uses crypto.randomInt for swap indices.
+ */
+function shuffleWithCrypto(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = randomInt(i + 1);
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/**
  * Select background for a channel: use channel's images if any, else global Photo1-12.
+ * Uses crypto.randomInt for selection so multiple renders created in quick succession get different backgrounds.
  * @param {string} businessId - Business ID (for settings lookup)
  * @param {string|null} channelId - Orbix channel ID (for per-channel images)
  * @returns {Promise<Object>} { type: 'MOTION', id: number, imageId: number, storagePath?: string }
@@ -114,8 +172,10 @@ export async function selectBackground(businessId, channelId = null) {
     if (businessId && channelId) {
       const channelFiles = await listChannelBackgrounds(businessId, channelId);
       if (channelFiles.length > 0) {
-        const idx = Math.floor(Math.random() * channelFiles.length);
-        const name = channelFiles[idx];
+        // Shuffle then pick first so we get a random choice with good entropy (avoids same background when creating multiple renders in one run)
+        const shuffled = shuffleWithCrypto([...channelFiles]);
+        const name = shuffled[0];
+        const idx = channelFiles.indexOf(name);
         const storagePath = `${businessId}/${channelId}/${name}`;
         return {
           type: 'MOTION',
@@ -126,8 +186,8 @@ export async function selectBackground(businessId, channelId = null) {
       }
     }
 
-    // Fallback: global images Photo1.png ... Photo12.png
-    const imageId = Math.floor(Math.random() * TOTAL_BACKGROUNDS) + 1;
+    // Fallback: global images Photo1.png ... Photo12.png (use crypto for variety)
+    const imageId = randomIndex(TOTAL_BACKGROUNDS) + 1;
     return {
       type: 'MOTION',
       id: imageId,
@@ -302,7 +362,9 @@ export async function uploadRenderToStorage(businessId, renderId, localPath) {
         continue;
       }
       const { data: urlData } = supabaseClient.storage.from(RENDERS_BUCKET).getPublicUrl(data.path);
-      const url = urlData?.publicUrl ?? null;
+      const baseUrl = urlData?.publicUrl ?? null;
+      // Append cache-busting param so re-renders (same path) are not served from cache — new code = new video
+      const url = baseUrl ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}v=${Date.now()}` : null;
       if (url) return url;
     } catch (error) {
       console.error(`[Orbix Video Renderer] Upload attempt ${attempt}/${maxAttempts} error:`, error?.message || error);
@@ -335,14 +397,16 @@ export async function generateAudio(script) {
     const content = script.content_json
       ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
       : {};
+    // Trivia: voice_script is the full spoken script
+    const voiceScript = (content.voice_script || '').trim();
     const hookText = (script.hook || content.hook || '').trim();
     let bodyText = content.narration || content.script || script.narration || '';
     if (!bodyText) {
       bodyText = [script.what_happened, script.why_it_matters, script.what_happens_next].filter(Boolean).join(' ');
     }
-    const narrationText = hookText
+    const narrationText = voiceScript || (hookText
       ? (hookText + '. ' + (bodyText || '').trim()).trim()
-      : (bodyText || '').trim();
+      : (bodyText || '').trim());
     
     if (!narrationText || narrationText.trim().length === 0) {
       throw new Error('No narration text found in script');
@@ -375,6 +439,103 @@ export async function generateAudio(script) {
   } catch (error) {
     console.error('[Orbix Video Renderer] Error generating audio:', error);
     throw error;
+  }
+}
+
+/**
+ * Generate trivia audio (15s retention format): hook 0s, question 1s, answer 7s, loop trigger 9s.
+ * @param {Object} opts - { hook?, question, answerText, loopTriggerText? }
+ * @param {number} totalDuration - Total video duration in seconds (15)
+ * @returns {Promise<{audioPath: string, duration: number}>}
+ */
+export async function generateTriviaAudio(opts, totalDuration = 15) {
+  const OpenAI = (await import('openai')).default;
+  const fs = (await import('fs')).default;
+
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY not set');
+  }
+
+  const hookPhrase = (opts.hook || "Let's test your knowledge.").trim().slice(0, 80);
+  const questionPhrase = (opts.question || '').trim().slice(0, 200);
+  const answerPhrase = (opts.answerText || '').trim().slice(0, 100);
+  const loopPhrase = (opts.loopTriggerText || 'Did you get it right?').trim().slice(0, 80);
+  if (!questionPhrase) throw new Error('No question text for trivia TTS');
+
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+  const hookPath = join(tmpdir(), `trivia-hook-${Date.now()}.mp3`);
+  const questionPath = join(tmpdir(), `trivia-q-${Date.now()}.mp3`);
+  const answerPath = join(tmpdir(), `trivia-a-${Date.now()}.mp3`);
+  const loopPath = join(tmpdir(), `trivia-loop-${Date.now()}.mp3`);
+  const mixedPath = join(tmpdir(), `trivia-mixed-${Date.now()}.mp3`);
+
+  const getDur = async (p) => {
+    try {
+      const r = await execAsync(
+        `ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        { timeout: 5000 }
+      );
+      return parseFloat(r.stdout.trim()) || 0;
+    } catch {
+      return 0;
+    }
+  };
+
+  const HOOK_START = 0;
+  const QUESTION_START = 1;
+  const ANSWER_START = 7;
+  const LOOP_START = 9;
+  const answerTtsPhrase = answerPhrase ? `The answer is ${answerPhrase}` : '';
+
+  try {
+    const [hookResp, qResp, aResp, loopResp] = await Promise.all([
+      openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: hookPhrase }),
+      openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: questionPhrase }),
+      answerTtsPhrase ? openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: answerTtsPhrase }) : null,
+      openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: loopPhrase })
+    ]);
+
+    await fs.promises.writeFile(hookPath, Buffer.from(await hookResp.arrayBuffer()));
+    await fs.promises.writeFile(questionPath, Buffer.from(await qResp.arrayBuffer()));
+    if (aResp) await fs.promises.writeFile(answerPath, Buffer.from(await aResp.arrayBuffer()));
+    await fs.promises.writeFile(loopPath, Buffer.from(await loopResp.arrayBuffer()));
+
+    const hookDur = await getDur(hookPath);
+    const qDur = await getDur(questionPath);
+    const aDur = aResp && answerTtsPhrase ? await getDur(answerPath) : 0;
+    const loopDur = await getDur(loopPath);
+
+    const inputs = [hookPath, questionPath];
+    const delays = [HOOK_START, QUESTION_START];
+    const durs = [hookDur, qDur];
+    if (aResp && answerTtsPhrase) {
+      inputs.push(answerPath);
+      delays.push(ANSWER_START);
+      durs.push(aDur);
+    }
+    inputs.push(loopPath);
+    delays.push(LOOP_START);
+    durs.push(loopDur);
+
+    const pads = inputs.map((_, i) => Math.max(0, totalDuration - delays[i] - durs[i]));
+
+    const streams = inputs
+      .map((_, i) => `[${i}:a]adelay=${Math.round(delays[i] * 1000)}|${Math.round(delays[i] * 1000)},apad=pad_dur=${pads[i]}[s${i}]`)
+      .join(';');
+    const mixInputs = inputs.map((_, i) => `[s${i}]`).join('');
+    const filter = `${streams};${mixInputs}amix=inputs=${inputs.length}:duration=first:dropout_transition=0[aout]`;
+
+    await execAsync(
+      `ffmpeg ${inputs.map((p) => `-i "${p}"`).join(' ')} -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${totalDuration} -y "${mixedPath}"`,
+      { timeout: 90000 }
+    );
+
+    return { audioPath: mixedPath, duration: totalDuration };
+  } finally {
+    for (const p of [hookPath, questionPath, answerPath, loopPath]) {
+      try { await unlinkAsync(p); } catch (_) {}
+    }
   }
 }
 
@@ -537,6 +698,185 @@ function formatASSTimeFromSeconds(seconds) {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
+/** Trivia 15s timing constants (must match trivia-renderer.js) */
+const TRIVIA_HOOK_END = 1.0;
+const TRIVIA_READ_END = 4.0;      // question + options visible 1–4s
+const TRIVIA_COUNTDOWN_END = 7.0; // countdown 4–7s
+const TRIVIA_REVEAL_END = 9.0;    // answer 7–9s
+const TRIVIA_LOOP_END = 15.0;     // loop trigger 9–15s
+
+/**
+ * Generate ASS file for trivia layout (15s retention format).
+ * 0–1s hook; 1–7s question + countdown (between question and options) + all options stay on screen; 7–9s answer; 9–15s loop trigger.
+ * @param {Object} opts - { category, triviaNumber, question, optionA, optionB, optionC, answerText, correctLetter, loopTriggerText?, hookText? }
+ * @param {number} duration - Video duration in seconds (15)
+ * @returns {Promise<string>} Path to ASS file
+ */
+export async function generateTriviaASSFile(opts, duration = 15) {
+  const fs = (await import('fs')).default;
+  const assPath = join(tmpdir(), `orbix-trivia-${Date.now()}.ass`);
+  const esc = (s) => (s || '').toString().replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+
+  const categoryDisplay = (opts.category || 'GENERAL').toUpperCase();
+  const triviaNum = opts.triviaNumber ?? 1;
+  const bannerText = `${categoryDisplay}  #${triviaNum}`;
+  const correctLetter = (opts.correctLetter || 'A').toUpperCase().charAt(0);
+  const hookDisplay = (opts.hookText || '').trim().slice(0, 60) || `ONLY ${[25, 30, 35, 40][(triviaNum - 1) % 4]}% GET THIS RIGHT.`;
+  const loopTriggerText = (opts.loopTriggerText || 'Did you get it right?').trim().slice(0, 80);
+
+  const t = (s) => formatASSTimeFromSeconds(s);
+  const questionCaps = (opts.question || '').toUpperCase();
+  const questionCenterY = 495;
+  const optCenterY = Math.round((910 + 1920) / 2);
+  const optY = { A: optCenterY - 80, B: optCenterY, C: optCenterY + 80 };
+  // Countdown position: between question (495) and first option (optY.A ~1335) — center of gap
+  const countdownY = Math.round((questionCenterY + optY.A) / 2);
+
+  const assContent = `[Script Info]
+Title: Orbix Trivia
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Interrupt,Arial,128,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,60,60,10,1
+Style: Banner,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
+Style: BannerBg,Arial,12,&H00FF8000,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: Question,Arial,120,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
+Style: Option,Arial,90,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
+Style: OptionCorrect,Arial,90,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
+Style: OptionDim,Arial,90,&H66FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
+Style: AnswerBig,Arial,168,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
+Style: LoopTrigger,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,60,60,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  const lines = [];
+
+  // === 0–1s: Hook text ===
+  lines.push(`Dialogue: 0,${t(0)},${t(TRIVIA_HOOK_END)},Interrupt,,0,0,0,,{\\an5\\pos(540,960)}${esc(hookDisplay.toUpperCase())}`);
+
+  // === 1–7s: Banner + question + all 3 options (all stay on through countdown) ===
+  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},BannerBg,,0,0,0,,{\\an7\\pos(0,0)\\p1}m 0 0 l 1080 0 l 1080 80 l 0 80{\\p0}`);
+  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Banner,,0,0,0,,{\\an5\\pos(540,40)}${esc(bannerText)}`);
+  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Question,,0,0,0,,{\\an5\\pos(540,${questionCenterY})}${esc(questionCaps)}`);
+
+  for (const letter of ['A', 'B', 'C']) {
+    const y = optY[letter];
+    const text = letter === 'A' ? opts.optionA : letter === 'B' ? opts.optionB : opts.optionC;
+    lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Option,,0,0,0,,{\\an5\\pos(540,${y})}${esc(text)}`);
+  }
+
+  // === 4–7s: 3-2-1 countdown between question and options (question + options stay on screen) ===
+  lines.push(`Dialogue: 2,${t(4)},${t(5)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}3`);
+  lines.push(`Dialogue: 2,${t(5)},${t(6)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}2`);
+  lines.push(`Dialogue: 2,${t(6)},${t(7)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}1`);
+
+  const answerOnly = (opts.answerText || '').replace(/^ANSWER:\s*[ABC]\)\s*/i, '').trim();
+
+  // === 7–9s: Answer reveal ===
+  lines.push(`Dialogue: 3,${t(TRIVIA_COUNTDOWN_END)},${t(TRIVIA_REVEAL_END)},AnswerBig,,0,0,0,,{\\an5\\pos(540,960)}${esc(answerOnly || opts.answerText || '')}`);
+
+  // === 9–15s: Loop trigger line, then hard cut ===
+  lines.push(`Dialogue: 3,${t(TRIVIA_REVEAL_END)},${t(Math.min(TRIVIA_LOOP_END, duration))},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopTriggerText)}`);
+
+  await fs.promises.writeFile(assPath, assContent + lines.join('\n') + '\n', 'utf8');
+  return assPath;
+}
+
+/**
+ * Generate ASS file for facts layout: one centered fact line (larger font), 2s–28s.
+ * @param {Object} opts - { title?, factText }
+ * @param {number} duration - Video duration in seconds (default 30)
+ * @returns {Promise<string>} Path to ASS file
+ */
+export async function generateFactsASSFile(opts, duration = 30) {
+  const fs = (await import('fs')).default;
+  const assPath = join(tmpdir(), `orbix-facts-${Date.now()}.ass`);
+  const esc = (s) => (s || '').toString().replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+  const t = (s) => formatASSTimeFromSeconds(s);
+  const factText = (opts.factText || opts.fact_text || '').trim().slice(0, 200);
+  const titleText = (opts.title || 'FACT').toString().slice(0, 60);
+  // Wrap fact to ~28 chars per line for readability (larger font)
+  const wrapFact = (text, maxChars = 28) => {
+    const words = (text || '').trim().split(/\s+/).filter(Boolean);
+    const lines = [];
+    let current = '';
+    for (const w of words) {
+      const next = current ? current + ' ' + w : w;
+      if (next.length <= maxChars) current = next;
+      else {
+        if (current) lines.push(current);
+        current = w.length <= maxChars ? w : w.substring(0, maxChars);
+      }
+    }
+    if (current) lines.push(current);
+    return lines.join('\\N');
+  };
+  const assContent = `[Script Info]
+Title: Orbix Facts
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: FactTitle,Arial,56,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,60,60,10,1
+Style: FactText,Arial,78,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+  const lines = [];
+  lines.push(`Dialogue: 0,${t(0)},${t(2)},FactTitle,,0,0,0,,{\\an5\\pos(540,200)}${esc(titleText.toUpperCase())}`);
+  lines.push(`Dialogue: 0,${t(2)},${t(Math.min(28, duration - 1))},FactText,,0,0,0,,{\\an5\\pos(540,960)}${wrapFact(factText)}`);
+  await fs.promises.writeFile(assPath, assContent + lines.join('\n') + '\n', 'utf8');
+  return assPath;
+}
+
+/**
+ * Generate facts TTS: one phrase (tts_script), padded to totalDuration.
+ * @param {Object} opts - { tts_script or ttsScript }
+ * @param {number} totalDuration - Total video duration in seconds (default 30)
+ * @returns {Promise<{audioPath: string, duration: number}>}
+ */
+export async function generateFactsAudio(opts, totalDuration = 30) {
+  const OpenAI = (await import('openai')).default;
+  const fs = (await import('fs')).default;
+  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
+  const phrase = (opts.tts_script || opts.ttsScript || '').trim().slice(0, 300);
+  if (!phrase) throw new Error('No TTS script for facts audio');
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const audioPath = join(tmpdir(), `facts-tts-${Date.now()}.mp3`);
+  const resp = await openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: phrase });
+  await fs.promises.writeFile(audioPath, Buffer.from(await resp.arrayBuffer()));
+  const getDur = async (p) => {
+    try {
+      const r = await execAsync(
+        `ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        { timeout: 5000 }
+      );
+      return parseFloat(r.stdout.trim()) || 0;
+    } catch {
+      return 0;
+    }
+  };
+  const actualDur = await getDur(audioPath);
+  const padDur = Math.max(0, totalDuration - actualDur);
+  const mixedPath = join(tmpdir(), `facts-mixed-${Date.now()}.mp3`);
+  await execAsync(
+    `ffmpeg -i "${audioPath}" -af "apad=pad_dur=${padDur}" -t ${totalDuration} -y "${mixedPath}"`,
+    { timeout: 30000 }
+  );
+  try {
+    await unlinkAsync(audioPath);
+  } catch (_) {}
+  return { audioPath: mixedPath, duration: totalDuration };
+}
+
 /**
  * Generate ASS file for hook only: center of screen, Arial Bold, all caps, wraps to screen width.
  * Hook is visible only for hookDurationSeconds (while TTS is saying the hook).
@@ -582,21 +922,26 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
  * @param {number} [targetDuration] - Video length (audioDuration + tail). If provided with endQuestionText, adds end-question line until end.
  * @param {string} [endQuestionText] - End question + " COMMENT NOW" shown in hook style
  * @param {number} [endQuestionStartSeconds] - When the question starts being spoken (so it appears on screen then). If omitted, uses audioDuration+1.
+ * @param {{ captionCenteredLarge?: boolean }} [options] - If captionCenteredLarge true, captions use hook style: large font, center of screen.
  * @returns {Promise<string>} Path to ASS file
  */
-export async function generateASSSubtitleFile(captionSegments, captionY, hookText, hookFontSize, hookY, audioDuration, targetDuration = null, endQuestionText = null, endQuestionStartSeconds = null) {
+export async function generateASSSubtitleFile(captionSegments, captionY, hookText, hookFontSize, hookY, audioDuration, targetDuration = null, endQuestionText = null, endQuestionStartSeconds = null, options = {}) {
   try {
     const fs = (await import('fs')).default;
     const assPath = join(tmpdir(), `orbix-subtitles-${Date.now()}.ass`);
+    const captionCenteredLarge = options.captionCenteredLarge === true;
     
-    // Parse caption Y position
+    // Parse caption Y position (used only when not captionCenteredLarge)
     const captionYValue = captionY === 'h-100' ? 1820 : captionY === 'h-120' ? 1800 : captionY === 'h-140' ? 1780 : 1800;
     
     const endQuestionFontSize = 114; // Same as hook (Arial Bold, center)
     const centerX = 540;
     const centerY = 960;
+    const captionStyleFontSize = captionCenteredLarge ? 114 : 48;
+    const captionAlignment = captionCenteredLarge ? 5 : 2; // 5 = center, 2 = top-center
+    const captionPos = captionCenteredLarge ? `\\an5\\pos(${centerX},${centerY})` : `\\an2\\pos(540,${captionYValue})`;
     
-    // ASS file header - PlayRes must match video size (1080x1920). EndQuestion style = same as hook (114pt, center)
+    // ASS file header - PlayRes must match video size (1080x1920). CaptionCenter = same as hook when captionCenteredLarge.
     let assContent = `[Script Info]
 Title: Orbix Network Video
 ScriptType: v4.00+
@@ -606,7 +951,7 @@ PlayResY: 1920
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Hook,Arial,${hookFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
-Style: Caption,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+Style: Caption,Arial,${captionStyleFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,${captionAlignment},80,80,10,1
 Style: EndQuestion,Arial,${endQuestionFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
 
 [Events]
@@ -624,11 +969,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       assContent += `Dialogue: 0,${hookStart},${hookEnd},Hook,,0,0,0,,{\\an2\\pos(540,${hookY})}${hookText}\n`;
     }
     
-    // Add caption segments
+    // Add caption segments (position and style depend on captionCenteredLarge; wrap when centered so large text fits)
     for (const segment of captionSegments) {
       const startTime = formatASSTime(segment.start);
       const endTime = formatASSTime(segment.end);
-      assContent += `Dialogue: 0,${startTime},${endTime},Caption,,0,0,0,,{\\an2\\pos(540,${captionYValue})}${segment.text}\n`;
+      const captionText = captionCenteredLarge ? wrapHookText(segment.text, 22) : segment.text;
+      assContent += `Dialogue: 0,${startTime},${endTime},Caption,,0,0,0,,{${captionPos}}${captionText}\n`;
     }
     
     // End question + " COMMENT NOW" in hook style — show when question is spoken (endQuestionStartSeconds) through end of video
@@ -665,15 +1011,19 @@ function formatASSTime(seconds) {
 }
 
 /**
- * Get random music track for business
+ * Get random music track for a channel (from per-channel uploads).
  * @param {string} businessId - Business ID
+ * @param {string|null} channelId - Orbix channel ID (for per-channel music)
  * @returns {Promise<{name: string, url: string} | null>} Music track info
  */
-export async function getRandomMusicTrack(businessId) {
+export async function getRandomMusicTrack(businessId, channelId = null) {
   try {
-    // Get music tracks from database (if stored) or return null
-    // For now, return null (music is optional)
-    return null;
+    if (!businessId || !channelId) return null;
+    const tracks = await listChannelMusicTracks(businessId, channelId);
+    if (!tracks.length) return null;
+    const idx = randomIndex(tracks.length);
+    const t = tracks[idx];
+    return { name: t.name, url: t.url };
   } catch (error) {
     console.error('[Orbix Video Renderer] Error getting music track:', error);
     return null;
@@ -717,121 +1067,154 @@ export async function prepareMusicTrack(url, duration) {
  * Orchestrates the complete video rendering pipeline
  */
 export async function processRenderJob(render) {
-  console.log(`[processRenderJob] Starting render job for render ${render.id}`);
-  
+  console.log(`[processRenderJob] START render_id=${render.id} story_id=${render.story_id} script_id=${render.script_id} business_id=${render.business_id || 'n/a'}`);
+  writeProgressLog('processRenderJob_START', { renderId: render.id, story_id: render.story_id });
+  setCurrentRender(render.id, 'JOB_START');
+
+  // Durable log so we can see "job started" in step_logs when process is killed mid-render (e.g. OOM)
+  try {
+    const { data: row } = await supabaseClient.from('orbix_renders').select('step_logs').eq('id', render.id).single();
+    const logs = row?.step_logs || [];
+    const entry = { timestamp: new Date().toISOString(), step: 'JOB', event: 'STARTED', message: 'Render job started', data: null };
+    await supabaseClient.from('orbix_renders').update({ step_logs: [...logs, entry].slice(-100) }).eq('id', render.id);
+  } catch (_) { /* non-fatal */ }
+
   try {
     // Import step functions
-    const { 
-      step3Background, 
-      step4Voice, 
-      step5HookText, 
-      step6Captions, 
-      step7Metadata, 
-      step8YouTubeUpload 
+    const {
+      step3Background,
+      step4Voice,
+      step5HookText,
+      step6Captions,
+      step7Metadata
     } = await import('./render-steps.js');
-    
+
     // Fetch story and script from database
     const { data: story, error: storyError } = await supabaseClient
       .from('orbix_stories')
       .select('*')
       .eq('id', render.story_id)
       .single();
-    
+
     if (storyError || !story) {
+      console.error(`[processRenderJob] Story not found render_id=${render.id} story_id=${render.story_id}`, storyError?.message);
       throw new Error(`Story not found: ${storyError?.message || 'Story ID: ' + render.story_id}`);
     }
-    
+
     const { data: script, error: scriptError } = await supabaseClient
       .from('orbix_scripts')
       .select('*')
       .eq('id', render.script_id)
       .single();
-    
+
     if (scriptError || !script) {
+      console.error(`[processRenderJob] Script not found render_id=${render.id} script_id=${render.script_id}`, scriptError?.message);
       throw new Error(`Script not found: ${scriptError?.message || 'Script ID: ' + render.script_id}`);
     }
-    
-    console.log(`[processRenderJob] Story and script loaded for render ${render.id}`);
-    
-    // Generate audio first so we know duration; video length = audioDuration + 5 seconds (end question + Comment Now stay on until end)
+
+    console.log(`[processRenderJob] Story and script loaded render_id=${render.id} story_title="${story?.title || 'n/a'}"`);
+
+    // Trivia uses separate pipeline
+    if ((story?.category || '').toLowerCase() === 'trivia') {
+      const { processTriviaRenderJob } = await import('./trivia-renderer.js');
+      return await processTriviaRenderJob(render, story, script);
+    }
+
+    // Facts now use the same pipeline as psychology/money (hook, captions, short duration)
+    // Generate audio first so we know duration; video length = audioDuration + tail
+    // Psychology/money/facts Shorts: keep total 12–20s (short tail) to avoid long drop-off killing retention
     const audioResult = await generateAudio(script);
     const preGeneratedAudioPath = audioResult.audioPath;
     const audioDuration = audioResult.duration;
-    const targetDuration = audioDuration + 5;
-    console.log(`[processRenderJob] Audio generated: ${audioDuration.toFixed(1)}s, target video length: ${targetDuration.toFixed(1)}s`);
+    const cat = (story?.category || '').toLowerCase();
+    const isShortsRetention = cat === 'psychology' || cat === 'money' || cat === 'facts';
+    const tailSeconds = isShortsRetention ? 3 : 5;
+    const maxDuration = isShortsRetention ? 20 : 45;
+    const targetDuration = Math.min(audioDuration + tailSeconds, maxDuration);
+    console.log(`[processRenderJob] Audio generated: ${audioDuration.toFixed(1)}s, target video length: ${targetDuration.toFixed(1)}s (Shorts retention: ${isShortsRetention})`);
     
     try {
     // STEP 3: Background motion render (length = targetDuration)
+    writeProgressLog('STEP_BEFORE', { renderId: render.id, step: 'STEP_3_BACKGROUND' });
+    setCurrentRender(render.id, 'STEP_3_BACKGROUND');
     console.log(`[processRenderJob] Starting Step 3: Background motion`);
     const step3Result = await step3Background(render.id, render, script, story, targetDuration);
+    writeProgressLog('STEP_AFTER', { renderId: render.id, step: 'STEP_3_BACKGROUND' });
     console.log(`[processRenderJob] Step 3 completed: ${step3Result.outputPath}`);
     
     // STEP 4: Voice and music addition (use pre-generated audio, output length = targetDuration)
+    writeProgressLog('STEP_BEFORE', { renderId: render.id, step: 'STEP_4_VOICE' });
+    setCurrentRender(render.id, 'STEP_4_VOICE');
     console.log(`[processRenderJob] Starting Step 4: Voice and music`);
     const step4Result = await step4Voice(render.id, render, script, story, step3Result.outputPath, {
       audioPath: preGeneratedAudioPath,
       audioDuration,
       targetDuration
     });
+    writeProgressLog('STEP_AFTER', { renderId: render.id, step: 'STEP_4_VOICE' });
     console.log(`[processRenderJob] Step 4 completed: ${step4Result.outputPath}, audio duration: ${step4Result.audioDuration}`);
     
     // STEP 5: Hook text addition (pass step 4 output so we never use stale DB path on re-render)
+    writeProgressLog('STEP_BEFORE', { renderId: render.id, step: 'STEP_5_HOOK_TEXT' });
+    setCurrentRender(render.id, 'STEP_5_HOOK_TEXT');
     console.log(`[processRenderJob] Starting Step 5: Hook text`);
     const step5Result = await step5HookText(render.id, render, script, story, render.template, step4Result.outputPath, step4Result.audioDuration);
+    writeProgressLog('STEP_AFTER', { renderId: render.id, step: 'STEP_5_HOOK_TEXT' });
     console.log(`[processRenderJob] Step 5 completed: ${step5Result.outputPath}`);
     
     // STEP 6: Captions addition (pass step 5 output so we never use stale DB path on re-render)
+    writeProgressLog('STEP_BEFORE', { renderId: render.id, step: 'STEP_6_CAPTIONS' });
+    setCurrentRender(render.id, 'STEP_6_CAPTIONS');
     console.log(`[processRenderJob] Starting Step 6: Captions`);
     const step6Result = await step6Captions(render.id, render, script, story, render.template, step5Result.outputPath, step4Result.audioDuration, targetDuration);
+    writeProgressLog('STEP_AFTER', { renderId: render.id, step: 'STEP_6_CAPTIONS' });
     console.log(`[processRenderJob] Step 6 completed: ${step6Result.outputPath}`);
     
     // STEP 7: Metadata generation
+    writeProgressLog('STEP_BEFORE', { renderId: render.id, step: 'STEP_7_METADATA' });
+    setCurrentRender(render.id, 'STEP_7_METADATA');
     console.log(`[processRenderJob] Starting Step 7: Metadata`);
     await step7Metadata(render.id, render, script, story);
+    writeProgressLog('STEP_AFTER', { renderId: render.id, step: 'STEP_7_METADATA' });
     console.log(`[processRenderJob] Step 7 completed`);
-    
-    // STEP 8: YouTube upload (optional - may be skipped if channel not connected)
-    console.log(`[processRenderJob] Starting Step 8: YouTube upload`);
-    const step8Result = await step8YouTubeUpload(render.id, render, step6Result.outputPath);
-    console.log(`[processRenderJob] Step 8 completed`, step8Result?.skipped ? '(skipped)' : step8Result?.url);
 
-    // We do NOT mark COMPLETED until we have a view URL — so every completed render always has a View button
-    let outputUrl = step8Result?.url ?? null;
-    if (!outputUrl && render.business_id) {
-      outputUrl = await uploadRenderToStorage(render.business_id, render.id, step6Result.outputPath);
-      if (outputUrl) console.log(`[processRenderJob] Video uploaded to storage for viewing`);
+    // STOP BEFORE STEP 8: Upload video to storage and mark READY_FOR_UPLOAD. YouTube upload runs in a separate job (optional 30s delay).
+    const storageUrl = await uploadRenderToStorage(render.business_id, render.id, step6Result.outputPath);
+    if (!storageUrl) {
+      throw new Error('Video rendered but storage upload failed. Please try Restart Render.');
     }
-    if (!outputUrl) {
-      throw new Error('Video rendered but view link could not be created (YouTube and storage upload failed). Please try Restart Render.');
-    }
+    console.log(`[processRenderJob] Video uploaded to storage; stopping before YouTube upload (separate job).`);
 
-    // Mark render as completed; jobs route will set output_url from return value
     await supabaseClient
       .from('orbix_renders')
       .update({
-        render_status: 'COMPLETED',
-        render_step: 'COMPLETED',
+        render_status: 'READY_FOR_UPLOAD',
+        render_step: 'STEP_7_METADATA',
         step_progress: 100,
         step_completed_at: new Date().toISOString(),
+        step_error: null,
+        output_url: storageUrl,
         updated_at: new Date().toISOString()
       })
       .eq('id', render.id);
 
-    console.log(`[processRenderJob] Render ${render.id} completed successfully`);
+    console.log(`[processRenderJob] Render ${render.id} ready for YouTube upload (job 2).`);
 
     return {
-      status: 'COMPLETED',
-      outputUrl,
+      status: 'RENDER_COMPLETE',
+      outputUrl: storageUrl,
       renderId: render.id
     };
     } finally {
       try { if (preGeneratedAudioPath) await unlinkAsync(preGeneratedAudioPath); } catch (e) { /* ignore */ }
     }
   } catch (error) {
-    console.error(`[processRenderJob] Error processing render ${render.id}:`, error);
-    console.error(`[processRenderJob] Error message:`, error.message);
-    console.error(`[processRenderJob] Error stack:`, error.stack);
-    
+    const currentStep = (await supabaseClient.from('orbix_renders').select('render_step').eq('id', render.id).single()).data?.render_step || 'unknown';
+    writeProgressLog('processRenderJob_FAILED', { renderId: render.id, at_step: currentStep, error: error?.message });
+    setCurrentRender(render.id, `FAILED_${currentStep}`);
+    console.error(`[processRenderJob] FAILED render_id=${render.id} at_step=${currentStep} error="${error.message}"`);
+    console.error(`[processRenderJob] Stack:`, error.stack);
+
     // Mark render as failed
     try {
       await supabaseClient

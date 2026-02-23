@@ -28,6 +28,7 @@ import {
   getRandomMusicTrack,
   prepareMusicTrack
 } from './video-renderer.js';
+import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
@@ -85,6 +86,11 @@ async function updateStepStatus(renderId, step, progress, error = null) {
     updateData.step_completed_at = new Date().toISOString();
   }
   
+  if (progress === 100) {
+    // Clear any previous step_error so UI doesn't show old failure (e.g. after YouTube skip)
+    updateData.step_error = null;
+  }
+  
   if (error) {
     updateData.step_error = error;
     updateData.render_status = 'STEP_FAILED';
@@ -121,6 +127,8 @@ async function updateStepStatus(renderId, step, progress, error = null) {
  */
 export async function step3Background(renderId, renderJob, script, story, targetDuration = null) {
   const step = 'STEP_3_BACKGROUND';
+  writeProgressLog('STEP_ENTER', { renderId, step });
+  setCurrentRender(renderId, step);
   await logStepEvent(renderId, step, 'START', 'Starting background motion render');
   await updateStepStatus(renderId, step, 0);
   
@@ -179,9 +187,10 @@ export async function step3Background(renderId, renderJob, script, story, target
       inputVideo: backgroundVideoPath, 
       outputVideo: step3OutputPath 
     });
-    
+    writeProgressLog('FFMPEG_START', { renderId, step, commandPreview: ffmpegCommand.slice(0, 120) });
     try {
       const result = await execAsync(ffmpegCommand, { timeout: 10 * 60 * 1000 });
+      writeProgressLog('FFMPEG_DONE', { renderId, step });
       await logStepEvent(renderId, step, 'PROGRESS', 'FFmpeg command executed successfully', { 
         stdout: result.stdout?.substring(0, 500),
         stderr: result.stderr?.substring(0, 500)
@@ -207,16 +216,18 @@ export async function step3Background(renderId, renderJob, script, story, target
     
     await updateStepStatus(renderId, step, 100);
     await logStepEvent(renderId, step, 'COMPLETE', 'Step 3 completed successfully', { outputPath: step3OutputPath });
-    
+    console.log(`[Orbix Step 3] COMPLETE render_id=${renderId} outputPath=${step3OutputPath}`);
+
     // Cleanup
     await unlinkAsync(backgroundPath).catch(() => {});
     await unlinkAsync(backgroundVideoPath).catch(() => {});
-    
+
     return {
       success: true,
       outputPath: step3OutputPath
     };
   } catch (error) {
+    console.error(`[Orbix Step 3] FAILED render_id=${renderId} error="${error.message}"`);
     await logStepEvent(renderId, step, 'ERROR', 'Step 3 failed', { error: error.message, stack: error.stack });
     await updateStepStatus(renderId, step, 0, error.message);
     throw error;
@@ -231,9 +242,12 @@ export async function step3Background(renderId, renderJob, script, story, target
  */
 export async function step4Voice(renderId, renderJob, script, story, step3VideoPath, options = null) {
   const step = 'STEP_4_VOICE';
+  writeProgressLog('STEP_ENTER', { renderId, step });
+  setCurrentRender(renderId, step);
+  console.log(`[Orbix Step 4] START render_id=${renderId} step3VideoPath=${step3VideoPath ? 'set' : 'n/a'} preGenerated=${!!(options?.audioPath)}`);
   await logStepEvent(renderId, step, 'START', 'Starting voice and music addition');
   await updateStepStatus(renderId, step, 0);
-  
+
   let audioPath;
   let audioDuration;
   const usePreGenerated = options?.audioPath != null && options?.audioDuration != null;
@@ -256,11 +270,12 @@ export async function step4Voice(renderId, renderJob, script, story, step3VideoP
     
     const targetDuration = options?.targetDuration ?? (audioDuration + 5);
     
-    // Get and prepare music track
+    // Get and prepare music track (per-channel)
     await updateStepStatus(renderId, step, 30);
     let musicPath = null;
     try {
-      const musicTrack = await getRandomMusicTrack(renderJob.business_id);
+      const channelId = story?.channel_id ?? null;
+      const musicTrack = await getRandomMusicTrack(renderJob.business_id, channelId);
       if (musicTrack) {
         await logStepEvent(renderId, step, 'PROGRESS', 'Music track selected', { name: musicTrack.name });
         musicPath = await prepareMusicTrack(musicTrack.url, audioDuration);
@@ -300,9 +315,10 @@ export async function step4Voice(renderId, renderJob, script, story, step3VideoP
       musicPath: musicPath || 'none',
       outputVideo: step4OutputPath 
     });
-    
+    writeProgressLog('FFMPEG_START', { renderId, step, commandPreview: ffmpegCommand.slice(0, 120) });
     try {
       const result = await execAsync(ffmpegCommand, { timeout: 10 * 60 * 1000 });
+      writeProgressLog('FFMPEG_DONE', { renderId, step });
       await logStepEvent(renderId, step, 'PROGRESS', 'FFmpeg command executed successfully', { 
         stdout: result.stdout?.substring(0, 500),
         stderr: result.stderr?.substring(0, 500)
@@ -328,7 +344,8 @@ export async function step4Voice(renderId, renderJob, script, story, step3VideoP
     
     await updateStepStatus(renderId, step, 100);
     await logStepEvent(renderId, step, 'COMPLETE', 'Step 4 completed successfully', { outputPath: step4OutputPath });
-    
+    console.log(`[Orbix Step 4] COMPLETE render_id=${renderId} outputPath=${step4OutputPath} audioDuration=${audioDuration}`);
+
     // Cleanup (do not unlink audio if it was pre-generated; caller owns it)
     if (!usePreGenerated) {
       await unlinkAsync(audioPath).catch(() => {});
@@ -336,13 +353,14 @@ export async function step4Voice(renderId, renderJob, script, story, step3VideoP
     if (musicPath) {
       await unlinkAsync(musicPath).catch(() => {});
     }
-    
+
     return {
       success: true,
       outputPath: step4OutputPath,
       audioDuration
     };
   } catch (error) {
+    console.error(`[Orbix Step 4] FAILED render_id=${renderId} error="${error.message}"`);
     await logStepEvent(renderId, step, 'ERROR', 'Step 4 failed', { error: error.message, stack: error.stack });
     await updateStepStatus(renderId, step, 0, error.message);
     throw error;
@@ -355,9 +373,12 @@ export async function step4Voice(renderId, renderJob, script, story, step3VideoP
  */
 export async function step5HookText(renderId, renderJob, script, story, template, step4VideoPath, audioDuration) {
   const step = 'STEP_5_HOOK_TEXT';
+  writeProgressLog('STEP_ENTER', { renderId, step });
+  setCurrentRender(renderId, step);
+  console.log(`[Orbix Step 5] START render_id=${renderId} template=${template} step4VideoPath=${step4VideoPath ? 'set' : 'from DB'}`);
   await logStepEvent(renderId, step, 'START', 'Starting hook text addition');
   await updateStepStatus(renderId, step, 0);
-  
+
   try {
     // Get step 4 video path from database if not provided
     let inputVideoPath = step4VideoPath;
@@ -408,16 +429,21 @@ export async function step5HookText(renderId, renderJob, script, story, template
     await logStepEvent(renderId, step, 'PROGRESS', 'Rendering hook with ASS (Arial Bold, wrap at width)');
     
     const step5OutputPath = join(tmpdir(), `orbix-step5-${renderId}-${Date.now()}.mp4`);
-    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "ass='${simpleAssPathEscaped}'" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p "${step5OutputPath}"`;
+    const isFacts = (story?.category || '').toLowerCase() === 'facts';
+    const step5Vf = isFacts
+      ? `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.5:t=fill,ass='${simpleAssPathEscaped}'`
+      : `ass='${simpleAssPathEscaped}'`;
+    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "${step5Vf}" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p "${step5OutputPath}"`;
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
     await logStepEvent(renderId, step, 'PROGRESS', 'Executing FFmpeg command', {
       inputVideo: inputVideoPath,
       outputVideo: step5OutputPath
     });
-    
+    writeProgressLog('FFMPEG_START', { renderId, step, commandPreview: ffmpegCommand.slice(0, 120) });
     try {
       const result = await execAsync(ffmpegCommand, { timeout: 10 * 60 * 1000 });
+      writeProgressLog('FFMPEG_DONE', { renderId, step });
       await logStepEvent(renderId, step, 'PROGRESS', 'FFmpeg command executed successfully', {
         stdout: result.stdout?.substring(0, 500),
         stderr: result.stderr?.substring(0, 500)
@@ -465,9 +491,12 @@ export async function step5HookText(renderId, renderJob, script, story, template
  */
 export async function step6Captions(renderId, renderJob, script, story, template, step5VideoPath, audioDuration, targetDuration = null) {
   const step = 'STEP_6_CAPTIONS';
+  writeProgressLog('STEP_ENTER', { renderId, step });
+  setCurrentRender(renderId, step);
+  console.log(`[Orbix Step 6] START render_id=${renderId} template=${template} step5VideoPath=${step5VideoPath ? 'set' : 'from DB'} targetDuration=${targetDuration ?? 'n/a'}`);
   await logStepEvent(renderId, step, 'START', 'Starting caption addition');
   await updateStepStatus(renderId, step, 0);
-  
+
   try {
     // Get step 5 video path from database if not provided
     // Note: Step 5 saves to video_step4_path (not video_step5_path) based on migration
@@ -558,6 +587,7 @@ export async function step6Captions(renderId, renderJob, script, story, template
     const endQuestionStartSeconds = totalBodyWords > 0
       ? hookDuration + bodyDuration * (bodyOnlyWords / totalBodyWords)
       : audioDuration;
+    const isFactsCategory = (story?.category || '').toLowerCase() === 'facts';
     const assFilePath = await generateASSSubtitleFile(
       captionSegments,
       captionY,
@@ -567,7 +597,8 @@ export async function step6Captions(renderId, renderJob, script, story, template
       audioDuration,
       effectiveTarget,
       endQuestion || null,
-      endQuestionStartSeconds
+      endQuestionStartSeconds,
+      { captionCenteredLarge: isFactsCategory }
     );
     
     await logStepEvent(renderId, step, 'PROGRESS', 'ASS file generated', { path: assFilePath, segments: captionSegments.length });
@@ -593,9 +624,10 @@ export async function step6Captions(renderId, renderJob, script, story, template
       assFile: simpleAssPath,
       outputVideo: step6OutputPath 
     });
-    
+    writeProgressLog('FFMPEG_START', { renderId, step, commandPreview: ffmpegCommand.slice(0, 120) });
     try {
       const result = await execAsync(ffmpegCommand, { timeout: 10 * 60 * 1000 });
+      writeProgressLog('FFMPEG_DONE', { renderId, step });
       await logStepEvent(renderId, step, 'PROGRESS', 'FFmpeg command executed successfully', { 
         stdout: result.stdout?.substring(0, 500),
         stderr: result.stderr?.substring(0, 500)
@@ -621,16 +653,18 @@ export async function step6Captions(renderId, renderJob, script, story, template
     
     await updateStepStatus(renderId, step, 100);
     await logStepEvent(renderId, step, 'COMPLETE', 'Step 6 completed successfully', { outputPath: step6OutputPath });
-    
+    console.log(`[Orbix Step 6] COMPLETE render_id=${renderId} outputPath=${step6OutputPath}`);
+
     // Cleanup
     await unlinkAsync(assFilePath).catch(() => {});
     await unlinkAsync(simpleAssPath).catch(() => {});
-    
+
     return {
       success: true,
       outputPath: step6OutputPath
     };
   } catch (error) {
+    console.error(`[Orbix Step 6] FAILED render_id=${renderId} error="${error.message}"`);
     await logStepEvent(renderId, step, 'ERROR', 'Step 6 failed', { error: error.message, stack: error.stack });
     await updateStepStatus(renderId, step, 0, error.message);
     throw error;
@@ -638,11 +672,13 @@ export async function step6Captions(renderId, renderJob, script, story, template
 }
 
 /**
- * STEP 6: Caption and hashtag creation
+ * STEP 7: Metadata (caption and hashtag creation)
  * Generates YouTube title, description, hashtags from story/script (psychology uses dedicated rules).
  */
 export async function step7Metadata(renderId, renderJob, script, story) {
   const step = 'STEP_7_METADATA';
+  writeProgressLog('STEP_ENTER', { renderId, step });
+  setCurrentRender(renderId, step);
   await logStepEvent(renderId, step, 'START', 'Starting metadata generation');
   await updateStepStatus(renderId, step, 0);
   
@@ -666,8 +702,9 @@ export async function step7Metadata(renderId, renderJob, script, story) {
       .eq('id', renderId);
     
     await updateStepStatus(renderId, step, 100);
-    await logStepEvent(renderId, step, 'COMPLETE', 'Step 6 completed successfully', { title, hashtags });
-    
+    await logStepEvent(renderId, step, 'COMPLETE', 'Step 7 completed successfully', { title, hashtags });
+    console.log(`[Orbix Step 7] COMPLETE render_id=${renderId} title="${(title || '').substring(0, 40)}..."`);
+
     return {
       success: true,
       title,
@@ -675,7 +712,8 @@ export async function step7Metadata(renderId, renderJob, script, story) {
       hashtags
     };
   } catch (error) {
-    await logStepEvent(renderId, step, 'ERROR', 'Step 6 failed', { error: error.message, stack: error.stack });
+    console.error(`[Orbix Step 7] FAILED render_id=${renderId} error="${error.message}"`);
+    await logStepEvent(renderId, step, 'ERROR', 'Step 7 failed', { error: error.message, stack: error.stack });
     await updateStepStatus(renderId, step, 0, error.message);
     throw error;
   }
@@ -687,19 +725,23 @@ export async function step7Metadata(renderId, renderJob, script, story) {
  */
 export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
   const step = 'STEP_8_YOUTUBE_UPLOAD';
+  writeProgressLog('STEP_ENTER', { renderId, step });
+  setCurrentRender(renderId, step);
   console.log(`[Step 8 YouTube] START renderId=${renderId} business_id=${renderJob.business_id || 'MISSING'} step6VideoPath=${step6VideoPath ? 'set' : 'MISSING'}`);
   await logStepEvent(renderId, step, 'START', 'Starting YouTube upload');
   await updateStepStatus(renderId, step, 0);
 
-  const { publishVideo } = await import('./youtube-publisher.js');
+  const { publishVideo, SKIP_YOUTUBE_UPLOAD_CODE } = await import('./youtube-publisher.js');
 
   try {
+    writeProgressLog('STEP_8_FETCH_RENDER', { renderId });
     // Get metadata and story (for per-channel YouTube)
     const { data: render, error: renderErr } = await supabaseClient
       .from('orbix_renders')
       .select('youtube_title, youtube_description, hashtags, script_id, story_id')
       .eq('id', renderId)
       .single();
+    writeProgressLog('STEP_8_FETCH_RENDER_DONE', { renderId });
 
     if (renderErr || !render) {
       console.error('[Step 8 YouTube] Render not found in DB', renderId);
@@ -722,25 +764,80 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
     await logStepEvent(renderId, step, 'PROGRESS', 'Metadata retrieved', { title: render.youtube_title });
     await updateStepStatus(renderId, step, 20);
 
-    const tags = (render.hashtags || '')
+    // If title or description missing (e.g. trivia metadata not saved), regenerate from story/script
+    let title = (render.youtube_title || '').trim();
+    let description = (render.youtube_description || '').trim();
+    let hashtags = render.hashtags || '';
+    if (!title || !description) {
+      const { data: story } = await supabaseClient.from('orbix_stories').select('*').eq('id', render.story_id).single();
+      const { data: script } = await supabaseClient.from('orbix_scripts').select('*').eq('id', render.script_id).single();
+      if (story && script) {
+        const { buildYouTubeMetadata } = await import('./youtube-metadata.js');
+        const built = buildYouTubeMetadata(story, script, renderId);
+        if (!title) title = (built.title || '').trim() || 'Orbix Short';
+        if (!description) description = (built.description || '').trim() || 'Comment A, B, or C. What did you choose?';
+        if (!hashtags && built.hashtags) hashtags = built.hashtags;
+        if (!title || !description) {
+          console.warn('[Step 8 YouTube] Regenerated metadata still incomplete', { title: !!title, description: !!description });
+        } else {
+          console.log('[Step 8 YouTube] Regenerated missing metadata from story/script', { title: title.slice(0, 40) });
+        }
+      }
+    }
+
+    const tags = (hashtags || '')
       .split(/\s+/)
       .filter(t => t.startsWith('#') && t.length > 1)
       .map(t => t.replace(/^#/, ''))
       .slice(0, 15);
 
-    const descriptionWithHashtags = (render.youtube_description || '').trim() + (render.hashtags ? '\n\n' + (render.hashtags || '').trim() : '');
+    const descriptionWithHashtags = description + (hashtags ? '\n\n' + (hashtags || '').trim() : '');
     const metadata = {
-      title: render.youtube_title || 'Orbix Short',
-      description: descriptionWithHashtags,
+      title: title || 'Orbix Short',
+      description: descriptionWithHashtags || 'Comment A, B, or C. What did you choose?',
       tags
     };
 
     const { uploadCaptions } = await import('./youtube-publisher.js');
     const publishOptions = orbixChannelId ? { orbixChannelId } : {};
-    console.log(`[Step 8 YouTube] Calling publishVideo businessId=${businessId} renderId=${renderId} orbixChannelId=${orbixChannelId || 'legacy'} title="${metadata.title}"`);
-    const result = await publishVideo(businessId, renderId, step6VideoPath, metadata, publishOptions);
+    const uploadTimeoutMs = Number(process.env.ORBIX_YOUTUBE_UPLOAD_TIMEOUT_MS) || 5 * 60 * 1000; // 5 min default
+    // Durable log before upload so if the server dies during upload we still have a trail in step_logs (DB)
+    await logStepEvent(renderId, step, 'PROGRESS', 'Calling YouTube API to upload video (streaming file; may take 1–2 min). If server restarts with no logs after this, crash was likely during upload — check memory or timeout.', { title: metadata?.title?.substring(0, 60) });
+    await updateStepStatus(renderId, step, 40);
+    writeProgressLog('STEP_8_CALLING_PUBLISH', { renderId, title: metadata?.title?.slice(0, 40) });
+    console.log(`[Step 8 YouTube] Calling publishVideo businessId=${businessId} renderId=${renderId} orbixChannelId=${orbixChannelId || 'legacy'} title="${metadata.title}" timeoutMs=${uploadTimeoutMs}`);
+    let result;
+    let timeoutId;
+    try {
+      const uploadPromise = publishVideo(businessId, renderId, step6VideoPath, metadata, publishOptions);
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => {
+          const err = new Error(`YouTube upload timed out after ${uploadTimeoutMs / 1000}s. Increase ORBIX_YOUTUBE_UPLOAD_TIMEOUT_MS or check network/memory.`);
+          err.code = 'YOUTUBE_UPLOAD_TIMEOUT';
+          console.error('[Step 8 YouTube] UPLOAD_TIMEOUT', { renderId, timeoutMs: uploadTimeoutMs, message: err.message });
+          writeProgressLog('STEP_8_PUBLISH_TIMEOUT', { renderId, timeoutMs: uploadTimeoutMs });
+          reject(err);
+        }, uploadTimeoutMs);
+      });
+      result = await Promise.race([uploadPromise, timeoutPromise]);
+      clearTimeout(timeoutId); // Cancel timeout so it never fires after success (prevents unhandled rejection crash)
+    } catch (uploadErr) {
+      if (timeoutId) clearTimeout(timeoutId);
+      console.error('[Step 8 YouTube] Upload error (will be retried by caller if retries left)', {
+        renderId,
+        message: uploadErr?.message,
+        code: uploadErr?.code,
+        stack: uploadErr?.stack,
+        responseStatus: uploadErr?.response?.status,
+        responseData: uploadErr?.response?.data ? JSON.stringify(uploadErr.response.data) : undefined
+      });
+      writeProgressLog('STEP_8_PUBLISH_ERROR', { renderId, message: uploadErr?.message, code: uploadErr?.code });
+      throw uploadErr;
+    }
+    writeProgressLog('STEP_8_PUBLISH_DONE', { renderId, videoId: result?.videoId });
     console.log(`[Step 8 YouTube] SUCCESS videoId=${result.videoId} url=${result.url}`);
 
+    writeProgressLog('STEP_8_CAPTIONS_START', { renderId, videoId: result?.videoId });
     try {
       if (render.script_id) {
         const { data: script } = await supabaseClient.from('orbix_scripts').select('*').eq('id', render.script_id).single();
@@ -758,6 +855,7 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
     } catch (captionErr) {
       console.error('[Step 8 YouTube] Caption upload failed (video already published)', captionErr?.message);
     }
+    writeProgressLog('STEP_8_CAPTIONS_DONE', { renderId });
 
     await updateStepStatus(renderId, step, 100);
     await logStepEvent(renderId, step, 'COMPLETE', 'Video published to YouTube', { url: result.url, videoId: result.videoId });
@@ -769,9 +867,14 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
       videoId: result.videoId
     };
   } catch (error) {
-    const isNotConnected = error?.message?.includes('YouTube not connected')
-      || error?.message?.includes('connect your YouTube')
-      || error?.message?.includes('credentials are missing or expired');
+    const msg = (error?.message != null ? String(error.message) : typeof error === 'string' ? error : '').toLowerCase();
+    const isSkipUpload = error?.code === SKIP_YOUTUBE_UPLOAD_CODE || msg.includes('skip_youtube_upload');
+    const isYouTubeConfigError = () => {
+      if (!msg) return false;
+      const tokens = ['youtube', 'oauth', 'not configured', 'credentials', 'connect your youtube', 'disconnect', 'redirect_uri', 'client_id', 'client_secret', 'youtube_client', 'youtube_redirect', 'missing', 'expired', 'invalid_grant', '401', '403', 'not connected'];
+      return tokens.some(t => msg.includes(t));
+    };
+    const isNotConnected = isSkipUpload || isYouTubeConfigError();
     console.error('[Step 8 YouTube] FAILED', {
       renderId,
       message: error.message,
@@ -781,8 +884,23 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
       stack: error.stack
     });
     if (isNotConnected) {
+      console.log(`[Orbix Step 8] SKIP (YouTube not configured/connected) render_id=${renderId} reason="${error.message}"`);
       await logStepEvent(renderId, step, 'PROGRESS', 'YouTube upload skipped', { message: error.message });
       await updateStepStatus(renderId, step, 100);
+      // Set READY_FOR_UPLOAD so user can view video and Force upload when YouTube is configured
+      try {
+        await supabaseClient
+          .from('orbix_renders')
+          .update({
+            step_error: null,
+            render_status: 'READY_FOR_UPLOAD',
+            render_step: 'STEP_7_METADATA',
+            step_progress: 100,
+            step_completed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', renderId);
+      } catch (e) { /* non-fatal */ }
       return { success: true, skipped: true, message: error.message };
     }
     await logStepEvent(renderId, step, 'ERROR', 'Step 8 failed', {

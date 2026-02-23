@@ -29,13 +29,23 @@ function normalizePhone(phone) {
 export async function getEmergencyConfig() {
   const now = Date.now();
   if (cachedConfig && (now - cacheTime) < CACHE_MS) return cachedConfig;
+  const empty = { emergency_phone_numbers: [], emergency_vapi_assistant_id: null, max_dispatch_attempts: 5 };
   try {
     const { data, error } = await supabaseClient
       .from('emergency_network_config')
       .select('value')
       .eq('key', CONFIG_KEY)
       .single();
-    if (error && error.code !== 'PGRST116') throw error;
+    if (error) {
+      if (error.code === 'PGRST116') {
+        cachedConfig = empty;
+      } else {
+        console.warn('[EmergencyNetwork] getEmergencyConfig DB error:', error.code, error.message);
+        cachedConfig = empty;
+      }
+      cacheTime = now;
+      return cachedConfig;
+    }
     const value = data?.value || {};
     cachedConfig = {
       emergency_phone_numbers: Array.isArray(value.emergency_phone_numbers) ? value.emergency_phone_numbers : [],
@@ -46,7 +56,7 @@ export async function getEmergencyConfig() {
     return cachedConfig;
   } catch (e) {
     console.warn('[EmergencyNetwork] getEmergencyConfig error:', e?.message || e);
-    cachedConfig = { emergency_phone_numbers: [], emergency_vapi_assistant_id: null, max_dispatch_attempts: 5 };
+    cachedConfig = empty;
     cacheTime = now;
     return cachedConfig;
   }

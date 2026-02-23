@@ -29,6 +29,10 @@ export async function scrapeSource(source) {
       return await scrapeHTMLSource(source);
     } else if (source.type === 'WIKIPEDIA') {
       return await scrapeWikipediaSource(source);
+    } else if (source.type === 'TRIVIA_GENERATOR') {
+      return await scrapeTriviaSource(source);
+    } else if (source.type === 'WIKIDATA_FACTS') {
+      return await scrapeFactsSource(source);
     } else {
       throw new Error(`Unsupported source type: ${source.type}`);
     }
@@ -218,7 +222,7 @@ async function scrapeWikipediaSource(source) {
           published_at: new Date().toISOString(),
           content_type: branch,
           category: branch,
-          shock_score: 55
+          shock_score: 70
         });
       }
       if (items.length >= 50) break;
@@ -227,6 +231,110 @@ async function scrapeWikipediaSource(source) {
     return items;
   } catch (error) {
     console.error(`[Orbix Scraper] Wikipedia scraping error:`, error.message);
+    throw error;
+  }
+}
+
+/**
+ * Generate trivia via LLM (TRIVIA_GENERATOR source type).
+ * Returns raw-item-shaped objects with content_fingerprint for dedup.
+ */
+async function scrapeTriviaSource(source) {
+  try {
+    const { generateAndValidateTrivia } = await import('./trivia-generator.js');
+    const businessId = source.business_id;
+    const channelId = source.channel_id;
+    if (!businessId || !channelId) {
+      console.warn('[Orbix Scraper] Trivia source missing business_id or channel_id');
+      return [];
+    }
+    // Get next episode number from existing trivia for this channel
+    const { count } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('category', 'trivia');
+    const episodeNumber = (count || 0) + 1;
+    const trivia = await generateAndValidateTrivia(businessId, channelId, { episodeNumber });
+    if (!trivia) {
+      console.log('[Orbix Scraper] Trivia generator produced no valid question');
+      return [];
+    }
+    const title = `Trivia #${String(episodeNumber).padStart(2, '0')} - ${trivia.category}`;
+    const url = `trivia://${trivia.content_fingerprint}`;
+    const snippet = JSON.stringify({
+      hook: trivia.hook,
+      category: trivia.category,
+      question: trivia.question,
+      option_a: trivia.option_a,
+      option_b: trivia.option_b,
+      option_c: trivia.option_c,
+      correct_answer: trivia.correct_answer,
+      voice_script: trivia.voice_script,
+      episode_number: trivia.episode_number
+    });
+    return [{
+      source_id: source.id,
+      channel_id: channelId,
+      title,
+      snippet,
+      url,
+      published_at: new Date().toISOString(),
+      content_type: 'trivia',
+      category: 'trivia',
+      shock_score: 70,
+      content_fingerprint: trivia.content_fingerprint,
+      factors_json: { source: 'trivia_generator' }
+    }];
+  } catch (error) {
+    console.error('[Orbix Scraper] Trivia source error:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Scrape one fact from Wikidata (WIKIDATA_FACTS source type).
+ * Returns raw-item-shaped objects with content_fingerprint for dedup.
+ */
+async function scrapeFactsSource(source) {
+  try {
+    const { fetchOneFact } = await import('./wikidata-facts.js');
+    const businessId = source.business_id;
+    const channelId = source.channel_id;
+    if (!businessId || !channelId) {
+      console.warn('[Orbix Scraper] Facts source missing business_id or channel_id');
+      return [];
+    }
+    const fact = await fetchOneFact(source);
+    if (!fact) {
+      console.log('[Orbix Scraper] Facts source produced no fact');
+      return [];
+    }
+    const title = fact.title || `Fact: ${fact.fact_text?.slice(0, 50) || 'Wikidata'}`;
+    const url = `facts://${fact.entity_id}`;
+    const snippet = JSON.stringify({
+      title: fact.title,
+      fact_text: fact.fact_text,
+      tts_script: fact.tts_script,
+      entity_id: fact.entity_id,
+      property_id: fact.property_id
+    });
+    return [{
+      source_id: source.id,
+      channel_id: channelId,
+      title,
+      snippet,
+      url,
+      published_at: new Date().toISOString(),
+      content_type: 'facts',
+      category: 'facts',
+      shock_score: 70,
+      content_fingerprint: fact.content_fingerprint,
+      factors_json: { source: 'wikidata_facts' }
+    }];
+  } catch (error) {
+    console.error('[Orbix Scraper] Facts source error:', error.message);
     throw error;
   }
 }
@@ -261,24 +369,48 @@ export function generateHash(url, title) {
 }
 
 /**
- * Check if item already exists (deduplication). Scoped by channel when channel_id present.
+ * Check if item already exists (deduplication).
+ * DB unique constraint is (business_id, url), so we check by URL first regardless of channel.
+ * For trivia: also check content_fingerprint scoped by channel (catches semantic duplicates).
  */
-export async function deduplicateItem(businessId, url, hash, channelId = null) {
+export async function deduplicateItem(businessId, url, hash, channelId = null, contentFingerprint = null) {
   try {
-    let query = supabaseClient
+    // Match DB unique constraint: same URL for same business is always a duplicate
+    const { data: byUrl, error: urlError } = await supabaseClient
       .from('orbix_raw_items')
       .select('id')
       .eq('business_id', businessId)
-      .or(`url.eq.${url},hash.eq.${hash}`);
-    if (channelId) {
-      query = query.eq('channel_id', channelId);
-    }
-    const { data, error } = await query.single();
+      .eq('url', url)
+      .maybeSingle();
 
-    if (error && error.code !== 'PGRST116') {
-      throw error;
+    if (urlError) throw urlError;
+    if (byUrl) return true;
+
+    // For trivia: check content_fingerprint (catches same Q+A with different URL due to wording)
+    if (contentFingerprint && channelId) {
+      const { data: byFingerprint, error: fpError } = await supabaseClient
+        .from('orbix_raw_items')
+        .select('id')
+        .eq('business_id', businessId)
+        .eq('channel_id', channelId)
+        .eq('content_fingerprint', contentFingerprint)
+        .maybeSingle();
+      if (!fpError && byFingerprint) return true;
     }
-    return !!data;
+
+    // Also check by hash (same content, different URL) scoped by channel when provided
+    let hashQuery = supabaseClient
+      .from('orbix_raw_items')
+      .select('id')
+      .eq('business_id', businessId)
+      .eq('hash', hash);
+    if (channelId != null) {
+      hashQuery = hashQuery.eq('channel_id', channelId);
+    }
+    const { data: byHash, error: hashError } = await hashQuery.maybeSingle();
+
+    if (hashError) throw hashError;
+    return !!byHash;
   } catch (error) {
     console.error('[Orbix Scraper] Deduplication check error:', error);
     return false;
@@ -292,8 +424,9 @@ export async function saveRawItem(businessId, item) {
   try {
     const hash = generateHash(item.url, item.title);
     const channelId = item.channel_id ?? null;
+    const contentFingerprint = item.content_fingerprint ?? null;
 
-    const isDuplicate = await deduplicateItem(businessId, item.url, hash, channelId);
+    const isDuplicate = await deduplicateItem(businessId, item.url, hash, channelId, contentFingerprint);
     if (isDuplicate) {
       if (Math.random() < 0.1) {
         console.log(`[Orbix Scraper] Skipping duplicate: ${item.title.substring(0, 60)}...`);
@@ -302,7 +435,9 @@ export async function saveRawItem(businessId, item) {
     }
 
     const isEvergreen = item.content_type === 'psychology' || item.category === 'psychology' ||
-      item.content_type === 'money' || item.category === 'money';
+      item.content_type === 'money' || item.category === 'money' ||
+      item.content_type === 'trivia' || item.category === 'trivia' ||
+      item.content_type === 'facts' || item.category === 'facts';
     const insertPayload = {
       business_id: businessId,
       channel_id: channelId,
@@ -314,10 +449,17 @@ export async function saveRawItem(businessId, item) {
       hash: hash,
       status: 'NEW'
     };
+    if (item.content_fingerprint) {
+      insertPayload.content_fingerprint = item.content_fingerprint;
+    }
     if (isEvergreen && item.category && item.shock_score != null) {
       insertPayload.category = item.category;
       insertPayload.shock_score = item.shock_score;
-      insertPayload.factors_json = item.factors_json || { source: item.category === 'money' ? 'wikipedia_money' : 'wikipedia_psychology' };
+      insertPayload.factors_json = item.factors_json || (
+        item.category === 'trivia' ? { source: 'trivia_generator' } :
+        item.category === 'facts' ? { source: 'wikidata_facts' } :
+        item.category === 'money' ? { source: 'wikipedia_money' } : { source: 'wikipedia_psychology' }
+      );
     }
     const { data, error } = await supabaseClient
       .from('orbix_raw_items')
@@ -368,6 +510,13 @@ export async function saveRawItem(businessId, item) {
 
     return data;
   } catch (error) {
+    // Unique constraint (business_id, url) - treat as duplicate and skip
+    if (error?.code === '23505') {
+      if (Math.random() < 0.1) {
+        console.log(`[Orbix Scraper] Skipping duplicate (race): ${item.title.substring(0, 50)}...`);
+      }
+      return null;
+    }
     console.error('[Orbix Scraper] Error saving raw item:', error);
     throw error;
   }

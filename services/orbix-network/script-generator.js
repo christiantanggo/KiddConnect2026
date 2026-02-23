@@ -6,6 +6,200 @@
 import OpenAI from 'openai';
 import { supabaseClient } from '../../config/database.js';
 
+/** Max words per hook line; max lines for hook. */
+const HOOK_MAX_WORDS_PER_LINE = 14;
+const HOOK_MAX_LINES = 2;
+
+/** Hedging / filler words to remove or replace so hooks stay punchy. */
+const HOOK_BANNED_WORDS = /\b(might|may|can|often|sometimes|perhaps|probably|possibly|generally|usually|typically|reveals?|influenced?|modelling|satisfaction|many people|it can|this is why|ever wonder|pretend|maybe|preferences?|influence|tend|insecurity)\b/gi;
+
+/** High-retention hooks (Money + Psychology): 4–8 words; strong declarative; high-authority. */
+const HOOK_MIN_WORDS_HIGH_RETENTION = 4;
+const HOOK_MAX_WORDS_HIGH_RETENTION = 8;
+
+/** Shorts-native format (psychology/money): 12–16s, tension + loop cut. */
+const SHORTS_NATIVE_HOOK_MAX_WORDS = 7;
+const SHORTS_NATIVE_TOTAL_WORDS_MIN = 32;
+const SHORTS_NATIVE_TOTAL_WORDS_MAX = 45;
+const MONEY_HOOK_MAX_WORDS = HOOK_MAX_WORDS_HIGH_RETENTION;
+const PSYCHOLOGY_HOOK_MAX_WORDS = HOOK_MAX_WORDS_HIGH_RETENTION;
+
+/** Banned starts for money/psychology (reject and strip): soft, academic, explanatory. */
+const HIGH_RETENTION_BANNED_STARTS = /^\s*(Have you ever[,.]?\s|Many people[,.]?\s|Sometimes[,.]?\s|It can be\s|This can lead to\s|Over time[,.]?\s|Understanding this can help\s|Why do\s|Why does\s|Ever wonder[,.]?\s|Did you know[,.]?\s|In psychology[,.]?\s|Studies show[,.]?\s|Understanding\s|Why\s)/i;
+
+/** Accusatory phrases that violate observational tone (reject hook). */
+const HOOK_ACCUSATORY_PHRASES = /\b(you'?re wrong|you'?re lying|you'?re fooling yourself)\b/i;
+const MONEY_HOOK_BANNED_STARTS = HIGH_RETENTION_BANNED_STARTS;
+const PSYCHOLOGY_HOOK_BANNED_STARTS = HIGH_RETENTION_BANNED_STARTS;
+
+/** Hook Style Guide block for LLM prompts (Money + Psychology). */
+const HOOK_STYLE_GUIDE = `HOOK STYLE GUIDE (high-retention Shorts):
+- Output 1–2 lines only. Each line ≤ ${HOOK_MAX_WORDS_PER_LINE} words.
+- First line must be a pattern interrupt: bold claim, contradiction, or "you think X, but Y".
+- Use 2nd person ("you/your") and identity triggers. Simple words. Short sentences.
+- No hedging: avoid "might, may, can, often, sometimes". No academic: "reveals, influenced, modelling, satisfaction".
+- No questions unless a single sharp question as line 2.
+- Approved structures: A) "You think _____. You're wrong." B) "Your brain _____. That's why ____." C) "This is why ____ feels ____." D) "Most people _____. Here's what's actually happening." E) "____ is not about _____. It's about ____."`;
+
+/** Final tone: observational, not accusatory (Money + Psychology). */
+const HIGH_RETENTION_HOOK_RULES = `HOOK: One strong declarative sentence. ${HOOK_MIN_WORDS_HIGH_RETENTION}–${HOOK_MAX_WORDS_HIGH_RETENTION} words. Calm but sharp. Observational, not accusatory.
+AVOID: "You're wrong," "You're fooling yourself," "You're lying." No attacking the viewer.
+Use framing like: "Fairness isn't always what it seems." "Generosity has hidden motives." "Approval influences spending." "Selflessness has a cost."
+FORBIDDEN: "Why…", "Many people…", "Have you ever…", "Understanding…". No soft curiosity. No motivational tone.`;
+
+/** Observational hook examples (one per variation). */
+const HOOK_ALLOWED_FORMATS = `HOOK EXAMPLES (observational, final brand voice):
+"Fairness isn't always what it seems." "Generosity has hidden motives." "Approval influences spending."
+"Selflessness has a cost." "Fairness isn't always what it appears to be." "Unexamined motives have consequences."`;
+
+/** Money channel: observers of behavior, not judges. */
+const MONEY_HOOK_STYLE_GUIDE = `HOOK (Money) — ${HIGH_RETENTION_HOOK_RULES}
+
+${HOOK_ALLOWED_FORMATS}
+
+MONEY CHANNEL: Calm, analytical, observational. Focus on behavioral dynamics. Not accusatory. Not theatrical.`;
+
+/** Psychology channel: observers of behavior, not judges. */
+const PSYCHOLOGY_HOOK_STYLE_GUIDE = `HOOK (Psychology) — ${HIGH_RETENTION_HOOK_RULES}
+
+${HOOK_ALLOWED_FORMATS}
+
+PSYCHOLOGY CHANNEL: Calm, analytical, observational. Focus on behavioral dynamics. Not accusatory. Not theatrical.`;
+
+/** What Happened: analytical; no moral judgment (Money + Psychology). */
+const WHAT_HAPPENED_STRUCTURE = `WHAT HAPPENED (final brand voice — observational, not accusatory):
+- 2–3 clean sentences. Natural flow. Analytical tone.
+- No moral judgment. No emotional exaggeration.
+- FORBIDDEN words: "manipulation," "fake," "lying," "pretend," etc. Focus on behavioral dynamics.
+- FORBIDDEN openers: "Many people…", "This can lead to…", "Understanding this can help…". No preachy or motivational tone.
+
+DO NOT: Judge the viewer. Use accusatory language. Be emotional or theatrical.
+
+GOOD (2–3 sentences, analytical):
+You may believe your spending reflects generosity or altruism. But social approval and the desire to be perceived positively often influence financial choices in subtle ways. Over time, these influences reshape priorities without conscious awareness.`;
+
+/** Tone: observers of behavior, not judges. Final brand voice. */
+const AUTHORITY_TONE = `TONE (final brand voice): We are observers of behavior, not judges of behavior.
+We are: Calm. Controlled. Slightly unsettling. Intellectually composed.
+We are never: Accusatory. Emotional. Preachy. Motivational. Theatrical.
+The viewer should feel: "Hmm. That's interesting."
+Not: "I'm being attacked."`;
+
+/** Shock score below this (for money) triggers an extra retry for a more aggressive hook. */
+const MONEY_SHOCK_SCORE_MIN = 70;
+
+/** Shorts-native format: FORCE retention — tension, ego-threat, punchy ending. NO educational/documentary tone. */
+const SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE = 9;
+/** Banned abstract words in twist/payoff (psychology/money). */
+const SHORTS_NATIVE_BANNED_WORDS = /\b(influences?|preferences?|subconsciously|lens|shapes?\b|decisions?)\b/gi;
+const SHORTS_NATIVE_PAYOFF_MAX_WORDS = 10;
+const SHORTS_NATIVE_LOOP_MAX_WORDS = 8;
+const SHORTS_NATIVE_CAPTION_MAX_WORDS = 6;
+const SHORTS_NATIVE_CAPTION_LINES_MIN = 5;
+const SHORTS_NATIVE_CAPTION_LINES_MAX = 7;
+
+const SHORTS_NATIVE_SYSTEM = `You write YouTube Shorts scripts for Psychology and Money. PRIMARY GOAL: stop swipes. Create tension, ego-threat, discomfort, and a punchy ending that drives rewatch. The story must feel complete; the last line must be a full sentence. We are NOT polite. We are NOT teaching.
+
+=== HARD OUTPUT (PASS/FAIL) ===
+- LENGTH: 12–16 seconds spoken. Word count MUST be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words total. No exceptions.
+- STRUCTURE (EXACT):
+  - HOOK: 1 line, <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. Identity threat or contradiction. Must land in under 1 second — first 3–4 words are the punch (no setup phrase first).
+  - TWIST (what_happened): EXACTLY 2 lines. Each line <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words. Escalate tension. NO definitions, NO explanations.
+  - PAYOFF (why_it_matters): 1 line, <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. Sharp insight, concrete language.
+  - LOOP CUT (what_happens_next): 1 line, <= ${SHORTS_NATIVE_LOOP_MAX_WORDS} words. Must be a COMPLETE sentence or phrase — the story must feel complete. Create rewatch with a punch or open-ended implication, not a literal cut-off.
+
+- TONE: Must feel like exposure / call-out / secret. NOT a lesson, blog post, or TED talk. The script must read as a COMPLETE story (clear point, full thought).
+
+- BANNED (FAIL IF PRESENT): Section headers. Soft CTA ("comment below", "follow for more"). Intros ("did you know", "in this video", "let's talk about"). Lists ("3 signs", "5 ways"). Moralizing: "might", "could", "sometimes", "often" (max 1 total if needed). HEAVY ABSTRACT WORDS — avoid: "influences", "preferences", "subconsciously", "lens", "shapes", "decisions". Use "bias" at most once; prefer not. No long explanations, no definitions. Literally incomplete sentences (e.g. "And that's why you still..." with nothing after).
+
+- REQUIRED: Include at least ONE of: ego trigger ("You think you're… but…"), threat ("This is why you keep losing…"), conflict ("They want you to…"), regret ("This is costing you…"), secret ("Nobody tells you this…").
+
+- LOOP CUT (CRITICAL): Last line MUST be a full sentence or phrase — no trailing "..." with the thought unfinished. Create rewatch with a sharp punch or implication. GOOD: "And that's why you still lose." "Which is exactly how they get you." "And that's the part they don't show you." "And that's why you keep falling for it." BAD: "And that's why you still..." (incomplete). BAD: Soft question "Could this affect you?" BAD: Obvious wrap-up like "So next time, think about it."
+
+- CAPTIONS: Return "captions" as array of 5–7 strings. Each caption <= ${SHORTS_NATIVE_CAPTION_MAX_WORDS} words. Punchy, match script pacing.
+
+SELF-VERIFY before output: (A) Hook threatens identity or creates curiosity. (B) No line sounds like a definition. (C) Ending is a COMPLETE sentence that still creates rewatch (no literal "..."). (D) Concrete verbs: tricks, hijacks, edits, punishes, pulls, hooks, controls, steals — not abstract. (E) Word count ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}. (F) Whole script reads as a complete story.
+
+Return only valid JSON: hook, what_happened (EXACTLY 2 lines separated by newline \\n — line 1 <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words, line 2 <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words), why_it_matters, what_happens_next, cta_line (""), captions (array of 5–7 strings), duration_target_seconds (14).`;
+
+/**
+ * Count words in a string (splits on whitespace).
+ * @param {string} s - Text
+ * @returns {number}
+ */
+function countWords(s) {
+  if (typeof s !== 'string') return 0;
+  return s.trim().split(/\s+/).filter(Boolean).length;
+}
+
+/**
+ * Validate Shorts-native script (psychology/money): word count 32-45, twist 2 lines each <=9 words, no banned abstract words.
+ * @param {{ hook?: string, what_happened?: string, why_it_matters?: string, what_happens_next?: string }} scriptData
+ * @returns {{ compliant: boolean, reason?: string }}
+ */
+function isShortsNativeScriptCompliant(scriptData) {
+  const hook = (scriptData.hook || '').trim();
+  const whatHappened = (scriptData.what_happened || '').trim();
+  const whyItMatters = (scriptData.why_it_matters || '').trim();
+  const whatHappensNext = (scriptData.what_happens_next || '').trim();
+  const total = countWords(hook) + countWords(whatHappened) + countWords(whyItMatters) + countWords(whatHappensNext);
+  if (total < SHORTS_NATIVE_TOTAL_WORDS_MIN || total > SHORTS_NATIVE_TOTAL_WORDS_MAX) {
+    return { compliant: false, reason: `Total word count ${total}; must be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}.` };
+  }
+  const twistLines = whatHappened.split(/\n/).map(l => l.trim()).filter(Boolean);
+  if (twistLines.length !== 2) {
+    return { compliant: false, reason: `TWIST must be exactly 2 lines (got ${twistLines.length}). Use newline between them.` };
+  }
+  const line1Words = countWords(twistLines[0]);
+  const line2Words = countWords(twistLines[1]);
+  if (line1Words > SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE || line2Words > SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE) {
+    return { compliant: false, reason: `Each TWIST line must be <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words (got ${line1Words} and ${line2Words}).` };
+  }
+  const body = `${whatHappened} ${whyItMatters}`;
+  const bannedMatch = body.match(SHORTS_NATIVE_BANNED_WORDS);
+  if (bannedMatch) {
+    const word = bannedMatch[0].toLowerCase();
+    return { compliant: false, reason: `Banned word "${word}" in twist/payoff. Use concrete verbs instead.` };
+  }
+  return { compliant: true };
+}
+
+/**
+ * Validate hook for high-retention rules (money/psychology): Shorts-native max 7 words, observational not accusatory, no banned starts.
+ * @param {string} hook - Hook text
+ * @param {string} topic - 'money' | 'psychology'
+ * @returns {{ compliant: boolean, reason?: string }}
+ */
+export function isHookCompliant(hook, topic = '') {
+  const t = (topic || '').toLowerCase();
+  if (t !== 'money' && t !== 'psychology') return { compliant: true };
+  const s = (hook || '').trim();
+  if (!s) return { compliant: false, reason: 'empty' };
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length < HOOK_MIN_WORDS_HIGH_RETENTION) return { compliant: false, reason: `fewer than ${HOOK_MIN_WORDS_HIGH_RETENTION} words (got ${words.length})` };
+  if (words.length > SHORTS_NATIVE_HOOK_MAX_WORDS) return { compliant: false, reason: `hook exceeds ${SHORTS_NATIVE_HOOK_MAX_WORDS} words (got ${words.length})` };
+  if (HOOK_ACCUSATORY_PHRASES.test(s)) return { compliant: false, reason: 'accusatory phrasing (observational tone required)' };
+  if (HIGH_RETENTION_BANNED_STARTS.test(s)) return { compliant: false, reason: 'banned opener (Many people/Have you ever/Understanding/This can lead to/Why etc.)' };
+  return { compliant: true };
+}
+
+/**
+ * Normalize What Happened for Money/Psychology (authority style): keep natural flow.
+ * For Shorts-native, preserves newlines (2-line twist). Converts " / " to space.
+ * @param {string} text - Raw what_happened from LLM
+ * @param {boolean} [preserveNewlines] - If true, keep \\n for 2-line twist
+ * @returns {string} Trimmed, normalized
+ */
+export function normalizeWhatHappened(text, preserveNewlines = false) {
+  if (typeof text !== 'string') return '';
+  const t = text.trim().replace(/\s*\/\s*/g, ' ');
+  if (preserveNewlines) {
+    return t.split(/\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean).join('\n').trim() || text.trim();
+  }
+  const s = t.replace(/\s+/g, ' ').trim();
+  return s || text.trim();
+}
+
 // Lazy OpenAI client initialization
 let openaiClient = null;
 
@@ -23,6 +217,54 @@ function getOpenAIClient() {
 }
 
 /**
+ * Rewrite generated hook: Money/Psychology = 4–8 words, strip banned openers/filler. Other = ≤2 lines, ≤14 words/line.
+ * @param {string} text - Raw hook from LLM
+ * @param {string} topic - 'psychology' | 'money' | other
+ * @returns {string} Rewritten hook
+ */
+export function rewriteHookForShorts(text, topic = '') {
+  if (typeof text !== 'string') return '';
+  let original = text.trim().replace(/\s+/g, ' ');
+  if (!original) return '';
+
+  const topicLower = (topic || '').toLowerCase();
+  const isMoney = topicLower === 'money';
+  const isPsychology = topicLower === 'psychology';
+  const isHighRetention = isMoney || isPsychology;
+  const maxWords = isHighRetention ? SHORTS_NATIVE_HOOK_MAX_WORDS : HOOK_MAX_WORDS_PER_LINE;
+
+  if (isHighRetention) {
+    let s = original.replace(HIGH_RETENTION_BANNED_STARTS, '').trim();
+    s = s.replace(HOOK_BANNED_WORDS, ' ').replace(/\s+/g, ' ').trim();
+    if (!s) s = original.replace(HIGH_RETENTION_BANNED_STARTS, '').trim();
+    const words = s.split(/\s+/).filter(Boolean);
+    const out = words.slice(0, maxWords).join(' ').trim();
+    return out || original.split(/\s+/).filter(Boolean).slice(0, maxWords).join(' ').trim();
+  }
+
+  let s = original.replace(HOOK_BANNED_WORDS, ' ').replace(/\s+/g, ' ').trim();
+  const words = s.split(/\s+/).filter(Boolean);
+  if (words.length === 0) {
+    const fallbackWords = original.split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cursor = 0;
+    for (let i = 0; i < HOOK_MAX_LINES && cursor < fallbackWords.length; i++) {
+      lines.push(fallbackWords.slice(cursor, cursor + HOOK_MAX_WORDS_PER_LINE).join(' '));
+      cursor += HOOK_MAX_WORDS_PER_LINE;
+    }
+    return lines.join('\n').trim();
+  }
+  const lines = [];
+  let cursor = 0;
+  for (let lineIndex = 0; lineIndex < HOOK_MAX_LINES && cursor < words.length; lineIndex++) {
+    const take = Math.min(HOOK_MAX_WORDS_PER_LINE, words.length - cursor);
+    lines.push(words.slice(cursor, cursor + take).join(' '));
+    cursor += take;
+  }
+  return lines.join('\n').trim() || words.slice(0, HOOK_MAX_WORDS_PER_LINE).join(' ');
+}
+
+/**
  * Generate script for a story
  * @param {Object} story - Story object from database
  * @param {Object} rawItem - Raw item data
@@ -34,85 +276,136 @@ export async function generateScript(story, rawItem) {
   console.log(`[Script Generator] Story ID: ${story.id}, Raw Item ID: ${rawItem?.id}`);
   const isPsychology = story.category === 'psychology';
   const isMoney = story.category === 'money';
+  const isTrivia = story.category === 'trivia';
+  const isFacts = story.category === 'facts';
 
   try {
+    // Facts: turn raw fact into Shorts-native script (hook, twist, payoff, loop) via LLM
+    if (isFacts && rawItem?.snippet) {
+      let factsPayload;
+      try {
+        factsPayload = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+      } catch {
+        console.error('[Script Generator] Facts snippet is not valid JSON');
+        throw new Error('Facts snippet must be valid JSON');
+      }
+      const title = (factsPayload.title || 'Fact').trim();
+      const factText = (factsPayload.fact_text || '').trim();
+      if (!factText) {
+        throw new Error('Facts snippet missing fact_text');
+      }
+      const factsSystemPrompt = `You write YouTube Shorts scripts for a Facts channel. Turn a single factual claim into a retention-focused Shorts script. Same rules as psychology/money: tension, hook, punchy ending. NOT educational or documentary tone.
+
+- TOTAL: ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words. Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST (what_happened): exactly 2 lines (separate with \\n), each <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words — the fact, punchy. PAYOFF (why_it_matters): 1 line <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP (what_happens_next): 1 line <= ${SHORTS_NATIVE_LOOP_MAX_WORDS} words, complete sentence with punch.
+- Hook must land in under 1 second (identity threat or curiosity). No "Did you know". No soft endings. Include at least one of: secret, ego trigger, conflict.
+- Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_happens_next, cta_line (""), duration_target_seconds (14).`;
+
+      const factsUserPrompt = `Turn this fact into a Shorts script (${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words). Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. 2-line twist, payoff, loop (complete punch).
+
+Subject: ${title}
+Fact: ${factText}
+
+Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_happens_next, cta_line "", duration_target_seconds 14.`;
+
+      const completion = await getOpenAIClient().chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'system', content: factsSystemPrompt },
+          { role: 'user', content: factsUserPrompt }
+        ],
+        temperature: 0.7,
+        max_tokens: 500,
+        response_format: { type: 'json_object' }
+      });
+      const scriptData = JSON.parse(completion.choices[0].message.content);
+      if (scriptData.what_happened && typeof scriptData.what_happened === 'string') {
+        scriptData.what_happened = scriptData.what_happened.replace(/\\n/g, '\n').trim();
+      }
+      const rawWhatHappened = (scriptData.what_happened || '').trim();
+      const script = {
+        hook: (scriptData.hook || '').trim().slice(0, 80),
+        what_happened: normalizeWhatHappened(rawWhatHappened, true) || rawWhatHappened,
+        why_it_matters: (scriptData.why_it_matters || '').trim().slice(0, 200),
+        what_happens_next: (scriptData.what_happens_next || '').trim().slice(0, 150),
+        cta_line: '',
+        duration_target_seconds: Math.min(16, Math.max(12, Number(scriptData.duration_target_seconds) || 14)),
+        content_type: 'facts',
+        content_json: {
+          title: factsPayload.title,
+          fact_text: factsPayload.fact_text,
+          entity_id: factsPayload.entity_id,
+          property_id: factsPayload.property_id
+        }
+      };
+      if (!script.hook || !script.what_happened || !script.why_it_matters || !script.what_happens_next) {
+        throw new Error('Facts LLM script missing required fields');
+      }
+      console.log(`[Script Generator] Facts script from LLM (hook + twist + payoff + loop)`);
+      return script;
+    }
+
+    // Trivia: use pre-generated payload from raw item snippet (no LLM call)
+    if (isTrivia && rawItem?.snippet) {
+      let trivia;
+      try {
+        trivia = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+      } catch {
+        console.error('[Script Generator] Trivia snippet is not valid JSON');
+        throw new Error('Trivia snippet must be valid JSON');
+      }
+      const script = {
+        hook: (trivia.hook || 'Let\'s test your knowledge.').trim(),
+        what_happened: trivia.question || '',
+        why_it_matters: '',
+        what_happens_next: 'Comment A, B, or C.',
+        cta_line: trivia.voice_script?.includes('Comment') ? 'Comment A, B, or C.' : 'Did you get it right?',
+        duration_target_seconds: 30,
+        content_type: 'trivia',
+        content_json: {
+          hook: trivia.hook,
+          category: trivia.category,
+          question: trivia.question,
+          option_a: trivia.option_a,
+          option_b: trivia.option_b,
+          option_c: trivia.option_c,
+          correct_answer: trivia.correct_answer,
+          voice_script: trivia.voice_script,
+          episode_number: trivia.episode_number
+        }
+      };
+      console.log(`[Script Generator] Trivia script from snippet (no LLM)`);
+      return script;
+    }
+
     console.log(`[Script Generator] Step 1: Building prompts... (psychology=${isPsychology}, money=${isMoney})`);
     let systemPrompt;
     let userPrompt;
     if (isPsychology) {
-      systemPrompt = `You are a script writer for short-form psychology videos. Write like you're talking to one person, not a group. Psychology scripts only—follow these rules:
+      systemPrompt = `${SHORTS_NATIVE_SYSTEM}
 
-HOOK (max 10 words):
-- Directly address the viewer. Use "you" or "your brain".
-- Slightly urgent or confrontational. Prefer strong verbs: "hides", "ignores", "decides", "misses", "lies", "skips".
-- Bad: "Ever wonder why surveys can be tricky?"
-- Good: "Your brain hides this from you." or "Your brain ignores what actually matters."
+Psychology channel: bias, perception, identity, hidden motives. Use concrete verbs (hijacks, tricks, edits). No educational tone.`;
 
-BODY (what_happened):
-- Simple, everyday language. Frame as something the brain does automatically.
-- Short, conversational sentences. No academic wording.
-
-WHY IT MATTERS (one short sentence):
-- Focus on visible behavior or decisions, not internal confusion. Emphasize repeated choices, actions, or patterns the viewer recognizes in themselves.
-- No research or academic phrasing.
-
-CALL TO ACTION (what_happens_next):
-- End with a question that invites comments or self-reflection.
-
-General:
-- Total length 30–45 words for the whole script. Do not increase length.
-- No medical or diagnostic language. Do not sound like a lesson or article.`;
-
-      userPrompt = `Write a YouTube Shorts script about this psychology concept.
+      userPrompt = `Shorts-native script. TOTAL words MUST be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}. HOOK <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines separated by newline (\\\\n), each line <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch. Do NOT use: preferences, influences, subconsciously, lens, shapes, decisions. Include ego-threat or secret. captions array: 5–7 lines, each <= ${SHORTS_NATIVE_CAPTION_MAX_WORDS} words.
 
 Concept: ${rawItem?.title || story.title || 'Psychology concept'}
-Source summary: ${(rawItem?.snippet || '').slice(0, 800)}
+Source: ${(rawItem?.snippet || story.snippet || '').slice(0, 600)}
 
-Return JSON with:
-{
-  "hook": "<direct, urgent or confrontational, use verbs like hides/ignores/decides/misses, max 10 words>",
-  "what_happened": "<simple everyday language, brain does this automatically, short sentences>",
-  "why_it_matters": "<one short sentence: visible behavior or decisions—repeated choices, actions, or patterns the viewer recognizes>",
-  "what_happens_next": "<question that invites comments or self-reflection>",
-  "cta_line": "",
-  "duration_target_seconds": 35
-}`;
+Example what_happened (2 lines with \\\\n): "Your birthday hides in your picks.\\\\nYou choose it without knowing."
+Return JSON only: hook_1, hook_2, hook_3, what_happened (2 lines with \\\\n), why_it_matters, what_happens_next, cta_line "", captions, duration_target_seconds 14.`;
     } else if (isMoney) {
-      systemPrompt = `You are a script writer for short-form money/wealth behavior videos. Write like you're talking to one person. Tone: practical, relatable, non-judgmental. No financial advice or guarantees. Focus on behavior, habits, and common mistakes.
+      systemPrompt = `${SHORTS_NATIVE_SYSTEM}
 
-HOOK (max 10 words):
-- Short, calm hook-style. Speak directly to the viewer ("you", "your money").
-- No emojis, no clickbait, no dollar amounts or promises.
-- Examples: "Why money decisions feel harder than they should." "Your brain treats money differently than time."
+Money channel: spending, approval, ego, status, control. Concrete verbs. No financial advice.`;
 
-BODY (what_happened):
-- Simple, everyday language. Use "often", "tends to", "many people", "over time".
-- Avoid advice like "you should invest" or "do this to get rich". No income promises or results.
-- Frame around: spending habits, inflation effects, lifestyle creep, compound interest behavior, emotional money decisions.
-
-WHY IT MATTERS (one short sentence):
-- Reinforce the idea in plain language. No financial advice. No promises.
-
-CALL TO ACTION (what_happens_next):
-- End with a soft question or reflection (e.g. "What do you think?").
-
-General:
-- Total length 30–45 words for the whole script. Same structure as psychology: Hook, What Happened, Why It Matters, What Happens Next.`;
-
-      userPrompt = `Write a YouTube Shorts script about this money/wealth concept.
+      const shockHint = (story.shock_score ?? 0) < MONEY_SHOCK_SCORE_MIN
+        ? ` Shock score below ${MONEY_SHOCK_SCORE_MIN}: hook sharp, tension, no soft tone.`
+        : '';
+      userPrompt = `Shorts-native script. TOTAL words MUST be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}. HOOK <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines separated by newline (\\\\n), each line <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence, punchy. Do NOT use: preferences, influences, subconsciously, lens, shapes, decisions. Include threat or regret. captions array: 5–7 lines, each <= ${SHORTS_NATIVE_CAPTION_MAX_WORDS} words.
 
 Concept: ${rawItem?.title || story.title || 'Money concept'}
-Source summary: ${(rawItem?.snippet || '').slice(0, 800)}
+Source: ${(rawItem?.snippet || story.snippet || '').slice(0, 600)}${shockHint}
 
-Return JSON with:
-{
-  "hook": "<short calm hook, speak to viewer, no emojis/clickbait/dollar amounts, max 10 words>",
-  "what_happened": "<simple language, use often/tends to/many people/over time, no advice or promises>",
-  "why_it_matters": "<one short sentence, plain language, no financial advice>",
-  "what_happens_next": "<soft question or reflection>",
-  "cta_line": "",
-  "duration_target_seconds": 35
-}`;
+Return JSON only: hook_1, hook_2, hook_3, what_happened (2 lines with \\\\n), why_it_matters, what_happens_next, cta_line "", captions, duration_target_seconds 14.`;
     } else {
       systemPrompt = `You are a script writer for Orbix Network, a video news network tracking sudden power shifts. Write scripts that are:
 
@@ -123,8 +416,10 @@ Return JSON with:
 - NO political rage framing
 - NO graphic violence or tragedy
 
+${HOOK_STYLE_GUIDE}
+
 Script Structure:
-1. Hook: One clear statement (NOT a question) that grabs attention
+1. Hook: One clear statement (NOT a question) that grabs attention; 1–2 lines, ≤${HOOK_MAX_WORDS_PER_LINE} words per line.
 2. What happened: Brief factual summary
 3. Why it matters: The impact and significance
 4. What happens next: Forward-looking perspective
@@ -147,7 +442,7 @@ Shock Score: ${story.shock_score}/100
 
 Generate a script for a short-form video. Return JSON with:
 {
-  "hook": "<one clear statement, not a question>",
+  "hook": "<1–2 lines, ≤${HOOK_MAX_WORDS_PER_LINE} words per line; one clear statement, not a question>",
   "what_happened": "<brief factual summary>",
   "why_it_matters": "<the impact and significance>",
   "what_happens_next": "<forward-looking perspective>",
@@ -156,37 +451,108 @@ Generate a script for a short-form video. Return JSON with:
 }`;
     }
 
-    console.log(`[Script Generator] Step 2: Calling OpenAI API...`);
-    const openaiStartTime = Date.now();
-    const completion = await getOpenAIClient().chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
+    const topic = story.category || 'other';
+    const isHighRetention = isPsychology || isMoney;
+    const shockScore = story.shock_score ?? 0;
+    const moneyNeedsAggressiveHook = isMoney && shockScore < MONEY_SHOCK_SCORE_MIN;
+    let scriptData;
+    let retried = false;
+    let retriedForShock = false;
+    let lastRejectReason = '';
+    const maxRetries = isPsychology ? 2 : isMoney ? 3 : 0;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      console.log(`[Script Generator] Step 2: Calling OpenAI API...${attempt > 0 ? ` (retry: ${lastRejectReason || 'validation'})` : ''}`);
+      const openaiStartTime = Date.now();
+      const messages = [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
-      ],
-      temperature: 0.7,
-      max_tokens: 800,
-      response_format: { type: 'json_object' }
-    });
-    const openaiDuration = Date.now() - openaiStartTime;
-    console.log(`[Script Generator] ✓ OpenAI API call completed in ${openaiDuration}ms`);
-    console.log(`[Script Generator] Response tokens: ${completion.usage?.total_tokens || 'unknown'}`);
+      ];
+      if (retried && isHighRetention) {
+        messages.push({
+          role: 'user',
+          content: `[REJECTED] ${lastRejectReason}. Generate again. Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch (e.g. "And that's why you still lose." — NOT "And that's why you still…"). No abstract words. Total ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words. captions array 5–7 lines. Same JSON.`
+        });
+      }
+      const completion = await getOpenAIClient().chat.completions.create({
+        model: 'gpt-4o',
+        messages,
+        temperature: 0.7,
+        max_tokens: 800,
+        response_format: { type: 'json_object' }
+      });
+      const openaiDuration = Date.now() - openaiStartTime;
+      console.log(`[Script Generator] ✓ OpenAI API call completed in ${openaiDuration}ms`);
+      console.log(`[Script Generator] Response tokens: ${completion.usage?.total_tokens || 'unknown'}`);
 
-    console.log(`[Script Generator] Step 3: Parsing JSON response...`);
-    const scriptData = JSON.parse(completion.choices[0].message.content);
-    console.log(`[Script Generator] ✓ JSON parsed successfully`);
-    console.log(`[Script Generator] Script data keys:`, Object.keys(scriptData || {}));
-    
-    // Validate and clean script data
+      console.log(`[Script Generator] Step 3: Parsing JSON response...`);
+      scriptData = JSON.parse(completion.choices[0].message.content);
+      console.log(`[Script Generator] ✓ JSON parsed successfully`);
+      console.log(`[Script Generator] Script data keys:`, Object.keys(scriptData || {}));
+      if (scriptData.what_happened && typeof scriptData.what_happened === 'string') {
+        scriptData.what_happened = scriptData.what_happened.replace(/\\n/g, '\n').trim();
+      }
+
+      // High-retention: prefer hook_1, hook_2, hook_3; pick first compliant or first rewritten
+      if (isHighRetention) {
+        const candidates = [
+          scriptData.hook_1,
+          scriptData.hook_2,
+          scriptData.hook_3,
+          scriptData.hook
+        ].filter(Boolean).map(h => (h || '').trim());
+        let chosen = '';
+        for (const raw of candidates) {
+          const rewritten = rewriteHookForShorts(raw, topic);
+          if (isHookCompliant(rewritten, topic).compliant) {
+            chosen = rewritten;
+            break;
+          }
+          if (!chosen) chosen = rewritten;
+        }
+        scriptData.hook = chosen || rewriteHookForShorts(candidates[0] || scriptData.hook || '', topic);
+      } else {
+        const rawHook = (scriptData.hook || '').trim();
+        scriptData.hook = rewriteHookForShorts(rawHook, topic);
+      }
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[Script Generator] Hook after:`, scriptData.hook);
+      }
+
+      if (!isHighRetention) break;
+      const hookValidation = isHookCompliant(scriptData.hook, topic);
+      const doShockRetry = moneyNeedsAggressiveHook && !retriedForShock;
+      const scriptValidation = isShortsNativeScriptCompliant(scriptData);
+      if (hookValidation.compliant && scriptValidation.compliant && !doShockRetry) break;
+      if (!hookValidation.compliant) {
+        lastRejectReason = hookValidation.reason || 'hook invalid';
+        console.log(`[Script Generator] Hook rejected (${lastRejectReason}), will retry...`);
+      } else if (!scriptValidation.compliant) {
+        lastRejectReason = scriptValidation.reason || 'script validation failed';
+        console.log(`[Script Generator] Script rejected (${lastRejectReason}), will retry...`);
+      } else if (doShockRetry) {
+        lastRejectReason = `Shock score below ${MONEY_SHOCK_SCORE_MIN}. Generate a more aggressive hook: imply weakness, insecurity, or self-deception; make the viewer uncomfortable; write as an accusation not a neutral statement.`;
+        console.log(`[Script Generator] Money hook shock boost (score=${shockScore}), will retry...`);
+        retriedForShock = true;
+      }
+      retried = true;
+    }
+
+    // Validate and clean script data (Money/Psychology: normalize What Happened to natural flow, no slashes)
+    const rawWhatHappened = (scriptData.what_happened || '').trim();
+    const durationTarget = scriptData.duration_target_seconds != null ? Number(scriptData.duration_target_seconds) : (isHighRetention ? 14 : 35);
     const script = {
       hook: (scriptData.hook || '').trim(),
-      what_happened: (scriptData.what_happened || '').trim(),
+      what_happened: isHighRetention ? normalizeWhatHappened(rawWhatHappened, true) || rawWhatHappened : normalizeWhatHappened(rawWhatHappened) || rawWhatHappened,
       why_it_matters: (scriptData.why_it_matters || '').trim(),
       what_happens_next: (scriptData.what_happens_next || '').trim(),
       cta_line: (scriptData.cta_line || '').trim(),
-      duration_target_seconds: Math.min(45, Math.max(30, scriptData.duration_target_seconds || 35))
+      duration_target_seconds: isHighRetention ? Math.min(16, Math.max(12, durationTarget)) : Math.min(45, Math.max(30, durationTarget || 35))
     };
-    
+    if (Array.isArray(scriptData.captions) && scriptData.captions.length > 0) {
+      script.content_json = { ...(typeof scriptData.content_json === 'object' && scriptData.content_json !== null ? scriptData.content_json : {}), captions: scriptData.captions };
+    }
+
     // Validate all fields are present
     console.log(`[Script Generator] Step 4: Validating script data...`);
     if (!script.hook || !script.what_happened || !script.why_it_matters || !script.what_happens_next) {
@@ -239,18 +605,21 @@ export async function saveScript(businessId, storyId, scriptData) {
   try {
     console.log(`[Script Generator] Inserting script into database...`);
     const insertStartTime = Date.now();
+    const insertPayload = {
+      business_id: businessId,
+      story_id: storyId,
+      hook: scriptData.hook,
+      what_happened: scriptData.what_happened || '',
+      why_it_matters: scriptData.why_it_matters || '',
+      what_happens_next: scriptData.what_happens_next || '',
+      cta_line: scriptData.cta_line || '',
+      duration_target_seconds: scriptData.duration_target_seconds ?? 35
+    };
+    if (scriptData.content_json) insertPayload.content_json = scriptData.content_json;
+    if (scriptData.content_type) insertPayload.content_type = scriptData.content_type;
     const { data: script, error } = await supabaseClient
       .from('orbix_scripts')
-      .insert({
-        business_id: businessId,
-        story_id: storyId,
-        hook: scriptData.hook,
-        what_happened: scriptData.what_happened,
-        why_it_matters: scriptData.why_it_matters,
-        what_happens_next: scriptData.what_happens_next,
-        cta_line: scriptData.cta_line,
-        duration_target_seconds: scriptData.duration_target_seconds
-      })
+      .insert(insertPayload)
       .select()
       .single();
     

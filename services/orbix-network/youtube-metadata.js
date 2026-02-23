@@ -21,13 +21,33 @@ const MONEY_HASHTAGS = [
   '#moneymindset'
 ];
 
+const TRIVIA_HASHTAGS = [
+  '#trivia',
+  '#quiz',
+  '#shorts',
+  '#triviachallenge',
+  '#testyourknowledge',
+  '#quiztime'
+];
+
+const FACTS_HASHTAGS = [
+  '#facts',
+  '#didyouknow',
+  '#shorts',
+  '#knowledge',
+  '#learnontiktok',
+  '#fact'
+];
+
 const CATEGORY_HASHTAGS = {
   'ai-automation': ['#AI', '#Automation', '#TechNews', '#ArtificialIntelligence'],
   'corporate-collapses': ['#Business', '#Corporate', '#Finance', '#News'],
   'tech-decisions': ['#Tech', '#Technology', '#Innovation', '#TechNews'],
   'laws-rules': ['#Law', '#Policy', '#Regulation', '#News'],
   'money-markets': ['#Finance', '#Markets', '#Economy', '#Money'],
-  'money': MONEY_HASHTAGS
+  'money': MONEY_HASHTAGS,
+  'trivia': TRIVIA_HASHTAGS,
+  'facts': FACTS_HASHTAGS
 };
 
 /** Remove emojis and common Unicode symbols from a string. */
@@ -150,14 +170,28 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
     : {};
   const hookText = (script?.hook ?? content?.hook ?? '').trim();
+  const question = (content?.question || '').trim();
   const isPsychology = (story?.category || '').toLowerCase() === 'psychology';
   const isMoney = (story?.category || '').toLowerCase() === 'money';
+  const isTrivia = (story?.category || '').toLowerCase() === 'trivia';
+  const isFacts = (story?.category || '').toLowerCase() === 'facts';
 
   let title;
   let description;
   let hashtags;
 
-  if (isPsychology) {
+  if (isFacts) {
+    const factText = (content?.fact_text || script?.what_happened || '').trim();
+    title = sanitizeTitleForYouTube(hookText || content?.title || factText?.slice(0, 60) || story?.title?.slice(0, 60) || 'Fact');
+    description = (factText ? `${factText}\n\n` : '') + 'Subscribe for more facts.';
+    hashtags = FACTS_HASHTAGS.slice(0, 6).join(' ');
+  } else if (isTrivia) {
+    const questionForTitle = question || (script?.what_happened || '').trim();
+    const questionForDesc = question || (script?.what_happened || '').trim();
+    title = sanitizeTitleForYouTube(hookText || questionForTitle?.slice(0, 60) || story?.title?.slice(0, 60) || 'Trivia challenge');
+    description = (questionForDesc ? `${questionForDesc}\n\n` : '') + 'Comment A, B, or C. What did you choose?';
+    hashtags = TRIVIA_HASHTAGS.slice(0, 6).join(' ');
+  } else if (isPsychology) {
     title = sanitizeTitleForYouTube(hookText || story?.title || 'Psychology insight');
     description = buildPsychologyDescription(script);
     hashtags = getPsychologyHashtags(renderId || story?.id || script?.id);

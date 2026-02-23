@@ -171,7 +171,38 @@ router.post('/setup/save', async (req, res) => {
       .single();
     
     if (error) throw error;
-    
+
+    // When saving step 4 (publishing), persist to module_settings so the YouTube publisher
+    // and jobs use the correct youtube_visibility and other settings immediately.
+    if (step === 4 && stepData) {
+      try {
+        const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+        const current = existing?.settings || {};
+        const next = {
+          ...current,
+          publishing: {
+            ...(current.publishing || {}),
+            youtube_visibility: stepData.youtube_visibility ?? current.publishing?.youtube_visibility ?? 'public',
+            enable_rumble: stepData.enable_rumble ?? current.publishing?.enable_rumble ?? false
+          },
+          limits: {
+            ...(current.limits || {}),
+            daily_video_cap: stepData.daily_video_cap ?? current.limits?.daily_video_cap ?? 5
+          },
+          posting_schedule: {
+            ...(current.posting_schedule || {}),
+            start: stepData.posting_window_start ?? current.posting_schedule?.start ?? '07:00',
+            end: stepData.posting_window_end ?? current.posting_schedule?.end ?? '20:00',
+            timezone: stepData.posting_timezone ?? current.posting_schedule?.timezone ?? 'America/New_York'
+          }
+        };
+        await ModuleSettings.update(businessId, MODULE_KEY, next);
+      } catch (settingsErr) {
+        console.error('[POST /api/v2/orbix-network/setup/save] Failed to persist step 4 to module_settings:', settingsErr);
+        // Don't fail the request; setup_state was already saved
+      }
+    }
+
     res.json({
       success: true,
       setup_state: updatedState

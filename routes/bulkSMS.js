@@ -1248,6 +1248,7 @@ router.post('/webhook', express.json(), async (req, res) => {
       }
       
       const text = (message?.text || message?.body || message?.message || '').toLowerCase().trim();
+      const rawText = (message?.text || message?.body || message?.message || '').trim();
       
       console.log('[BulkSMS Webhook] Extracted message data:', {
         fromNumber,
@@ -1261,6 +1262,23 @@ router.post('/webhook', express.json(), async (req, res) => {
         to: toNumber,
         text: text.substring(0, 50),
       });
+      
+      // EMERGENCY NETWORK: separate stream — if destination is emergency number, create service request and stop
+      if (toNumber) {
+        const formattedToNumber = formatPhoneNumberE164(toNumber);
+        const formattedFromNumber = formatPhoneNumberE164(fromNumber);
+        const { isEmergencyNumber } = await import('../services/emergency-network/config.js');
+        if (await isEmergencyNumber(formattedToNumber)) {
+          try {
+            const { createServiceRequestFromSms } = await import('../services/emergency-network/intake.js');
+            await createServiceRequestFromSms(formattedFromNumber, rawText);
+            console.log('[BulkSMS Webhook] Emergency Network: service request created from SMS from', formattedFromNumber);
+          } catch (err) {
+            console.error('[BulkSMS Webhook] Emergency Network intake error:', err?.message || err);
+          }
+          return;
+        }
+      }
       
       // Check for opt-out keywords
       const optOutKeywords = ['stop', 'unsubscribe', 'optout', 'opt out', 'cancel', 'end', 'quit', 'remove'];
