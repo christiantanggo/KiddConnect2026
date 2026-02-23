@@ -707,28 +707,37 @@ try {
     runPublishJob,
     runScheduledAnalyticsCheck
   } = await import('./routes/v2/orbix-network-jobs.js');
-  
-  // Wrapper so any promise rejection from the job is never unhandled (keeps process alive)
-  const runSafe = (fn, name) => () => { fn().catch((e) => console.error(`[Orbix Jobs] ${name} unhandled:`, e?.message || e)); };
+
+  if (typeof processOnePendingRender !== 'function' || typeof processOneYouTubeUpload !== 'function') {
+    console.warn('[Orbix Jobs] processOnePendingRender or processOneYouTubeUpload missing from orbix-network-jobs.js — skipping PENDING render / YouTube upload intervals');
+  }
+
+  // Wrapper so any promise rejection from the job is never unhandled (keeps process alive). Guard so we never call non-functions.
+  const runSafe = (fn, name) => () => {
+    if (typeof fn !== 'function') return;
+    fn().catch((e) => console.error(`[Orbix Jobs] ${name} unhandled:`, e?.message || e));
+  };
 
   // 1. Scheduled Pipeline: scrape → process → review → render at fixed times in each business's timezone.
   // Pipeline runs 1 hour before each post: 7am, 10am, 1pm, 4pm, 7pm. Posts at 8am, 11am, 2pm, 5pm, 8pm.
   // Uses posting_schedule.timezone from settings (NOT UTC). Check every 5 minutes.
-  const scheduledPipelineJob = async () => {
-    try {
-      const result = await runScheduledPipelineCheck();
-      if (result?.pipelines_run > 0) {
-        console.log('[Orbix Jobs] Scheduled pipeline ran for', result.pipelines_run, 'business(es)');
+  if (typeof runScheduledPipelineCheck === 'function') {
+    const scheduledPipelineJob = async () => {
+      try {
+        const result = await runScheduledPipelineCheck();
+        if (result?.pipelines_run > 0) {
+          console.log('[Orbix Jobs] Scheduled pipeline ran for', result.pipelines_run, 'business(es)');
+        }
+      } catch (error) {
+        console.error('[Orbix Jobs] Scheduled pipeline error:', error.message);
       }
-    } catch (error) {
-      console.error('[Orbix Jobs] Scheduled pipeline error:', error.message);
-    }
-  };
-  orbixNetworkIntervals.scheduledPipeline = setInterval(runSafe(scheduledPipelineJob, 'ScheduledPipeline'), 5 * 60 * 1000); // Every 5 minutes
+    };
+    orbixNetworkIntervals.scheduledPipeline = setInterval(runSafe(scheduledPipelineJob, 'ScheduledPipeline'), 5 * 60 * 1000); // Every 5 minutes
+  }
   console.log('✅ Orbix Network scheduled pipeline (7am, 10am, 1pm, 4pm, 7pm in business timezone)');
 
   // When no separate worker is running, the web server picks up PENDING renders every 30s and READY_FOR_UPLOAD uploads
-  if (process.env.RUN_ORBIX_WORKER !== 'true') {
+  if (process.env.RUN_ORBIX_WORKER !== 'true' && typeof processOnePendingRender === 'function' && typeof processOneYouTubeUpload === 'function') {
     const uploadDelayMs = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0;
     const processPendingWithUpload = async () => {
       const result = await processOnePendingRender();
@@ -750,17 +759,21 @@ try {
   }
 
   // 5. Publish Videos (every 5 minutes) — fixed post times 8am, 11am, 2pm, 5pm, 8pm in business timezone
-  orbixNetworkIntervals.publish = setInterval(runSafe(() => runPublishJob(), 'Publish'), 5 * 60 * 1000);
+  if (typeof runPublishJob === 'function') {
+    orbixNetworkIntervals.publish = setInterval(runSafe(() => runPublishJob(), 'Publish'), 5 * 60 * 1000);
+  }
   console.log('✅ Orbix Network publish job (8am, 11am, 2pm, 5pm, 8pm in business timezone)');
-  
+
   // 6. Fetch Analytics (daily at 2 AM in each business's timezone — NOT UTC)
-  const analyticsCheckJob = async () => {
-    const result = await runScheduledAnalyticsCheck();
-    if (result?.analytics_run > 0) {
-      console.log('[Orbix Jobs] Analytics ran for', result.analytics_run, 'business(es) at 2am local');
-    }
-  };
-  orbixNetworkIntervals.analytics = setInterval(runSafe(analyticsCheckJob, 'Analytics'), 30 * 60 * 1000); // Every 30 min to catch 2am windows
+  if (typeof runScheduledAnalyticsCheck === 'function') {
+    const analyticsCheckJob = async () => {
+      const result = await runScheduledAnalyticsCheck();
+      if (result?.analytics_run > 0) {
+        console.log('[Orbix Jobs] Analytics ran for', result.analytics_run, 'business(es) at 2am local');
+      }
+    };
+    orbixNetworkIntervals.analytics = setInterval(runSafe(analyticsCheckJob, 'Analytics'), 30 * 60 * 1000); // Every 30 min to catch 2am windows
+  }
   console.log('✅ Orbix Network analytics (daily at 2am in business timezone)');
   
 } catch (error) {
