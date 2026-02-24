@@ -1,6 +1,7 @@
 /**
  * Orbix Trivia Render Pipeline
- * 15s format: 0-1s hook; 1-4s question+all options; 4-7s 3s countdown (progress bar); 7-9s answer reveal; 9-15s loop trigger, hard cut.
+ * 12s format: 0-1s hook; 1-5s question+options; 5-9s countdown (progress bar); 9-10.5s answer reveal; 10.5-11.7s single loop line, hard cut.
+ * Short ending (1–2s loop line only) for retention; no long congrats/outro.
  */
 
 import { exec } from 'child_process';
@@ -25,13 +26,13 @@ import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progre
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
-// Timing constants (15s total, no waiting time)
+// Timing constants (12s total; short loop ending for retention)
 const HOOK_DURATION = 1.0;
-const READ_DURATION = 3.0;       // question + options visible 1s–4s
-const COUNTDOWN_DURATION = 3.0;   // 4s–7s
-const REVEAL_DURATION = 2.0;      // 7s–9s
-const LOOP_DURATION = 6.0;        // 9s–15s
-const DURATION = 15;
+const READ_DURATION = 4.0;       // question + options visible 1s–5s
+const COUNTDOWN_DURATION = 4.0;   // 5s–9s
+const REVEAL_DURATION = 1.5;      // answer highlight time
+const LOOP_LINE_DURATION = 1.2;   // final cliffhanger line only (1.0–2.0s), then hard cut
+const DURATION = 12;
 
 /**
  * Process a trivia render job (separate pipeline from news/money/psychology).
@@ -75,7 +76,7 @@ export async function processTriviaRenderJob(render, story, script) {
     const imgResp = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000 });
     await fs.promises.writeFile(bgPath, imgResp.data);
 
-    // 2. Apply motion to background (creates 15s video)
+    // 2. Apply motion to background (creates 12s video)
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
     // Trivia number: count of trivia stories for this channel up to this story
@@ -90,17 +91,20 @@ export async function processTriviaRenderJob(render, story, script) {
       triviaNumber = Math.max(1, count ?? 1);
     }
 
-    // Loop trigger: pick one phrase at random (correctLetter, one wrong letter)
-    const wrongLetters = ['A', 'B', 'C'].filter((l) => l !== correctLetter);
-    const wrongLetter = wrongLetters[randomInt(wrongLetters.length)];
-    const loopPhrases = [
-      `Most people pick ${wrongLetter}… that's wrong.`,
-      `If you picked ${correctLetter}… you're ahead of most.`,
-      'Be honest… did you change your answer?'
+    // Loop line: one short cliffhanger only (1–2s), no congrats/recap. Pick one at random.
+    const TRIVIA_LOOP_LINES = [
+      'Did you change your answer?',
+      'Be honest… did you guess?',
+      'Most people get this wrong.',
+      'If you hesitated… that\'s why.',
+      'You answered too fast.',
+      'Watch that again.',
+      'And that\'s the easy one…',
+      'Now try the next one…'
     ];
-    const loopTriggerText = loopPhrases[randomInt(loopPhrases.length)];
+    const loopTriggerText = TRIVIA_LOOP_LINES[randomInt(TRIVIA_LOOP_LINES.length)];
 
-    // 3. Generate ASS overlay per retention blueprint (15s timeline)
+    // 3. Generate ASS overlay per retention blueprint (12s timeline)
     const assFilePath = await generateTriviaASSFile(
       {
         category,
@@ -142,7 +146,7 @@ export async function processTriviaRenderJob(render, story, script) {
     try { await unlinkAsync(assFilePath); } catch (_) {}
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
 
-    // 5. Generate trivia TTS: hook 0s, question 1s, answer 7s, loop trigger 9s (15s total)
+    // 5. Generate trivia TTS: hook 0s, question 1s, answer 9s, loop line 10.5s (12s total)
     const audioResult = await generateTriviaAudio(
       { hook, question, answerText: correctText, loopTriggerText },
       DURATION

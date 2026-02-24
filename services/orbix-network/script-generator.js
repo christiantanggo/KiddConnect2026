@@ -133,11 +133,27 @@ function countWords(s) {
 }
 
 /**
+ * Psychology: opening hook is what_happens_next, so it MUST be a question.
+ * @param {string} text - what_happens_next
+ * @returns {boolean}
+ */
+function isQuestion(text) {
+  const s = (text || '').trim();
+  if (!s) return false;
+  if (s.endsWith('?')) return true;
+  const lower = s.toLowerCase();
+  if (/^(did you|do you|would you|have you|are you|is it|why do|why does|how do|how does|what if|when did|who |which )/i.test(lower)) return true;
+  return false;
+}
+
+/**
  * Validate Shorts-native script (psychology/money): word count 32-45, twist 2 lines each <=9 words, no banned abstract words.
+ * For psychology, what_happens_next (opening hook) must be a question.
  * @param {{ hook?: string, what_happened?: string, why_it_matters?: string, what_happens_next?: string }} scriptData
+ * @param {string} [topic] - 'psychology' | 'money' | other
  * @returns {{ compliant: boolean, reason?: string }}
  */
-function isShortsNativeScriptCompliant(scriptData) {
+function isShortsNativeScriptCompliant(scriptData, topic = '') {
   const hook = (scriptData.hook || '').trim();
   const whatHappened = (scriptData.what_happened || '').trim();
   const whyItMatters = (scriptData.why_it_matters || '').trim();
@@ -160,6 +176,9 @@ function isShortsNativeScriptCompliant(scriptData) {
   if (bannedMatch) {
     const word = bannedMatch[0].toLowerCase();
     return { compliant: false, reason: `Banned word "${word}" in twist/payoff. Use concrete verbs instead.` };
+  }
+  if ((topic || '').toLowerCase() === 'psychology' && !isQuestion(whatHappensNext)) {
+    return { compliant: false, reason: 'Psychology opening hook (what_happens_next) must be a question (end with ? or start with Did you/Do you/Why/How etc.).' };
   }
   return { compliant: true };
 }
@@ -214,6 +233,35 @@ function getOpenAIClient() {
     });
   }
   return openaiClient;
+}
+
+/**
+ * Convert a short statement into a single short question for psychology opening hook.
+ * Used when the LLM returns a declarative "loop" line — we need a real question at the start.
+ * @param {string} statement - e.g. "And you never even realize it."
+ * @returns {Promise<string>} e.g. "Do you ever even realize it?"
+ */
+async function convertStatementToQuestion(statement) {
+  const s = (statement || '').trim().replace(/[.!]$/, '').slice(0, 120);
+  if (!s) return 'Did you catch that?';
+  try {
+    const completion = await getOpenAIClient().chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: 'You output only a single short question (under 10 words). No explanation. The question must end with ? and hook the viewer. Psychology/bias/perception tone.' },
+        { role: 'user', content: `Turn this into one short question (under 10 words, end with ?): ${s}` }
+      ],
+      temperature: 0.3,
+      max_tokens: 50
+    });
+    const out = (completion.choices[0]?.message?.content || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+    if (out && (out.endsWith('?') || /^(did you|do you|would you|have you|are you|why |how |what |when |who |which )/i.test(out))) {
+      return out.endsWith('?') ? out : out + '?';
+    }
+  } catch (err) {
+    console.warn('[Script Generator] convertStatementToQuestion failed:', err?.message);
+  }
+  return s + '?';
 }
 
 /**
@@ -383,14 +431,17 @@ Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_h
     if (isPsychology) {
       systemPrompt = `${SHORTS_NATIVE_SYSTEM}
 
-Psychology channel: bias, perception, identity, hidden motives. Use concrete verbs (hijacks, tricks, edits). No educational tone.`;
+Psychology channel: bias, perception, identity, hidden motives. Use concrete verbs (hijacks, tricks, edits). No educational tone.
 
-      userPrompt = `Shorts-native script. TOTAL words MUST be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}. HOOK <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines separated by newline (\\\\n), each line <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch. Do NOT use: preferences, influences, subconsciously, lens, shapes, decisions. Include ego-threat or secret. captions array: 5–7 lines, each <= ${SHORTS_NATIVE_CAPTION_MAX_WORDS} words.
+CRITICAL (Psychology only): what_happens_next is shown as the OPENING HOOK (first 1–2 seconds). It MUST be a QUESTION — end with "?" and be phrased as a question (e.g. "Why do you keep falling for it?" "Did you catch that?" "How often does that happen?"). No declarative loop line for psychology.`;
+
+      userPrompt = `Shorts-native script. TOTAL words MUST be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}. HOOK <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines separated by newline (\\\\n), each line <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP (what_happens_next) = MUST be a QUESTION for psychology (opening hook): end with ? and ask the viewer something (e.g. "Why do you still lose?" "Did you notice that?"). Do NOT use: preferences, influences, subconsciously, lens, shapes, decisions. Include ego-threat or secret. captions array: 5–7 lines, each <= ${SHORTS_NATIVE_CAPTION_MAX_WORDS} words.
 
 Concept: ${rawItem?.title || story.title || 'Psychology concept'}
 Source: ${(rawItem?.snippet || story.snippet || '').slice(0, 600)}
 
 Example what_happened (2 lines with \\\\n): "Your birthday hides in your picks.\\\\nYou choose it without knowing."
+Example what_happens_next (MUST be a question): "Why do you keep falling for it?" or "Did you catch that?"
 Return JSON only: hook_1, hook_2, hook_3, what_happened (2 lines with \\\\n), why_it_matters, what_happens_next, cta_line "", captions, duration_target_seconds 14.`;
     } else if (isMoney) {
       systemPrompt = `${SHORTS_NATIVE_SYSTEM}
@@ -471,7 +522,7 @@ Generate a script for a short-form video. Return JSON with:
       if (retried && isHighRetention) {
         messages.push({
           role: 'user',
-          content: `[REJECTED] ${lastRejectReason}. Generate again. Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch (e.g. "And that's why you still lose." — NOT "And that's why you still…"). No abstract words. Total ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words. captions array 5–7 lines. Same JSON.`
+          content: `[REJECTED] ${lastRejectReason}. Generate again. Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch${isPsychology ? ' — for Psychology, what_happens_next MUST be a QUESTION (end with ?)' : ' (e.g. "And that\'s why you still lose." — NOT "And that\'s why you still…")'}. No abstract words. Total ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words. captions array 5–7 lines. Same JSON.`
         });
       }
       const completion = await getOpenAIClient().chat.completions.create({
@@ -522,7 +573,7 @@ Generate a script for a short-form video. Return JSON with:
       if (!isHighRetention) break;
       const hookValidation = isHookCompliant(scriptData.hook, topic);
       const doShockRetry = moneyNeedsAggressiveHook && !retriedForShock;
-      const scriptValidation = isShortsNativeScriptCompliant(scriptData);
+      const scriptValidation = isShortsNativeScriptCompliant(scriptData, topic);
       if (hookValidation.compliant && scriptValidation.compliant && !doShockRetry) break;
       if (!hookValidation.compliant) {
         lastRejectReason = hookValidation.reason || 'hook invalid';
@@ -541,11 +592,22 @@ Generate a script for a short-form video. Return JSON with:
     // Validate and clean script data (Money/Psychology: normalize What Happened to natural flow, no slashes)
     const rawWhatHappened = (scriptData.what_happened || '').trim();
     const durationTarget = scriptData.duration_target_seconds != null ? Number(scriptData.duration_target_seconds) : (isHighRetention ? 14 : 35);
+    let whatHappensNext = (scriptData.what_happens_next || '').trim();
+    if (isPsychology && whatHappensNext) {
+      if (!isQuestion(whatHappensNext)) {
+        console.log('[Script Generator] Psychology: converting opening hook to question:', whatHappensNext.slice(0, 50));
+        whatHappensNext = await convertStatementToQuestion(whatHappensNext);
+        console.log('[Script Generator] Psychology: question hook:', whatHappensNext);
+      }
+      if (!whatHappensNext.endsWith('?')) {
+        whatHappensNext = whatHappensNext.replace(/[.!]$/, '') + '?';
+      }
+    }
     const script = {
       hook: (scriptData.hook || '').trim(),
       what_happened: isHighRetention ? normalizeWhatHappened(rawWhatHappened, true) || rawWhatHappened : normalizeWhatHappened(rawWhatHappened) || rawWhatHappened,
       why_it_matters: (scriptData.why_it_matters || '').trim(),
-      what_happens_next: (scriptData.what_happens_next || '').trim(),
+      what_happens_next: whatHappensNext,
       cta_line: (scriptData.cta_line || '').trim(),
       duration_target_seconds: isHighRetention ? Math.min(16, Math.max(12, durationTarget)) : Math.min(45, Math.max(30, durationTarget || 35))
     };

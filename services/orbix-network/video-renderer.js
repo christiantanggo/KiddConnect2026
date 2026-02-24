@@ -465,12 +465,12 @@ export async function generateAudio(script, story = null) {
 }
 
 /**
- * Generate trivia audio (15s retention format): hook 0s, question 1s, answer 7s, loop trigger 9s.
+ * Generate trivia audio (12s retention format): hook 0s, question 1s, answer 9s, loop line 10.5s.
  * @param {Object} opts - { hook?, question, answerText, loopTriggerText? }
- * @param {number} totalDuration - Total video duration in seconds (15)
+ * @param {number} totalDuration - Total video duration in seconds (12)
  * @returns {Promise<{audioPath: string, duration: number}>}
  */
-export async function generateTriviaAudio(opts, totalDuration = 15) {
+export async function generateTriviaAudio(opts, totalDuration = 12) {
   const OpenAI = (await import('openai')).default;
   const fs = (await import('fs')).default;
 
@@ -506,8 +506,8 @@ export async function generateTriviaAudio(opts, totalDuration = 15) {
 
   const HOOK_START = 0;
   const QUESTION_START = 1;
-  const ANSWER_START = 7;
-  const LOOP_START = 9;
+  const ANSWER_START = 9;   // answer reveal 9–10.5s
+  const LOOP_START = 10.5;  // single loop line 10.5–11.7s
   const answerTtsPhrase = answerPhrase ? `The answer is ${answerPhrase}` : '';
 
   try {
@@ -762,21 +762,22 @@ function formatASSTimeFromSeconds(seconds) {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
-/** Trivia 15s timing constants (must match trivia-renderer.js) */
+/** Trivia 12s timing constants (must match trivia-renderer.js; short loop ending) */
 const TRIVIA_HOOK_END = 1.0;
-const TRIVIA_READ_END = 4.0;      // question + options visible 1–4s
-const TRIVIA_COUNTDOWN_END = 7.0; // countdown 4–7s
-const TRIVIA_REVEAL_END = 9.0;    // answer 7–9s
-const TRIVIA_LOOP_END = 15.0;     // loop trigger 9–15s
+const TRIVIA_READ_END = 5.0;      // question + options visible 1–5s
+const TRIVIA_COUNTDOWN_END = 9.0;  // countdown 5–9s
+const TRIVIA_REVEAL_END = 10.5;   // answer reveal 9–10.5s (1.5s)
+const TRIVIA_LOOP_LINE_DURATION = 1.2; // loop line only 10.5–11.7s, then hard cut
+const TRIVIA_LOOP_END = 11.7;     // video end 12s
 
 /**
- * Generate ASS file for trivia layout (15s retention format).
- * 0–1s hook; 1–7s question + countdown (between question and options) + all options stay on screen; 7–9s answer; 9–15s loop trigger.
+ * Generate ASS file for trivia layout (12s retention format).
+ * 0–1s hook; 1–9s question + countdown + options; 9–10.5s answer; 10.5–11.7s single loop line, hard cut.
  * @param {Object} opts - { category, triviaNumber, question, optionA, optionB, optionC, answerText, correctLetter, loopTriggerText?, hookText? }
- * @param {number} duration - Video duration in seconds (15)
+ * @param {number} duration - Video duration in seconds (12)
  * @returns {Promise<string>} Path to ASS file
  */
-export async function generateTriviaASSFile(opts, duration = 15) {
+export async function generateTriviaASSFile(opts, duration = 12) {
   const fs = (await import('fs')).default;
   const assPath = join(tmpdir(), `orbix-trivia-${Date.now()}.ass`);
   const esc = (s) => (s || '').toString().replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
@@ -812,7 +813,7 @@ Style: Option,Arial,90,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,1
 Style: OptionCorrect,Arial,90,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
 Style: OptionDim,Arial,90,&H66FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
 Style: AnswerBig,Arial,168,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
-Style: LoopTrigger,Arial,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,60,60,10,1
+Style: LoopTrigger,Arial,96,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,60,60,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -823,7 +824,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   // === 0–1s: Hook text ===
   lines.push(`Dialogue: 0,${t(0)},${t(TRIVIA_HOOK_END)},Interrupt,,0,0,0,,{\\an5\\pos(540,960)}${esc(hookDisplay.toUpperCase())}`);
 
-  // === 1–7s: Banner + question + all 3 options (all stay on through countdown) ===
+  // === 1–9s: Banner + question + all 3 options (all stay on through countdown) ===
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},BannerBg,,0,0,0,,{\\an7\\pos(0,0)\\p1}m 0 0 l 1080 0 l 1080 80 l 0 80{\\p0}`);
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Banner,,0,0,0,,{\\an5\\pos(540,40)}${esc(bannerText)}`);
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Question,,0,0,0,,{\\an5\\pos(540,${questionCenterY})}${esc(questionCaps)}`);
@@ -834,18 +835,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Option,,0,0,0,,{\\an5\\pos(540,${y})}${esc(text)}`);
   }
 
-  // === 4–7s: 3-2-1 countdown between question and options (question + options stay on screen) ===
-  lines.push(`Dialogue: 2,${t(4)},${t(5)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}3`);
-  lines.push(`Dialogue: 2,${t(5)},${t(6)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}2`);
-  lines.push(`Dialogue: 2,${t(6)},${t(7)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}1`);
+  // === 5–9s: 3-2-1 countdown (6,7,8) between question and options ===
+  lines.push(`Dialogue: 2,${t(6)},${t(7)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}3`);
+  lines.push(`Dialogue: 2,${t(7)},${t(8)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}2`);
+  lines.push(`Dialogue: 2,${t(8)},${t(9)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}1`);
 
   const answerOnly = (opts.answerText || '').replace(/^ANSWER:\s*[ABC]\)\s*/i, '').trim();
 
-  // === 7–9s: Answer reveal ===
+  // === 9–10.5s: Answer reveal (1.5s) ===
   lines.push(`Dialogue: 3,${t(TRIVIA_COUNTDOWN_END)},${t(TRIVIA_REVEAL_END)},AnswerBig,,0,0,0,,{\\an5\\pos(540,960)}${esc(answerOnly || opts.answerText || '')}`);
 
-  // === 9–15s: Loop trigger line, then hard cut ===
-  lines.push(`Dialogue: 3,${t(TRIVIA_REVEAL_END)},${t(Math.min(TRIVIA_LOOP_END, duration))},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopTriggerText)}`);
+  // === 10.5–11.7s: Single loop line only (1.2s), then hard cut ===
+  const loopEnd = Math.min(TRIVIA_LOOP_END, duration);
+  lines.push(`Dialogue: 3,${t(TRIVIA_REVEAL_END)},${t(loopEnd)},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopTriggerText)}`);
 
   await fs.promises.writeFile(assPath, assContent + lines.join('\n') + '\n', 'utf8');
   return assPath;
