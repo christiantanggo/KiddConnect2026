@@ -654,15 +654,27 @@ export const PSYCHOLOGY_QUESTION_HOOK_DURATION = 1.75;
 
 /**
  * Prepend silence to an audio file (e.g. for psychology question-hook at start).
+ * Uses adelay so we don't need to match formats (concat required same sample rate/channels).
  * @param {string} audioPath - Path to existing audio file
  * @param {number} silenceSeconds - Seconds of silence to prepend
  * @returns {Promise<{path: string, totalDuration: number}>} New file path and total duration (silence + original)
  */
 export async function prependSilenceToAudio(audioPath, silenceSeconds) {
-  const fs = (await import('fs')).default;
   const outPath = join(tmpdir(), `orbix-audio-padded-${Date.now()}.mp3`);
-  // anullsrc=r=44100:cl=stereo for silence; -t silenceSeconds; then concat with original
-  const cmd = `ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo -t ${silenceSeconds} -i "${audioPath}" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -c:a libmp3lame -q:a 2 "${outPath}"`;
+  const delayMs = Math.round(silenceSeconds * 1000);
+  let channels = 1;
+  try {
+    const probe = await execAsync(
+      `ffprobe -i "${audioPath}" -select_streams a:0 -show_entries stream=channels -v quiet -of csv="p=0"`,
+      { timeout: 5000 }
+    );
+    const n = parseInt(probe.stdout?.trim(), 10);
+    if (Number.isFinite(n) && n >= 1) channels = n;
+  } catch (_) { /* keep default 1 */ }
+  // adelay (ms): one value for mono, N values for N channels
+  const adelayArg = channels === 1 ? String(delayMs) : Array(channels).fill(delayMs).join('|');
+  const adelayFilter = `adelay=${adelayArg}`;
+  const cmd = `ffmpeg -i "${audioPath}" -af "${adelayFilter}" -c:a libmp3lame -q:a 2 -y "${outPath}"`;
   await execAsync(cmd, { timeout: 60000 });
   const { duration } = await execAsync(
     `ffprobe -i "${outPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
