@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, RefreshCw, Loader, CheckCircle2, XCircle, Clock, AlertCircle, Play, Youtube } from 'lucide-react';
+import { X, RefreshCw, Loader, CheckCircle2, XCircle, Clock, AlertCircle, AlertTriangle, Play, Youtube } from 'lucide-react';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { useOrbixChannel } from '../OrbixChannelContext';
@@ -178,6 +178,24 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
     }
   };
 
+  const handleForceRenderPipeline = async () => {
+    if (!item.story_id) return;
+    try {
+      setLoading(true);
+      await orbixNetworkAPI.forceRenderStory(item.story_id, apiParams());
+      success('Render pipeline started');
+      onClose();
+      if (onForceProcess) {
+        setTimeout(() => onForceProcess(), 1000);
+      }
+    } catch (error) {
+      console.error('Error forcing render pipeline:', error);
+      showErrorToast(error?.response?.data?.error || 'Failed to force render pipeline');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleRestart = async () => {
     if (!item.render_id) return;
     
@@ -267,8 +285,12 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
 
   const getStatusIcon = (status) => {
     if (status === 'COMPLETED') return <CheckCircle2 className="w-5 h-5 text-green-600" />;
-    if (status === 'FAILED') return <XCircle className="w-5 h-5 text-red-600" />;
-    if (status === 'PROCESSING') return <Loader className="w-5 h-5 text-blue-600 animate-spin" />;
+    if (status === 'FAILED' || status === 'STEP_FAILED') return <XCircle className="w-5 h-5 text-red-600" />;
+    // READY_FOR_UPLOAD + step_error = YouTube upload failed; video viewable, can retry
+    if (status === 'READY_FOR_UPLOAD' && (details?.step_error || item?.step_error)) {
+      return <AlertTriangle className="w-5 h-5 text-amber-600" />;
+    }
+    if (status === 'PROCESSING' || status === 'READY_FOR_UPLOAD') return <Loader className="w-5 h-5 text-blue-600 animate-spin" />;
     return <Clock className="w-5 h-5 text-gray-400" />;
   };
 
@@ -277,6 +299,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
   const currentStep = details?.render_step || item.render_step;
   const stepProgress = details?.step_progress !== undefined ? details.step_progress : item.step_progress;
   const renderStatus = details?.render_status || item.render_status;
+  const isFailed = renderStatus === 'FAILED' || renderStatus === 'STEP_FAILED';
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
@@ -284,7 +307,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-200">
           <div className="flex-1">
-            <h2 className="text-2xl font-bold">{item.story_title}</h2>
+            <h2 className="text-2xl font-bold">{item.story_title?.trim() || item.story_category || 'Untitled'}</h2>
             <div className="flex gap-2 mt-2">
               <span className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded">
                 {item.story_category}
@@ -313,17 +336,64 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
           )}
           {/* Raw Item Info */}
           {isRawItem && (
-            <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
-              <div className="flex items-center gap-3 mb-3">
-                <h3 className="text-lg font-semibold">Raw Item - Ready to Process</h3>
-                <span className="px-2 py-1 text-xs bg-purple-100 text-purple-800 rounded font-semibold">
-                  Score: {item.story_shock_score || 'N/A'}
-                </span>
+            <div className="space-y-4">
+              <div className="bg-purple-50 rounded-lg p-4 border border-purple-200">
+                <div className="flex items-center gap-3 mb-3">
+                  <h3 className="text-lg font-semibold">Raw Item - Ready to Process</h3>
+                  <span className="px-2 py-1 text-xs bg-purple-100 text-purple-800 rounded font-semibold">
+                    Score: {item.story_shock_score || 'N/A'}
+                  </span>
+                </div>
+                <p className="text-sm text-gray-600">
+                  This item has a shock score of {item.story_shock_score} and is ready to be processed into a story.
+                  Click &quot;Force Process into Story&quot; to create a story from this raw item.
+                </p>
               </div>
-              <p className="text-sm text-gray-600">
-                This item has a shock score of {item.story_shock_score} and is ready to be processed into a story.
-                Click "Force Process into Story" to create a story from this raw item.
-              </p>
+              {item.story_category === 'facts' && item.snippet && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Scraped fact (story for video)</h4>
+                  {(() => {
+                    try {
+                      const f = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      return (
+                        <div className="space-y-2 text-sm">
+                          {f.title && <p className="font-medium text-gray-900">{f.title}</p>}
+                          {f.fact_text && <p className="text-gray-800">{f.fact_text}</p>}
+                          {f.tts_script && f.tts_script !== f.fact_text && (
+                            <p className="text-gray-600 italic border-t border-gray-200 pt-2 mt-2">TTS: {f.tts_script}</p>
+                          )}
+                        </div>
+                      );
+                    } catch {
+                      return <p className="text-gray-500 text-sm">Could not parse facts content</p>;
+                    }
+                  })()}
+                </div>
+              )}
+              {item.story_category === 'trivia' && item.snippet && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Trivia Content</h4>
+                  {(() => {
+                    try {
+                      const t = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      return (
+                        <div className="space-y-2 text-sm">
+                          {t.hook && <p className="text-gray-600 italic">&quot;{t.hook}&quot;</p>}
+                          <p className="font-medium text-gray-900">{t.question}</p>
+                          <ul className="space-y-1 text-gray-700">
+                            {t.option_a && <li>A) {t.option_a}</li>}
+                            {t.option_b && <li>B) {t.option_b}</li>}
+                            {t.option_c && <li>C) {t.option_c}</li>}
+                          </ul>
+                          <p className="text-green-700 font-medium pt-2">Correct: {t.correct_answer}) {t[`option_${(t.correct_answer || 'A').toLowerCase()}`]}</p>
+                        </div>
+                      );
+                    } catch {
+                      return <p className="text-gray-500 text-sm">Could not parse trivia content</p>;
+                    }
+                  })()}
+                </div>
+              )}
             </div>
           )}
           
@@ -404,6 +474,26 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   </button>
                 </div>
               )}
+              <div className="mt-3 flex flex-wrap gap-2 items-center">
+                <button
+                  onClick={handleForceRenderPipeline}
+                  disabled={loading}
+                  className="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                  title="Start the render pipeline for this story"
+                >
+                  {loading ? (
+                    <>
+                      <Loader className="w-3 h-3 animate-spin" />
+                      Starting…
+                    </>
+                  ) : (
+                    <>
+                      <RefreshCw className="w-3 h-3" />
+                      Force Render Pipeline
+                    </>
+                  )}
+                </button>
+              </div>
               <div className="mt-3 pt-3 border-t border-yellow-200">
                 <p className="text-xs text-gray-500">
                   Status: {item.story_status} | Story ID: {item.story_id?.substring(0, 8)}...
@@ -430,7 +520,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                 <p className="font-medium">{getStepName(currentStep)}</p>
                 
                 {/* Progress Bar */}
-                {(renderStatus === 'PENDING' || renderStatus === 'PROCESSING') && (
+                {(renderStatus === 'PENDING' || renderStatus === 'PROCESSING' || renderStatus === 'READY_FOR_UPLOAD') && (
                   <div className="w-full bg-gray-200 rounded-full h-3">
                     <div
                       className="bg-blue-600 h-3 rounded-full transition-all"
@@ -440,7 +530,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                 )}
                 
                 {/* Error Message */}
-                {renderStatus === 'FAILED' && (details?.step_error || item.step_error) && (
+                {isFailed && (details?.step_error || item.step_error) && (
                   <div className="bg-red-50 border border-red-200 rounded p-3">
                     <div className="flex items-start gap-2">
                       <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -508,36 +598,64 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                 )}
               </div>
               <div className="bg-gray-50 rounded-lg p-4 space-y-4">
-                {details.orbix_scripts[0].hook && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700 mb-1">Hook</p>
-                    <p className="text-base text-gray-900">{details.orbix_scripts[0].hook}</p>
-                  </div>
-                )}
-                {details.orbix_scripts[0].what_happened && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700 mb-1">What Happened</p>
-                    <p className="text-base text-gray-900">{details.orbix_scripts[0].what_happened}</p>
-                  </div>
-                )}
-                {details.orbix_scripts[0].why_it_matters && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700 mb-1">Why It Matters</p>
-                    <p className="text-base text-gray-900">{details.orbix_scripts[0].why_it_matters}</p>
-                  </div>
-                )}
-                {details.orbix_scripts[0].what_happens_next && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700 mb-1">What Happens Next</p>
-                    <p className="text-base text-gray-900">{details.orbix_scripts[0].what_happens_next}</p>
-                  </div>
-                )}
-                {details.orbix_scripts[0].cta_line && (
-                  <div>
-                    <p className="text-sm font-semibold text-gray-700 mb-1">Call to Action</p>
-                    <p className="text-base text-gray-900">{details.orbix_scripts[0].cta_line}</p>
-                  </div>
-                )}
+                {(() => {
+                  const cat = (item.story_category || '').toLowerCase();
+                  const isPsychology = cat === 'psychology';
+                  const isShortsNative = cat === 'psychology' || cat === 'money' || cat === 'facts';
+                  const labelTwist = isShortsNative ? 'Twist' : 'What Happened';
+                  const labelPayoff = isShortsNative ? 'Payoff' : 'Why It Matters';
+                  const labelLoop = isShortsNative ? 'Loop' : 'What Happens Next';
+                  // Use latest script (newest first) so we match what the render pipeline uses
+                  const scripts = Array.isArray(details.orbix_scripts) ? [...details.orbix_scripts] : [];
+                  const byNewest = scripts.sort((a, b) => {
+                    const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+                    const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+                    return tb - ta;
+                  });
+                  const script = byNewest[0];
+                  if (!script) return null;
+                  const openingHookText = (script.what_happens_next || script.cta_line || '').trim();
+                  return (
+                    <>
+                      {isPsychology && openingHookText && (
+                        <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
+                          <p className="text-sm font-semibold text-blue-800 mb-1">Opening hook (shown first in video)</p>
+                          <p className="text-base text-blue-900">{openingHookText}</p>
+                        </div>
+                      )}
+                      {script.hook && (
+                        <div>
+                          <p className="text-sm font-semibold text-gray-700 mb-1">{isPsychology ? 'Hook (not used as opening)' : 'Hook'}</p>
+                          <p className="text-base text-gray-900">{script.hook}</p>
+                        </div>
+                      )}
+                      {script.what_happened && (
+                        <div>
+                          <p className="text-sm font-semibold text-gray-700 mb-1">{labelTwist}</p>
+                          <p className="text-base text-gray-900">{script.what_happened}</p>
+                        </div>
+                      )}
+                      {script.why_it_matters && (
+                        <div>
+                          <p className="text-sm font-semibold text-gray-700 mb-1">{labelPayoff}</p>
+                          <p className="text-base text-gray-900">{script.why_it_matters}</p>
+                        </div>
+                      )}
+                      {script.what_happens_next && (
+                        <div>
+                          <p className="text-sm font-semibold text-gray-700 mb-1">{labelLoop}</p>
+                          <p className="text-base text-gray-900">{script.what_happens_next}</p>
+                        </div>
+                      )}
+                      {script.cta_line && (
+                        <div>
+                          <p className="text-sm font-semibold text-gray-700 mb-1">Call to Action</p>
+                          <p className="text-base text-gray-900">{script.cta_line}</p>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -567,8 +685,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
             </div>
           </div>
 
-          {/* Output Video - completed renders have a view link; ?v= cache-bust so re-renders show new video */}
-          {renderStatus === 'COMPLETED' && (
+          {/* Output Video - COMPLETED or READY_FOR_UPLOAD (video in storage; YouTube upload may have failed) */}
+          {(renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD') && (
             <div>
               <h3 className="text-lg font-semibold mb-3">Output Video</h3>
               {(details?.output_url || item?.output_url) ? (
@@ -600,8 +718,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
             {/* Render Actions - only show if render exists */}
             {item.render_id && (
               <>
-                {/* View Render - show on EVERY completed render (opens video when we have URL) */}
-                {renderStatus === 'COMPLETED' && (
+                {/* View Render - COMPLETED or READY_FOR_UPLOAD (video in storage; READY_FOR_UPLOAD = upload failed, video viewable) */}
+                {(renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD') && (
                   (details?.output_url || item?.output_url) ? (
                     <a
                       href={`${details?.output_url || item?.output_url}${(details?.output_url || item?.output_url).includes('?') ? '&' : '?'}v=${encodeURIComponent(details?.updated_at || item?.updated_at || '')}`}
@@ -612,7 +730,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                       <Play className="w-4 h-4" />
                       View Render
                     </a>
-                  ) : (
+                  ) : renderStatus === 'COMPLETED' ? (
                     <button
                       onClick={handleRestart}
                       disabled={loading}
@@ -621,11 +739,11 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                       {loading ? <Loader className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
                       View Render (restart to generate link)
                     </button>
-                  )
+                  ) : null
                 )}
                 
-                {/* Re-Render - for completed videos, re-run pipeline to apply code/setting changes */}
-                {renderStatus === 'COMPLETED' && (
+                {/* Re-Render - for completed/ready videos, re-run pipeline to apply code/setting changes */}
+                {(renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD') && (
                   <button
                     onClick={handleRestart}
                     disabled={loading}
@@ -644,8 +762,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                     )}
                   </button>
                 )}
-                {/* Force upload to YouTube - for completed videos */}
-                {renderStatus === 'COMPLETED' && (
+                {/* Force upload to YouTube - for completed or READY_FOR_UPLOAD (retry when step 8 failed) */}
+                {(renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD') && (
                   <button
                     onClick={handleForceUploadYouTube}
                     disabled={uploadingYouTube || loading}
@@ -686,7 +804,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   </button>
                 )}
                 
-                {/* Cancel Render - show if PENDING or PROCESSING */}
+                {/* Cancel Render - show if PENDING or PROCESSING (not READY_FOR_UPLOAD: video is done, use View/Force upload) */}
                 {(renderStatus === 'PENDING' || renderStatus === 'PROCESSING') && (
                   <button
                     onClick={handleCancelRender}
@@ -725,6 +843,28 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   <>
                     <Play className="w-4 h-4" />
                     Force Process into Story
+                  </>
+                )}
+              </button>
+            )}
+
+            {/* Story Creation: Force Render Pipeline (no render yet) */}
+            {!isRawItem && item.story_id && !item.render_id && (
+              <button
+                onClick={handleForceRenderPipeline}
+                disabled={loading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 transition-colors"
+                title="Start the render pipeline for this story"
+              >
+                {loading ? (
+                  <>
+                    <Loader className="w-4 h-4 animate-spin" />
+                    Starting…
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    Force Render Pipeline
                   </>
                 )}
               </button>

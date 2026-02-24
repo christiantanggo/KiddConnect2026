@@ -377,9 +377,10 @@ export async function uploadRenderToStorage(businessId, renderId, localPath) {
 /**
  * Generate audio from script using OpenAI TTS
  * @param {Object} script - Script object with narration text
+ * @param {Object} [story] - Optional story; when category is 'psychology', TTS is body-only (no hook, no end question)
  * @returns {Promise<{audioPath: string, duration: number}>} Audio file path and duration
  */
-export async function generateAudio(script) {
+export async function generateAudio(script, story = null) {
   try {
     const OpenAI = (await import('openai')).default;
     const fs = (await import('fs')).default;
@@ -393,10 +394,31 @@ export async function generateAudio(script) {
     
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     
-    // Build body text (no hook) and hook for TTS: voice speaks hook first, then body
     const content = script.content_json
       ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
       : {};
+    const isPsychology = (story?.category || '').toLowerCase() === 'psychology';
+
+    // Psychology: voice speaks body only (what_happened + why_it_matters). Question becomes on-screen hook at start; no end question.
+    if (isPsychology) {
+      const bodyOnly = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ').trim();
+      if (!bodyOnly) throw new Error('Psychology script missing what_happened or why_it_matters');
+      const audioPath = join(tmpdir(), `orbix-audio-${Date.now()}.mp3`);
+      const response = await openai.audio.speech.create({
+        model: 'tts-1',
+        voice: 'alloy',
+        input: bodyOnly,
+      });
+      const buffer = Buffer.from(await response.arrayBuffer());
+      await fs.promises.writeFile(audioPath, buffer);
+      const { duration } = await execAsync(
+        `ffprobe -i "${audioPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        { timeout: 10000 }
+      ).then(result => ({ duration: parseFloat(result.stdout.trim()) }))
+      .catch(() => ({ duration: 35 }));
+      return { audioPath, duration: duration || 35 };
+    }
+
     // Trivia: voice_script is the full spoken script
     const voiceScript = (content.voice_script || '').trim();
     const hookText = (script.hook || content.hook || '').trim();
@@ -545,13 +567,16 @@ export async function generateTriviaAudio(opts, totalDuration = 15) {
  * so captions align with when the body is spoken.
  * @param {Object} script - Script object
  * @param {number} audioDuration - Total audio duration in seconds (from TTS)
+ * @param {{ psychologyQuestionHookSeconds?: number }} [options] - If psychologyQuestionHookSeconds set (e.g. 1.75), hook is silent question card; captions start after it; no end question.
  * @returns {Array<{text: string, start: number, end: number}>} Caption segments
  */
-export function generateCaptionSegments(script, audioDuration) {
+export function generateCaptionSegments(script, audioDuration, options = {}) {
   try {
     const content = script.content_json
       ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
       : {};
+    const psychologyHookSeconds = options.psychologyQuestionHookSeconds;
+
     // Body only (no hook, no end question / Comment Now): captions = what_happened + why_it_matters only
     let bodyText = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ');
     if (!bodyText) {
@@ -569,14 +594,18 @@ export function generateCaptionSegments(script, audioDuration) {
     }
     if (!bodyText) return [];
 
-    // Estimate hook duration so we offset captions (hook is spoken first, no caption during it). Use 3.0 wps to match TTS.
     const wordsPerSecond = 3.0;
-    const hookWords = hookText ? hookText.split(/\s+/).filter(Boolean).length : 0;
-    const hookDuration = Math.min(Math.max((hookWords / wordsPerSecond), 0.5), 10);
+    // Psychology: question is on-screen hook for fixed seconds at start; no spoken hook; body only; no end question.
+    const hookDuration = psychologyHookSeconds != null
+      ? psychologyHookSeconds
+      : (() => {
+          const hookWords = hookText ? hookText.split(/\s+/).filter(Boolean).length : 0;
+          return Math.min(Math.max((hookWords / wordsPerSecond), 0.5), 10);
+        })();
     const bodyDuration = Math.max(audioDuration - hookDuration, 0.5);
-    // Caption only the body (no question); that part is spoken in the first (bodyOnlyWords/totalSpokenBodyWords) of body duration
+    // Psychology: entire body is what_happened + why_it_matters (no question at end). Others: body only portion of spoken body.
     const bodyOnlyWords = bodyText.split(/\s+/).filter(Boolean).length;
-    const questionWords = (script.what_happens_next || '').trim().split(/\s+/).filter(Boolean).length;
+    const questionWords = psychologyHookSeconds != null ? 0 : (script.what_happens_next || '').trim().split(/\s+/).filter(Boolean).length;
     const totalSpokenBodyWords = bodyOnlyWords + questionWords;
     const bodyDurationForCaptions = totalSpokenBodyWords > 0
       ? bodyDuration * (bodyOnlyWords / totalSpokenBodyWords)
@@ -618,6 +647,29 @@ export function generateCaptionSegments(script, audioDuration) {
     console.error('[Orbix Video Renderer] Error generating caption segments:', error);
     return [];
   }
+}
+
+/** Psychology test: question-as-hook at start for this many seconds (1.5–2s). */
+export const PSYCHOLOGY_QUESTION_HOOK_DURATION = 1.75;
+
+/**
+ * Prepend silence to an audio file (e.g. for psychology question-hook at start).
+ * @param {string} audioPath - Path to existing audio file
+ * @param {number} silenceSeconds - Seconds of silence to prepend
+ * @returns {Promise<{path: string, totalDuration: number}>} New file path and total duration (silence + original)
+ */
+export async function prependSilenceToAudio(audioPath, silenceSeconds) {
+  const fs = (await import('fs')).default;
+  const outPath = join(tmpdir(), `orbix-audio-padded-${Date.now()}.mp3`);
+  // anullsrc=r=44100:cl=stereo for silence; -t silenceSeconds; then concat with original
+  const cmd = `ffmpeg -f lavfi -i anullsrc=r=44100:cl=stereo -t ${silenceSeconds} -i "${audioPath}" -filter_complex "[0:a][1:a]concat=n=2:v=0:a=1[a]" -map "[a]" -c:a libmp3lame -q:a 2 "${outPath}"`;
+  await execAsync(cmd, { timeout: 60000 });
+  const { duration } = await execAsync(
+    `ffprobe -i "${outPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+    { timeout: 10000 }
+  ).then(result => ({ duration: parseFloat(result.stdout.trim()) }))
+  .catch(() => ({ duration: silenceSeconds + 10 }));
+  return { path: outPath, totalDuration: duration || (silenceSeconds + 10) };
 }
 
 /** Words-per-second for TTS (match generateCaptionSegments). */
@@ -1101,18 +1153,40 @@ export async function processRenderJob(render) {
       throw new Error(`Story not found: ${storyError?.message || 'Story ID: ' + render.story_id}`);
     }
 
-    const { data: script, error: scriptError } = await supabaseClient
-      .from('orbix_scripts')
-      .select('*')
-      .eq('id', render.script_id)
-      .single();
-
-    if (scriptError || !script) {
-      console.error(`[processRenderJob] Script not found render_id=${render.id} script_id=${render.script_id}`, scriptError?.message);
-      throw new Error(`Script not found: ${scriptError?.message || 'Script ID: ' + render.script_id}`);
+    let script;
+    const isPsychologyStory = (story?.category || '').toLowerCase() === 'psychology';
+    // Psychology: use latest script for this story so a rewrite → restart uses the new question-as-hook
+    if (isPsychologyStory) {
+      const { data: latestScript, error: latestErr } = await supabaseClient
+        .from('orbix_scripts')
+        .select('*')
+        .eq('story_id', render.story_id)
+        .eq('business_id', render.business_id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      if (latestErr || !latestScript) {
+        const { data: fallback } = await supabaseClient.from('orbix_scripts').select('*').eq('id', render.script_id).single();
+        script = fallback;
+      } else {
+        script = latestScript;
+      }
+    }
+    if (!script) {
+      const { data: scriptRow, error: scriptError } = await supabaseClient
+        .from('orbix_scripts')
+        .select('*')
+        .eq('id', render.script_id)
+        .single();
+      if (scriptError || !scriptRow) {
+        console.error(`[processRenderJob] Script not found render_id=${render.id} script_id=${render.script_id}`, scriptError?.message);
+        throw new Error(`Script not found: ${scriptError?.message || 'Script ID: ' + render.script_id}`);
+      }
+      script = scriptRow;
     }
 
-    console.log(`[processRenderJob] Story and script loaded render_id=${render.id} story_title="${story?.title || 'n/a'}"`);
+    const psychologyHookPreview = isPsychologyStory && script ? (script.what_happens_next || script.cta_line || script.hook || '').trim().slice(0, 60) : '';
+    console.log(`[processRenderJob] Story and script loaded render_id=${render.id} story_title="${story?.title || 'n/a'}" script_id=${script?.id}${isPsychologyStory ? ' (latest for story)' : ''}${psychologyHookPreview ? ` psychology_hook="${psychologyHookPreview}..."` : ''}`);
 
     // Trivia uses separate pipeline
     if ((story?.category || '').toLowerCase() === 'trivia') {
@@ -1121,17 +1195,23 @@ export async function processRenderJob(render) {
     }
 
     // Facts now use the same pipeline as psychology/money (hook, captions, short duration)
-    // Generate audio first so we know duration; video length = audioDuration + tail
-    // Psychology/money/facts Shorts: keep total 12–20s (short tail) to avoid long drop-off killing retention
-    const audioResult = await generateAudio(script);
-    const preGeneratedAudioPath = audioResult.audioPath;
-    const audioDuration = audioResult.duration;
+    // Psychology test: body-only TTS, then prepend 1.75s silence (question-as-hook at start); no tail; no end question.
     const cat = (story?.category || '').toLowerCase();
+    const isPsychology = cat === 'psychology';
+    let audioResult = await generateAudio(script, story);
+    let preGeneratedAudioPath = audioResult.audioPath;
+    let audioDuration = audioResult.duration;
+    if (isPsychology) {
+      const padded = await prependSilenceToAudio(preGeneratedAudioPath, PSYCHOLOGY_QUESTION_HOOK_DURATION);
+      await unlinkAsync(preGeneratedAudioPath).catch(() => {});
+      preGeneratedAudioPath = padded.path;
+      audioDuration = padded.totalDuration;
+    }
     const isShortsRetention = cat === 'psychology' || cat === 'money' || cat === 'facts';
-    const tailSeconds = isShortsRetention ? 3 : 5;
+    const tailSeconds = isPsychology ? 0 : (isShortsRetention ? 3 : 5);
     const maxDuration = isShortsRetention ? 20 : 45;
-    const targetDuration = Math.min(audioDuration + tailSeconds, maxDuration);
-    console.log(`[processRenderJob] Audio generated: ${audioDuration.toFixed(1)}s, target video length: ${targetDuration.toFixed(1)}s (Shorts retention: ${isShortsRetention})`);
+    const targetDuration = isPsychology ? audioDuration : Math.min(audioDuration + tailSeconds, maxDuration);
+    console.log(`[processRenderJob] Audio generated: ${audioDuration.toFixed(1)}s, target video length: ${targetDuration.toFixed(1)}s (psychology=${isPsychology}, Shorts retention: ${isShortsRetention})`);
     
     try {
     // STEP 3: Background motion render (length = targetDuration)

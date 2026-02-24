@@ -26,7 +26,8 @@ import {
   applyMotionToImage,
   getBackgroundImageUrl,
   getRandomMusicTrack,
-  prepareMusicTrack
+  prepareMusicTrack,
+  PSYCHOLOGY_QUESTION_HOOK_DURATION
 } from './video-renderer.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
 
@@ -396,27 +397,37 @@ export async function step5HookText(renderId, renderJob, script, story, template
       await logStepEvent(renderId, step, 'PROGRESS', 'Retrieved Step 4 video path from database', { path: inputVideoPath });
     }
     
-    // Get hook text
-    let hookText = script.hook;
-    if (!hookText && script.content_json) {
-      const content = typeof script.content_json === 'string' 
-        ? JSON.parse(script.content_json) 
-        : script.content_json;
-      hookText = content.hook;
+    // Psychology: question-as-hook at start for 1.5–2s only; no traditional hook. Other categories: traditional hook.
+    const isPsychology = (story?.category || '').toLowerCase() === 'psychology';
+    let hookText;
+    let hookDuration;
+    if (isPsychology) {
+      const content = script.content_json
+        ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+        : {};
+      hookText = (script.what_happens_next || script.cta_line || content.what_happens_next || content.cta_line || script.hook || content.hook || '').trim() || story?.title || 'Breaking News';
+      hookDuration = PSYCHOLOGY_QUESTION_HOOK_DURATION;
+      await logStepEvent(renderId, step, 'PROGRESS', 'Psychology question-as-hook text', { hookText: hookText.slice(0, 80) });
+    } else {
+      hookText = script.hook;
+      if (!hookText && script.content_json) {
+        const content = typeof script.content_json === 'string' 
+          ? JSON.parse(script.content_json) 
+          : script.content_json;
+        hookText = content.hook;
+      }
+      hookText = hookText || story.title || 'Breaking News';
+      const hookWords = hookText.split(/\s+/).filter(Boolean).length;
+      const wordsPerSecond = 2.7;
+      hookDuration = Math.min(Math.max(hookWords / wordsPerSecond, 0.5), 10);
     }
-    hookText = hookText || story.title || 'Breaking News';
     const hookDisplay = hookText.length > 80 
       ? hookText.substring(0, 77) + '...' 
       : hookText;
     const hookAllCaps = hookDisplay.toUpperCase();
     
-    await logStepEvent(renderId, step, 'PROGRESS', 'Hook text extracted (all caps, wrap)', { hook: hookAllCaps });
+    await logStepEvent(renderId, step, 'PROGRESS', isPsychology ? 'Question-as-hook (psychology)' : 'Hook text extracted (all caps, wrap)', { hook: hookAllCaps });
     await updateStepStatus(renderId, step, 20);
-    
-    // Hook visible only while TTS is saying the hook (same duration estimate as captions)
-    const hookWords = hookDisplay.split(/\s+/).filter(Boolean).length;
-    const wordsPerSecond = 2.7;
-    const hookDuration = Math.min(Math.max(hookWords / wordsPerSecond, 0.5), 10);
     
     // ASS: Arial Bold 114pt, center, wraps; shown only for hookDuration seconds
     const assFilePath = await generateHookOnlyASSFile(hookAllCaps, hookDuration);
@@ -515,11 +526,15 @@ export async function step6Captions(renderId, renderJob, script, story, template
       await logStepEvent(renderId, step, 'PROGRESS', 'Retrieved Step 5 video path from database', { path: inputVideoPath });
     }
     
-    // Generate caption segments
+    // Generate caption segments (psychology: captions start after question-hook; no end question)
     await updateStepStatus(renderId, step, 20);
     await logStepEvent(renderId, step, 'PROGRESS', 'Generating caption segments from script');
-    
-    const captionSegments = generateCaptionSegments(script, audioDuration);
+    const isPsychologyCategory = (story?.category || '').toLowerCase() === 'psychology';
+    const captionSegments = generateCaptionSegments(
+      script,
+      audioDuration,
+      isPsychologyCategory ? { psychologyQuestionHookSeconds: PSYCHOLOGY_QUESTION_HOOK_DURATION } : undefined
+    );
     await logStepEvent(renderId, step, 'PROGRESS', 'Caption segments generated', { count: captionSegments.length });
     
     if (captionSegments.length === 0) {
@@ -573,21 +588,23 @@ export async function step6Captions(renderId, renderJob, script, story, template
       default: hookFontSize = 56; hookY = 340;
     }
     
-    // Hook is already burned in by step 5; step 6 ASS adds captions + end question + "Comment Now" (hook style, when spoken until end)
-    const endQuestion = (script.what_happens_next || '').trim();
-    const effectiveTarget = targetDuration != null && targetDuration > audioDuration ? targetDuration : audioDuration + 5;
-    // When does the question start in the audio? (hook then body-without-question then question)
-    const wordsPerSecond = 3.0;
-    const hookWords = hookDisplay.split(/\s+/).filter(Boolean).length;
-    const hookDuration = Math.min(Math.max(hookWords / wordsPerSecond, 0.5), 10);
-    const bodyDuration = Math.max(audioDuration - hookDuration, 0.5);
-    const bodyOnlyWords = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ').split(/\s+/).filter(Boolean).length;
-    const questionWords = (script.what_happens_next || '').split(/\s+/).filter(Boolean).length;
-    const totalBodyWords = bodyOnlyWords + questionWords;
-    const endQuestionStartSeconds = totalBodyWords > 0
-      ? hookDuration + bodyDuration * (bodyOnlyWords / totalBodyWords)
-      : audioDuration;
+    // Hook is already burned in by step 5; step 6 ASS adds captions + (unless psychology) end question + "Comment Now"
     const isFactsCategory = (story?.category || '').toLowerCase() === 'facts';
+    const endQuestion = isPsychologyCategory ? null : (script.what_happens_next || '').trim();
+    const effectiveTarget = targetDuration != null && targetDuration > audioDuration ? targetDuration : audioDuration + 5;
+    let endQuestionStartSeconds = null;
+    if (endQuestion) {
+      const wordsPerSecond = 3.0;
+      const hookWords = hookDisplay.split(/\s+/).filter(Boolean).length;
+      const hookDuration = Math.min(Math.max(hookWords / wordsPerSecond, 0.5), 10);
+      const bodyDuration = Math.max(audioDuration - hookDuration, 0.5);
+      const bodyOnlyWords = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ').split(/\s+/).filter(Boolean).length;
+      const questionWords = (script.what_happens_next || '').split(/\s+/).filter(Boolean).length;
+      const totalBodyWords = bodyOnlyWords + questionWords;
+      endQuestionStartSeconds = totalBodyWords > 0
+        ? hookDuration + bodyDuration * (bodyOnlyWords / totalBodyWords)
+        : audioDuration;
+    }
     const assFilePath = await generateASSSubtitleFile(
       captionSegments,
       captionY,

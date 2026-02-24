@@ -28,6 +28,7 @@ function getYouTubeSetupInstructions(req = null) {
   }
   if (!base) base = 'https://your-backend-domain.com';
   base = base.replace(/\/$/, '');
+  if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
   const redirectUri = `${base}/api/v2/orbix-network/youtube/callback`;
   return {
     short: 'Add YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, and YOUTUBE_REDIRECT_URI to your .env (and Railway Environment if deployed).',
@@ -239,6 +240,14 @@ router.get('/stories/:id', async (req, res) => {
     if (error) throw error;
     if (!story) {
       return res.status(404).json({ error: 'Story not found' });
+    }
+    // Ensure scripts are newest first (so UI and psychology "latest script" match)
+    if (story.orbix_scripts && Array.isArray(story.orbix_scripts)) {
+      story.orbix_scripts.sort((a, b) => {
+        const ta = a.created_at ? new Date(a.created_at).getTime() : 0;
+        const tb = b.created_at ? new Date(b.created_at).getTime() : 0;
+        return tb - ta;
+      });
     }
     res.json({ story });
   } catch (error) {
@@ -2200,10 +2209,11 @@ router.get('/youtube/auth-url', async (req, res) => {
       });
     }
 
+    const redirectUri = process.env.YOUTUBE_REDIRECT_URI?.startsWith('http') ? process.env.YOUTUBE_REDIRECT_URI : `https://${process.env.YOUTUBE_REDIRECT_URI || ''}`;
     const oauth2Client = new google.auth.OAuth2(
       process.env.YOUTUBE_CLIENT_ID,
       process.env.YOUTUBE_CLIENT_SECRET,
-      process.env.YOUTUBE_REDIRECT_URI
+      redirectUri
     );
     
     const scopes = [
