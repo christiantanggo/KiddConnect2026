@@ -147,17 +147,37 @@ function isQuestion(text) {
 }
 
 /**
- * Validate Shorts-native script (psychology/money): word count 32-45, twist 2 lines each <=9 words, no banned abstract words.
- * For psychology, what_happens_next (opening hook) must be a question.
+ * Validate Shorts-native script.
+ * Psychology uses a separate, lighter validation (concept-first format: question → name → "Like when..." → payoff).
+ * Money uses full word-count + banned-word check.
  * @param {{ hook?: string, what_happened?: string, why_it_matters?: string, what_happens_next?: string }} scriptData
  * @param {string} [topic] - 'psychology' | 'money' | other
  * @returns {{ compliant: boolean, reason?: string }}
  */
 function isShortsNativeScriptCompliant(scriptData, topic = '') {
-  const hook = (scriptData.hook || '').trim();
+  const isPsychology = (topic || '').toLowerCase() === 'psychology';
   const whatHappened = (scriptData.what_happened || '').trim();
-  const whyItMatters = (scriptData.why_it_matters || '').trim();
   const whatHappensNext = (scriptData.what_happens_next || '').trim();
+  const whyItMatters = (scriptData.why_it_matters || '').trim();
+
+  // Psychology: question → concept name → "Like when..." → payoff (shorter, concept-first format)
+  if (isPsychology) {
+    if (!isQuestion(whatHappensNext)) {
+      return { compliant: false, reason: 'Psychology opening hook (what_happens_next) must be a question ending with ?.' };
+    }
+    const twistLines = whatHappened.split(/\n/).map(l => l.trim()).filter(Boolean);
+    if (twistLines.length !== 2) {
+      return { compliant: false, reason: `what_happened must be exactly 2 lines (concept name + "Like when..." example). Got ${twistLines.length}.` };
+    }
+    const spokenWords = countWords(whatHappened) + countWords(whyItMatters);
+    if (spokenWords < 12 || spokenWords > 35) {
+      return { compliant: false, reason: `Spoken body (what_happened + why_it_matters) must be 12–35 words (got ${spokenWords}).` };
+    }
+    return { compliant: true };
+  }
+
+  // Money / other Shorts-native: original word count + twist + banned word checks
+  const hook = (scriptData.hook || '').trim();
   const total = countWords(hook) + countWords(whatHappened) + countWords(whyItMatters) + countWords(whatHappensNext);
   if (total < SHORTS_NATIVE_TOTAL_WORDS_MIN || total > SHORTS_NATIVE_TOTAL_WORDS_MAX) {
     return { compliant: false, reason: `Total word count ${total}; must be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}.` };
@@ -176,9 +196,6 @@ function isShortsNativeScriptCompliant(scriptData, topic = '') {
   if (bannedMatch) {
     const word = bannedMatch[0].toLowerCase();
     return { compliant: false, reason: `Banned word "${word}" in twist/payoff. Use concrete verbs instead.` };
-  }
-  if ((topic || '').toLowerCase() === 'psychology' && !isQuestion(whatHappensNext)) {
-    return { compliant: false, reason: 'Psychology opening hook (what_happens_next) must be a question (end with ? or start with Did you/Do you/Why/How etc.).' };
   }
   return { compliant: true };
 }
@@ -429,20 +446,35 @@ Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_h
     let systemPrompt;
     let userPrompt;
     if (isPsychology) {
-      systemPrompt = `${SHORTS_NATIVE_SYSTEM}
+      systemPrompt = `You write YouTube Shorts scripts for a Psychology channel. PRIMARY GOAL: create a curiosity loop — open with a question about the psychology idea, deliver the "aha" quickly, then loop back to the question.
 
-Psychology channel: bias, perception, identity, hidden motives. Use concrete verbs (hijacks, tricks, edits). No educational tone.
+STRUCTURE (EXACT — do not deviate):
+1. OPENING QUESTION (what_happens_next): 1 short question, ≤ 8 words, ends with "?". Must be directly about the psychology phenomenon. This is shown on screen at the very start (not spoken in audio). e.g. "Why do bad memories feel more real?" "Why does one criticism ruin your day?"
+2. CONCEPT NAME (Line 1 of what_happened): State the name of the psychology concept in plain, everyday language. Max 12 words. e.g. "It's called the negativity bias." "That's the spotlight effect at work."
+3. RELATABLE EXAMPLE (Line 2 of what_happened): Start with "Like when" and give one concrete, specific scenario the viewer instantly recognises. Max 14 words. e.g. "Like when one bad comment ruins a day of great feedback." "Like when you replay an awkward moment for days."
+4. PAYOFF (why_it_matters): One short line (max 12 words) that explains why this matters or what it means for them. Calm, clear, slightly fascinating tone. e.g. "Your brain weights bad events more than good ones." "It's not a flaw — it's how you're wired."
 
-CRITICAL (Psychology only): what_happens_next is shown as the OPENING HOOK (first 1–2 seconds). It MUST be a QUESTION — end with "?" and be phrased as a question (e.g. "Why do you keep falling for it?" "Did you catch that?" "How often does that happen?"). No declarative loop line for psychology.`;
+TONE: Clear, calm, slightly fascinating. NOT preachy. NOT accusatory. Like discovering something interesting about yourself.
+SPOKEN BODY: what_happened (lines 1+2) + why_it_matters is all that is spoken aloud. Keep total spoken words 18–32.
+VIDEO LOOP: After the payoff, the video loops back to the opening question automatically.
 
-      userPrompt = `Shorts-native script. TOTAL words MUST be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}. HOOK <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines separated by newline (\\\\n), each line <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP (what_happens_next) = MUST be a QUESTION for psychology (opening hook): end with ? and ask the viewer something (e.g. "Why do you still lose?" "Did you notice that?"). Do NOT use: preferences, influences, subconsciously, lens, shapes, decisions. Include ego-threat or secret. captions array: 5–7 lines, each <= ${SHORTS_NATIVE_CAPTION_MAX_WORDS} words.
+Return only valid JSON: hook (the concept name, for title/metadata), what_happened (EXACTLY 2 lines separated by \\n — Line 1 = concept name, Line 2 = "Like when..." example), why_it_matters (payoff line), what_happens_next (the opening question, must end with ?), cta_line (""), captions (5–6 short strings matching the spoken body), duration_target_seconds (12).`;
+
+      userPrompt = `Write a psychology Short using the concept-first format:
+- what_happens_next: Opening question about the concept (≤ 8 words, ends with ?)
+- what_happened line 1: Name the psychology concept ("It's called [X]." or "That's [X] at work.")
+- what_happened line 2: "Like when [concrete relatable scenario]." (≤ 14 words)
+- why_it_matters: One-line payoff (≤ 12 words)
 
 Concept: ${rawItem?.title || story.title || 'Psychology concept'}
 Source: ${(rawItem?.snippet || story.snippet || '').slice(0, 600)}
 
-Example what_happened (2 lines with \\\\n): "Your birthday hides in your picks.\\\\nYou choose it without knowing."
-Example what_happens_next (MUST be a question): "Why do you keep falling for it?" or "Did you catch that?"
-Return JSON only: hook_1, hook_2, hook_3, what_happened (2 lines with \\\\n), why_it_matters, what_happens_next, cta_line "", captions, duration_target_seconds 14.`;
+EXAMPLES of the format:
+  what_happens_next: "Why does one criticism stick more than ten compliments?"
+  what_happened: "It's called the negativity bias.\\nLike when one bad review ruins a week of great ones."
+  why_it_matters: "Your brain is built to weight threats more than rewards."
+
+Return JSON only: hook (concept name for metadata), what_happened (2 lines with \\n), why_it_matters, what_happens_next (question ending with ?), cta_line "", captions (5–6 short strings), duration_target_seconds 12.`;
     } else if (isMoney) {
       systemPrompt = `${SHORTS_NATIVE_SYSTEM}
 
@@ -520,10 +552,10 @@ Generate a script for a short-form video. Return JSON with:
         { role: 'user', content: userPrompt }
       ];
       if (retried && isHighRetention) {
-        messages.push({
-          role: 'user',
-          content: `[REJECTED] ${lastRejectReason}. Generate again. Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch${isPsychology ? ' — for Psychology, what_happens_next MUST be a QUESTION (end with ?)' : ' (e.g. "And that\'s why you still lose." — NOT "And that\'s why you still…")'}. No abstract words. Total ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words. captions array 5–7 lines. Same JSON.`
-        });
+        const retryContent = isPsychology
+          ? `[REJECTED] ${lastRejectReason}. Fix and return the same JSON format. RULES: what_happens_next = opening question (≤ 8 words, ends with ?). what_happened = EXACTLY 2 lines separated by \\n — Line 1: "It's called [concept name]." — Line 2: "Like when [relatable scenario]." why_it_matters = 1 payoff line (≤ 12 words). Total spoken words (what_happened + why_it_matters) must be 18–32. captions 5–6 short strings.`
+          : `[REJECTED] ${lastRejectReason}. Generate again. Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch (e.g. "And that's why you still lose." — NOT "And that's why you still…"). No abstract words. Total ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words. captions array 5–7 lines. Same JSON.`;
+        messages.push({ role: 'user', content: retryContent });
       }
       const completion = await getOpenAIClient().chat.completions.create({
         model: 'gpt-4o',
