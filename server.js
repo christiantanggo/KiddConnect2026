@@ -477,6 +477,23 @@ try {
   } catch (emergencyError) {
     console.warn('⚠️  Emergency Network routes not loaded:', emergencyError.message);
   }
+
+  // Kid Quiz Studio (PUBLIC callback must be before authenticated routes)
+  try {
+    const kidquizYouTubeCallback = (await import("./routes/v2/kidquiz-youtube-callback.js")).default;
+    app.use("/api/v2/kidquiz", kidquizYouTubeCallback);
+    console.log('✅ Kid Quiz Studio YouTube OAuth callback loaded (public)');
+  } catch (kqCallbackErr) {
+    console.warn('⚠️  Kid Quiz Studio YouTube callback not loaded:', kqCallbackErr.message);
+  }
+
+  try {
+    const kidquizRoutes = (await import("./routes/v2/kidquiz.js")).default;
+    app.use("/api/v2/kidquiz", kidquizRoutes);
+    console.log('✅ Kid Quiz Studio routes loaded at /api/v2/kidquiz');
+  } catch (kqErr) {
+    console.warn('⚠️  Kid Quiz Studio routes not loaded:', kqErr.message);
+  }
   
   // V2 routes health check
   app.get("/api/v2/health", (_req, res) => {
