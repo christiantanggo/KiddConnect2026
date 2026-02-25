@@ -614,18 +614,53 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   });
                   const script = byNewest[0];
                   if (!script) return null;
-                  const openingHookText = (script.what_happens_next || script.cta_line || '').trim();
+                  if (isPsychology) {
+                    // Psychology: show fields in exact video playback order
+                    const question = (script.what_happens_next || '').trim();
+                    const bodyLines = (script.what_happened || '').split('\n').map(l => l.trim()).filter(Boolean);
+                    const conceptName = bodyLines[0] || '';
+                    const likeWhen = bodyLines[1] || '';
+                    const payoff = (script.why_it_matters || '').trim();
+                    return (
+                      <div className="space-y-3">
+                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
+                        {question && (
+                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
+                            <p className="text-xs font-semibold text-blue-600 mb-1">1 · Opening Question <span className="font-normal">(spoken + on screen)</span></p>
+                            <p className="text-base text-blue-900 font-medium">{question}</p>
+                          </div>
+                        )}
+                        {conceptName && (
+                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">2 · Concept Name <span className="font-normal">(spoken)</span></p>
+                            <p className="text-base text-gray-900">{conceptName}</p>
+                          </div>
+                        )}
+                        {likeWhen && (
+                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">3 · Relatable Example <span className="font-normal">(spoken)</span></p>
+                            <p className="text-base text-gray-900">{likeWhen}</p>
+                          </div>
+                        )}
+                        {payoff && (
+                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">4 · Payoff <span className="font-normal">(spoken)</span></p>
+                            <p className="text-base text-gray-900">{payoff}</p>
+                          </div>
+                        )}
+                        {question && (
+                          <div className="rounded-md bg-blue-50 border border-blue-100 p-2 text-center">
+                            <p className="text-xs text-blue-500">↩ Loops back to opening question</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
                   return (
                     <>
-                      {isPsychology && openingHookText && (
-                        <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
-                          <p className="text-sm font-semibold text-blue-800 mb-1">Opening hook (shown first in video)</p>
-                          <p className="text-base text-blue-900">{openingHookText}</p>
-                        </div>
-                      )}
                       {script.hook && (
                         <div>
-                          <p className="text-sm font-semibold text-gray-700 mb-1">{isPsychology ? 'Hook (not used as opening)' : 'Hook'}</p>
+                          <p className="text-sm font-semibold text-gray-700 mb-1">Hook</p>
                           <p className="text-base text-gray-900">{script.hook}</p>
                         </div>
                       )}
