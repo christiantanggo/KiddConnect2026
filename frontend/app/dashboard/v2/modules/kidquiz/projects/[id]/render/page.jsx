@@ -168,17 +168,6 @@ export default function RenderPage() {
               </div>
             )}
 
-            {isReady && (
-              <button
-                onClick={startRender}
-                disabled={rendering}
-                className="w-full py-3 rounded-xl font-semibold text-sm border mb-3"
-                style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)', background: 'var(--color-background)' }}
-              >
-                {rendering ? 'Starting...' : '🔄 Re-render Video'}
-              </button>
-            )}
-
             {status === 'APPROVED' && !rendering && (
               <div className="rounded-xl p-5 mb-6 text-center" style={{ background: '#f9fafb' }}>
                 <div className="text-4xl mb-3">🎬</div>
@@ -186,15 +175,17 @@ export default function RenderPage() {
               </div>
             )}
 
-            {showRestartButton && (
-              <button onClick={startRender} disabled={rendering} className="w-full py-4 rounded-xl font-bold text-white text-base" style={{ background: rendering ? '#9ca3af' : 'linear-gradient(135deg, #ef4444, #dc2626)', cursor: rendering ? 'not-allowed' : 'pointer' }}>
-                {rendering ? 'Starting...' : '🔄 Restart Render'}
+            {/* Start Rendering — only when APPROVED */}
+            {status === 'APPROVED' && (
+              <button onClick={startRender} disabled={rendering} className="w-full py-4 rounded-xl font-bold text-white text-base mb-3" style={{ background: 'linear-gradient(135deg, #6366f1, #ec4899)', opacity: rendering ? 0.6 : 1 }}>
+                {rendering ? 'Starting...' : 'Start Rendering'}
               </button>
             )}
 
-            {showStartButton && (
-              <button onClick={startRender} disabled={rendering} className="w-full py-4 rounded-xl font-bold text-white text-base" style={{ background: 'linear-gradient(135deg, #6366f1, #ec4899)', opacity: rendering ? 0.6 : 1 }}>
-                {rendering ? 'Starting...' : 'Start Rendering'}
+            {/* Restart/Re-render — always visible when not actively rendering or approved-fresh */}
+            {status !== 'APPROVED' && !isActivelyRendering && !rendering && (
+              <button onClick={startRender} className="w-full py-4 rounded-xl font-bold text-white text-base mb-3" style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}>
+                🔄 {status === 'READY' || status === 'PUBLISHED' ? 'Re-render Video' : 'Restart Render'}
               </button>
             )}
 
