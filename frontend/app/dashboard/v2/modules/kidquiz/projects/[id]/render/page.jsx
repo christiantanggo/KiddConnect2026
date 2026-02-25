@@ -18,6 +18,9 @@ function getBusinessId() {
   return localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
 }
 
+// Renders stuck in RENDERING for longer than this are treated as failed
+const STUCK_MINUTES = 5;
+
 export default function RenderPage() {
   const router = useRouter();
   const { id } = useParams();
@@ -47,24 +50,38 @@ export default function RenderPage() {
     } catch (err) { setError(err.message); }
   }
 
+  function isStuck() {
+    if (status !== 'RENDERING') return false;
+    const updated = render?.updated_at || render?.created_at;
+    if (!updated) return true;
+    return new Date(updated) < new Date(Date.now() - STUCK_MINUTES * 60 * 1000);
+  }
+
   async function startRender() {
     setRendering(true); setError(null);
     try {
       const headers = { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() };
+      // If stuck or failed, force reset status first
+      if (isStuck() || isFailed) {
+        await fetch(`${API_URL}/api/v2/kidquiz/projects/${id}/render-reset`, { method: 'POST', headers });
+      }
       const res = await fetch(`${API_URL}/api/v2/kidquiz/projects/${id}/render`, { method: 'POST', headers });
       if (!res.ok) {
         const d = await res.json();
         throw new Error(d.error || 'Render failed to start');
       }
       setStatus('RENDERING');
+      clearInterval(pollRef.current);
       pollRef.current = setInterval(checkStatus, 3000);
     } catch (err) { setError(err.message); setRendering(false); }
   }
 
-  const isRendering = status === 'RENDERING';
+  const isRendering = status === 'RENDERING' && !isStuck();
   const isReady = status === 'READY';
   const isFailed = status === 'FAILED';
+  const isStuckRendering = isStuck();
   const canStart = ['APPROVED', 'FAILED'].includes(status);
+  const showRestartButton = isFailed || isStuckRendering;
 
   return (
     <AuthGuard>
@@ -92,7 +109,7 @@ export default function RenderPage() {
             {error && <div className="p-3 mb-4 rounded-lg text-sm" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
 
             {/* Status indicator */}
-            <div className="rounded-xl p-5 mb-6 text-center" style={{ background: isReady ? '#f0fdf4' : isRendering ? '#ede9fe' : isFailed ? '#fee2e2' : '#f9fafb' }}>
+            <div className="rounded-xl p-5 mb-6 text-center" style={{ background: isReady ? '#f0fdf4' : isRendering ? '#ede9fe' : (isFailed || isStuckRendering) ? '#fee2e2' : '#f9fafb' }}>
               {isRendering && (
                 <>
                   <div className="text-4xl mb-3">&#x2699;&#xFE0F;</div>
@@ -101,6 +118,13 @@ export default function RenderPage() {
                   <div className="mt-4 h-2 rounded-full overflow-hidden" style={{ background: '#e5e7eb' }}>
                     <div className="h-full rounded-full animate-pulse" style={{ background: 'linear-gradient(90deg, #6366f1, #ec4899)', width: '60%' }} />
                   </div>
+                </>
+              )}
+              {isStuckRendering && (
+                <>
+                  <div className="text-4xl mb-3">&#x274C;</div>
+                  <p className="font-bold text-base" style={{ color: '#dc2626' }}>Render got stuck</p>
+                  <p className="text-sm mt-1" style={{ color: '#6b7280' }}>It stopped responding. Tap Restart Render below.</p>
                 </>
               )}
               {isReady && (
@@ -121,7 +145,7 @@ export default function RenderPage() {
                   {render?.step_error && <p className="text-xs mt-1" style={{ color: '#6b7280' }}>{render.step_error}</p>}
                 </>
               )}
-              {!isRendering && !isReady && !isFailed && canStart && (
+              {!isRendering && !isStuckRendering && !isReady && !isFailed && canStart && (
                 <>
                   <div className="text-4xl mb-3">&#x1F3AC;</div>
                   <p className="text-sm" style={{ color: '#6b7280' }}>Click below to start rendering your video</p>
@@ -129,13 +153,13 @@ export default function RenderPage() {
               )}
             </div>
 
-            {isFailed && (
+            {showRestartButton && (
               <button onClick={startRender} disabled={rendering} className="w-full py-4 rounded-xl font-bold text-white text-base" style={{ background: rendering ? '#9ca3af' : 'linear-gradient(135deg, #ef4444, #dc2626)', cursor: rendering ? 'not-allowed' : 'pointer' }}>
                 {rendering ? 'Starting...' : '🔄 Restart Render'}
               </button>
             )}
 
-            {!isFailed && canStart && (
+            {!showRestartButton && canStart && (
               <button onClick={startRender} disabled={rendering || isRendering} className="w-full py-4 rounded-xl font-bold text-white text-base" style={{ background: 'linear-gradient(135deg, #6366f1, #ec4899)', opacity: (rendering || isRendering) ? 0.6 : 1 }}>
                 {rendering ? 'Starting...' : 'Start Rendering'}
               </button>
