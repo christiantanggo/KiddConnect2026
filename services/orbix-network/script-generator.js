@@ -165,6 +165,16 @@ function isShortsNativeScriptCompliant(scriptData, topic = '') {
     if (!isQuestion(whatHappensNext)) {
       return { compliant: false, reason: 'Psychology opening hook (what_happens_next) must be a question ending with ?.' };
     }
+    // Question must not contain "you" + a contrast word in the same sentence (sends brain to the wrong thing)
+    const qLower = whatHappensNext.toLowerCase();
+    const hasContrast = /\b(and forget|but forget|instead of|not the|over the|more than|rather than|but not|while forgetting)\b/.test(qLower);
+    if (hasContrast) {
+      return { compliant: false, reason: 'Psychology question must not set up a contrast (e.g. "remember X and forget Y"). Ask about the phenomenon directly: "Do you always remember the weird stuff?" not "Why do you remember X and forget Y?".' };
+    }
+    // Question must feel personal — include "you" or "your"
+    if (!/\b(you|your)\b/.test(qLower)) {
+      return { compliant: false, reason: 'Psychology question must include "you" or "your" to feel personal and direct (e.g. "Do you always remember the weird stuff?").' };
+    }
     const twistLines = whatHappened.split(/\n/).map(l => l.trim()).filter(Boolean);
     if (twistLines.length !== 2) {
       return { compliant: false, reason: `what_happened must be exactly 2 lines (concept name + "Like when..." example). Got ${twistLines.length}.` };
@@ -449,7 +459,13 @@ Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_h
       systemPrompt = `You write YouTube Shorts scripts for a Psychology channel. PRIMARY GOAL: create a curiosity loop — open with a question about the psychology idea, deliver the "aha" quickly, then loop back to the question.
 
 STRUCTURE (EXACT — do not deviate):
-1. OPENING QUESTION (what_happens_next): 1 short question, ≤ 8 words, ends with "?". Must be directly about the psychology phenomenon. This is shown on screen at the very start (not spoken in audio). e.g. "Why do bad memories feel more real?" "Why does one criticism ruin your day?"
+1. OPENING QUESTION (what_happens_next): 1 short question, ≤ 8 words, ends with "?". Must make the viewer's brain immediately DO the thing the video is about — scan their memory, notice a feeling, recognise a pattern. Use "you" or "your". Ask about the phenomenon directly, positively. NEVER set up a contrast in the question (no "and forget the X" or "but not the Y" — that sends the brain to the wrong thing).
+   GOOD: "Do you always remember the weird stuff?" → brain scans for weird memories ✓
+   GOOD: "Have you ever replayed an awkward moment for days?" → brain immediately replays one ✓
+   GOOD: "Why do you always notice that one mistake?" → brain finds the mistake ✓
+   BAD: "Why do you remember the weird stuff and forget the normal?" → brain goes to "the normal" ✗
+   BAD: "Why do bad memories feel more real than good ones?" → contrast kills focus ✗
+   BAD: "Why does one criticism stick more than ten compliments?" → brain counts compliments ✗
 2. CONCEPT NAME (Line 1 of what_happened): State the name of the psychology concept in plain, everyday language. Max 12 words. e.g. "It's called the negativity bias." "That's the spotlight effect at work."
 3. RELATABLE EXAMPLE (Line 2 of what_happened): Start with "Like when" and give one concrete, specific scenario the viewer instantly recognises. Max 14 words. e.g. "Like when one bad comment ruins a day of great feedback." "Like when you replay an awkward moment for days."
 4. PAYOFF (why_it_matters): One short line (max 12 words) that explains why this matters or what it means for them. Calm, clear, slightly fascinating tone. e.g. "Your brain weights bad events more than good ones." "It's not a flaw — it's how you're wired."
@@ -470,9 +486,15 @@ Concept: ${rawItem?.title || story.title || 'Psychology concept'}
 Source: ${(rawItem?.snippet || story.snippet || '').slice(0, 600)}
 
 EXAMPLES of the format:
-  what_happens_next: "Why does one criticism stick more than ten compliments?"
+  what_happens_next: "Do you always remember the one bad comment?" → brain scans for it immediately
   what_happened: "It's called the negativity bias.\\nLike when one bad review ruins a week of great ones."
   why_it_matters: "Your brain is built to weight threats more than rewards."
+
+  what_happens_next: "Have you ever replayed an awkward moment for days?"
+  what_happened: "That's the Zeigarnik effect at work.\\nLike when you can't stop thinking about an unfinished task."
+  why_it_matters: "Unfinished things stay open tabs in your brain."
+
+The question must make the viewer's brain DO the thing — not describe or contrast it. Short, personal, positive framing only.
 
 Return JSON only: hook (concept name for metadata), what_happened (2 lines with \\n), why_it_matters, what_happens_next (question ending with ?), cta_line "", captions (5–6 short strings), duration_target_seconds 12.`;
     } else if (isMoney) {
