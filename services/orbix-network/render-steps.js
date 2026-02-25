@@ -526,14 +526,17 @@ export async function step6Captions(renderId, renderJob, script, story, template
       await logStepEvent(renderId, step, 'PROGRESS', 'Retrieved Step 5 video path from database', { path: inputVideoPath });
     }
     
-    // Generate caption segments (psychology: captions start after question-hook; no end question)
+    // Generate caption segments (psychology + money: captions start after spoken question; no end question)
     await updateStepStatus(renderId, step, 20);
     await logStepEvent(renderId, step, 'PROGRESS', 'Generating caption segments from script');
-    const isPsychologyCategory = (story?.category || '').toLowerCase() === 'psychology';
+    const storyCategory = (story?.category || '').toLowerCase();
+    const isPsychologyCategory = storyCategory === 'psychology';
+    const isMoneyCategory = storyCategory === 'money';
+    const isConceptFirstCategory = isPsychologyCategory || isMoneyCategory;
     const captionSegments = generateCaptionSegments(
       script,
       audioDuration,
-      isPsychologyCategory ? { psychologyQuestionHookSeconds: PSYCHOLOGY_QUESTION_HOOK_DURATION } : undefined
+      isConceptFirstCategory ? { psychologyQuestionHookSeconds: PSYCHOLOGY_QUESTION_HOOK_DURATION } : undefined
     );
     await logStepEvent(renderId, step, 'PROGRESS', 'Caption segments generated', { count: captionSegments.length });
     
@@ -588,9 +591,9 @@ export async function step6Captions(renderId, renderJob, script, story, template
       default: hookFontSize = 56; hookY = 340;
     }
     
-    // Hook is already burned in by step 5; step 6 ASS adds captions + (unless psychology) end question + "Comment Now"
-    const isFactsCategory = (story?.category || '').toLowerCase() === 'facts';
-    const endQuestion = isPsychologyCategory ? null : (script.what_happens_next || '').trim();
+    // Hook is already burned in by step 5; step 6 ASS adds captions + (unless psychology/money) end question + "Comment Now"
+    const isFactsCategory = storyCategory === 'facts';
+    const endQuestion = isConceptFirstCategory ? null : (script.what_happens_next || '').trim();
     const effectiveTarget = targetDuration != null && targetDuration > audioDuration ? targetDuration : audioDuration + 5;
     let endQuestionStartSeconds = null;
     if (endQuestion) {
@@ -615,7 +618,7 @@ export async function step6Captions(renderId, renderJob, script, story, template
       effectiveTarget,
       endQuestion || null,
       endQuestionStartSeconds,
-      { captionCenteredLarge: isFactsCategory, psychologyCaptions: isPsychologyCategory }
+      { captionCenteredLarge: isFactsCategory, psychologyCaptions: isConceptFirstCategory }
     );
     
     await logStepEvent(renderId, step, 'PROGRESS', 'ASS file generated', { path: assFilePath, segments: captionSegments.length });

@@ -397,14 +397,16 @@ export async function generateAudio(script, story = null) {
     const content = script.content_json
       ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
       : {};
-    const isPsychology = (story?.category || '').toLowerCase() === 'psychology';
+    const cat = (story?.category || '').toLowerCase();
+    const isPsychology = cat === 'psychology';
+    const isMoney = cat === 'money';
 
-    // Psychology: voice speaks question first (what_happens_next), then body (what_happened + why_it_matters).
-    // Speaking the question lets you hear it in audio preview to confirm it's in the video before upload.
-    if (isPsychology) {
+    // Psychology + Money: voice speaks question first, then body (concept/behaviour name → "Like when..." → payoff).
+    // Speaking the question confirms it's in the video before upload.
+    if (isPsychology || isMoney) {
       const question = (script.what_happens_next || '').trim();
       const bodyOnly = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ').trim();
-      if (!bodyOnly) throw new Error('Psychology script missing what_happened or why_it_matters');
+      if (!bodyOnly) throw new Error(`${isPsychology ? 'Psychology' : 'Money'} script missing what_happened or why_it_matters`);
       const fullSpoken = [question, bodyOnly].filter(Boolean).join(' ').trim();
       const audioPath = join(tmpdir(), `orbix-audio-${Date.now()}.mp3`);
       const response = await openai.audio.speech.create({
@@ -1215,24 +1217,25 @@ export async function processRenderJob(render) {
       return await processTriviaRenderJob(render, story, script);
     }
 
-    // Facts now use the same pipeline as psychology/money (hook, captions, short duration)
-    // Psychology: TTS now speaks question first then body. Add a short breath pause (0.3s) before voice starts.
-    const cat = (story?.category || '').toLowerCase();
-    const isPsychology = cat === 'psychology';
+    // Psychology + Money: TTS speaks question first then body. Add a short breath pause (0.3s) before voice starts.
+    const cat2 = (story?.category || '').toLowerCase();
+    const isPsychology = cat2 === 'psychology';
+    const isMoneyChannel = cat2 === 'money';
+    const isConceptFirst = isPsychology || isMoneyChannel;
     let audioResult = await generateAudio(script, story);
     let preGeneratedAudioPath = audioResult.audioPath;
     let audioDuration = audioResult.duration;
-    if (isPsychology) {
+    if (isConceptFirst) {
       const padded = await prependSilenceToAudio(preGeneratedAudioPath, 0.3);
       await unlinkAsync(preGeneratedAudioPath).catch(() => {});
       preGeneratedAudioPath = padded.path;
       audioDuration = padded.totalDuration;
     }
-    const isShortsRetention = cat === 'psychology' || cat === 'money' || cat === 'facts';
-    const tailSeconds = isPsychology ? 0 : (isShortsRetention ? 3 : 5);
+    const isShortsRetention = cat2 === 'psychology' || cat2 === 'money' || cat2 === 'facts';
+    const tailSeconds = isConceptFirst ? 0 : (isShortsRetention ? 3 : 5);
     const maxDuration = isShortsRetention ? 20 : 45;
-    const targetDuration = isPsychology ? audioDuration : Math.min(audioDuration + tailSeconds, maxDuration);
-    console.log(`[processRenderJob] Audio generated: ${audioDuration.toFixed(1)}s, target video length: ${targetDuration.toFixed(1)}s (psychology=${isPsychology}, Shorts retention: ${isShortsRetention})`);
+    const targetDuration = isConceptFirst ? audioDuration : Math.min(audioDuration + tailSeconds, maxDuration);
+    console.log(`[processRenderJob] Audio generated: ${audioDuration.toFixed(1)}s, target video length: ${targetDuration.toFixed(1)}s (conceptFirst=${isConceptFirst}, Shorts retention: ${isShortsRetention})`);
     
     try {
     // STEP 3: Background motion render (length = targetDuration)

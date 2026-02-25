@@ -601,7 +601,9 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                 {(() => {
                   const cat = (item.story_category || '').toLowerCase();
                   const isPsychology = cat === 'psychology';
-                  const isShortsNative = cat === 'psychology' || cat === 'money' || cat === 'facts';
+                  const isMoney = cat === 'money';
+                  const isConceptFirst = isPsychology || isMoney;
+                  const isShortsNative = isConceptFirst || cat === 'facts';
                   const labelTwist = isShortsNative ? 'Twist' : 'What Happened';
                   const labelPayoff = isShortsNative ? 'Payoff' : 'Why It Matters';
                   const labelLoop = isShortsNative ? 'Loop' : 'What Happens Next';
@@ -614,13 +616,14 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   });
                   const script = byNewest[0];
                   if (!script) return null;
-                  if (isPsychology) {
-                    // Psychology: show fields in exact video playback order
+                  if (isConceptFirst) {
+                    // Psychology + Money: show fields in exact video playback order
                     const question = (script.what_happens_next || '').trim();
                     const bodyLines = (script.what_happened || '').split('\n').map(l => l.trim()).filter(Boolean);
                     const conceptName = bodyLines[0] || '';
                     const likeWhen = bodyLines[1] || '';
                     const payoff = (script.why_it_matters || '').trim();
+                    const label2 = isPsychology ? 'Concept Name' : 'Behaviour Name';
                     return (
                       <div className="space-y-3">
                         <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
@@ -632,7 +635,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                         )}
                         {conceptName && (
                           <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
-                            <p className="text-xs font-semibold text-gray-500 mb-1">2 · Concept Name <span className="font-normal">(spoken)</span></p>
+                            <p className="text-xs font-semibold text-gray-500 mb-1">2 · {label2} <span className="font-normal">(spoken)</span></p>
                             <p className="text-base text-gray-900">{conceptName}</p>
                           </div>
                         )}

@@ -155,29 +155,32 @@ function isQuestion(text) {
  * @returns {{ compliant: boolean, reason?: string }}
  */
 function isShortsNativeScriptCompliant(scriptData, topic = '') {
-  const isPsychology = (topic || '').toLowerCase() === 'psychology';
+  const t = (topic || '').toLowerCase();
+  const isPsychology = t === 'psychology';
+  const isMoney = t === 'money';
   const whatHappened = (scriptData.what_happened || '').trim();
   const whatHappensNext = (scriptData.what_happens_next || '').trim();
   const whyItMatters = (scriptData.why_it_matters || '').trim();
 
-  // Psychology: question → concept name → "Like when..." → payoff (shorter, concept-first format)
-  if (isPsychology) {
+  // Shared validation for psychology + money (concept-first loop format)
+  if (isPsychology || isMoney) {
+    const channelLabel = isPsychology ? 'Psychology' : 'Money';
     if (!isQuestion(whatHappensNext)) {
-      return { compliant: false, reason: 'Psychology opening hook (what_happens_next) must be a question ending with ?.' };
+      return { compliant: false, reason: `${channelLabel} opening hook (what_happens_next) must be a question ending with ?.` };
     }
-    // Question must not contain "you" + a contrast word in the same sentence (sends brain to the wrong thing)
     const qLower = whatHappensNext.toLowerCase();
-    const hasContrast = /\b(and forget|but forget|instead of|not the|over the|more than|rather than|but not|while forgetting)\b/.test(qLower);
+    // Reject contrast framing — sends the brain to the wrong thing
+    const hasContrast = /\b(and forget|but forget|instead of|not the|over the|more than|rather than|but not|while forgetting|and then|but then)\b/.test(qLower);
     if (hasContrast) {
-      return { compliant: false, reason: 'Psychology question must not set up a contrast (e.g. "remember X and forget Y"). Ask about the phenomenon directly: "Do you always remember the weird stuff?" not "Why do you remember X and forget Y?".' };
+      return { compliant: false, reason: `${channelLabel} question must not set up a contrast. Ask about the behaviour directly and positively.` };
     }
-    // Question must feel personal — include "you" or "your"
+    // Must feel personal
     if (!/\b(you|your)\b/.test(qLower)) {
-      return { compliant: false, reason: 'Psychology question must include "you" or "your" to feel personal and direct (e.g. "Do you always remember the weird stuff?").' };
+      return { compliant: false, reason: `${channelLabel} question must include "you" or "your" to feel personal and direct.` };
     }
     const twistLines = whatHappened.split(/\n/).map(l => l.trim()).filter(Boolean);
     if (twistLines.length !== 2) {
-      return { compliant: false, reason: `what_happened must be exactly 2 lines (concept name + "Like when..." example). Got ${twistLines.length}.` };
+      return { compliant: false, reason: `what_happened must be exactly 2 lines (behaviour name + "Like when..." example). Got ${twistLines.length}.` };
     }
     const spokenWords = countWords(whatHappened) + countWords(whyItMatters);
     if (spokenWords < 12 || spokenWords > 35) {
@@ -186,7 +189,7 @@ function isShortsNativeScriptCompliant(scriptData, topic = '') {
     return { compliant: true };
   }
 
-  // Money / other Shorts-native: original word count + twist + banned word checks
+  // Other Shorts-native: original word count + twist + banned word checks
   const hook = (scriptData.hook || '').trim();
   const total = countWords(hook) + countWords(whatHappened) + countWords(whyItMatters) + countWords(whatHappensNext);
   if (total < SHORTS_NATIVE_TOTAL_WORDS_MIN || total > SHORTS_NATIVE_TOTAL_WORDS_MAX) {
@@ -498,19 +501,46 @@ The question must make the viewer's brain DO the thing — not describe or contr
 
 Return JSON only: hook (concept name for metadata), what_happened (2 lines with \\n), why_it_matters, what_happens_next (question ending with ?), cta_line "", captions (5–6 short strings), duration_target_seconds 12.`;
     } else if (isMoney) {
-      systemPrompt = `${SHORTS_NATIVE_SYSTEM}
+      systemPrompt = `You write YouTube Shorts scripts for a Money channel. PRIMARY GOAL: create a guilt/recognition loop — open with a question that makes the viewer instantly recognise a money mistake they make, name the behaviour, give a relatable example, deliver the aha, then loop back.
 
-Money channel: spending, approval, ego, status, control. Concrete verbs. No financial advice.`;
+STRUCTURE (EXACT — do not deviate):
+1. OPENING QUESTION (what_happens_next): 1 short question, ≤ 8 words, ends with "?". Must be ego-threat or guilt-based — make the viewer immediately recognise a money behaviour they do. Use "you" or "your". NEVER set up a contrast in the question.
+   GOOD: "Do you know where your money actually goes?" → brain immediately tries to account for it ✓
+   GOOD: "Have you ever bought something you didn't need?" → instant guilty yes ✓
+   GOOD: "Are you spending to feel better right now?" → hits the nerve directly ✓
+   BAD: "Why do you spend money and then regret it?" → contrast kills focus ✗
+   BAD: "Why do people overspend instead of saving?" → third person, no personal hit ✗
+2. BEHAVIOUR NAME (Line 1 of what_happened): Name the money behaviour or pattern in plain language. Max 12 words. e.g. "It's called lifestyle creep." "That's the pain of paying effect." "It's called emotional spending."
+3. RELATABLE EXAMPLE (Line 2 of what_happened): Start with "Like when" and give one concrete, specific scenario the viewer instantly recognises. Max 14 words. e.g. "Like when you upgrade your life every time you get a raise." "Like when you shop online after a bad day."
+4. PAYOFF (why_it_matters): One short line (max 12 words) that lands the insight. Calm, direct, slightly uncomfortable. e.g. "Your income grows but your savings never do." "It's not the price — it's the feeling you're buying."
 
-      const shockHint = (story.shock_score ?? 0) < MONEY_SHOCK_SCORE_MIN
-        ? ` Shock score below ${MONEY_SHOCK_SCORE_MIN}: hook sharp, tension, no soft tone.`
-        : '';
-      userPrompt = `Shorts-native script. TOTAL words MUST be ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX}. HOOK <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines separated by newline (\\\\n), each line <= ${SHORTS_NATIVE_TWIST_MAX_WORDS_PER_LINE} words. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence, punchy. Do NOT use: preferences, influences, subconsciously, lens, shapes, decisions. Include threat or regret. captions array: 5–7 lines, each <= ${SHORTS_NATIVE_CAPTION_MAX_WORDS} words.
+TONE: Direct, calm, slightly uncomfortable. NOT preachy. NOT judgmental. Like a friend calling you out gently.
+SPOKEN BODY: what_happened (lines 1+2) + why_it_matters is all that is spoken aloud. Keep total spoken words 18–32.
+VIDEO LOOP: After the payoff, the video loops back to the opening question automatically.
+
+Return only valid JSON: hook (the behaviour name, for title/metadata), what_happened (EXACTLY 2 lines separated by \\n — Line 1 = behaviour name, Line 2 = "Like when..." example), why_it_matters (payoff line), what_happens_next (the opening question, must end with ?), cta_line (""), captions (5–6 short strings matching the spoken body), duration_target_seconds (12).`;
+
+      userPrompt = `Write a money Short using the concept-first format:
+- what_happens_next: Opening ego-threat question (≤ 8 words, ends with ?, includes "you" or "your")
+- what_happened line 1: Name the money behaviour ("It's called [X]." or "That's [X] at work.")
+- what_happened line 2: "Like when [concrete relatable scenario]." (≤ 14 words)
+- why_it_matters: One-line payoff (≤ 12 words)
 
 Concept: ${rawItem?.title || story.title || 'Money concept'}
-Source: ${(rawItem?.snippet || story.snippet || '').slice(0, 600)}${shockHint}
+Source: ${(rawItem?.snippet || story.snippet || '').slice(0, 600)}
 
-Return JSON only: hook_1, hook_2, hook_3, what_happened (2 lines with \\\\n), why_it_matters, what_happens_next, cta_line "", captions, duration_target_seconds 14.`;
+EXAMPLES of the format:
+  what_happens_next: "Do you know where your money actually goes?"
+  what_happened: "It's called lifestyle creep.\\nLike when you upgrade everything every time you earn more."
+  why_it_matters: "Your income grows but your savings never do."
+
+  what_happens_next: "Have you ever bought something just to feel better?"
+  what_happened: "That's emotional spending.\\nLike when you shop online after a stressful day at work."
+  why_it_matters: "You're not buying the thing — you're buying relief."
+
+The question must make the viewer immediately recognise a money mistake they make. Personal, ego-threat framing only.
+
+Return JSON only: hook (behaviour name for metadata), what_happened (2 lines with \\n), why_it_matters, what_happens_next (question ending with ?), cta_line "", captions (5–6 short strings), duration_target_seconds 12.`;
     } else {
       systemPrompt = `You are a script writer for Orbix Network, a video news network tracking sudden power shifts. Write scripts that are:
 
@@ -574,8 +604,8 @@ Generate a script for a short-form video. Return JSON with:
         { role: 'user', content: userPrompt }
       ];
       if (retried && isHighRetention) {
-        const retryContent = isPsychology
-          ? `[REJECTED] ${lastRejectReason}. Fix and return the same JSON format. RULES: what_happens_next = opening question (≤ 8 words, ends with ?). what_happened = EXACTLY 2 lines separated by \\n — Line 1: "It's called [concept name]." — Line 2: "Like when [relatable scenario]." why_it_matters = 1 payoff line (≤ 12 words). Total spoken words (what_happened + why_it_matters) must be 18–32. captions 5–6 short strings.`
+        const retryContent = (isPsychology || isMoney)
+          ? `[REJECTED] ${lastRejectReason}. Fix and return the same JSON format. RULES: what_happens_next = opening question (≤ 8 words, ends with ?, includes "you" or "your", no contrast framing). what_happened = EXACTLY 2 lines separated by \\n — Line 1: "${isPsychology ? 'It\'s called [concept name].' : 'It\'s called [behaviour name].'}" — Line 2: "Like when [relatable scenario]." why_it_matters = 1 payoff line (≤ 12 words). Total spoken words (what_happened + why_it_matters) must be 18–32. captions 5–6 short strings.`
           : `[REJECTED] ${lastRejectReason}. Generate again. Hook <= ${SHORTS_NATIVE_HOOK_MAX_WORDS} words. TWIST = exactly 2 lines. PAYOFF <= ${SHORTS_NATIVE_PAYOFF_MAX_WORDS} words. LOOP = complete sentence with punch (e.g. "And that's why you still lose." — NOT "And that's why you still…"). No abstract words. Total ${SHORTS_NATIVE_TOTAL_WORDS_MIN}–${SHORTS_NATIVE_TOTAL_WORDS_MAX} words. captions array 5–7 lines. Same JSON.`;
         messages.push({ role: 'user', content: retryContent });
       }
