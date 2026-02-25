@@ -3,12 +3,12 @@
  * Renders a single-question 1080x1920 vertical Short using FFmpeg.
  * Reuses shared helpers from orbix video-renderer (applyMotionToImage, uploadRenderToStorage).
  *
- * Timeline (11 seconds):
- *  0.0–1.0s  Hook text (full screen)
- *  1.0–5.0s  Question + A/B/C options appear
- *  5.0–9.0s  Progress bar countdown
- *  9.0–9.5s  Correct answer flashes (visual only, no TTS)
- *  9.5–11.0s Loop line spoken — hard cut → loops
+ * Timeline (13 seconds):
+ *  0.0–1.0s   Hook text (full screen, random rotating phrase)
+ *  1.0–5.0s   Question + A/B/C options appear
+ *  5.0–9.0s   Progress bar countdown
+ *  9.0–9.5s   Correct answer flashes (visual only, no TTS)
+ *  9.5–13.0s  Loop line spoken — 3.5s buffer so voice never gets cut off
  */
 
 import { exec } from 'child_process';
@@ -26,12 +26,25 @@ import {
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
-const DURATION = 11;
+const DURATION = 13;
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS || 'kidquiz-videos';
 
 // Backgrounds reuse the orbix bucket (same server, same images)
 const BG_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_BACKGROUNDS || 'orbix-network-backgrounds';
 const TOTAL_BG = 12;
+
+const HOOK_LINES = [
+  'Think you know this one?',
+  'Can you guess it?',
+  "Here's a tricky one!",
+  'Test your brain!',
+  'Do you know the answer?',
+  'Only the smartest get this one!',
+  'Quick — what do you think?',
+  "Let's see how smart you are!",
+  'This one will get you thinking!',
+  'Are you ready for this?'
+];
 
 const LOOP_LINES = [
   'Did you get it right?',
@@ -174,8 +187,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     }
   }
 
-  // Loop line: 9.5–11s
-  lines.push(`Dialogue: 3,${t(9.5)},${t(11)},LoopLine,,0,0,0,,{\\an5\\pos(540,960)\\fad(100,200)}${escAss(loopLine)}`);
+  // Loop line: 9.5–13s
+  lines.push(`Dialogue: 3,${t(9.5)},${t(13)},LoopLine,,0,0,0,,{\\an5\\pos(540,960)\\fad(100,200)}${escAss(loopLine)}`);
 
   await fs.promises.writeFile(assPath, lines.join('\n'), 'utf8');
   return assPath;
@@ -188,7 +201,7 @@ export async function renderKidQuizShort(render, project) {
   const answers = question?.answers || [];
   const correctAnswer = answers.find(a => a.is_correct);
 
-  const hook = (project.hook_text || `Can you answer this ${project.category} question?`).trim();
+  const hook = HOOK_LINES[randomInt(HOOK_LINES.length)];
   const questionText = question?.question_text || '';
   const optionA = answers.find(a => a.label === 'A')?.answer_text || '';
   const optionB = answers.find(a => a.label === 'B')?.answer_text || '';
