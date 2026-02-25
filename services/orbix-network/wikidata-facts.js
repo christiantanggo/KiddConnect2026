@@ -65,7 +65,6 @@ async function fetchEntity(entityId) {
     action: 'wbgetentities',
     ids: entityId,
     format: 'json',
-    origin: '*',
     props: 'labels|claims',
     languages: 'en'
   });
