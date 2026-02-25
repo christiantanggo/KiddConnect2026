@@ -217,7 +217,7 @@ export default function V2DashboardPage() {
                 {activeModules.map((module) => {
                   const dashboardHref = module.key === 'phone-agent' 
                     ? '/dashboard' 
-                    : `/modules/${module.key}/dashboard`;
+                    : `/dashboard/v2/modules/${module.key}/dashboard`;
                   
                   return (
                     <Link
