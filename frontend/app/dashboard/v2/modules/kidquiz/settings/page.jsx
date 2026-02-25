@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
@@ -18,7 +18,7 @@ function getBusinessId() {
   return localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
 }
 
-export default function KidQuizSettings() {
+function KidQuizSettingsInner() {
   const searchParams = useSearchParams();
   const [settings, setSettings] = useState({ timer_seconds: 6, enable_auto_correct: true, enable_auto_metadata: true });
   const [ytStatus, setYtStatus] = useState(null);
@@ -102,6 +102,7 @@ export default function KidQuizSettings() {
           <Link href="/dashboard/v2/modules/kidquiz/dashboard" className="text-sm mb-4 inline-block" style={{ color: 'var(--color-text-muted)' }}>
             ← Back to Quizzes
           </Link>
+
 
           <h1 className="text-2xl font-bold mb-1" style={{ color: 'var(--color-text-main)' }}>⚙️ Parent Settings</h1>
           <p className="text-sm mb-6" style={{ color: 'var(--color-text-muted)' }}>Control defaults for Kid Quiz Studio</p>
@@ -207,5 +208,13 @@ export default function KidQuizSettings() {
         </div>
       </V2AppShell>
     </AuthGuard>
+  );
+}
+
+export default function KidQuizSettings() {
+  return (
+    <Suspense fallback={<div className="text-center py-20" style={{ color: '#9ca3af' }}>Loading…</div>}>
+      <KidQuizSettingsInner />
+    </Suspense>
   );
 }
