@@ -167,7 +167,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   // Loop line: 9.5–11s
   lines.push(`Dialogue: 3,${t(9.5)},${t(11)},LoopLine,,0,0,0,,{\\an5\\pos(540,960)\\fad(100,200)}${escAss(loopLine)}`);
 
-  await fs.default.promises.writeFile(assPath, lines.join('\n'), 'utf8');
+  await fs.promises.writeFile(assPath, lines.join('\n'), 'utf8');
   return assPath;
 }
 
