@@ -387,7 +387,7 @@ router.post('/projects/:id/photo', upload.single('photo'), async (req, res) => {
 
     const ext = req.file.mimetype === 'image/png' ? 'png' : 'jpg';
     const storagePath = `${businessId}/${req.params.id}/photo.${ext}`;
-    const bucket = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS || 'kidquiz-videos';
+    const bucket = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_PHOTOS || 'kidquiz-photos';
 
     const { error: uploadErr } = await supabaseClient.storage
       .from(bucket)
