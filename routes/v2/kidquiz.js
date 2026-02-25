@@ -9,6 +9,10 @@ import { requireBusinessContext } from '../../middleware/v2/requireBusinessConte
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { google } from 'googleapis';
+import OpenAI from 'openai';
+import multer from 'multer';
+
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 const router = express.Router();
 const MODULE_KEY = 'kidquiz';
@@ -189,7 +193,6 @@ router.post('/text/clean', async (req, res) => {
       return res.json({ cleanedText: cleaned });
     }
 
-    const OpenAI = (await import('openai')).default;
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -221,23 +224,23 @@ router.post('/ai/generate-metadata', async (req, res) => {
     const { project_id } = req.body;
     if (!project_id) return res.status(400).json({ error: 'project_id required' });
 
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(400).json({ error: 'OPENAI_API_KEY not configured on the server' });
+    }
+
     const project = await getProjectOrFail(res, project_id, businessId);
     if (!project) return;
 
     const full = await getProjectFull(project_id);
+    if (!full) return res.status(404).json({ error: 'Project data not found' });
+
     const question = full.questions?.[0];
     const answers = question?.answers || [];
     const correctAnswer = answers.find(a => a.is_correct);
 
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(400).json({ error: 'OPENAI_API_KEY not configured' });
-    }
-
-    const OpenAI = (await import('openai')).default;
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const prompt = `
-You are creating YouTube Shorts metadata for a kid-friendly trivia quiz video.
+    const prompt = `You are creating YouTube Shorts metadata for a kid-friendly trivia quiz video.
 
 Topic: ${project.topic}
 Category: ${project.category}
@@ -246,13 +249,12 @@ Answer options: ${answers.map(a => `${a.label}) ${a.answer_text}`).join(', ')}
 Correct answer: ${correctAnswer ? `${correctAnswer.label}) ${correctAnswer.answer_text}` : 'unknown'}
 
 Generate:
-1. hook_text: One punchy sentence for the first second of the video (e.g. "Only 1 in 10 kids gets this right…"). Max 10 words.
-2. title: YouTube Short title. Max 60 chars. Kid-friendly, fun, emoji optional.
+1. hook_text: One punchy sentence for the first second of the video (e.g. "Only 1 in 10 kids gets this right"). Max 10 words.
+2. title: YouTube Short title. Max 60 chars. Kid-friendly and fun.
 3. description: 2-3 sentences. Friendly, encourages engagement.
 4. hashtags: Array of 5-8 relevant hashtags (no # symbol, lowercase).
 
-Respond ONLY with valid JSON: { "hook_text": "...", "title": "...", "description": "...", "hashtags": ["..."] }
-`;
+Respond ONLY with valid JSON: { "hook_text": "...", "title": "...", "description": "...", "hashtags": ["..."] }`;
 
     const completion = await openai.chat.completions.create({
       model: 'gpt-4o-mini',
@@ -267,7 +269,7 @@ Respond ONLY with valid JSON: { "hook_text": "...", "title": "...", "description
     try { meta = JSON.parse(raw); } catch { meta = {}; }
 
     // Save to project
-    await supabaseClient
+    const { error: updateErr } = await supabaseClient
       .from('kidquiz_projects')
       .update({
         hook_text: meta.hook_text || project.hook_text,
@@ -278,8 +280,13 @@ Respond ONLY with valid JSON: { "hook_text": "...", "title": "...", "description
       })
       .eq('id', project_id);
 
+    if (updateErr) {
+      console.error('[kidquiz/ai/generate-metadata] DB update error:', updateErr.message);
+    }
+
     res.json({ hookText: meta.hook_text, title: meta.title, description: meta.description, hashtags: meta.hashtags || [] });
   } catch (err) {
+    console.error('[kidquiz/ai/generate-metadata] Error:', err.message, err.stack);
     res.status(500).json({ error: err.message });
   }
 });
@@ -370,6 +377,36 @@ router.delete('/projects/:id', async (req, res) => {
 });
 
 // ─── Parent submit for approval ──────────────────────────────────────────────
+
+router.post('/projects/:id/photo', upload.single('photo'), async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const project = await getProjectOrFail(res, req.params.id, businessId);
+    if (!project) return;
+    if (!req.file) return res.status(400).json({ error: 'No photo uploaded' });
+
+    const ext = req.file.mimetype === 'image/png' ? 'png' : 'jpg';
+    const storagePath = `${businessId}/${req.params.id}/photo.${ext}`;
+    const bucket = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS || 'kidquiz-videos';
+
+    const { error: uploadErr } = await supabaseClient.storage
+      .from(bucket)
+      .upload(storagePath, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
+    if (uploadErr) throw new Error(`Photo upload failed: ${uploadErr.message}`);
+
+    const { data: urlData } = supabaseClient.storage.from(bucket).getPublicUrl(storagePath);
+    const photoUrl = urlData?.publicUrl;
+
+    await supabaseClient
+      .from('kidquiz_projects')
+      .update({ photo_url: photoUrl, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id);
+
+    res.json({ photo_url: photoUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.post('/projects/:id/submit', async (req, res) => {
   try {

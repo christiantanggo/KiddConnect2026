@@ -196,11 +196,11 @@ export async function renderKidQuizShort(render, project) {
       .update({ render_status: 'RENDERING', updated_at: new Date().toISOString() })
       .eq('id', renderId);
 
-    // 1. Background
+    // 1. Background — use uploaded photo if available, otherwise pick a random one
     const axios = (await import('axios')).default;
     const fs = (await import('fs')).default;
-    const bgUrl = await getBackground();
-    bgPath = join(tmpdir(), `kq-bg-${renderId}-${Date.now()}.png`);
+    const bgUrl = project.photo_url || await getBackground();
+    bgPath = join(tmpdir(), `kq-bg-${renderId}-${Date.now()}.jpg`);
     const imgResp = await axios.get(bgUrl, { responseType: 'arraybuffer', timeout: 30000 });
     await fs.promises.writeFile(bgPath, imgResp.data);
 
