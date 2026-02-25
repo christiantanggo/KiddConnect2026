@@ -475,7 +475,7 @@ export async function generateAudio(script, story = null) {
  * @param {number} totalDuration - Total video duration in seconds (12)
  * @returns {Promise<{audioPath: string, duration: number}>}
  */
-export async function generateTriviaAudio(opts, totalDuration = 12) {
+export async function generateTriviaAudio(opts, totalDuration = 11) {
   const OpenAI = (await import('openai')).default;
   const fs = (await import('fs')).default;
 
@@ -511,9 +511,9 @@ export async function generateTriviaAudio(opts, totalDuration = 12) {
 
   const HOOK_START = 0;
   const QUESTION_START = 1;
-  const ANSWER_START = 9;   // answer reveal 9–10.5s
-  const LOOP_START = 10.5;  // single loop line 10.5–11.7s
-  const answerTtsPhrase = answerPhrase ? `The answer is ${answerPhrase}` : '';
+  const ANSWER_START = 9;   // answer flash 9–9.5s (visual only, no TTS — gone before it feels resolved)
+  const LOOP_START = 9.5;   // single loop line 9.5–11s
+  const answerTtsPhrase = ''; // No answer TTS — answer flashes on screen only (0.5s), keeps tension unresolved
 
   try {
     const [hookResp, qResp, aResp, loopResp] = await Promise.all([
@@ -771,18 +771,18 @@ function formatASSTimeFromSeconds(seconds) {
 const TRIVIA_HOOK_END = 1.0;
 const TRIVIA_READ_END = 5.0;      // question + options visible 1–5s
 const TRIVIA_COUNTDOWN_END = 9.0;  // countdown 5–9s
-const TRIVIA_REVEAL_END = 10.5;   // answer reveal 9–10.5s (1.5s)
-const TRIVIA_LOOP_LINE_DURATION = 1.2; // loop line only 10.5–11.7s, then hard cut
-const TRIVIA_LOOP_END = 11.7;     // video end 12s
+const TRIVIA_REVEAL_END = 9.5;    // answer flash 9–9.5s (0.5s visual only, no TTS)
+const TRIVIA_LOOP_LINE_DURATION = 1.5; // loop line 9.5–11s, hard cut
+const TRIVIA_LOOP_END = 11.0;     // video end 11s
 
 /**
- * Generate ASS file for trivia layout (12s retention format).
- * 0–1s hook; 1–9s question + countdown + options; 9–10.5s answer; 10.5–11.7s single loop line, hard cut.
+ * Generate ASS file for trivia layout (11s retention format).
+ * 0–1s hook; 1–9s question + countdown + options; 9–9.5s answer flash; 9.5–11s single loop line, hard cut.
  * @param {Object} opts - { category, triviaNumber, question, optionA, optionB, optionC, answerText, correctLetter, loopTriggerText?, hookText? }
- * @param {number} duration - Video duration in seconds (12)
+ * @param {number} duration - Video duration in seconds (11)
  * @returns {Promise<string>} Path to ASS file
  */
-export async function generateTriviaASSFile(opts, duration = 12) {
+export async function generateTriviaASSFile(opts, duration = 11) {
   const fs = (await import('fs')).default;
   const assPath = join(tmpdir(), `orbix-trivia-${Date.now()}.ass`);
   const esc = (s) => (s || '').toString().replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');

@@ -1,7 +1,7 @@
 /**
  * Orbix Trivia Render Pipeline
- * 12s format: 0-1s hook; 1-5s question+options; 5-9s countdown (progress bar); 9-10.5s answer reveal; 10.5-11.7s single loop line, hard cut.
- * Short ending (1–2s loop line only) for retention; no long congrats/outro.
+ * 11s format: 0-1s hook; 1-5s question+options; 5-9s countdown (progress bar); 9-9.5s answer flash (visual only); 9.5-11s loop line, hard cut.
+ * 2s ending total (0.5s answer flash + 1.5s loop line) for max retention loop.
  */
 
 import { exec } from 'child_process';
@@ -26,13 +26,13 @@ import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progre
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
-// Timing constants (12s total; short loop ending for retention)
+// Timing constants (11s total; 2s ending = 0.5s answer flash + 1.5s loop line)
 const HOOK_DURATION = 1.0;
 const READ_DURATION = 4.0;       // question + options visible 1s–5s
-const COUNTDOWN_DURATION = 4.0;   // 5s–9s
-const REVEAL_DURATION = 1.5;      // answer highlight time
-const LOOP_LINE_DURATION = 1.2;   // final cliffhanger line only (1.0–2.0s), then hard cut
-const DURATION = 12;
+const COUNTDOWN_DURATION = 4.0;  // 5s–9s
+const REVEAL_DURATION = 0.5;     // answer flash only — visual, no TTS, gone before it resolves
+const LOOP_LINE_DURATION = 1.5;  // loop line spoken 9.5–11s, hard cut
+const DURATION = 11;
 
 /**
  * Process a trivia render job (separate pipeline from news/money/psychology).
@@ -76,7 +76,7 @@ export async function processTriviaRenderJob(render, story, script) {
     const imgResp = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000 });
     await fs.promises.writeFile(bgPath, imgResp.data);
 
-    // 2. Apply motion to background (creates 12s video)
+    // 2. Apply motion to background (creates 11s video)
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
     // Trivia number: count of trivia stories for this channel up to this story
