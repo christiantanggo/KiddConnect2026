@@ -56,10 +56,11 @@ async function generateAudio(hook, question, loopLine) {
   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const hookPath = join(tmpdir(), `kq-hook-${Date.now()}.mp3`);
-  const qPath = join(tmpdir(), `kq-q-${Date.now()}.mp3`);
-  const loopPath = join(tmpdir(), `kq-loop-${Date.now()}.mp3`);
-  const mixPath = join(tmpdir(), `kq-mix-${Date.now()}.mp3`);
+  const ts = Date.now();
+  const hookPath = join(tmpdir(), `kq-hook-${ts}.mp3`);
+  const qPath = join(tmpdir(), `kq-q-${ts}.mp3`);
+  const loopPath = join(tmpdir(), `kq-loop-${ts}.mp3`);
+  const mixPath = join(tmpdir(), `kq-mix-${ts}.mp3`);
 
   const getDur = async (p) => {
     try {
@@ -80,22 +81,31 @@ async function generateAudio(hook, question, loopLine) {
 
   const hookDur = await getDur(hookPath);
   const qDur = await getDur(qPath);
-  const loopDur = await getDur(loopPath);
 
-  // Delays: hook at 0s, question at 1s, loop at 9.5s
-  const delays = [0, 1000, 9500];
-  const durs = [hookDur, qDur, loopDur];
-  const paths = [hookPath, qPath, loopPath];
-  const pads = paths.map((_, i) => Math.max(0, DURATION - delays[i] / 1000 - durs[i]));
+  // Timeline: hook at 0s, question at 1s, loop at 9.5s
+  // Build sequential audio with silence gaps using concat:
+  // [silence_before_q] = gap between hook end and 1s
+  // [silence_before_loop] = gap between question end and 9.5s
+  const silenceBeforeQ = Math.max(0, 1.0 - hookDur);
+  const questionEnds = 1.0 + qDur;
+  const silenceBeforeLoop = Math.max(0, 9.5 - questionEnds);
+  const loopStart = Math.max(questionEnds, 9.5);
+  const silenceAfterLoop = Math.max(0, DURATION - loopStart - 1.5);
 
-  const streams = paths
-    .map((_, i) => `[${i}:a]adelay=${delays[i]}|${delays[i]},apad=pad_dur=${pads[i]}[s${i}]`)
-    .join(';');
-  const mixInputs = paths.map((_, i) => `[s${i}]`).join('');
-  const filter = `${streams};${mixInputs}amix=inputs=${paths.length}:duration=first:dropout_transition=0[aout]`;
+  // Use ffmpeg concat with generated silence segments
+  const filter = [
+    // hook -> silence -> question -> silence -> loop -> tail silence
+    `[0:a]asetpts=PTS-STARTPTS[h]`,
+    `[1:a]asetpts=PTS-STARTPTS[q]`,
+    `[2:a]asetpts=PTS-STARTPTS[l]`,
+    `aevalsrc=0:c=mono:s=44100:d=${silenceBeforeQ.toFixed(3)}[sq]`,
+    `aevalsrc=0:c=mono:s=44100:d=${silenceBeforeLoop.toFixed(3)}[sl]`,
+    `aevalsrc=0:c=mono:s=44100:d=${silenceAfterLoop.toFixed(3)}[st]`,
+    `[h][sq][q][sl][l][st]concat=n=6:v=0:a=1[aout]`
+  ].join(';');
 
   await execAsync(
-    `ffmpeg ${paths.map(p => `-i "${p}"`).join(' ')} -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${DURATION} -y "${mixPath}"`,
+    `ffmpeg -i "${hookPath}" -i "${qPath}" -i "${loopPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${DURATION} -y "${mixPath}"`,
     { timeout: 90000 }
   );
 
