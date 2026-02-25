@@ -13,9 +13,9 @@ const STATUS_CONFIG = {
   DRAFT:            { label: 'Draft',            color: '#6b7280', icon: Clock },
   PENDING_APPROVAL: { label: 'Needs Approval',   color: '#f59e0b', icon: Clock },
   APPROVED:         { label: 'Approved',          color: '#3b82f6', icon: CheckCircle },
-  RENDERING:        { label: 'Rendering…',        color: '#8b5cf6', icon: Play },
+  RENDERING:        { label: 'Rendering...',       color: '#8b5cf6', icon: Play },
   READY:            { label: 'Ready to Upload',   color: '#10b981', icon: Upload },
-  UPLOADING:        { label: 'Uploading…',        color: '#6366f1', icon: Upload },
+  UPLOADING:        { label: 'Uploading...',      color: '#6366f1', icon: Upload },
   PUBLISHED:        { label: 'Published! 🎉',     color: '#10b981', icon: CheckCircle },
   FAILED:           { label: 'Failed',            color: '#ef4444', icon: XCircle },
 };
@@ -66,9 +66,25 @@ export default function KidQuizDashboard() {
       case 'DRAFT': return { label: 'Build Quiz', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/editor` };
       case 'PENDING_APPROVAL': return { label: 'Review & Approve', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/review` };
       case 'APPROVED': return { label: 'Render Video', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/render` };
+      case 'RENDERING': return { label: 'View Render', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/render` };
       case 'READY': return { label: 'Upload to YouTube', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/upload` };
-      case 'FAILED': return { label: 'Try Again', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/render` };
+      case 'FAILED': return { label: '🔄 Restart Render', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/render` };
+      case 'PUBLISHED': return { label: 'View', href: `/dashboard/v2/modules/kidquiz/projects/${project.id}/upload` };
       default: return null;
+    }
+  }
+
+  function getCardHref(project) {
+    switch (project.status) {
+      case 'DRAFT': return `/dashboard/v2/modules/kidquiz/projects/${project.id}/editor`;
+      case 'PENDING_APPROVAL': return `/dashboard/v2/modules/kidquiz/projects/${project.id}/review`;
+      case 'APPROVED':
+      case 'RENDERING':
+      case 'FAILED': return `/dashboard/v2/modules/kidquiz/projects/${project.id}/render`;
+      case 'READY':
+      case 'UPLOADING':
+      case 'PUBLISHED': return `/dashboard/v2/modules/kidquiz/projects/${project.id}/upload`;
+      default: return `/dashboard/v2/modules/kidquiz/projects/${project.id}/editor`;
     }
   }
 
@@ -96,7 +112,7 @@ export default function KidQuizDashboard() {
           )}
 
           {loading && (
-            <div className="text-center py-16" style={{ color: 'var(--color-text-muted)' }}>Loading projects…</div>
+            <div className="text-center py-16" style={{ color: 'var(--color-text-muted)' }}>Loading projects...</div>
           )}
 
           {!loading && projects.length === 0 && (
@@ -119,11 +135,15 @@ export default function KidQuizDashboard() {
               const cfg = STATUS_CONFIG[project.status] || STATUS_CONFIG.DRAFT;
               const StatusIcon = cfg.icon;
               const nextStep = getNextStep(project);
+              const cardHref = getCardHref(project);
               return (
                 <div
                   key={project.id}
-                  className="p-5 rounded-xl border"
+                  onClick={() => router.push(cardHref)}
+                  className="p-5 rounded-xl border cursor-pointer transition-all"
                   style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
+                  onMouseEnter={e => e.currentTarget.style.borderColor = cfg.color}
+                  onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--color-border)'}
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
@@ -151,23 +171,14 @@ export default function KidQuizDashboard() {
                         {new Date(project.created_at).toLocaleDateString()}
                       </p>
                     </div>
-                    <div className="flex items-center gap-2 flex-shrink-0">
+                    <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
                       {nextStep && (
                         <Link
                           href={nextStep.href}
                           className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white"
-                          style={{ background: 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}
+                          style={{ background: project.status === 'FAILED' ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}
                         >
                           {nextStep.label}
-                        </Link>
-                      )}
-                      {project.status === 'PUBLISHED' && (
-                        <Link
-                          href={`/dashboard/v2/modules/kidquiz/projects/${project.id}/upload`}
-                          className="px-3 py-1.5 rounded-lg text-sm font-semibold"
-                          style={{ background: '#f3f4f6', color: '#374151' }}
-                        >
-                          <Eye className="w-4 h-4 inline mr-1" /> View
                         </Link>
                       )}
                       <button
