@@ -999,16 +999,20 @@ export async function generateASSSubtitleFile(captionSegments, captionY, hookTex
     const fs = (await import('fs')).default;
     const assPath = join(tmpdir(), `orbix-subtitles-${Date.now()}.ass`);
     const captionCenteredLarge = options.captionCenteredLarge === true;
+    const psychologyCaptions = options.psychologyCaptions === true;
     
-    // Parse caption Y position (used only when not captionCenteredLarge)
+    // Parse caption Y position (used only when not centered)
     const captionYValue = captionY === 'h-100' ? 1820 : captionY === 'h-120' ? 1800 : captionY === 'h-140' ? 1780 : 1800;
     
     const endQuestionFontSize = 114; // Same as hook (Arial Bold, center)
     const centerX = 540;
     const centerY = 960;
-    const captionStyleFontSize = captionCenteredLarge ? 114 : 48;
-    const captionAlignment = captionCenteredLarge ? 5 : 2; // 5 = center, 2 = top-center
-    const captionPos = captionCenteredLarge ? `\\an5\\pos(${centerX},${centerY})` : `\\an2\\pos(540,${captionYValue})`;
+    // Psychology: 88pt centered (slightly smaller than 114pt question hook, dominates body section)
+    // Facts/captionCenteredLarge: 114pt centered (same as hook)
+    // Default: 48pt bottom-aligned
+    const captionStyleFontSize = psychologyCaptions ? 88 : captionCenteredLarge ? 114 : 48;
+    const captionAlignment = (captionCenteredLarge || psychologyCaptions) ? 5 : 2; // 5 = center, 2 = bottom-center
+    const captionPos = (captionCenteredLarge || psychologyCaptions) ? `\\an5\\pos(${centerX},${centerY})` : `\\an2\\pos(540,${captionYValue})`;
     
     // ASS file header - PlayRes must match video size (1080x1920). CaptionCenter = same as hook when captionCenteredLarge.
     let assContent = `[Script Info]
@@ -1042,7 +1046,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for (const segment of captionSegments) {
       const startTime = formatASSTime(segment.start);
       const endTime = formatASSTime(segment.end);
-      const captionText = captionCenteredLarge ? wrapHookText(segment.text, 22) : segment.text;
+      const captionText = (captionCenteredLarge || psychologyCaptions) ? wrapHookText(segment.text, 22) : segment.text;
       assContent += `Dialogue: 0,${startTime},${endTime},Caption,,0,0,0,,{${captionPos}}${captionText}\n`;
     }
     

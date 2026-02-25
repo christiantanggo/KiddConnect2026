@@ -615,7 +615,7 @@ export async function step6Captions(renderId, renderJob, script, story, template
       effectiveTarget,
       endQuestion || null,
       endQuestionStartSeconds,
-      { captionCenteredLarge: isFactsCategory }
+      { captionCenteredLarge: isFactsCategory, psychologyCaptions: isPsychologyCategory }
     );
     
     await logStepEvent(renderId, step, 'PROGRESS', 'ASS file generated', { path: assFilePath, segments: captionSegments.length });
