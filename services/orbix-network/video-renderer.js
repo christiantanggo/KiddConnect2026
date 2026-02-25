@@ -399,15 +399,18 @@ export async function generateAudio(script, story = null) {
       : {};
     const isPsychology = (story?.category || '').toLowerCase() === 'psychology';
 
-    // Psychology: voice speaks body only (what_happened + why_it_matters). Question becomes on-screen hook at start; no end question.
+    // Psychology: voice speaks question first (what_happens_next), then body (what_happened + why_it_matters).
+    // Speaking the question lets you hear it in audio preview to confirm it's in the video before upload.
     if (isPsychology) {
+      const question = (script.what_happens_next || '').trim();
       const bodyOnly = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ').trim();
       if (!bodyOnly) throw new Error('Psychology script missing what_happened or why_it_matters');
+      const fullSpoken = [question, bodyOnly].filter(Boolean).join(' ').trim();
       const audioPath = join(tmpdir(), `orbix-audio-${Date.now()}.mp3`);
       const response = await openai.audio.speech.create({
         model: 'tts-1',
         voice: 'alloy',
-        input: bodyOnly,
+        input: fullSpoken,
       });
       const buffer = Buffer.from(await response.arrayBuffer());
       await fs.promises.writeFile(audioPath, buffer);
@@ -649,8 +652,8 @@ export function generateCaptionSegments(script, audioDuration, options = {}) {
   }
 }
 
-/** Psychology test: question-as-hook at start for this many seconds (1.5–2s). */
-export const PSYCHOLOGY_QUESTION_HOOK_DURATION = 1.75;
+/** Psychology: captions start after the opening question is spoken (0.3s breath + ~2s for a 6–8 word question at TTS pace). */
+export const PSYCHOLOGY_QUESTION_HOOK_DURATION = 2.3;
 
 /**
  * Prepend silence to an audio file (e.g. for psychology question-hook at start).
@@ -1209,14 +1212,14 @@ export async function processRenderJob(render) {
     }
 
     // Facts now use the same pipeline as psychology/money (hook, captions, short duration)
-    // Psychology test: body-only TTS, then prepend 1.75s silence (question-as-hook at start); no tail; no end question.
+    // Psychology: TTS now speaks question first then body. Add a short breath pause (0.3s) before voice starts.
     const cat = (story?.category || '').toLowerCase();
     const isPsychology = cat === 'psychology';
     let audioResult = await generateAudio(script, story);
     let preGeneratedAudioPath = audioResult.audioPath;
     let audioDuration = audioResult.duration;
     if (isPsychology) {
-      const padded = await prependSilenceToAudio(preGeneratedAudioPath, PSYCHOLOGY_QUESTION_HOOK_DURATION);
+      const padded = await prependSilenceToAudio(preGeneratedAudioPath, 0.3);
       await unlinkAsync(preGeneratedAudioPath).catch(() => {});
       preGeneratedAudioPath = padded.path;
       audioDuration = padded.totalDuration;
