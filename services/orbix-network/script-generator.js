@@ -386,7 +386,7 @@ Fact: ${factText}
 Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_happens_next, cta_line "", duration_target_seconds 14.`;
 
       const completion = await getOpenAIClient().chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         messages: [
           { role: 'system', content: factsSystemPrompt },
           { role: 'user', content: factsUserPrompt }
@@ -610,7 +610,7 @@ Generate a script for a short-form video. Return JSON with:
         messages.push({ role: 'user', content: retryContent });
       }
       const completion = await getOpenAIClient().chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini',
         messages,
         temperature: 0.7,
         max_tokens: 800,
