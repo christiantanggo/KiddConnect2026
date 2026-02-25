@@ -3,35 +3,42 @@
  * Renders a single-question 1080x1920 vertical Short using FFmpeg.
  * Reuses shared helpers from orbix video-renderer (applyMotionToImage, uploadRenderToStorage).
  *
- * Timeline (13 seconds):
- *  0.0–1.0s   Hook text (full screen, random rotating phrase)
- *  1.0–5.0s   Question + A/B/C options appear
- *  5.0–9.0s   Progress bar countdown
- *  9.0–9.5s   Correct answer flashes (visual only, no TTS)
- *  9.5–13.0s  Loop line spoken — 3.5s buffer so voice never gets cut off
+ * Dynamic Timeline (computed from actual TTS durations):
+ *  0.0 – hookEnd        Hook phrase (full screen)
+ *  hookEnd – qEnd       Question spoken + Q text visible
+ *  qEnd – countdownEnd  Countdown timer with progress bar between Q and answers
+ *  countdownEnd – revealEnd  Correct answer reveal flash
+ *  revealEnd – DURATION Loop line spoken
+ *
+ * The progress bar sits between the question text and answer options.
+ * Countdown numbers (5,4,3,2,1) appear on top of the bar.
  */
 
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { unlink, mkdirSync } from 'fs';
+import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
 import {
   applyMotionToImage,
-  uploadRenderToStorage
 } from '../orbix-network/video-renderer.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
-const DURATION = 13;
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS || 'kidquiz-videos';
-
-// Backgrounds reuse the orbix bucket (same server, same images)
 const BG_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_BACKGROUNDS || 'orbix-network-backgrounds';
 const TOTAL_BG = 12;
+
+// Fixed timing constants (seconds)
+const HOOK_WINDOW   = 1.5;   // how long hook phrase shows on screen
+const Q_BUFFER      = 0.4;   // silence after question audio before countdown starts
+const COUNTDOWN_DUR = 5;     // always 5-second countdown
+const REVEAL_DUR    = 1.0;   // correct answer flash
+const LOOP_BUFFER   = 0.5;   // silence before loop line starts
+const LOOP_TAIL     = 1.5;   // extra silence after loop line ends
 
 const HOOK_LINES = [
   'Think you know this one?',
@@ -47,12 +54,13 @@ const HOOK_LINES = [
 ];
 
 const LOOP_LINES = [
-  'Did you get it right?',
-  'Be honest… did you know?',
-  'Watch it again!',
-  'Are you sure about that?',
-  "That's the tricky one…",
-  'Could you beat your friends?'
+  'Comment your answer below!',
+  'Tag a friend who needs to see this!',
+  'Follow for more brain teasers!',
+  'Did you get it right? Drop a comment!',
+  'Share this with someone who thinks they know everything!',
+  'Double tap if you got it right!',
+  'Save this for your quiz night!'
 ];
 
 async function getBackground() {
@@ -63,7 +71,17 @@ async function getBackground() {
   return result.data.publicUrl;
 }
 
-async function generateAudio(hook, question, loopLine) {
+async function getDur(p) {
+  try {
+    const r = await execAsync(`ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`, { timeout: 8000 });
+    return parseFloat(r.stdout.trim()) || 0;
+  } catch { return 0; }
+}
+
+/**
+ * Generate all three TTS clips, measure their durations, return paths + timeline.
+ */
+async function generateAudioAndTimeline(hook, question, loopLine) {
   const OpenAI = (await import('openai')).default;
   const fs = (await import('fs')).default;
   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
@@ -71,61 +89,95 @@ async function generateAudio(hook, question, loopLine) {
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const ts = Date.now();
   const hookPath = join(tmpdir(), `kq-hook-${ts}.mp3`);
-  const qPath = join(tmpdir(), `kq-q-${ts}.mp3`);
+  const qPath    = join(tmpdir(), `kq-q-${ts}.mp3`);
   const loopPath = join(tmpdir(), `kq-loop-${ts}.mp3`);
-  const mixPath = join(tmpdir(), `kq-mix-${ts}.mp3`);
+  const mixPath  = join(tmpdir(), `kq-mix-${ts}.mp3`);
 
-  const getDur = async (p) => {
-    try {
-      const r = await execAsync(`ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`, { timeout: 5000 });
-      return parseFloat(r.stdout.trim()) || 0;
-    } catch { return 0; }
-  };
-
+  // Generate all TTS in parallel
   const [hookResp, qResp, loopResp] = await Promise.all([
     openai.audio.speech.create({ model: 'tts-1', voice: 'nova', input: hook }),
     openai.audio.speech.create({ model: 'tts-1', voice: 'nova', input: question }),
     openai.audio.speech.create({ model: 'tts-1', voice: 'nova', input: loopLine })
   ]);
 
-  await fs.promises.writeFile(hookPath, Buffer.from(await hookResp.arrayBuffer()));
-  await fs.promises.writeFile(qPath, Buffer.from(await qResp.arrayBuffer()));
-  await fs.promises.writeFile(loopPath, Buffer.from(await loopResp.arrayBuffer()));
+  await Promise.all([
+    fs.promises.writeFile(hookPath, Buffer.from(await hookResp.arrayBuffer())),
+    fs.promises.writeFile(qPath,    Buffer.from(await qResp.arrayBuffer())),
+    fs.promises.writeFile(loopPath, Buffer.from(await loopResp.arrayBuffer()))
+  ]);
 
-  const hookDur = await getDur(hookPath);
-  const qDur = await getDur(qPath);
+  // Measure actual durations
+  const [hookDur, qDur, loopDur] = await Promise.all([
+    getDur(hookPath),
+    getDur(qPath),
+    getDur(loopPath)
+  ]);
 
-  // Timeline: hook at 0s, question at 1s, loop at 9.5s
-  // Build sequential audio with silence gaps using concat:
-  // [silence_before_q] = gap between hook end and 1s
-  // [silence_before_loop] = gap between question end and 9.5s
-  const silenceBeforeQ = Math.max(0, 1.0 - hookDur);
-  const questionEnds = 1.0 + qDur;
-  const silenceBeforeLoop = Math.max(0, 9.5 - questionEnds);
-  const loopStart = Math.max(questionEnds, 9.5);
-  const silenceAfterLoop = Math.max(0, DURATION - loopStart - 1.5);
+  // --- Compute dynamic timeline ---
+  // Hook audio starts at 0, hook text shows for HOOK_WINDOW
+  const hookAudioStart  = 0;
+  const hookEnd         = Math.max(HOOK_WINDOW, hookDur + 0.2);
 
-  // Use ffmpeg concat with generated silence segments
+  // Question audio starts right when hook screen ends
+  const qAudioStart     = hookEnd;
+  const qAudioEnd       = qAudioStart + qDur;
+
+  // Countdown starts after question finishes speaking + small buffer
+  const countdownStart  = qAudioEnd + Q_BUFFER;
+  const countdownEnd    = countdownStart + COUNTDOWN_DUR;
+
+  // Reveal: correct answer flash
+  const revealStart     = countdownEnd;
+  const revealEnd       = revealStart + REVEAL_DUR;
+
+  // Loop line
+  const loopStart       = revealEnd + LOOP_BUFFER;
+  const loopEnd         = loopStart + loopDur;
+
+  // Total video duration
+  const DURATION        = loopEnd + LOOP_TAIL;
+
+  console.log(`[KidQuiz] Timeline: hookEnd=${hookEnd.toFixed(2)} qAudioEnd=${qAudioEnd.toFixed(2)} countdown=${countdownStart.toFixed(2)}-${countdownEnd.toFixed(2)} loop=${loopStart.toFixed(2)}-${loopEnd.toFixed(2)} total=${DURATION.toFixed(2)}s`);
+
+  // --- Build audio mix with precise silence gaps ---
+  const silenceBeforeQ    = Math.max(0, qAudioStart - hookDur);
+  const silenceBeforeLoop = Math.max(0, loopStart - qAudioEnd - Q_BUFFER - hookDur - silenceBeforeQ);
+  const silenceAfterLoop  = Math.max(0.1, LOOP_TAIL);
+
+  // Recalculate more carefully:
+  // Segment order: [hook][silA][question][silB][loop][silC]
+  // hook ends at: hookDur
+  // silA fills to: qAudioStart  → silA = qAudioStart - hookDur
+  // q ends at: qAudioStart + qDur = qAudioEnd
+  // silB fills to: loopStart   → silB = loopStart - qAudioEnd
+  // loop ends at: loopStart + loopDur = loopEnd
+  // silC = LOOP_TAIL
+  const silA = Math.max(0, qAudioStart - hookDur);
+  const silB = Math.max(0, loopStart - qAudioEnd);
+
   const filter = [
-    // hook -> silence -> question -> silence -> loop -> tail silence
     `[0:a]asetpts=PTS-STARTPTS[h]`,
     `[1:a]asetpts=PTS-STARTPTS[q]`,
     `[2:a]asetpts=PTS-STARTPTS[l]`,
-    `aevalsrc=0:c=mono:s=44100:d=${silenceBeforeQ.toFixed(3)}[sq]`,
-    `aevalsrc=0:c=mono:s=44100:d=${silenceBeforeLoop.toFixed(3)}[sl]`,
-    `aevalsrc=0:c=mono:s=44100:d=${silenceAfterLoop.toFixed(3)}[st]`,
-    `[h][sq][q][sl][l][st]concat=n=6:v=0:a=1[aout]`
+    `aevalsrc=0:c=mono:s=44100:d=${silA.toFixed(3)}[sa]`,
+    `aevalsrc=0:c=mono:s=44100:d=${silB.toFixed(3)}[sb]`,
+    `aevalsrc=0:c=mono:s=44100:d=${silenceAfterLoop.toFixed(3)}[sc]`,
+    `[h][sa][q][sb][l][sc]concat=n=6:v=0:a=1[aout]`
   ].join(';');
 
   await execAsync(
-    `ffmpeg -i "${hookPath}" -i "${qPath}" -i "${loopPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${DURATION} -y "${mixPath}"`,
+    `ffmpeg -i "${hookPath}" -i "${qPath}" -i "${loopPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${DURATION.toFixed(3)} -y "${mixPath}"`,
     { timeout: 90000 }
   );
 
   for (const p of [hookPath, qPath, loopPath]) {
     try { await unlinkAsync(p); } catch (_) {}
   }
-  return mixPath;
+
+  return {
+    mixPath,
+    timeline: { hookEnd, qAudioStart, qAudioEnd, countdownStart, countdownEnd, revealStart, revealEnd, loopStart, loopEnd, DURATION }
+  };
 }
 
 function escAss(s) {
@@ -139,9 +191,21 @@ function t(sec) {
   return `${h}:${String(m).padStart(2, '0')}:${s}`;
 }
 
-async function buildASS(hook, question, optionA, optionB, optionC, correctLetter, loopLine) {
+async function buildASS(hook, question, optionA, optionB, optionC, correctLetter, loopLine, tl) {
   const fs = (await import('fs')).default;
   const assPath = join(tmpdir(), `kq-${Date.now()}.ass`);
+
+  const { hookEnd, qAudioStart, countdownStart, countdownEnd, revealStart, revealEnd, loopStart, loopEnd, DURATION } = tl;
+
+  // Layout Y positions (1080x1920 canvas)
+  // Question sits in the upper-middle area
+  // Progress bar sits between question and answers
+  // Answers below the bar
+  const qY       = 560;   // question text center Y
+  const barY     = 820;   // progress bar top Y (between Q and answers)
+  const answerYA = 980;
+  const answerYB = 1110;
+  const answerYC = 1240;
 
   const header = `[Script Info]
 ScriptType: v4.00+
@@ -152,11 +216,12 @@ WrapStyle: 1
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Hook,Arial Black,96,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1
-Style: Question,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,2,5,60,60,800,1
-Style: Option,Arial Rounded MT Bold,60,&H00FFFFFF,&H000000FF,&H00222222,&HCC000000,0,0,0,0,100,100,0,0,3,2,0,5,60,60,0,1
-Style: OptionCorrect,Arial Rounded MT Bold,60,&H0000FF00,&H000000FF,&H00000000,&HCC000000,-1,0,0,0,100,100,0,0,1,3,0,5,60,60,0,1
-Style: LoopLine,Arial Black,80,&H00FFFF00,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1
+Style: Hook,Arial Black,90,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1
+Style: Question,Arial Black,68,&H00FFFFFF,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,3,2,5,80,80,80,1
+Style: Option,Arial Rounded MT Bold,56,&H00FFFFFF,&H000000FF,&H00222222,&HCC000000,0,0,0,0,100,100,0,0,3,2,0,5,60,60,0,1
+Style: OptionCorrect,Arial Rounded MT Bold,56,&H0000FF00,&H000000FF,&H00000000,&HCC000000,-1,0,0,0,100,100,0,0,1,3,0,5,60,60,0,1
+Style: Countdown,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,4,2,5,0,0,0,1
+Style: LoopLine,Arial Black,76,&H00FFFF00,&H000000FF,&H00000000,&H90000000,-1,0,0,0,100,100,0,0,1,4,2,5,60,60,60,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -164,50 +229,60 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   const lines = [header];
 
-  // Hook: 0–1s centered
-  lines.push(`Dialogue: 0,${t(0)},${t(1)},Hook,,0,0,0,,{\\an5\\pos(540,960)\\fad(100,100)}${escAss(hook.toUpperCase())}`);
+  // Hook: 0 – hookEnd, centered on screen
+  lines.push(`Dialogue: 0,${t(0)},${t(hookEnd)},Hook,,0,0,0,,{\\an5\\pos(540,960)\\fad(150,150)}${escAss(hook.toUpperCase())}`);
 
-  // Question: 1–9s, upper area
-  const qWrapped = escAss(question);
-  lines.push(`Dialogue: 1,${t(1)},${t(9)},Question,,0,0,0,,{\\an5\\pos(540,520)\\fad(150,0)}${qWrapped}`);
+  // Question: shows from when hook ends until countdown ends
+  lines.push(`Dialogue: 1,${t(qAudioStart)},${t(countdownEnd)},Question,,0,0,0,,{\\an5\\pos(540,${qY})\\fad(200,0)}${escAss(question)}`);
 
-  // Options: stagger in 1.3s / 1.6s / 1.9s
+  // Answers: stagger in after question appears
   const opts = [
-    { label: 'A', text: optionA, y: 900 },
-    { label: 'B', text: optionB, y: 1020 },
-    { label: 'C', text: optionC, y: 1140 }
+    { label: 'A', text: optionA, y: answerYA },
+    { label: 'B', text: optionB, y: answerYB },
+    { label: 'C', text: optionC, y: answerYC }
   ];
-  for (const o of opts) {
-    const style = (o.label === correctLetter) ? 'OptionCorrect' : 'Option';
-    const fadeStart = 1 + opts.indexOf(o) * 0.3;
-    // Show correct answer green on reveal (9–9.5s), others hidden
-    lines.push(`Dialogue: 1,${t(fadeStart)},${t(9)},Option,,0,0,0,,{\\an5\\pos(540,${o.y})\\fad(200,0)}${escAss(o.label + ')  ' + o.text)}`);
-    if (o.label === correctLetter) {
-      lines.push(`Dialogue: 2,${t(9)},${t(9.5)},OptionCorrect,,0,0,0,,{\\an5\\pos(540,960)\\fad(0,0)}✓  ${escAss(o.label + ')  ' + o.text)}`);
-    }
+  for (let i = 0; i < opts.length; i++) {
+    const o = opts[i];
+    const fadeStart = qAudioStart + 0.2 + i * 0.3;
+    lines.push(`Dialogue: 1,${t(fadeStart)},${t(countdownEnd)},Option,,0,0,0,,{\\an5\\pos(540,${o.y})\\fad(200,0)}${escAss(o.label + ')  ' + o.text)}`);
   }
 
-  // Loop line: 9.5–13s
-  lines.push(`Dialogue: 3,${t(9.5)},${t(13)},LoopLine,,0,0,0,,{\\an5\\pos(540,960)\\fad(100,200)}${escAss(loopLine)}`);
+  // Countdown numbers: one per second on the bar, centered
+  // Each number shows for 1 second, positioned on top of bar
+  const countdownBarCenterY = barY + 8; // center of 16px bar
+  for (let n = COUNTDOWN_DUR; n >= 1; n--) {
+    const numStart = countdownEnd - n;
+    const numEnd   = numStart + 1;
+    lines.push(`Dialogue: 3,${t(numStart)},${t(numEnd)},Countdown,,0,0,0,,{\\an5\\pos(540,${barY - 55})\\fad(50,50)}${n}`);
+  }
+
+  // Correct answer reveal: full-screen centered, green
+  const correctOpt = opts.find(o => o.label === correctLetter);
+  if (correctOpt) {
+    lines.push(`Dialogue: 2,${t(revealStart)},${t(revealEnd)},OptionCorrect,,0,0,0,,{\\an5\\pos(540,960)\\fad(0,0)}✓  ${escAss(correctLetter + ')  ' + correctOpt.text)}`);
+  }
+
+  // Loop line: after reveal
+  lines.push(`Dialogue: 3,${t(loopStart)},${t(DURATION)},LoopLine,,0,0,0,,{\\an5\\pos(540,960)\\fad(150,300)}${escAss(loopLine)}`);
 
   await fs.promises.writeFile(assPath, lines.join('\n'), 'utf8');
   return assPath;
 }
 
 export async function renderKidQuizShort(render, project) {
-  const renderId = render.id;
+  const renderId   = render.id;
   const businessId = render.business_id;
-  const question = project.questions?.[0];
-  const answers = question?.answers || [];
+  const question   = project.questions?.[0];
+  const answers    = question?.answers || [];
   const correctAnswer = answers.find(a => a.is_correct);
 
-  const hook = HOOK_LINES[randomInt(HOOK_LINES.length)];
-  const questionText = question?.question_text || '';
-  const optionA = answers.find(a => a.label === 'A')?.answer_text || '';
-  const optionB = answers.find(a => a.label === 'B')?.answer_text || '';
-  const optionC = answers.find(a => a.label === 'C')?.answer_text || '';
+  const hook          = HOOK_LINES[randomInt(HOOK_LINES.length)];
+  const questionText  = question?.question_text || '';
+  const optionA       = answers.find(a => a.label === 'A')?.answer_text || '';
+  const optionB       = answers.find(a => a.label === 'B')?.answer_text || '';
+  const optionC       = answers.find(a => a.label === 'C')?.answer_text || '';
   const correctLetter = correctAnswer?.label || 'A';
-  const loopLine = LOOP_LINES[randomInt(LOOP_LINES.length)];
+  const loopLine      = LOOP_LINES[randomInt(LOOP_LINES.length)];
 
   console.log(`[KidQuiz Renderer] Starting render_id=${renderId}`);
 
@@ -219,51 +294,66 @@ export async function renderKidQuizShort(render, project) {
       .update({ render_status: 'RENDERING', updated_at: new Date().toISOString() })
       .eq('id', renderId);
 
-    // 1. Background — use uploaded photo if available, otherwise pick a random one
+    // 1. Background
     const axios = (await import('axios')).default;
-    const fs = (await import('fs')).default;
+    const fs    = (await import('fs')).default;
     const bgUrl = project.photo_url || await getBackground();
     bgPath = join(tmpdir(), `kq-bg-${renderId}-${Date.now()}.jpg`);
     const imgResp = await axios.get(bgUrl, { responseType: 'arraybuffer', timeout: 30000 });
     await fs.promises.writeFile(bgPath, imgResp.data);
 
-    // 2. Motion (11s)
+    // 2. Generate TTS first so we can build dynamic timeline
+    const { mixPath, timeline: tl } = await generateAudioAndTimeline(hook, questionText, loopLine);
+    audioPath = mixPath;
+    const DURATION = tl.DURATION;
+
+    // 3. Motion video (dynamic duration)
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
-    // 3. ASS subtitles
-    assPath = await buildASS(hook, questionText, optionA, optionB, optionC, correctLetter, loopLine);
+    // 4. ASS subtitles with dynamic timestamps
+    assPath = await buildASS(hook, questionText, optionA, optionB, optionC, correctLetter, loopLine, tl);
     const assEscaped = assPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
-    // 4. Base video with dark overlay + progress bar + ASS
+    // 5. Base video: dark overlay + progress bar between Q and answers + ASS
     baseVideoPath = join(tmpdir(), `kq-base-${renderId}-${Date.now()}.mp4`);
-    const barY = 870, barW = 960, barH = 16, barX = 60;
-    // Progress bar 5–9s (4s countdown)
+
+    // Progress bar sits between question and answers
+    // barY=820 in ASS; we align drawbox to the same pixel rows
+    const barX = 60;
+    const barW = 960;
+    const barH = 16;
+    const barY = 820;
+    const cdS  = tl.countdownStart.toFixed(3);
+    const cdE  = tl.countdownEnd.toFixed(3);
+    const cdD  = COUNTDOWN_DUR;
+
     const filterComplex = [
-      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill,drawbox=x=${barX}:y=${barY}:w=${barW}:h=${barH}:color=0x404040:t=fill:enable='between(t\\,5\\,9)'[v1]`,
-      `color=c=0xFF6B6B:s=${barW}x${barH}:d=${DURATION},scale=eval=frame:w='if(lt(t\\,5)\\,${barW}\\,if(gt(t\\,9)\\,1\\,max(1\\,${barW}*(9-t)/4)))':h=${barH}[bar]`,
-      `[v1][bar]overlay=x=${barX}:y=${barY}:enable='between(t\\,5\\,9)'[v2]`,
+      // Dark overlay over whole frame
+      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill[ov]`,
+      // Grey bar track (visible during countdown only)
+      `[ov]drawbox=x=${barX}:y=${barY}:w=${barW}:h=${barH}:color=0x404040:t=fill:enable='between(t\\,${cdS}\\,${cdE})'[v1]`,
+      // Red bar filling from full to empty left-to-right countdown
+      `color=c=0xFF4444:s=${barW}x${barH}:d=${DURATION},scale=eval=frame:w='if(lt(t\\,${cdS})\\,${barW}\\,if(gt(t\\,${cdE})\\,1\\,max(1\\,${barW}*(${cdE}-t)/${cdD})))':h=${barH}[bar]`,
+      `[v1][bar]overlay=x=${barX}:y=${barY}:enable='between(t\\,${cdS}\\,${cdE})'[v2]`,
+      // ASS subtitles on top
       `[v2]ass='${assEscaped}'[vout]`
     ].join(';');
 
     await execAsync(
-      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
-      { timeout: 120000 }
+      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION.toFixed(3)} -pix_fmt yuv420p -y "${baseVideoPath}"`,
+      { timeout: 180000 }
     );
 
     try { await unlinkAsync(assPath); assPath = null; } catch (_) {}
 
-    // 5. TTS audio
-    audioPath = await generateAudio(hook, questionText, loopLine);
-
-    // 6. Mix voice onto video
+    // 6. Mix TTS audio onto video
     finalVideoPath = join(tmpdir(), `kq-final-${renderId}-${Date.now()}.mp4`);
-    const padDur = Math.max(0, DURATION - DURATION);
     await execAsync(
-      `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.4[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+      `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]volume=1.4[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION.toFixed(3)} -y "${finalVideoPath}"`,
       { timeout: 60000 }
     );
 
-    // 7. Upload to storage
+    // 7. Upload to Supabase storage
     const fs2 = (await import('fs')).default;
     const buffer = await fs2.promises.readFile(finalVideoPath);
     const remotePath = `${businessId}/${renderId}.mp4`;
@@ -285,8 +375,9 @@ export async function renderKidQuizShort(render, project) {
       .update({ status: 'READY', updated_at: new Date().toISOString() })
       .eq('id', project.id);
 
-    console.log(`[KidQuiz Renderer] Done render_id=${renderId}`);
+    console.log(`[KidQuiz Renderer] Done render_id=${renderId} duration=${DURATION.toFixed(2)}s`);
     return { outputUrl };
+
   } catch (err) {
     console.error(`[KidQuiz Renderer] FAILED render_id=${renderId}`, err.message);
     await supabaseClient.from('kidquiz_renders')
