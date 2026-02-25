@@ -55,7 +55,7 @@ export default function NewProject() {
       });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      router.push(`/dashboard/v2/modules/kidquiz/projects/${data.project.id}/build`);
+      router.push(`/dashboard/v2/modules/kidquiz/projects/${data.project.id}/editor`);
     } catch (err) {
       setError(err.message);
       setCreating(false);

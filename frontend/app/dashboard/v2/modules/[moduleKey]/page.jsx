@@ -373,7 +373,7 @@ export default function ModuleDetailPage() {
                   Configure Module
                 </Link>
                 <Link
-                  href={moduleKey === 'phone-agent' ? '/tavari-ai-phone/dashboard' : moduleKey === 'reviews' ? '/review-reply-ai/dashboard' : moduleKey === 'orbix-network' ? '/dashboard/v2/modules/orbix-network/dashboard' : `/${moduleKey}/dashboard`}
+                  href={moduleKey === 'phone-agent' ? '/tavari-ai-phone/dashboard' : moduleKey === 'reviews' ? '/review-reply-ai/dashboard' : `/dashboard/v2/modules/${moduleKey}/dashboard`}
                   className="px-6 py-3 font-medium transition-colors"
                   style={{
                     backgroundColor: 'var(--color-surface)',
