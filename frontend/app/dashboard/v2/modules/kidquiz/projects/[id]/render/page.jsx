@@ -168,6 +168,17 @@ export default function RenderPage() {
               </div>
             )}
 
+            {isReady && (
+              <button
+                onClick={startRender}
+                disabled={rendering}
+                className="w-full py-3 rounded-xl font-semibold text-sm border mb-3"
+                style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)', background: 'var(--color-background)' }}
+              >
+                {rendering ? 'Starting...' : '🔄 Re-render Video'}
+              </button>
+            )}
+
             {status === 'APPROVED' && !rendering && (
               <div className="rounded-xl p-5 mb-6 text-center" style={{ background: '#f9fafb' }}>
                 <div className="text-4xl mb-3">🎬</div>

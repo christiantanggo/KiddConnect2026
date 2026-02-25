@@ -489,9 +489,9 @@ router.post('/projects/:id/render-reset', async (req, res) => {
       .update({ status: 'FAILED', updated_at: new Date().toISOString() })
       .eq('id', req.params.id);
     await supabaseClient.from('kidquiz_renders')
-      .update({ render_status: 'FAILED', step_error: 'Manually reset — render was stuck', updated_at: new Date().toISOString() })
+      .update({ render_status: 'FAILED', step_error: 'Manually reset', updated_at: new Date().toISOString() })
       .eq('project_id', req.params.id)
-      .in('render_status', ['RENDERING', 'PENDING']);
+      .in('render_status', ['RENDERING', 'PENDING', 'READY_FOR_UPLOAD']);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
