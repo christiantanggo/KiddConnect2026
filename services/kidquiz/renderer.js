@@ -54,13 +54,13 @@ const HOOK_LINES = [
 ];
 
 const LOOP_LINES = [
-  'Comment your answer below!',
-  'Tag a friend who needs to see this!',
-  'Follow for more brain teasers!',
-  'Did you get it right? Drop a comment!',
-  'Share this with someone who thinks they know everything!',
-  'Double tap if you got it right!',
-  'Save this for your quiz night!'
+  'Follow for a new question every day!',
+  'Did you get it? Drop a comment!',
+  'Share this with someone who got it wrong!',
+  'Follow for more quizzes like this!',
+  'Save this and challenge your friends!',
+  'How fast did you figure it out?',
+  'Think you can beat your friends? Send it to them!'
 ];
 
 async function getBackground() {
@@ -79,98 +79,98 @@ async function getDur(p) {
 }
 
 /**
- * Generate all three TTS clips, measure their durations, return paths + timeline.
+ * Generate all four TTS clips, measure their durations, return paths + timeline.
+ * Clips: hook, question, answer reveal ("The answer is: X"), loop line
  */
-async function generateAudioAndTimeline(hook, question, loopLine) {
+async function generateAudioAndTimeline(hook, question, answerReveal, loopLine) {
   const OpenAI = (await import('openai')).default;
   const fs = (await import('fs')).default;
   if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const ts = Date.now();
-  const hookPath = join(tmpdir(), `kq-hook-${ts}.mp3`);
-  const qPath    = join(tmpdir(), `kq-q-${ts}.mp3`);
-  const loopPath = join(tmpdir(), `kq-loop-${ts}.mp3`);
-  const mixPath  = join(tmpdir(), `kq-mix-${ts}.mp3`);
+  const hookPath    = join(tmpdir(), `kq-hook-${ts}.mp3`);
+  const qPath       = join(tmpdir(), `kq-q-${ts}.mp3`);
+  const answerPath  = join(tmpdir(), `kq-ans-${ts}.mp3`);
+  const loopPath    = join(tmpdir(), `kq-loop-${ts}.mp3`);
+  const mixPath     = join(tmpdir(), `kq-mix-${ts}.mp3`);
 
   // Generate all TTS in parallel
-  const [hookResp, qResp, loopResp] = await Promise.all([
+  const [hookResp, qResp, answerResp, loopResp] = await Promise.all([
     openai.audio.speech.create({ model: 'tts-1', voice: 'nova', input: hook }),
     openai.audio.speech.create({ model: 'tts-1', voice: 'nova', input: question }),
+    openai.audio.speech.create({ model: 'tts-1', voice: 'nova', input: answerReveal }),
     openai.audio.speech.create({ model: 'tts-1', voice: 'nova', input: loopLine })
   ]);
 
   await Promise.all([
-    fs.promises.writeFile(hookPath, Buffer.from(await hookResp.arrayBuffer())),
-    fs.promises.writeFile(qPath,    Buffer.from(await qResp.arrayBuffer())),
-    fs.promises.writeFile(loopPath, Buffer.from(await loopResp.arrayBuffer()))
+    fs.promises.writeFile(hookPath,   Buffer.from(await hookResp.arrayBuffer())),
+    fs.promises.writeFile(qPath,      Buffer.from(await qResp.arrayBuffer())),
+    fs.promises.writeFile(answerPath, Buffer.from(await answerResp.arrayBuffer())),
+    fs.promises.writeFile(loopPath,   Buffer.from(await loopResp.arrayBuffer()))
   ]);
 
   // Measure actual durations
-  const [hookDur, qDur, loopDur] = await Promise.all([
+  const [hookDur, qDur, answerDur, loopDur] = await Promise.all([
     getDur(hookPath),
     getDur(qPath),
+    getDur(answerPath),
     getDur(loopPath)
   ]);
 
   // --- Compute dynamic timeline ---
-  // Hook audio starts at 0, hook text shows for HOOK_WINDOW
-  const hookAudioStart  = 0;
-  const hookEnd         = Math.max(HOOK_WINDOW, hookDur + 0.2);
+  // Hook audio starts at 0, hook text shows for at least HOOK_WINDOW
+  const hookEnd        = Math.max(HOOK_WINDOW, hookDur + 0.2);
 
-  // Question audio starts right when hook screen ends
-  const qAudioStart     = hookEnd;
-  const qAudioEnd       = qAudioStart + qDur;
+  // Question audio starts when hook screen ends
+  const qAudioStart    = hookEnd;
+  const qAudioEnd      = qAudioStart + qDur;
 
   // Countdown starts after question finishes speaking + small buffer
-  const countdownStart  = qAudioEnd + Q_BUFFER;
-  const countdownEnd    = countdownStart + COUNTDOWN_DUR;
+  const countdownStart = qAudioEnd + Q_BUFFER;
+  const countdownEnd   = countdownStart + COUNTDOWN_DUR;
 
-  // Reveal: correct answer flash
-  const revealStart     = countdownEnd;
-  const revealEnd       = revealStart + REVEAL_DUR;
+  // Reveal: TTS says "The answer is: X" — starts right after countdown
+  const revealStart    = countdownEnd;
+  const revealEnd      = revealStart + answerDur + 0.3; // small tail after voice
 
-  // Loop line
-  const loopStart       = revealEnd + LOOP_BUFFER;
-  const loopEnd         = loopStart + loopDur;
+  // Loop line follows the reveal
+  const loopStart      = revealEnd + LOOP_BUFFER;
+  const loopEnd        = loopStart + loopDur;
 
   // Total video duration
-  const DURATION        = loopEnd + LOOP_TAIL;
+  const DURATION       = loopEnd + LOOP_TAIL;
 
-  console.log(`[KidQuiz] Timeline: hookEnd=${hookEnd.toFixed(2)} qAudioEnd=${qAudioEnd.toFixed(2)} countdown=${countdownStart.toFixed(2)}-${countdownEnd.toFixed(2)} loop=${loopStart.toFixed(2)}-${loopEnd.toFixed(2)} total=${DURATION.toFixed(2)}s`);
+  console.log(`[KidQuiz] Timeline: hookEnd=${hookEnd.toFixed(2)} qAudioEnd=${qAudioEnd.toFixed(2)} countdown=${countdownStart.toFixed(2)}-${countdownEnd.toFixed(2)} reveal=${revealStart.toFixed(2)}-${revealEnd.toFixed(2)} loop=${loopStart.toFixed(2)}-${loopEnd.toFixed(2)} total=${DURATION.toFixed(2)}s`);
 
   // --- Build audio mix with precise silence gaps ---
-  const silenceBeforeQ    = Math.max(0, qAudioStart - hookDur);
-  const silenceBeforeLoop = Math.max(0, loopStart - qAudioEnd - Q_BUFFER - hookDur - silenceBeforeQ);
-  const silenceAfterLoop  = Math.max(0.1, LOOP_TAIL);
-
-  // Recalculate more carefully:
-  // Segment order: [hook][silA][question][silB][loop][silC]
-  // hook ends at: hookDur
-  // silA fills to: qAudioStart  → silA = qAudioStart - hookDur
-  // q ends at: qAudioStart + qDur = qAudioEnd
-  // silB fills to: loopStart   → silB = loopStart - qAudioEnd
-  // loop ends at: loopStart + loopDur = loopEnd
-  // silC = LOOP_TAIL
+  // Segment order: [hook][silA][question][silB][answer][silC][loop][silD]
+  // silA: fills from hookDur → qAudioStart
+  // silB: fills from qAudioEnd → revealStart (countdown is silent)
+  // silC: the 0.3s tail after answer audio (already in revealEnd calc)
+  // silD: LOOP_TAIL
   const silA = Math.max(0, qAudioStart - hookDur);
-  const silB = Math.max(0, loopStart - qAudioEnd);
+  const silB = Math.max(0, revealStart - qAudioEnd);
+  const silC = Math.max(0, loopStart - revealEnd);
 
   const filter = [
     `[0:a]asetpts=PTS-STARTPTS[h]`,
     `[1:a]asetpts=PTS-STARTPTS[q]`,
-    `[2:a]asetpts=PTS-STARTPTS[l]`,
+    `[2:a]asetpts=PTS-STARTPTS[an]`,
+    `[3:a]asetpts=PTS-STARTPTS[l]`,
     `aevalsrc=0:c=mono:s=44100:d=${silA.toFixed(3)}[sa]`,
     `aevalsrc=0:c=mono:s=44100:d=${silB.toFixed(3)}[sb]`,
-    `aevalsrc=0:c=mono:s=44100:d=${silenceAfterLoop.toFixed(3)}[sc]`,
-    `[h][sa][q][sb][l][sc]concat=n=6:v=0:a=1[aout]`
+    `aevalsrc=0:c=mono:s=44100:d=${silC.toFixed(3)}[sc]`,
+    `aevalsrc=0:c=mono:s=44100:d=${LOOP_TAIL.toFixed(3)}[sd]`,
+    `[h][sa][q][sb][an][sc][l][sd]concat=n=8:v=0:a=1[aout]`
   ].join(';');
 
   await execAsync(
-    `ffmpeg -i "${hookPath}" -i "${qPath}" -i "${loopPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${DURATION.toFixed(3)} -y "${mixPath}"`,
+    `ffmpeg -i "${hookPath}" -i "${qPath}" -i "${answerPath}" -i "${loopPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${DURATION.toFixed(3)} -y "${mixPath}"`,
     { timeout: 90000 }
   );
 
-  for (const p of [hookPath, qPath, loopPath]) {
+  for (const p of [hookPath, qPath, answerPath, loopPath]) {
     try { await unlinkAsync(p); } catch (_) {}
   }
 
@@ -256,10 +256,10 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines.push(`Dialogue: 3,${t(numStart)},${t(numEnd)},Countdown,,0,0,0,,{\\an5\\pos(540,${barY - 55})\\fad(50,50)}${n}`);
   }
 
-  // Correct answer reveal: full-screen centered, green
+  // Correct answer reveal: full-screen centered, green — stays visible while voice speaks the answer
   const correctOpt = opts.find(o => o.label === correctLetter);
   if (correctOpt) {
-    lines.push(`Dialogue: 2,${t(revealStart)},${t(revealEnd)},OptionCorrect,,0,0,0,,{\\an5\\pos(540,960)\\fad(0,0)}✓  ${escAss(correctLetter + ')  ' + correctOpt.text)}`);
+    lines.push(`Dialogue: 2,${t(revealStart)},${t(loopStart)},OptionCorrect,,0,0,0,,{\\an5\\pos(540,960)\\fad(100,200)}✓  ${escAss(correctLetter + ')  ' + correctOpt.text)}`);
   }
 
   // Loop line: after reveal
@@ -282,6 +282,8 @@ export async function renderKidQuizShort(render, project) {
   const optionB       = answers.find(a => a.label === 'B')?.answer_text || '';
   const optionC       = answers.find(a => a.label === 'C')?.answer_text || '';
   const correctLetter = correctAnswer?.label || 'A';
+  const correctText   = correctAnswer?.answer_text || '';
+  const answerReveal  = `The answer is: ${correctText}`;
   const loopLine      = LOOP_LINES[randomInt(LOOP_LINES.length)];
 
   console.log(`[KidQuiz Renderer] Starting render_id=${renderId}`);
@@ -303,7 +305,7 @@ export async function renderKidQuizShort(render, project) {
     await fs.promises.writeFile(bgPath, imgResp.data);
 
     // 2. Generate TTS first so we can build dynamic timeline
-    const { mixPath, timeline: tl } = await generateAudioAndTimeline(hook, questionText, loopLine);
+    const { mixPath, timeline: tl } = await generateAudioAndTimeline(hook, questionText, answerReveal, loopLine);
     audioPath = mixPath;
     const DURATION = tl.DURATION;
 
