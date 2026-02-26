@@ -129,13 +129,22 @@ router.get('/:moduleKey', authenticate, requireBusinessContext, async (req, res)
  * Query param ?test=true bypasses Stripe and creates a test subscription (development only)
  * Test mode also bypasses legal acceptance requirement
  */
+// Internal/free modules that don't require Stripe or legal acceptance gate
+const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network']);
+
 router.post('/:moduleKey/activate',
   authenticate,
   requireBusinessContext,
-  // Conditionally apply legal acceptance middleware (skip in test mode)
+  // Conditionally apply legal acceptance middleware
   async (req, res, next) => {
     const testMode = req.query.test === 'true' || req.body.test === true;
-    
+    const { moduleKey } = req.params;
+
+    // Free/internal modules skip the legal acceptance gate entirely
+    if (FREE_MODULES.has(moduleKey)) {
+      return next();
+    }
+
     // Test mode only available in development
     if (testMode && process.env.NODE_ENV === 'production') {
       return res.status(403).json({
@@ -631,8 +640,15 @@ router.post('/:moduleKey/activate',
         }
       }
       
-      // Redirect to setup wizard or dashboard
-      const successUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/${moduleKey}/setup`;
+      // Redirect to the appropriate dashboard for this module
+      const moduleDashboards = {
+        'kidquiz': '/dashboard/v2/modules/kidquiz/dashboard',
+        'movie-review': '/dashboard/v2/modules/movie-review/dashboard',
+        'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
+        'emergency-network': '/dashboard/v2/modules/emergency-dispatch',
+      };
+      const dashboardPath = moduleDashboards[moduleKey] || `/modules/${moduleKey}/setup`;
+      const successUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}${dashboardPath}`;
       
       res.json({
         success: true,
