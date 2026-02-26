@@ -38,6 +38,7 @@ export default function EditorPage() {
   const [error, setError] = useState(null);
   const [photoUrl, setPhotoUrl] = useState(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [pastingPhoto, setPastingPhoto] = useState(false);
 
   useEffect(() => { loadProject(); }, [id]);
 
@@ -87,6 +88,39 @@ export default function EditorPage() {
       setAnswers(prev => prev.map((a, i) => ({ ...a, answer_text: lines[i + 1] !== undefined ? lines[i + 1] : a.answer_text })));
     } catch (err) { console.warn('Clean failed:', err.message); }
     finally { setCleaning(false); }
+  }
+
+  async function handlePastePhoto() {
+    setPastingPhoto(true);
+    setError(null);
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      let imageBlob = null;
+      for (const item of clipboardItems) {
+        const imageType = item.types.find(t => t.startsWith('image/'));
+        if (imageType) { imageBlob = await item.getType(imageType); break; }
+      }
+      if (!imageBlob) { setError('No image found in clipboard. Copy an image first, then tap Paste Photo.'); return; }
+
+      const token = document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1];
+      const businessId = localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
+      const formData = new FormData();
+      formData.append('photo', imageBlob, 'pasted-image.png');
+      const res = await fetch(`${API_URL}/api/v2/kidquiz/projects/${id}/photo`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'X-Active-Business-Id': businessId },
+        body: formData,
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Paste failed'); }
+      const data = await res.json();
+      setPhotoUrl(data.photo_url);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setError('Clipboard access denied. Please allow clipboard access in your browser and try again.');
+      } else {
+        setError(err.message);
+      }
+    } finally { setPastingPhoto(false); }
   }
 
   async function handlePhotoUpload(e) {
@@ -159,14 +193,24 @@ export default function EditorPage() {
             <div className="mb-5">
               <label className="block text-sm font-bold mb-2" style={{ color: 'var(--color-text-main)' }}>Background Photo</label>
               <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>Upload a photo related to your quiz topic — it appears as the video background. If you skip this, a default background is used.</p>
-              <label className="flex items-center gap-3 cursor-pointer">
-                <div className="px-4 py-2.5 rounded-xl font-semibold text-sm border" style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)', background: 'var(--color-background)' }}>
-                  {uploadingPhoto ? 'Uploading...' : photoUrl ? 'Change Photo' : 'Upload Photo'}
-                </div>
-                <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={uploadingPhoto} />
-                {photoUrl && !uploadingPhoto && <span className="text-xs" style={{ color: '#10b981' }}>✓ Photo uploaded</span>}
-                {uploadingPhoto && <span className="text-xs" style={{ color: '#6366f1' }}>Uploading...</span>}
-              </label>
+              <div className="flex items-center gap-3 flex-wrap">
+                <label className="cursor-pointer">
+                  <div className="px-4 py-2.5 rounded-xl font-semibold text-sm border" style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-muted)', background: 'var(--color-background)' }}>
+                    {uploadingPhoto ? 'Uploading...' : photoUrl ? 'Change Photo' : 'Upload Photo'}
+                  </div>
+                  <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={uploadingPhoto} />
+                </label>
+                <button
+                  onClick={handlePastePhoto}
+                  disabled={pastingPhoto || uploadingPhoto}
+                  className="px-4 py-2.5 rounded-xl font-semibold text-sm border"
+                  style={{ borderColor: '#6366f1', color: '#6366f1', background: 'var(--color-background)', opacity: (pastingPhoto || uploadingPhoto) ? 0.6 : 1 }}
+                >
+                  {pastingPhoto ? 'Pasting...' : '📋 Paste Photo'}
+                </button>
+                {photoUrl && !uploadingPhoto && !pastingPhoto && <span className="text-xs" style={{ color: '#10b981' }}>✓ Photo saved</span>}
+                {(uploadingPhoto || pastingPhoto) && <span className="text-xs" style={{ color: '#6366f1' }}>Saving...</span>}
+              </div>
               {photoUrl && (
                 <div className="mt-3 rounded-xl overflow-hidden" style={{ height: 120, background: '#f3f4f6' }}>
                   <img src={photoUrl} alt="Background preview" className="w-full h-full object-cover" />
