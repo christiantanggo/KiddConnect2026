@@ -762,26 +762,11 @@ try {
   }
   console.log('✅ Orbix Network scheduled pipeline (7am, 10am, 1pm, 4pm, 7pm in business timezone)');
 
-  // When no separate worker is running, the web server picks up PENDING renders every 30s and READY_FOR_UPLOAD uploads
-  if (process.env.RUN_ORBIX_WORKER !== 'true' && typeof processOnePendingRender === 'function' && typeof processOneYouTubeUpload === 'function') {
-    const uploadDelayMs = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0;
-    const processPendingWithUpload = async () => {
-      const result = await processOnePendingRender();
-      if (result.processed && result.status === 'RENDER_COMPLETE') {
-        if (uploadDelayMs > 0) {
-          console.log('[Orbix Jobs] Render READY_FOR_UPLOAD, pausing', uploadDelayMs / 1000, 's before YouTube upload...');
-          await new Promise((r) => setTimeout(r, uploadDelayMs));
-        }
-        const uploadResult = await processOneYouTubeUpload();
-        if (uploadResult.processed) {
-          console.log('[Orbix Jobs] YouTube upload', uploadResult.status, uploadResult.renderId);
-        }
-      }
-    };
-    orbixNetworkIntervals.processPending = setInterval(runSafe(processPendingWithUpload, 'ProcessOne'), 30 * 1000);
-    // Also drain READY_FOR_UPLOAD every 45s in case a render completed but the 30s follow-up didn't run (e.g. restart)
-    orbixNetworkIntervals.youtubeUpload = setInterval(runSafe(processOneYouTubeUpload, 'YouTubeUpload'), 45 * 1000);
-    console.log('✅ Orbix Network: web server will process PENDING renders every 30s and YouTube uploads every 45s (no separate worker)');
+  // When no separate worker is running, the web server picks up PENDING renders every 30s.
+  // YouTube upload is now MANUAL ONLY — user clicks "Upload to YouTube" in the UI after reviewing the render.
+  if (process.env.RUN_ORBIX_WORKER !== 'true' && typeof processOnePendingRender === 'function') {
+    orbixNetworkIntervals.processPending = setInterval(runSafe(processOnePendingRender, 'ProcessOne'), 30 * 1000);
+    console.log('✅ Orbix Network: web server will process PENDING renders every 30s (YouTube upload is manual via UI button)');
   }
 
   // 5. Publish Videos (every 5 minutes) — fixed post times 8am, 11am, 2pm, 5pm, 8pm in business timezone

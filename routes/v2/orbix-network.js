@@ -610,6 +610,69 @@ router.post('/renders/:id/restart', async (req, res) => {
 });
 
 /**
+ * POST /api/v2/orbix-network/renders/:id/upload-to-youtube
+ * Manually upload a READY_FOR_UPLOAD render to YouTube.
+ * Requires query.channel_id.
+ */
+router.post('/renders/:id/upload-to-youtube', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { id } = req.params;
+
+    // Verify render exists and belongs to this business/channel
+    const { data: render, error: getError } = await supabaseClient
+      .from('orbix_renders')
+      .select('*, orbix_stories!inner(id, channel_id)')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .eq('orbix_stories.channel_id', channelId)
+      .maybeSingle();
+
+    if (getError && getError.code !== 'PGRST116') throw getError;
+    if (!render) return res.status(404).json({ error: 'Render not found' });
+
+    const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED'];
+    if (!allowedStatuses.includes(render.render_status)) {
+      return res.status(400).json({
+        error: `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD or COMPLETED renders can be uploaded.`
+      });
+    }
+
+    if (!render.output_url) {
+      return res.status(400).json({ error: 'No video file available to upload. Re-render first.' });
+    }
+
+    console.log(`[POST renders/:id/upload-to-youtube] Triggering manual YouTube upload for render ${id}`);
+    res.json({ message: 'YouTube upload started', render_id: id });
+
+    // Run upload in background after response
+    const { processOneYouTubeUpload } = await import('./orbix-network-jobs.js');
+
+    // Mark it READY_FOR_UPLOAD (in case it was COMPLETED) so the upload job picks it up
+    if (render.render_status !== 'READY_FOR_UPLOAD') {
+      await supabaseClient
+        .from('orbix_renders')
+        .update({ render_status: 'READY_FOR_UPLOAD', updated_at: new Date().toISOString() })
+        .eq('id', id);
+    }
+
+    processOneYouTubeUpload()
+      .then((result) => {
+        console.log(`[upload-to-youtube] Upload result for ${id}:`, result.status, result.error || '');
+      })
+      .catch((err) => {
+        console.error(`[upload-to-youtube] Upload error for ${id}:`, err?.message);
+      });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/renders/:id/upload-to-youtube] Error:', error);
+    res.status(channelErrorStatus(error)).json({
+      error: error.message || 'Failed to start YouTube upload',
+    });
+  }
+});
+
+/**
  * Build YouTube title, description, hashtags from story + script (same logic as step7Metadata; psychology uses dedicated rules).
  */
 async function buildMetadataFromRender(renderId, story, script) {
