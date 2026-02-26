@@ -197,10 +197,19 @@ export default function RenderPage() {
             )}
 
             {isReady && (
-              <button onClick={() => router.push(`/dashboard/v2/modules/kidquiz/projects/${id}/upload`)} className="w-full py-4 rounded-xl font-bold text-white text-base" style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}>
+              <button onClick={() => router.push(`/dashboard/v2/modules/kidquiz/projects/${id}/upload`)} className="w-full py-4 rounded-xl font-bold text-white text-base mb-2" style={{ background: 'linear-gradient(135deg, #10b981, #059669)' }}>
                 Next: Upload to YouTube
               </button>
             )}
+
+            {/* Always visible — go back to editor to swap background image then re-render */}
+            <button
+              onClick={() => router.push(`/dashboard/v2/modules/kidquiz/projects/${id}/editor`)}
+              className="w-full py-3 rounded-xl font-semibold text-sm"
+              style={{ background: 'transparent', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}
+            >
+              🖼️ Change Background Image
+            </button>
           </div>
         </div>
       </V2AppShell>

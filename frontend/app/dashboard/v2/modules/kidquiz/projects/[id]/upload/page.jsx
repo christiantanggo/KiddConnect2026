@@ -101,15 +101,21 @@ export default function UploadPage() {
           <div className="space-y-5">
             {error && <div className="p-3 rounded-lg text-sm" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
 
-            {/* Always-visible Re-render button */}
-            <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-              <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>Need to re-render the video with updated code?</p>
+            {/* Re-render / Change background */}
+            <div className="rounded-2xl p-4 space-y-2" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
               <button
                 onClick={() => router.push(`/dashboard/v2/modules/kidquiz/projects/${id}/render`)}
                 className="w-full py-3 rounded-xl font-bold text-white text-sm"
                 style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}
               >
                 🔄 Re-render Video
+              </button>
+              <button
+                onClick={() => router.push(`/dashboard/v2/modules/kidquiz/projects/${id}/editor`)}
+                className="w-full py-3 rounded-xl font-semibold text-sm"
+                style={{ background: 'transparent', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}
+              >
+                🖼️ Change Background Image
               </button>
             </div>
 
