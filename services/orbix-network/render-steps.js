@@ -443,10 +443,7 @@ export async function step5HookText(renderId, renderJob, script, story, template
     await logStepEvent(renderId, step, 'PROGRESS', 'Rendering hook with ASS (Arial Bold, wrap at width)');
     
     const step5OutputPath = join(tmpdir(), `orbix-step5-${renderId}-${Date.now()}.mp4`);
-    const isFacts = (story?.category || '').toLowerCase() === 'facts';
-    const step5Vf = isFacts
-      ? `drawbox=x=0:y=0:w=iw:h=ih:color=black@0.5:t=fill,ass='${simpleAssPathEscaped}'`
-      : `ass='${simpleAssPathEscaped}'`;
+    const step5Vf = `ass='${simpleAssPathEscaped}'`;
     const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "${step5Vf}" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p "${step5OutputPath}"`;
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
