@@ -27,14 +27,24 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=invalid_state`);
     }
 
-    if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET || !process.env.YOUTUBE_REDIRECT_URI) {
+    if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET) {
       return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_not_configured`);
     }
 
-    // Build the kidquiz-specific redirect URI
-    const raw = process.env.YOUTUBE_REDIRECT_URI || '';
-    const kidquizRedirect = raw.replace(/orbix-network\/youtube\/callback/, 'kidquiz/youtube/callback');
-    const redirectUri = kidquizRedirect.startsWith('http') ? kidquizRedirect : `https://${kidquizRedirect}`;
+    // Build the kidquiz-specific redirect URI — must match exactly what was sent during auth
+    let redirectUri;
+    if (process.env.KIDQUIZ_YOUTUBE_REDIRECT_URI) {
+      redirectUri = process.env.KIDQUIZ_YOUTUBE_REDIRECT_URI;
+    } else {
+      const raw = process.env.YOUTUBE_REDIRECT_URI || '';
+      const replaced = raw.replace(/orbix-network\/youtube\/callback/, 'kidquiz/youtube/callback');
+      if (replaced !== raw) {
+        redirectUri = replaced.startsWith('http') ? replaced : `https://${replaced}`;
+      } else {
+        const base = (process.env.API_URL || process.env.BASE_URL || 'http://localhost:5001').replace(/\/$/, '');
+        redirectUri = `${base}/api/v2/kidquiz/youtube/callback`;
+      }
+    }
 
     const oauth2Client = new google.auth.OAuth2(
       process.env.YOUTUBE_CLIENT_ID,
