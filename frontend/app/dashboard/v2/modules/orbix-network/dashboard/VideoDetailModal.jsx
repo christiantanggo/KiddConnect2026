@@ -201,7 +201,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
     
     try {
       setLoading(true);
-      await orbixNetworkAPI.restartRender(item.render_id, apiParams());
+      await orbixNetworkAPI.restartRender(item.render_id, apiParams(), item.story_id);
       success('Render restarted successfully');
       if (onRestart) {
         onRestart();

@@ -441,32 +441,111 @@ router.post('/renders/:id/restart', async (req, res) => {
     const businessId = req.active_business_id;
     const { id } = req.params;
 
-    const { data: render, error: getError } = await supabaseClient
+    let render = null;
+    let renderId = id;
+
+    // Try to find render by ID first
+    const { data: renderById, error: getError } = await supabaseClient
       .from('orbix_renders')
-      .select('render_status, story_id')
+      .select('*')
       .eq('id', id)
       .eq('business_id', businessId)
-      .single();
-    
-    if (getError) throw getError;
+      .maybeSingle();
+
+    if (getError && getError.code !== 'PGRST116') throw getError;
+
+    if (renderById) {
+      // Verify the render belongs to the right channel
+      const { data: story } = await supabaseClient
+        .from('orbix_stories')
+        .select('id')
+        .eq('id', renderById.story_id)
+        .eq('channel_id', channelId)
+        .maybeSingle();
+      if (story) render = renderById;
+    }
+
+    // If render not found by ID (e.g. was deleted after a script rewrite),
+    // find the story via story_id param or look up by channel to get a fresh render
     if (!render) {
-      return res.status(404).json({ error: 'Render not found' });
+      console.log(`[restart] Render ${id} not found — looking for story's current render`);
+      // Try to find by story_id from query or from the story linked to this render id via any orphan reference
+      const storyId = req.query.story_id || null;
+      if (storyId) {
+        const { data: latestRender } = await supabaseClient
+          .from('orbix_renders')
+          .select('*')
+          .eq('story_id', storyId)
+          .eq('business_id', businessId)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (latestRender) {
+          render = latestRender;
+          renderId = latestRender.id;
+          console.log(`[restart] Using latest render ${renderId} for story ${storyId}`);
+        } else {
+          // No render exists at all — create a new one for this story
+          const { data: story } = await supabaseClient
+            .from('orbix_stories')
+            .select('*')
+            .eq('id', storyId)
+            .eq('business_id', businessId)
+            .eq('channel_id', channelId)
+            .maybeSingle();
+          if (!story) return res.status(404).json({ error: 'Story not found' });
+
+          const { data: script } = await supabaseClient
+            .from('orbix_scripts')
+            .select('id')
+            .eq('story_id', storyId)
+            .eq('business_id', businessId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          if (!script) return res.status(400).json({ error: 'No script found for story — generate a script first' });
+
+          const { selectTemplate, selectBackground } = await import('../../services/orbix-network/video-renderer.js');
+          const template = selectTemplate(story);
+          const background = await selectBackground(businessId, channelId);
+          const { data: newRender, error: createErr } = await supabaseClient
+            .from('orbix_renders')
+            .insert({
+              business_id: businessId,
+              story_id: storyId,
+              script_id: script.id,
+              template,
+              background_type: background.type,
+              background_id: background.id,
+              background_storage_path: background.storagePath ?? null,
+              render_status: 'PENDING'
+            })
+            .select()
+            .single();
+          if (createErr) throw createErr;
+          render = newRender;
+          renderId = newRender.id;
+          console.log(`[restart] Created new render ${renderId} for story ${storyId}`);
+        }
+      } else {
+        return res.status(404).json({ error: 'Render not found. If you rewrote the script, refresh the page and try again.' });
+      }
     }
 
-    const { data: story } = await supabaseClient
-      .from('orbix_stories')
-      .select('id')
-      .eq('id', render.story_id)
-      .eq('channel_id', channelId)
-      .single();
-    if (!story) {
-      return res.status(404).json({ error: 'Render not found' });
-    }
-
-    const allowedStatuses = ['COMPLETED', 'FAILED', 'PROCESSING', 'STEP_FAILED', 'READY_FOR_UPLOAD'];
+    const allowedStatuses = ['COMPLETED', 'FAILED', 'PROCESSING', 'STEP_FAILED', 'READY_FOR_UPLOAD', 'PENDING'];
     if (!allowedStatuses.includes(render.render_status)) {
       return res.status(400).json({ error: 'Can only restart COMPLETED, FAILED, STEP_FAILED, READY_FOR_UPLOAD, or stuck PROCESSING renders' });
     }
+
+    // Update the script_id to the latest script for this story (picks up rewrites)
+    const { data: latestScript } = await supabaseClient
+      .from('orbix_scripts')
+      .select('id')
+      .eq('story_id', render.story_id)
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
 
     // Reset render and clear ALL step paths so the worker runs from step 3 with no stale paths
     const updateData = {
@@ -486,26 +565,27 @@ router.post('/renders/:id/restart', async (req, res) => {
       video_step5_path: null,
       updated_at: new Date().toISOString()
     };
+    if (latestScript) updateData.script_id = latestScript.id;
     
     const { data: updatedRender, error: updateError } = await supabaseClient
       .from('orbix_renders')
       .update(updateData)
-      .eq('id', id)
+      .eq('id', renderId)
       .eq('business_id', businessId)
       .select()
       .single();
     
     if (updateError) throw updateError;
     
-    console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${id} restarted to PENDING – triggering process now`);
-    res.json({ render: updatedRender });
+    console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${renderId} restarted to PENDING – triggering process now`);
+    res.json({ render: updatedRender, render_id: renderId });
 
     // Process this specific render immediately (don't wait for 30s interval)
     const { processRenderById, processOneYouTubeUpload } = await import('./orbix-network-jobs.js');
-    processRenderById(id)
+    processRenderById(renderId)
       .then((result) => {
         if (result.processed) {
-          console.log(`[restart] Render ${id} processed:`, result.status);
+          console.log(`[restart] Render ${renderId} processed:`, result.status);
           if (result.status === 'RENDER_COMPLETE') {
             const delayMs = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0;
             if (delayMs > 0) {
@@ -515,10 +595,10 @@ router.post('/renders/:id/restart', async (req, res) => {
             }
           }
         } else if (result.error) {
-          console.warn(`[restart] Could not process render ${id}:`, result.error);
+          console.warn(`[restart] Could not process render ${renderId}:`, result.error);
         }
       })
-      .catch((err) => console.error(`[restart] Process error for ${id}:`, err?.message));
+      .catch((err) => console.error(`[restart] Process error for ${renderId}:`, err?.message));
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/renders/:id/restart] Error:', error);
     res.status(channelErrorStatus(error)).json({

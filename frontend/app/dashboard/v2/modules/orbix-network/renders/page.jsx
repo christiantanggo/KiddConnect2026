@@ -45,17 +45,23 @@ export default function OrbixNetworkRendersPage() {
     }
   };
 
+  const getStatusLabel = (status) => {
+    const labels = { PENDING: 'Pending', PROCESSING: 'Rendering', READY_FOR_UPLOAD: 'Ready for upload', COMPLETED: 'Completed', FAILED: 'Failed' };
+    return labels[status] || status;
+  };
+
   const getStatusBadge = (status) => {
     const statusColors = {
       'PENDING': 'bg-yellow-100 text-yellow-800',
       'PROCESSING': 'bg-blue-100 text-blue-800',
+      'READY_FOR_UPLOAD': 'bg-amber-100 text-amber-800',
       'COMPLETED': 'bg-green-100 text-green-800',
       'FAILED': 'bg-red-100 text-red-800'
     };
     
     return (
       <span className={`px-2 py-1 text-xs font-medium rounded ${statusColors[status] || 'bg-gray-100 text-gray-800'}`}>
-        {status}
+        {getStatusLabel(status)}
       </span>
     );
   };
@@ -81,12 +87,12 @@ export default function OrbixNetworkRendersPage() {
     });
   };
 
-  const handleRestartRender = async (renderId) => {
+  const handleRestartRender = async (renderId, storyId) => {
     if (!window.confirm('Are you sure you want to restart this render? It will be re-queued for processing.')) {
       return;
     }
     try {
-      await orbixNetworkAPI.restartRender(renderId, apiParams());
+      await orbixNetworkAPI.restartRender(renderId, apiParams(), storyId);
       success('Render restarted. It will be processed again.');
       loadRenders(); // Reload the list
     } catch (error) {
@@ -137,6 +143,7 @@ export default function OrbixNetworkRendersPage() {
               <option value="">All Statuses</option>
               <option value="PENDING">Pending</option>
               <option value="PROCESSING">Processing</option>
+              <option value="READY_FOR_UPLOAD">Ready for upload</option>
               <option value="COMPLETED">Completed</option>
               <option value="FAILED">Failed</option>
             </select>
@@ -208,7 +215,7 @@ export default function OrbixNetworkRendersPage() {
                               </>
                             ) : (
                               <button
-                                onClick={() => handleRestartRender(render.id)}
+                                onClick={() => handleRestartRender(render.id, render.story_id)}
                                 className="flex-1 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-center text-sm flex items-center justify-center gap-2"
                               >
                                 <RotateCw className="w-4 h-4" />
@@ -217,7 +224,7 @@ export default function OrbixNetworkRendersPage() {
                             )}
                             {render.output_url && (
                               <button
-                                onClick={() => handleRestartRender(render.id)}
+                                onClick={() => handleRestartRender(render.id, render.story_id)}
                                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 text-center text-sm flex items-center justify-center gap-2"
                               >
                                 <RotateCw className="w-4 h-4" />
@@ -228,7 +235,7 @@ export default function OrbixNetworkRendersPage() {
                         )}
                         {render.render_status === 'FAILED' && (
                           <button
-                            onClick={() => handleRestartRender(render.id)}
+                            onClick={() => handleRestartRender(render.id, render.story_id)}
                             className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 text-center text-sm flex items-center justify-center gap-2"
                           >
                             <RotateCw className="w-4 h-4" />

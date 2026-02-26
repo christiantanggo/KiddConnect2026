@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckCircle2, XCircle, Loader, Clock, Zap, ThumbsUp, RefreshCw } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader, Clock, Zap, ThumbsUp, RefreshCw, CheckCheck, Trash2 } from 'lucide-react';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
@@ -9,10 +9,15 @@ import { useOrbixChannel } from '../OrbixChannelContext';
 
 export default function PipelineView({ pipeline = [], onVideoClick, onRefresh }) {
   const { success, error: showErrorToast } = useToast();
-  const { apiParams } = useOrbixChannel();
+  const { apiParams, channels, currentChannelId } = useOrbixChannel();
+  const currentChannel = channels?.find((c) => c.id === currentChannelId);
+  const scrapingStepName = currentChannel ? `${currentChannel.name} Scraping` : 'News Scraping';
   const [scoringId, setScoringId] = useState(null);
   const [allowingId, setAllowingId] = useState(null);
   const [rerenderId, setRerenderId] = useState(null);
+  const [forceRenderStoryId, setForceRenderStoryId] = useState(null);
+  const [approvingAllStep2, setApprovingAllStep2] = useState(false);
+  const [deletingId, setDeletingId] = useState(null); // raw_item_id or story_id
   const steps = [
     { key: 'step1', name: 'News Scraping', shortName: 'Step 1' },
     { key: 'step2', name: 'Story Creation', shortName: 'Step 2' },
@@ -93,7 +98,7 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
     if (item.render_id) {
       if (item.render_status === 'COMPLETED') return 'completed';
       if (item.render_status === 'FAILED') return 'failed';
-      if (item.render_status === 'PROCESSING' || item.render_status === 'PENDING') return 'processing';
+      if (item.render_status === 'PROCESSING' || item.render_status === 'PENDING' || item.render_status === 'READY_FOR_UPLOAD') return 'processing';
     }
     
     return 'pending';
@@ -122,6 +127,7 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
     return (
       <div className="bg-white rounded-lg shadow p-8 text-center">
         <p className="text-gray-500">No pipeline data yet. Stories will appear here as they progress through the pipeline.</p>
+        <p className="text-gray-400 text-sm mt-2">If you just ran Scrape: select a channel above first, then run Scrape again so items are saved to that channel and show here.</p>
       </div>
     );
   }
@@ -137,19 +143,54 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
         {steps.map((step) => {
           const videos = videosByStep[step.key] || [];
           const hasVideos = videos.length > 0;
-          
+          const isScrapingStep = step.key === 'step1';
+
           return (
             <div key={step.key} className="p-6">
               {/* Step Header */}
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <h3 className="text-lg font-semibold">{step.name}</h3>
+                  <h3 className="text-lg font-semibold">{step.key === 'step1' ? scrapingStepName : step.name}</h3>
                   {hasVideos && (
                     <span className="px-2 py-1 text-xs bg-blue-100 text-blue-800 rounded-full">
                       {videos.length} {videos.length === 1 ? 'video' : 'videos'}
                     </span>
                   )}
                 </div>
+                {isScrapingStep && (
+                  <button
+                    type="button"
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      if (approvingAllStep2) return;
+                      setApprovingAllStep2(true);
+                      try {
+                        const res = await orbixNetworkAPI.allowAllRawItems(apiParams());
+                        const allowed = res.data?.allowed ?? 0;
+                        const approved = res.data?.approved ?? 0;
+                        if (allowed > 0 || approved > 0) {
+                          const parts = [];
+                          if (allowed > 0) parts.push(`${allowed} allowed as story${allowed !== 1 ? 'ies' : ''}`);
+                          if (approved > 0) parts.push(`${approved} approved`);
+                          success(parts.join('. ') + '. The system will now run.');
+                          if (typeof onRefresh === 'function') onRefresh();
+                        } else {
+                          showErrorToast('No discarded items or pending stories for this channel.');
+                        }
+                      } catch (err) {
+                        const info = handleAPIError(err);
+                        showErrorToast(info.message || 'Failed to allow/approve all');
+                      } finally {
+                        setApprovingAllStep2(false);
+                      }
+                    }}
+                    disabled={approvingAllStep2}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 text-sm font-medium bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {approvingAllStep2 ? <Loader className="w-4 h-4 animate-spin" /> : <CheckCheck className="w-4 h-4" />}
+                    {approvingAllStep2 ? 'Allow & approve…' : 'Approve All'}
+                  </button>
+                )}
               </div>
               
               {/* Videos in this step */}
@@ -171,9 +212,44 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
                         onClick={() => onVideoClick && onVideoClick(item)}
                       >
                         <div className="flex flex-col">
-                          <div className="flex items-start justify-between mb-2">
+                          <div className="flex items-start justify-between gap-2 mb-2">
                             <p className="font-medium text-sm line-clamp-2 flex-1">{item.story_title}</p>
-                            {getStatusIcon(status)}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  const toDelete = item.raw_item_id && !item.story_id ? 'raw' : 'story';
+                                  if (!confirm(`Delete this ${toDelete === 'raw' ? 'scraped item' : 'story'}? It will be removed from the pipeline.`)) return;
+                                  setDeletingId(toDelete === 'raw' ? item.raw_item_id : item.story_id);
+                                  try {
+                                    if (toDelete === 'raw') {
+                                      await orbixNetworkAPI.deleteRawItem(item.raw_item_id, apiParams());
+                                      success('Scraped item deleted');
+                                    } else {
+                                      await orbixNetworkAPI.deleteStory(item.story_id, apiParams());
+                                      success('Story deleted');
+                                    }
+                                    if (typeof onRefresh === 'function') onRefresh();
+                                  } catch (err) {
+                                    const info = handleAPIError(err);
+                                    showErrorToast(info.message || 'Delete failed');
+                                  } finally {
+                                    setDeletingId(null);
+                                  }
+                                }}
+                                disabled={!!deletingId}
+                                className="p-1 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded disabled:opacity-50"
+                                title={item.raw_item_id && !item.story_id ? 'Delete scraped item' : 'Delete story'}
+                              >
+                                {deletingId === (item.raw_item_id && !item.story_id ? item.raw_item_id : item.story_id) ? (
+                                  <Loader className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Trash2 className="w-4 h-4" />
+                                )}
+                              </button>
+                              {getStatusIcon(status)}
+                            </div>
                           </div>
                           
                           <div className="flex gap-2 mb-2 flex-wrap">
@@ -287,6 +363,34 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
                             </div>
                           )}
 
+                          {/* Step 2: Story Creation - force start render pipeline when no render yet */}
+                          {step.key === 'step2' && item.story_id && !item.render_id && (
+                            <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!item.story_id) return;
+                                  setForceRenderStoryId(item.story_id);
+                                  try {
+                                    await orbixNetworkAPI.forceRenderStory(item.story_id, apiParams());
+                                    success('Render pipeline started');
+                                    if (typeof onRefresh === 'function') onRefresh();
+                                  } catch (err) {
+                                    const info = handleAPIError(err);
+                                    showErrorToast(info.message || 'Failed to force render');
+                                  } finally {
+                                    setForceRenderStoryId(null);
+                                  }
+                                }}
+                                disabled={forceRenderStoryId === item.story_id}
+                                className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 disabled:opacity-50"
+                              >
+                                {forceRenderStoryId === item.story_id ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
+                                {forceRenderStoryId === item.story_id ? 'Starting…' : 'Force Render'}
+                              </button>
+                            </div>
+                          )}
+
                           {step.key === 'completed' && item.render_id && (
                             <div className="mt-2" onClick={(e) => e.stopPropagation()}>
                               <button
@@ -295,7 +399,7 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
                                   if (!item.render_id) return;
                                   setRerenderId(item.render_id);
                                   try {
-                                    await orbixNetworkAPI.restartRender(item.render_id, apiParams());
+                                    await orbixNetworkAPI.restartRender(item.render_id, apiParams(), item.story_id);
                                     success('Re-render started');
                                     if (typeof onRefresh === 'function') onRefresh();
                                   } catch (err) {
