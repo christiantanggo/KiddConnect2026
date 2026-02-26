@@ -840,4 +840,88 @@ router.put('/permissions', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/v2/settings/profile
+ * Return the current user's profile (name, email)
+ */
+router.get('/profile', async (req, res) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({
+      profile: {
+        id: user.id,
+        email: user.email,
+        first_name: user.first_name || '',
+        last_name: user.last_name || '',
+      }
+    });
+  } catch (err) {
+    console.error('[GET /api/v2/settings/profile]', err);
+    res.status(500).json({ error: 'Failed to load profile' });
+  }
+});
+
+/**
+ * PUT /api/v2/settings/profile
+ * Update first/last name for the current user
+ */
+router.put('/profile', async (req, res) => {
+  try {
+    const { first_name, last_name } = req.body;
+    const updated = await User.update(req.user.id, {
+      first_name: first_name?.trim() ?? null,
+      last_name: last_name?.trim() ?? null,
+    });
+    res.json({ success: true, profile: { id: updated.id, email: updated.email, first_name: updated.first_name, last_name: updated.last_name } });
+  } catch (err) {
+    console.error('[PUT /api/v2/settings/profile]', err);
+    res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+/**
+ * PUT /api/v2/settings/profile/password
+ * Change the current user's password (requires current password)
+ */
+router.put('/profile/password', async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) {
+      return res.status(400).json({ error: 'current_password and new_password are required' });
+    }
+    if (new_password.length < 8) {
+      return res.status(400).json({ error: 'New password must be at least 8 characters' });
+    }
+
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const { comparePassword, hashPassword } = await import('../../utils/auth.js');
+    const valid = await comparePassword(current_password, user.password_hash);
+    if (!valid) {
+      return res.status(401).json({ error: 'Current password is incorrect' });
+    }
+
+    const password_hash = await hashPassword(new_password);
+    await User.update(req.user.id, { password_hash });
+
+    await AuditLog.create({
+      business_id: req.active_business_id,
+      user_id: req.user.id,
+      action: 'password_changed',
+      resource_type: 'user',
+      resource_id: req.user.id,
+      metadata: {},
+      ip_address: req.ip,
+      user_agent: req.headers['user-agent'],
+    }).catch(() => {});
+
+    res.json({ success: true, message: 'Password updated successfully' });
+  } catch (err) {
+    console.error('[PUT /api/v2/settings/profile/password]', err);
+    res.status(500).json({ error: 'Failed to update password' });
+  }
+});
+
 export default router;

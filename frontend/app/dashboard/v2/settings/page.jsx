@@ -30,6 +30,22 @@ export default function V2SettingsPage() {
 
             {/* Settings Cards */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              <Link
+                href="/dashboard/v2/settings/profile"
+                className="shadow transition-shadow"
+                style={{
+                  backgroundColor: 'var(--color-surface)',
+                  borderRadius: 'var(--card-radius)',
+                  padding: 'var(--padding-base)',
+                }}
+                onMouseEnter={(e) => e.currentTarget.style.boxShadow = '0 10px 15px rgba(0,0,0,0.1)'}
+                onMouseLeave={(e) => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)'}
+              >
+                <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>My Profile</h3>
+                <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
+                  Update your name and change your password
+                </p>
+              </Link>
               {/* Organizations link removed - feature disabled for now */}
               {/* <Link
                 href="/dashboard/v2/settings/organizations"
