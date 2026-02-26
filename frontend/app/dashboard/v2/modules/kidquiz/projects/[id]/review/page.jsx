@@ -91,11 +91,18 @@ export default function ReviewPage() {
             &larr; Back
           </Link>
 
-          <div className="flex items-center gap-2 mb-6 text-xs font-semibold flex-wrap">
+          <div className="flex items-center mb-4" style={{ gap: 2, minWidth: 0 }}>
             {['Topic', 'Build Quiz', 'Review', 'Render', 'Upload'].map((step, i) => (
-              <span key={step} className="flex items-center gap-2">
-                <span className="px-2 py-1 rounded-full" style={{ background: i === 2 ? '#6366f1' : '#f3f4f6', color: i === 2 ? '#fff' : '#9ca3af' }}>{step}</span>
-                {i < 4 && <span style={{ color: '#d1d5db' }}>&rsaquo;</span>}
+              <span key={step} className="flex items-center" style={{ gap: 2, minWidth: 0, flex: '1 1 0' }}>
+                <span
+                  className="font-semibold text-center truncate"
+                  style={{
+                    fontSize: 11, padding: '4px 6px', borderRadius: 999, width: '100%',
+                    background: i === 2 ? '#6366f1' : '#f3f4f6',
+                    color: i === 2 ? '#fff' : '#9ca3af',
+                  }}
+                >{step}</span>
+                {i < 4 && <span style={{ color: '#d1d5db', flexShrink: 0, fontSize: 12 }}>›</span>}
               </span>
             ))}
           </div>
