@@ -20,9 +20,9 @@ async function getYouTubeClient(businessId) {
     throw new Error('YouTube not connected for Kid Quiz Studio. Go to Kid Quiz Studio → Settings and connect YouTube.');
   }
 
-  const raw = process.env.YOUTUBE_REDIRECT_URI || '';
-  const kidquizRedirect = raw.replace(/orbix-network\/youtube\/callback/, 'kidquiz/youtube/callback');
-  const redirectUri = kidquizRedirect.startsWith('http') ? kidquizRedirect : `https://${kidquizRedirect}`;
+  const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
+  const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
+  const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
   const oauth2Client = new google.auth.OAuth2(
     process.env.YOUTUBE_CLIENT_ID,

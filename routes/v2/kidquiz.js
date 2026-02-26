@@ -130,23 +130,10 @@ router.get('/youtube/auth-url', async (req, res) => {
       return res.status(400).json({ error: 'YouTube OAuth not configured on the server.' });
     }
     const businessId = req.active_business_id;
-    // Build the kidquiz-specific callback URI
-    // Use dedicated env var if set, otherwise derive from YOUTUBE_REDIRECT_URI or API_URL
-    let redirectUri;
-    if (process.env.KIDQUIZ_YOUTUBE_REDIRECT_URI) {
-      redirectUri = process.env.KIDQUIZ_YOUTUBE_REDIRECT_URI;
-    } else {
-      const raw = process.env.YOUTUBE_REDIRECT_URI || '';
-      const replaced = raw.replace(/orbix-network\/youtube\/callback/, 'kidquiz/youtube/callback');
-      if (replaced !== raw) {
-        // Replace worked
-        redirectUri = replaced.startsWith('http') ? replaced : `https://${replaced}`;
-      } else {
-        // Replace didn't work — build from API_URL or BASE_URL
-        const base = (process.env.API_URL || process.env.BASE_URL || 'http://localhost:5001').replace(/\/$/, '');
-        redirectUri = `${base}/api/v2/kidquiz/youtube/callback`;
-      }
-    }
+    // Build the kidquiz callback URI from the orbix one — strip everything after /api/v2/ and append kidquiz path
+    const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
+    const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
+    const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
     const oauth2Client = new google.auth.OAuth2(
       process.env.YOUTUBE_CLIENT_ID,
