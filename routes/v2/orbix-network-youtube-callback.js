@@ -26,10 +26,15 @@ router.get('/youtube/callback', async (req, res) => {
     let businessId = state;
     let orbixChannelId = null;
     let redirectToSetup = false;
+    let isKidquiz = false;
     if (state && state.includes(':')) {
       const parts = state.split(':');
       if (parts[parts.length - 1] === 'setup') {
         redirectToSetup = true;
+        parts.pop();
+      }
+      if (parts[parts.length - 1] === 'kidquiz') {
+        isKidquiz = true;
         parts.pop();
       }
       businessId = parts[0];
@@ -44,7 +49,8 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_not_configured`);
     }
 
-    const redirectUri = process.env.YOUTUBE_REDIRECT_URI;
+    const raw = process.env.YOUTUBE_REDIRECT_URI || '';
+    const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
     const oauth2Client = new google.auth.OAuth2(
       process.env.YOUTUBE_CLIENT_ID,
       process.env.YOUTUBE_CLIENT_SECRET,
@@ -80,8 +86,6 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=no_channel_found`);
     }
     
-    const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
-    const settings = existing?.settings ? { ...existing.settings } : {};
     const ytCreds = {
       channel_id: channel.id,
       channel_title: channel.snippet?.title || '',
@@ -89,6 +93,21 @@ router.get('/youtube/callback', async (req, res) => {
       refresh_token: tokens.refresh_token,
       token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null
     };
+
+    const base = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+    if (isKidquiz) {
+      // Save under kidquiz module settings
+      const kqExisting = await ModuleSettings.findByBusinessAndModule(businessId, 'kidquiz');
+      const kqSettings = kqExisting?.settings ? { ...kqExisting.settings } : {};
+      kqSettings.youtube = ytCreds;
+      await ModuleSettings.update(businessId, 'kidquiz', kqSettings);
+      console.log('[YouTube Callback] Saved YouTube credentials for KidQuiz businessId=', businessId, 'youtube_channel_id=', channel.id);
+      return res.redirect(`${base}/dashboard/v2/modules/kidquiz/settings?youtube_connected=true`);
+    }
+
+    const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    const settings = existing?.settings ? { ...existing.settings } : {};
 
     if (orbixChannelId) {
       settings.youtube_by_channel = settings.youtube_by_channel || {};
@@ -100,7 +119,6 @@ router.get('/youtube/callback', async (req, res) => {
     await ModuleSettings.update(businessId, MODULE_KEY, settings);
     console.log('[YouTube Callback] Saved YouTube credentials for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy', 'youtube_channel_id=', channel.id);
 
-    const base = process.env.FRONTEND_URL || 'http://localhost:3000';
     const redirect = redirectToSetup
       ? `${base}/modules/orbix-network/setup?youtube_connected=true`
       : (orbixChannelId
