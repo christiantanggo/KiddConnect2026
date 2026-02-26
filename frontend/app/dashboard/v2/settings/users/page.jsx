@@ -18,8 +18,11 @@ export default function UsersSettingsPage() {
 
   const [inviteForm, setInviteForm] = useState({
     email: '',
+    first_name: '',
+    last_name: '',
     role: 'staff',
   });
+  const [tempPassword, setTempPassword] = useState(null);
   const [managingUser, setManagingUser] = useState(null);
   const [showManageModal, setShowManageModal] = useState(false);
   const [updating, setUpdating] = useState(false);
@@ -303,12 +306,11 @@ export default function UsersSettingsPage() {
         const data = await res.json();
         setSuccess(data.message || 'User added successfully!');
         setShowInviteModal(false);
-        setInviteForm({ email: '', role: 'staff' });
-        
-        // Reload users
+        setInviteForm({ email: '', first_name: '', last_name: '', role: 'staff' });
+        if (data.temp_password) {
+          setTempPassword({ email: data.user.email, password: data.temp_password });
+        }
         await loadUsers();
-        
-        setTimeout(() => setSuccess(null), 3000);
       } else {
         const errorData = await res.json();
         setError(errorData.message || errorData.error || 'Failed to add user');
@@ -410,7 +412,7 @@ export default function UsersSettingsPage() {
 
           {success && (
             <div 
-              className="px-4 py-3 mb-6"
+              className="px-4 py-3 mb-4"
               style={{
                 backgroundColor: 'rgba(20, 184, 166, 0.1)',
                 border: '1px solid rgba(20, 184, 166, 0.2)',
@@ -419,6 +421,52 @@ export default function UsersSettingsPage() {
               }}
             >
               {success}
+            </div>
+          )}
+
+          {/* Temp password notice — shown when a new account was auto-created */}
+          {tempPassword && (
+            <div
+              className="p-4 mb-6"
+              style={{
+                backgroundColor: 'rgba(250, 204, 21, 0.12)',
+                border: '1px solid rgba(250, 204, 21, 0.4)',
+                borderRadius: 'var(--card-radius)',
+              }}
+            >
+              <p className="font-semibold mb-1" style={{ color: 'var(--color-text-main)' }}>
+                ✅ New account created — share these login details with {tempPassword.email}
+              </p>
+              <p className="text-sm mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                An invite email has been sent, but you can also share the temporary password directly:
+              </p>
+              <div
+                className="flex items-center justify-between px-3 py-2 rounded font-mono text-sm"
+                style={{ backgroundColor: 'var(--color-bg)', border: '1px solid var(--color-border)' }}
+              >
+                <span style={{ color: 'var(--color-text-main)' }}>
+                  <strong>Email:</strong> {tempPassword.email} &nbsp;|&nbsp; <strong>Password:</strong> {tempPassword.password}
+                </span>
+                <button
+                  onClick={() => {
+                    navigator.clipboard?.writeText(`Email: ${tempPassword.email}\nPassword: ${tempPassword.password}`);
+                  }}
+                  className="ml-3 text-xs px-2 py-1 rounded"
+                  style={{ background: 'var(--color-accent)', color: '#fff', borderRadius: 4 }}
+                >
+                  Copy
+                </button>
+              </div>
+              <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
+                They should change their password after first login.
+              </p>
+              <button
+                onClick={() => setTempPassword(null)}
+                className="text-xs mt-2 underline"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Dismiss
+              </button>
             </div>
           )}
 
@@ -717,11 +765,56 @@ export default function UsersSettingsPage() {
               </h2>
               
               <p className="text-sm mb-6" style={{ color: 'var(--color-text-muted)' }}>
-                Add an existing user to this organization by their email address. The user must have already signed up for a Tavari account.
+                Enter the person's email and assign their role. If they don't have an account yet, one will be created automatically and a temporary password will be sent to them.
               </p>
 
               <form onSubmit={handleInvite}>
                 <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-main)' }}>
+                        First Name
+                      </label>
+                      <input
+                        type="text"
+                        value={inviteForm.first_name}
+                        onChange={(e) => setInviteForm(prev => ({ ...prev, first_name: e.target.value }))}
+                        className="w-full px-4 py-2 border rounded transition-colors focus:outline-none"
+                        style={{
+                          backgroundColor: 'var(--color-surface)',
+                          borderColor: 'var(--color-border)',
+                          color: 'var(--color-text-main)',
+                          borderRadius: 'var(--button-radius)',
+                          height: 'var(--input-height)',
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = 'var(--color-accent)'}
+                        onBlur={(e) => e.target.style.borderColor = 'var(--color-border)'}
+                        placeholder="Jane"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-main)' }}>
+                        Last Name
+                      </label>
+                      <input
+                        type="text"
+                        value={inviteForm.last_name}
+                        onChange={(e) => setInviteForm(prev => ({ ...prev, last_name: e.target.value }))}
+                        className="w-full px-4 py-2 border rounded transition-colors focus:outline-none"
+                        style={{
+                          backgroundColor: 'var(--color-surface)',
+                          borderColor: 'var(--color-border)',
+                          color: 'var(--color-text-main)',
+                          borderRadius: 'var(--button-radius)',
+                          height: 'var(--input-height)',
+                        }}
+                        onFocus={(e) => e.target.style.borderColor = 'var(--color-accent)'}
+                        onBlur={(e) => e.target.style.borderColor = 'var(--color-border)'}
+                        placeholder="Smith"
+                      />
+                    </div>
+                  </div>
+
                   <div>
                     <label className="block text-sm font-medium mb-2" style={{ color: 'var(--color-text-main)' }}>
                       Email Address *
@@ -744,9 +837,6 @@ export default function UsersSettingsPage() {
                       onBlur={(e) => e.target.style.borderColor = 'var(--color-border)'}
                       placeholder="user@example.com"
                     />
-                    <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-                      The user must have an existing account with this email
-                    </p>
                   </div>
 
                   <div>
@@ -794,7 +884,7 @@ export default function UsersSettingsPage() {
                     onClick={() => {
                       setShowInviteModal(false);
                       setError(null);
-                      setInviteForm({ email: '', role: 'staff' });
+                      setInviteForm({ email: '', first_name: '', last_name: '', role: 'staff' });
                     }}
                     className="px-6 py-3 font-medium transition-colors"
                     style={{

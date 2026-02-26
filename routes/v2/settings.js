@@ -513,8 +513,11 @@ router.delete('/users/:organizationUserId', async (req, res) => {
 
 /**
  * POST /api/v2/settings/users
- * Add a user to the organization by email
- * Requires owner or admin role
+ * Add a user to the organization by email.
+ * If no account exists for that email, one is created automatically with a
+ * temporary password and an invite email is sent. The admin does NOT need to
+ * ask the person to sign up first.
+ * Requires owner or admin role.
  */
 router.post('/users', async (req, res) => {
   try {
@@ -527,7 +530,7 @@ router.post('/users', async (req, res) => {
       });
     }
 
-    const { email, role = 'staff' } = req.body;
+    const { email, role = 'staff', first_name = '', last_name = '' } = req.body;
     
     if (!email) {
       return res.status(400).json({ error: 'Email is required' });
@@ -537,20 +540,75 @@ router.post('/users', async (req, res) => {
     if (!['owner', 'admin', 'staff'].includes(role)) {
       return res.status(400).json({ error: 'Invalid role. Must be owner, admin, or staff' });
     }
-    
-    // Check if user exists
-    const existingUser = await User.findByEmail(email);
-    
-    if (!existingUser) {
-      return res.status(404).json({ 
-        error: 'User not found',
-        message: 'A user with this email does not exist. They must sign up first before being added to an organization.'
+
+    // Get the current business for the invite email
+    const business = await Business.findById(req.active_business_id);
+
+    // Look up the user — or create one if they haven't signed up yet
+    let targetUser = await User.findByEmail(email);
+    let wasInvited = false;
+    let tempPassword = null;
+
+    if (!targetUser) {
+      // Generate a random temporary password (12 chars: letters + digits)
+      const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789';
+      tempPassword = Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+
+      const { hashPassword } = await import('../../utils/auth.js');
+      const password_hash = await hashPassword(tempPassword);
+
+      // Create the user account linked to this business
+      targetUser = await User.create({
+        business_id: req.active_business_id,
+        email: email.toLowerCase().trim(),
+        password_hash,
+        first_name: first_name.trim() || null,
+        last_name: last_name.trim() || null,
+        role: role === 'owner' ? 'admin' : role, // invited users can't be owner at creation
+        terms_accepted_at: null,
+        privacy_accepted_at: null,
       });
+
+      wasInvited = true;
+
+      // Send invite email (non-fatal if it fails)
+      try {
+        const { sendEmail } = await import('../../services/notifications.js');
+        const loginUrl = `${process.env.FRONTEND_URL || 'https://tavarios.com'}/login`;
+        const subject = `You've been added to ${business?.name || 'an organization'} on Tavari`;
+        const bodyText = [
+          `Hi${first_name ? ' ' + first_name : ''},`,
+          ``,
+          `${req.user.first_name || req.user.email} has added you to ${business?.name || 'their organization'} on Tavari as ${role}.`,
+          ``,
+          `Your login details:`,
+          `  Email:    ${email}`,
+          `  Password: ${tempPassword}`,
+          ``,
+          `Please log in and change your password as soon as possible:`,
+          loginUrl,
+          ``,
+          `— The Tavari Team`,
+        ].join('\n');
+        const bodyHtml = `
+          <p>Hi${first_name ? ' ' + first_name : ''},</p>
+          <p><strong>${req.user.first_name || req.user.email}</strong> has added you to <strong>${business?.name || 'their organization'}</strong> on Tavari as <strong>${role}</strong>.</p>
+          <p><strong>Your login details:</strong><br>
+          Email: <code>${email}</code><br>
+          Temporary password: <code>${tempPassword}</code></p>
+          <p><a href="${loginUrl}" style="background:#7c3aed;color:#fff;padding:10px 20px;border-radius:8px;text-decoration:none;display:inline-block;margin-top:8px;">Log in to Tavari</a></p>
+          <p style="color:#666;font-size:12px;">Please change your password after logging in.</p>
+        `;
+        await sendEmail(email, subject, bodyText, bodyHtml);
+        console.log(`[POST /api/v2/settings/users] Invite email sent to ${email}`);
+      } catch (emailErr) {
+        console.warn(`[POST /api/v2/settings/users] Could not send invite email:`, emailErr.message);
+      }
     }
     
     // Check if user is already in this organization
     const existingMembership = await OrganizationUser.findByUserAndBusiness(
-      existingUser.id,
+      targetUser.id,
       req.active_business_id
     );
     
@@ -558,8 +616,8 @@ router.post('/users', async (req, res) => {
       return res.status(400).json({ 
         error: 'User already belongs to this organization',
         user: {
-          id: existingUser.id,
-          email: existingUser.email,
+          id: targetUser.id,
+          email: targetUser.email,
           role: existingMembership.role
         }
       });
@@ -568,7 +626,7 @@ router.post('/users', async (req, res) => {
     // Add user to organization
     const orgUser = await OrganizationUser.create({
       business_id: req.active_business_id,
-      user_id: existingUser.id,
+      user_id: targetUser.id,
       role: role,
     });
     
@@ -576,13 +634,14 @@ router.post('/users', async (req, res) => {
     await AuditLog.create({
       business_id: req.active_business_id,
       user_id: req.user.id,
-      action: 'user_added_to_organization',
+      action: wasInvited ? 'user_invited_to_organization' : 'user_added_to_organization',
       resource_type: 'organization_user',
       resource_id: orgUser.id,
       metadata: {
-        added_user_id: existingUser.id,
-        added_user_email: existingUser.email,
-        role: role,
+        added_user_id: targetUser.id,
+        added_user_email: targetUser.email,
+        role,
+        was_invited: wasInvited,
       },
       ip_address: req.ip,
       user_agent: req.headers['user-agent']
@@ -590,15 +649,20 @@ router.post('/users', async (req, res) => {
     
     res.json({
       success: true,
+      was_invited: wasInvited,
       user: {
-        id: existingUser.id,
-        email: existingUser.email,
-        first_name: existingUser.first_name,
-        last_name: existingUser.last_name,
-        role: role,
+        id: targetUser.id,
+        email: targetUser.email,
+        first_name: targetUser.first_name,
+        last_name: targetUser.last_name,
+        role,
         organization_user_id: orgUser.id,
       },
-      message: `User ${existingUser.email} has been added to the organization as ${role}`
+      // Only returned when a new account was created so the admin can share it if email fails
+      temp_password: wasInvited ? tempPassword : undefined,
+      message: wasInvited
+        ? `Account created and invite email sent to ${targetUser.email}. They can log in with their temporary password.`
+        : `${targetUser.email} has been added to the organization as ${role}.`,
     });
   } catch (error) {
     console.error('[POST /api/v2/settings/users] Error:', error);
