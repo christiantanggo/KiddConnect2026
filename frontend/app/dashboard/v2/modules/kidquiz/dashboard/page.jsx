@@ -97,7 +97,7 @@ export default function KidQuizDashboard() {
   return (
     <AuthGuard>
       <V2AppShell>
-        <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
+        <div style={{ maxWidth: 680, margin: '0 auto', padding: '24px 16px' }}>
 
           {/* Module tabs */}
           <div className="flex gap-1 mb-6 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', display: 'inline-flex' }}>

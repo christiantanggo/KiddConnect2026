@@ -65,7 +65,7 @@ export default function NewProject() {
   return (
     <AuthGuard>
       <V2AppShell>
-        <div style={{ maxWidth: 700, margin: '0 auto', padding: '24px 16px' }}>
+        <div style={{ maxWidth: 680, margin: '0 auto', padding: '24px 16px' }}>
           <Link href="/dashboard/v2/modules/kidquiz/dashboard" className="text-sm mb-4 inline-block" style={{ color: 'var(--color-text-muted)' }}>
             ← Back to My Quizzes
           </Link>
