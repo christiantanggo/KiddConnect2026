@@ -182,10 +182,17 @@ export default function RenderPage() {
               </button>
             )}
 
-            {/* Restart/Re-render — always visible when not actively rendering or approved-fresh */}
+            {/* Restart/Re-render — visible when not actively rendering or approved-fresh */}
             {status !== 'APPROVED' && !isActivelyRendering && !rendering && (
               <button onClick={startRender} className="w-full py-4 rounded-xl font-bold text-white text-base mb-3" style={{ background: 'linear-gradient(135deg, #ef4444, #dc2626)' }}>
                 🔄 {status === 'READY' || status === 'PUBLISHED' ? 'Re-render Video' : 'Restart Render'}
+              </button>
+            )}
+
+            {/* Force Re-render — always visible even while rendering (server crash recovery) */}
+            {isActivelyRendering && !rendering && (
+              <button onClick={startRender} className="w-full py-3 rounded-xl font-semibold text-sm mt-2" style={{ background: 'transparent', border: '1px solid #dc2626', color: '#dc2626' }}>
+                ⚠️ Force Re-render (server crashed?)
               </button>
             )}
 
