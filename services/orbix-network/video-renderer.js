@@ -229,25 +229,26 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     const zoomRangePerFrame = segmentFrames > 0 ? 0.15 / segmentFrames : 0.0005;
 
     // A B A B pattern: Zoom in → Pan → Zoom out → Pan (alternating, different angles)
+    // format=rgb24 strips alpha before zoompan — zoompan produces grey frames with RGBA PNGs (FFmpeg bug).
     // Segment 1: Zoom in 1.0 → 1.15, linear in 'on' for smooth motion
-    const segment1Filter = `${scaleCover},zoompan=z='min(1.0+on*${zoomRangePerFrame},1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segmentFrames}:s=${outputWidth}x${outputHeight}`;
+    const segment1Filter = `${scaleCover},format=rgb24,zoompan=z='min(1.0+on*${zoomRangePerFrame},1.15)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segmentFrames}:s=${outputWidth}x${outputHeight}`;
 
     // Segment 2: Pan right-to-left, start from RIGHT + UPPER (different angle)
     const segment2Zoom = 1.15;
     const segment2StartX = scaleWidth - (outputWidth * segment2Zoom);
     const segment2EndX = 0;
     const segment2OffsetY = scaleHeight * 0.15;
-    const segment2Filter = `${scaleCover},crop=${outputWidth * segment2Zoom}:${outputHeight * segment2Zoom}:x='${segment2StartX}-(${segment2StartX}-${segment2EndX})*n/${segmentFrames}':y='${segment2OffsetY}+(ih/2-${outputHeight * segment2Zoom}/2-${segment2OffsetY})*n/${segmentFrames}',scale=${outputWidth}:${outputHeight}`;
+    const segment2Filter = `${scaleCover},format=rgb24,crop=${outputWidth * segment2Zoom}:${outputHeight * segment2Zoom}:x='${segment2StartX}-(${segment2StartX}-${segment2EndX})*n/${segmentFrames}':y='${segment2OffsetY}+(ih/2-${outputHeight * segment2Zoom}/2-${segment2OffsetY})*n/${segmentFrames}',scale=${outputWidth}:${outputHeight}`;
 
     // Segment 3: Zoom out 1.15 → 1.0, linear in 'on' for smooth motion
-    const segment3Filter = `${scaleCover},zoompan=z='max(1.15-on*${zoomRangePerFrame},1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segmentFrames}:s=${outputWidth}x${outputHeight}`;
+    const segment3Filter = `${scaleCover},format=rgb24,zoompan=z='max(1.15-on*${zoomRangePerFrame},1.0)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${segmentFrames}:s=${outputWidth}x${outputHeight}`;
 
     // Segment 4: Pan left-to-right, start from LEFT + LOWER (different angle from seg 2)
     const segment4Zoom = 1.15;
     const segment4StartX = 0;
     const segment4EndX = scaleWidth - (outputWidth * segment4Zoom);
     const segment4OffsetY = scaleHeight * 0.65;
-    const segment4Filter = `${scaleCover},crop=${outputWidth * segment4Zoom}:${outputHeight * segment4Zoom}:x='${segment4StartX}+(${segment4EndX}-${segment4StartX})*n/${segmentFrames}':y='${segment4OffsetY}+(ih/2-${outputHeight * segment4Zoom}/2-${segment4OffsetY})*n/${segmentFrames}',scale=${outputWidth}:${outputHeight}`;
+    const segment4Filter = `${scaleCover},format=rgb24,crop=${outputWidth * segment4Zoom}:${outputHeight * segment4Zoom}:x='${segment4StartX}+(${segment4EndX}-${segment4StartX})*n/${segmentFrames}':y='${segment4OffsetY}+(ih/2-${outputHeight * segment4Zoom}/2-${segment4OffsetY})*n/${segmentFrames}',scale=${outputWidth}:${outputHeight}`;
     
     const segment1Path = join(tmpdir(), `orbix-segment1-${Date.now()}.mp4`);
     const segment2Path = join(tmpdir(), `orbix-segment2-${Date.now()}.mp4`);

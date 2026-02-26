@@ -76,9 +76,9 @@ export async function processFactsRenderJob(render, story, script) {
     await fs.promises.copyFile(assFilePath, simpleAssPath);
     const simpleAssPathEscaped = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
-    // 4. 40% black overlay + ASS (no progress bar for facts)
+    // 25% black overlay + ASS (lighter than other channels to preserve background colour)
     baseVideoPath = join(tmpdir(), `facts-base-${renderId}-${Date.now()}.mp4`);
-    const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill[v1];[v1]ass='${simpleAssPathEscaped}'[vout]`;
+    const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.25:t=fill[v1];[v1]ass='${simpleAssPathEscaped}'[vout]`;
     await execAsync(
       `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
