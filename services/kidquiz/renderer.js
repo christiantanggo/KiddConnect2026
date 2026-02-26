@@ -23,7 +23,46 @@ import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
 import {
   applyMotionToImage,
+  prepareMusicTrack,
 } from '../orbix-network/video-renderer.js';
+
+const MUSIC_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_MUSIC || 'orbix-network-music';
+const MUSIC_EXT = /\.(mp3|m4a|aac|wav|ogg)$/i;
+
+async function getAnyMusicTrack(businessId) {
+  try {
+    // Music is stored at {businessId}/{channelId}/track.mp3
+    // First list the channel folders under this business
+    const { data: folders, error: fErr } = await supabaseClient.storage
+      .from(MUSIC_BUCKET)
+      .list(businessId, { limit: 50 });
+    if (fErr || !folders?.length) return null;
+
+    // Collect all tracks across all channel folders
+    const allTracks = [];
+    for (const folder of folders) {
+      if (!folder.name) continue;
+      const prefix = `${businessId}/${folder.name}`;
+      const { data: files } = await supabaseClient.storage
+        .from(MUSIC_BUCKET)
+        .list(prefix, { limit: 100 });
+      if (!files?.length) continue;
+      for (const f of files) {
+        if (f.name && MUSIC_EXT.test(f.name)) {
+          const path = `${prefix}/${f.name}`;
+          const { data } = supabaseClient.storage.from(MUSIC_BUCKET).getPublicUrl(path);
+          if (data?.publicUrl) allTracks.push({ name: f.name, url: data.publicUrl });
+        }
+      }
+    }
+
+    if (!allTracks.length) return null;
+    return allTracks[randomInt(allTracks.length)];
+  } catch (e) {
+    console.warn('[KidQuiz] Could not load music track:', e?.message);
+    return null;
+  }
+}
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
@@ -288,7 +327,7 @@ export async function renderKidQuizShort(render, project) {
 
   console.log(`[KidQuiz Renderer] Starting render_id=${renderId}`);
 
-  let bgPath, motionPath, assPath, audioPath, baseVideoPath, finalVideoPath;
+  let bgPath, motionPath, assPath, audioPath, musicPath, baseVideoPath, finalVideoPath;
 
   try {
     await supabaseClient
@@ -348,14 +387,28 @@ export async function renderKidQuizShort(render, project) {
 
     try { await unlinkAsync(assPath); assPath = null; } catch (_) {}
 
-    // 6. Mix TTS audio onto video
-    finalVideoPath = join(tmpdir(), `kq-final-${renderId}-${Date.now()}.mp4`);
-    await execAsync(
-      `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]volume=1.4[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION.toFixed(3)} -y "${finalVideoPath}"`,
-      { timeout: 60000 }
-    );
+    // 6. Optionally fetch background music
+    const musicTrack = await getAnyMusicTrack(businessId);
+    if (musicTrack) {
+      musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
+    }
 
-    // 7. Upload to Supabase storage
+    // 7. Mix TTS voice + optional background music onto video
+    finalVideoPath = join(tmpdir(), `kq-final-${renderId}-${Date.now()}.mp4`);
+    if (musicPath) {
+      // Voice at full volume, music very quiet so TTS is always clear
+      await execAsync(
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]volume=1.4[voice];[2:a]volume=0.12[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION.toFixed(3)} -y "${finalVideoPath}"`,
+        { timeout: 60000 }
+      );
+    } else {
+      await execAsync(
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]volume=1.4[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION.toFixed(3)} -y "${finalVideoPath}"`,
+        { timeout: 60000 }
+      );
+    }
+
+    // 8. Upload to Supabase storage
     const fs2 = (await import('fs')).default;
     const buffer = await fs2.promises.readFile(finalVideoPath);
     const remotePath = `${businessId}/${renderId}.mp4`;
@@ -390,7 +443,7 @@ export async function renderKidQuizShort(render, project) {
       .eq('id', project.id);
     throw err;
   } finally {
-    for (const p of [bgPath, motionPath, assPath, audioPath, baseVideoPath, finalVideoPath].filter(Boolean)) {
+    for (const p of [bgPath, motionPath, assPath, audioPath, musicPath, baseVideoPath, finalVideoPath].filter(Boolean)) {
       try { await unlinkAsync(p); } catch (_) {}
     }
   }
