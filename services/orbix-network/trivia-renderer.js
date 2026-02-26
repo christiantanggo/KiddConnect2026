@@ -48,12 +48,19 @@ export async function processTriviaRenderJob(render, story, script) {
   const content = script?.content_json
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
     : {};
+
+  // Strip any A)/B)/C) answer options that may have been baked into the question by the LLM
+  const stripOptions = (q) => (q || '')
+    .replace(/\s*A\)\s*.+?\s*B\)\s*.+?\s*C\)\s*.+$/is, '')
+    .replace(/\s*\n\s*[A-Ca-c]\)\s*.+/g, '')
+    .trim();
+
   const hook = (script?.hook || content?.hook || "Let's test your knowledge.").trim();
   const category = (content?.category || 'GENERAL').toString().slice(0, 30);
-  const question = (content?.question || '').trim().slice(0, 150);
-  const optionA = (content?.option_a || 'A').trim().slice(0, 80);
-  const optionB = (content?.option_b || 'B').trim().slice(0, 80);
-  const optionC = (content?.option_c || 'C').trim().slice(0, 80);
+  const question = stripOptions(content?.question).slice(0, 150);
+  const optionA = (content?.option_a || 'A').replace(/^[A-Ca-c]\)\s*/, '').trim().slice(0, 80);
+  const optionB = (content?.option_b || 'B').replace(/^[A-Ca-c]\)\s*/, '').trim().slice(0, 80);
+  const optionC = (content?.option_c || 'C').replace(/^[A-Ca-c]\)\s*/, '').trim().slice(0, 80);
   const correctLetter = (content?.correct_answer || 'A').toUpperCase().charAt(0);
   const correctText = { A: optionA, B: optionB, C: optionC }[correctLetter] || optionA;
 

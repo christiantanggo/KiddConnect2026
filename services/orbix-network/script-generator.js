@@ -432,7 +432,14 @@ Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_h
         throw new Error('Trivia snippet must be valid JSON');
       }
       // Strip any A)/B)/C) options accidentally baked into the question field
-      const cleanTriviaQuestion = (trivia.question || '').replace(/\s*A\)\s*.+?\s*B\)\s*.+?\s*C\)\s*.+$/i, '').trim();
+      const stripOptions = (q) => (q || '')
+        .replace(/\s*A\)\s*.+?\s*B\)\s*.+?\s*C\)\s*.+$/is, '')
+        .replace(/\s*\n\s*[A-Ca-c]\)\s*.+/g, '')
+        .trim();
+      const cleanTriviaQuestion = stripOptions(trivia.question);
+      const cleanOptionA = (trivia.option_a || '').replace(/^[A-Ca-c]\)\s*/, '').trim();
+      const cleanOptionB = (trivia.option_b || '').replace(/^[A-Ca-c]\)\s*/, '').trim();
+      const cleanOptionC = (trivia.option_c || '').replace(/^[A-Ca-c]\)\s*/, '').trim();
       const script = {
         hook: (trivia.hook || 'Let\'s test your knowledge.').trim(),
         what_happened: cleanTriviaQuestion,
@@ -444,10 +451,10 @@ Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_h
         content_json: {
           hook: trivia.hook,
           category: trivia.category,
-          question: trivia.question,
-          option_a: trivia.option_a,
-          option_b: trivia.option_b,
-          option_c: trivia.option_c,
+          question: cleanTriviaQuestion,
+          option_a: cleanOptionA,
+          option_b: cleanOptionB,
+          option_c: cleanOptionC,
           correct_answer: trivia.correct_answer,
           voice_script: trivia.voice_script,
           episode_number: trivia.episode_number
