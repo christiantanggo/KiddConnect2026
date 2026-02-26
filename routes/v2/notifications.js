@@ -46,10 +46,14 @@ router.get('/unread-count', async (req, res) => {
   try {
     const businessId = req.active_business_id;
     const userId = req.user.id;
-    
-    // Get unread count for business (all users can see business notifications)
-    const unreadCount = await Notification.getUnreadCount(businessId, null);
-    
+
+    // Match the same visibility logic as the list endpoint:
+    // show notifications with no user_id (business-wide) OR scoped to this user
+    const all = await Notification.findByBusinessId(businessId);
+    const unreadCount = all.filter(n =>
+      (!n.user_id || n.user_id === userId) && !n.read_at
+    ).length;
+
     res.json({ count: unreadCount });
   } catch (error) {
     console.error('[GET /api/v2/notifications/unread-count] Error:', error);
