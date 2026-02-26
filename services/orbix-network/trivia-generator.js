@@ -8,14 +8,14 @@ import crypto from 'crypto';
 import { supabaseClient } from '../../config/database.js';
 
 const TRIVIA_CATEGORIES = [
-  'Geography', 'Science', 'History', 'General knowledge', 'Logic', 'Pop culture'
+  'History', 'Science', 'General knowledge', 'Geography', 'Logic', 'Pop culture'
 ];
 
 const TRIVIA_HOOK_EXAMPLES = [
   "Let's test your knowledge.",
   "Think you know this?",
   "This one surprises people.",
-  "Hard geography question.",
+  "Hard history question.",
   "Ready for a challenge?"
 ];
 
@@ -169,7 +169,7 @@ HOOK RULES (3–7 words):
 - Calm but competitive. Not exaggerated.
 - NO fake statistics ("Only 5% get this", "Genius only").
 - NO clickbait.
-- Approved: "Let's test your knowledge.", "Think you know this?", "This one surprises people.", "Hard geography question.", "Ready for a challenge?"
+- Approved: "Let's test your knowledge.", "Think you know this?", "This one surprises people.", "Hard history question.", "Ready for a challenge?"
 
 QUESTION FORMAT:
 - One question per video. Multiple choice only (A, B, C).
@@ -177,7 +177,13 @@ QUESTION FORMAT:
 - NO political, controversial, or sensitive topics.
 - NO copyrighted material requiring images.
 - Difficulty: 40% medium, 30% easy, 20% hard, 10% trick.
-- Categories: Geography, Science, History, General knowledge, Logic, Pop culture (non-copyright dependent).
+- Categories and TARGET MIX — follow this distribution, do NOT over-index on Geography:
+  History 30%: events, dates, empires, wars, discoveries, famous people
+  Science 25%: biology, chemistry, physics, space, nature, medicine
+  General knowledge 20%: everyday facts, records, language, food, animals
+  Geography 15%: capitals, countries, landmarks (already well-covered — keep low)
+  Logic 5%: riddles, patterns, sequences
+  Pop culture 5%: non-copyright-dependent music, film, sports facts
 
 TOPIC FIELD: You must also return a "topic" field — a 3–6 word label for the specific fact being tested (e.g. "gold chemical symbol", "Vatican City smallest country", "Nile river longest", "speed of light value"). This is used to track what has been covered.
 
@@ -190,7 +196,7 @@ Episode number: ${episodeNumber}
 Return JSON:
 {
   "hook": "<3-7 words, calm competitive>",
-  "category": "<GEOGRAPHY|SCIENCE|HISTORY|GENERAL KNOWLEDGE|LOGIC|POP CULTURE>",
+  "category": "<HISTORY|SCIENCE|GENERAL KNOWLEDGE|GEOGRAPHY|LOGIC|POP CULTURE>",
   "topic": "<3-6 word label for the specific fact being tested>",
   "question": "<one question, max 2 lines>",
   "option_a": "<text>",
