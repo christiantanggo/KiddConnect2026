@@ -266,6 +266,7 @@ async function scrapeTriviaSource(source) {
     const snippet = JSON.stringify({
       hook: trivia.hook,
       category: trivia.category,
+      topic: trivia.topic || null, // specific fact label — used for future dedup prompts
       question: trivia.question,
       option_a: trivia.option_a,
       option_b: trivia.option_b,
