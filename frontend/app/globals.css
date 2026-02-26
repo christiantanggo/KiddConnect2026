@@ -27,6 +27,16 @@
   --input-height: 40px;
 }
 
+/* Sidebar offset — desktop only */
+.sidebar-offset {
+  padding-left: 0;
+}
+@media (min-width: 768px) {
+  .sidebar-offset {
+    padding-left: var(--sidebar-width);
+  }
+}
+
 /* Disable dark mode auto-detection - we use light theme */
 @media (prefers-color-scheme: dark) {
   :root {

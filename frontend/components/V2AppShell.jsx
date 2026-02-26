@@ -9,7 +9,6 @@ export default function V2AppShell({ children, showSidebar = true }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
 
-  // Close mobile menu on route change
   useEffect(() => { setMobileMenuOpen(false); }, [pathname]);
 
   return (
@@ -25,14 +24,9 @@ export default function V2AppShell({ children, showSidebar = true }) {
         />
       )}
       <main
+        className={showSidebar ? 'sidebar-offset' : ''}
         style={{ paddingTop: 'var(--topbar-height)' }}
-        className={showSidebar ? 'md:sidebar-offset' : ''}
       >
-        <style>{`
-          @media (min-width: 768px) {
-            .md\\:sidebar-offset { padding-left: var(--sidebar-width); }
-          }
-        `}</style>
         {children}
       </main>
     </div>
