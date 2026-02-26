@@ -140,7 +140,7 @@ export default function ModuleDetailPage() {
         <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
           <V2DashboardHeader />
           <V2Sidebar />
-          <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }}>
+          <div className="sidebar-offset" style={{ paddingTop: 'var(--topbar-height)' }}>
             <div className="mx-auto py-8" style={{ maxWidth: 'var(--max-content-width)', padding: 'var(--padding-base)' }}>
             <Link
               href="/dashboard"
@@ -164,7 +164,7 @@ export default function ModuleDetailPage() {
           <V2DashboardHeader />
           <V2Sidebar />
           
-          <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }}>
+          <div className="sidebar-offset" style={{ paddingTop: 'var(--topbar-height)' }}>
             <div className="mx-auto py-8" style={{ maxWidth: 'var(--max-content-width)', padding: 'var(--padding-base)' }}>
           {/* Back Link */}
           <Link

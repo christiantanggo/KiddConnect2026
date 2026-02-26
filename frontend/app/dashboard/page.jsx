@@ -199,7 +199,7 @@ export default function ModulesMarketplacePage() {
           <div className="mt-auto">
             <Link
               href={module.subscribed 
-                ? (module.key === 'phone-agent' ? '/tavari-ai-phone/dashboard' : module.key === 'reviews' ? '/review-reply-ai/dashboard' : module.key === 'orbix-network' ? `/dashboard/v2/modules/${module.key}/dashboard` : `/${module.key}/dashboard`)
+                ? (module.key === 'phone-agent' ? '/tavari-ai-phone/dashboard' : module.key === 'reviews' ? '/review-reply-ai/dashboard' : `/dashboard/v2/modules/${module.key}/dashboard`)
                 : `/dashboard/v2/modules/${module.key}`
               }
               className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium transition-colors rounded w-full"
@@ -229,7 +229,7 @@ export default function ModulesMarketplacePage() {
         <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
           <V2DashboardHeader />
           <V2Sidebar />
-          <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }} className="flex items-center justify-center min-h-[60vh]">
+          <div className="sidebar-offset flex items-center justify-center min-h-[60vh]" style={{ paddingTop: 'var(--topbar-height)' }}>
             <div className="text-lg" style={{ color: 'var(--color-text-muted)' }}>Loading modules...</div>
           </div>
         </div>
@@ -243,7 +243,7 @@ export default function ModulesMarketplacePage() {
         <V2DashboardHeader />
         <V2Sidebar />
         
-        <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }}>
+        <div className="sidebar-offset" style={{ paddingTop: 'var(--topbar-height)' }}>
           <div className="mx-auto py-8" style={{ maxWidth: 'var(--max-content-width)', padding: 'var(--padding-base)' }}>
             {/* Header */}
             <div className="mb-8">

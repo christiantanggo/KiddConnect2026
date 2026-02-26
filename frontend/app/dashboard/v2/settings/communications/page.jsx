@@ -130,7 +130,7 @@ export default function CommunicationsSettingsPage() {
         <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
           <V2DashboardHeader />
           <V2Sidebar />
-          <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }} className="flex items-center justify-center min-h-[60vh]">
+          <div className="sidebar-offset flex items-center justify-center min-h-[60vh]" style={{ paddingTop: 'var(--topbar-height)' }}>
             <div className="text-lg" style={{ color: 'var(--color-text-muted)' }}>Loading...</div>
           </div>
         </div>
@@ -144,7 +144,7 @@ export default function CommunicationsSettingsPage() {
         <V2DashboardHeader />
         <V2Sidebar />
         
-        <div style={{ paddingLeft: 'var(--sidebar-width)', paddingTop: 'var(--topbar-height)' }}>
+        <div className="sidebar-offset" style={{ paddingTop: 'var(--topbar-height)' }}>
           <div className="mx-auto py-8" style={{ maxWidth: 'var(--max-content-width)', padding: 'var(--padding-base)' }}>
             {/* Header */}
             <div className="mb-8">
