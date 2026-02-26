@@ -397,17 +397,20 @@ export async function step5HookText(renderId, renderJob, script, story, template
       await logStepEvent(renderId, step, 'PROGRESS', 'Retrieved Step 4 video path from database', { path: inputVideoPath });
     }
     
-    // Psychology: question-as-hook at start for 1.5–2s only; no traditional hook. Other categories: traditional hook.
-    const isPsychology = (story?.category || '').toLowerCase() === 'psychology';
+    // Psychology + Money: question-as-hook at start for ~2s; no traditional hook. Other categories: traditional hook.
+    const storyCategory = (story?.category || '').toLowerCase();
+    const isPsychology = storyCategory === 'psychology';
+    const isMoney = storyCategory === 'money';
+    const isConceptFirst = isPsychology || isMoney;
     let hookText;
     let hookDuration;
-    if (isPsychology) {
+    if (isConceptFirst) {
       const content = script.content_json
         ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
         : {};
       hookText = (script.what_happens_next || script.cta_line || content.what_happens_next || content.cta_line || script.hook || content.hook || '').trim() || story?.title || 'Breaking News';
       hookDuration = PSYCHOLOGY_QUESTION_HOOK_DURATION;
-      await logStepEvent(renderId, step, 'PROGRESS', 'Psychology question-as-hook text', { hookText: hookText.slice(0, 80) });
+      await logStepEvent(renderId, step, 'PROGRESS', `${isPsychology ? 'Psychology' : 'Money'} question-as-hook text`, { hookText: hookText.slice(0, 80) });
     } else {
       hookText = script.hook;
       if (!hookText && script.content_json) {
@@ -426,7 +429,7 @@ export async function step5HookText(renderId, renderJob, script, story, template
       : hookText;
     const hookAllCaps = hookDisplay.toUpperCase();
     
-    await logStepEvent(renderId, step, 'PROGRESS', isPsychology ? 'Question-as-hook (psychology)' : 'Hook text extracted (all caps, wrap)', { hook: hookAllCaps });
+    await logStepEvent(renderId, step, 'PROGRESS', isConceptFirst ? `Question-as-hook (${storyCategory})` : 'Hook text extracted (all caps, wrap)', { hook: hookAllCaps });
     await updateStepStatus(renderId, step, 20);
     
     // ASS: Arial Bold 114pt, center, wraps; shown only for hookDuration seconds
