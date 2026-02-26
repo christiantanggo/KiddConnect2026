@@ -26,12 +26,8 @@ import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progre
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
-// Timing constants (11s total; 2s ending = 0.5s answer flash + 1.5s loop line)
-const HOOK_DURATION = 1.0;
-const READ_DURATION = 4.0;       // question + options visible 1s–5s
-const COUNTDOWN_DURATION = 4.0;  // 5s–9s
-const REVEAL_DURATION = 0.5;     // answer flash only — visual, no TTS, gone before it resolves
-const LOOP_LINE_DURATION = 1.5;  // loop line spoken 9.5–11s, hard cut
+// Timing constants (11s total)
+// 0–1s: hook | 1–9s: question + progress bar + answers | 9–11s: answer reveal (spoken + on screen)
 const DURATION = 11;
 
 /**
@@ -132,18 +128,11 @@ export async function processTriviaRenderJob(render, story, script) {
     await fs.promises.copyFile(assFilePath, simpleAssPath);
     const simpleAssPathEscaped = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
-    // 4. 40% black overlay + progress bar (FFmpeg) + ASS
-    // Progress bar: 3s countdown only, 4s–7s (shrinks right→left over 3s)
+    // 4. 40% black overlay + ASS overlays (progress bar is drawn entirely in the ASS file)
     baseVideoPath = join(tmpdir(), `trivia-base-${renderId}-${Date.now()}.mp4`);
-    const barY = 910;
-    const barW = 900;
-    const barH = 14;
-    const barX = 90;
     const filterComplex = [
-      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill,drawbox=x=${barX}:y=${barY}:w=${barW}:h=${barH}:color=0x404040:t=fill:enable='between(t\\,4\\,7)'[v1]`,
-      `color=c=white:s=${barW}x${barH}:d=${DURATION},scale=eval=frame:w='if(lt(t\\,4)\\,900\\,if(gt(t\\,7)\\,1\\,max(1\\,900*(7-t)/3)))':h=${barH}[bar]`,
-      `[v1][bar]overlay=x=${barX}:y=${barY}:enable='between(t\\,4\\,7)'[v2]`,
-      `[v2]ass='${simpleAssPathEscaped}'[vout]`
+      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill[v1]`,
+      `[v1]ass='${simpleAssPathEscaped}'[vout]`
     ].join(';');
     await execAsync(
       `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
@@ -153,9 +142,9 @@ export async function processTriviaRenderJob(render, story, script) {
     try { await unlinkAsync(assFilePath); } catch (_) {}
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
 
-    // 5. Generate trivia TTS: hook 0s, question 1s, answer 9s, loop line 10.5s (12s total)
+    // 5. Generate trivia TTS: hook 0s, question 1s, answer spoken at 9s (on-screen 9–11s)
     const audioResult = await generateTriviaAudio(
-      { hook, question, answerText: correctText, loopTriggerText },
+      { hook, question, answerText: `The answer is ${correctText}.` },
       DURATION
     );
     audioPath = audioResult.audioPath;

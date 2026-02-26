@@ -512,27 +512,24 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
 
   const HOOK_START = 0;
   const QUESTION_START = 1;
-  const ANSWER_START = 9;   // answer flash 9–9.5s (visual only, no TTS — gone before it feels resolved)
-  const LOOP_START = 9.5;   // single loop line 9.5–11s
-  const answerTtsPhrase = ''; // No answer TTS — answer flashes on screen only (0.5s), keeps tension unresolved
+  const ANSWER_START = 9;   // answer spoken at 9s, matches on-screen reveal (9–11s)
+  // answerPhrase is passed in — speak the correct answer aloud at 9s
+  const answerTtsPhrase = answerPhrase; // e.g. "The correct answer is Paris."
 
   try {
-    const [hookResp, qResp, aResp, loopResp] = await Promise.all([
+    const [hookResp, qResp, aResp] = await Promise.all([
       openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: hookPhrase }),
       openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: questionPhrase }),
       answerTtsPhrase ? openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: answerTtsPhrase }) : null,
-      openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: loopPhrase })
     ]);
 
     await fs.promises.writeFile(hookPath, Buffer.from(await hookResp.arrayBuffer()));
     await fs.promises.writeFile(questionPath, Buffer.from(await qResp.arrayBuffer()));
     if (aResp) await fs.promises.writeFile(answerPath, Buffer.from(await aResp.arrayBuffer()));
-    await fs.promises.writeFile(loopPath, Buffer.from(await loopResp.arrayBuffer()));
 
     const hookDur = await getDur(hookPath);
     const qDur = await getDur(questionPath);
-    const aDur = aResp && answerTtsPhrase ? await getDur(answerPath) : 0;
-    const loopDur = await getDur(loopPath);
+    const aDur = aResp ? await getDur(answerPath) : 0;
 
     const inputs = [hookPath, questionPath];
     const delays = [HOOK_START, QUESTION_START];
@@ -542,9 +539,6 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
       delays.push(ANSWER_START);
       durs.push(aDur);
     }
-    inputs.push(loopPath);
-    delays.push(LOOP_START);
-    durs.push(loopDur);
 
     const pads = inputs.map((_, i) => Math.max(0, totalDuration - delays[i] - durs[i]));
 
@@ -561,7 +555,7 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
 
     return { audioPath: mixedPath, duration: totalDuration };
   } finally {
-    for (const p of [hookPath, questionPath, answerPath, loopPath]) {
+    for (const p of [hookPath, questionPath, answerPath]) {
       try { await unlinkAsync(p); } catch (_) {}
     }
   }
@@ -768,13 +762,11 @@ function formatASSTimeFromSeconds(seconds) {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
-/** Trivia 12s timing constants (must match trivia-renderer.js; short loop ending) */
-const TRIVIA_HOOK_END = 1.0;
-const TRIVIA_READ_END = 5.0;      // question + options visible 1–5s
-const TRIVIA_COUNTDOWN_END = 9.0;  // countdown 5–9s
-const TRIVIA_REVEAL_END = 9.5;    // answer flash 9–9.5s (0.5s visual only, no TTS)
-const TRIVIA_LOOP_LINE_DURATION = 1.5; // loop line 9.5–11s, hard cut
-const TRIVIA_LOOP_END = 11.0;     // video end 11s
+/** Trivia 11s timing constants */
+const TRIVIA_HOOK_END = 1.0;       // hook 0–1s
+const TRIVIA_COUNTDOWN_END = 9.0;  // question + options + progress bar 1–9s
+const TRIVIA_REVEAL_END = 11.0;    // answer reveal 9–11s (2 full seconds so viewer can read it)
+const TRIVIA_LOOP_END = 11.0;      // video end
 
 /**
  * Generate ASS file for trivia layout (11s retention format).
@@ -811,48 +803,58 @@ export async function generateTriviaASSFile(opts, duration = 11) {
     return lines.join('\\N');
   };
 
-  // ── Answer font size (base) — scales with longest option ─────────────────
+  // ── Font sizes — answer scales with longest option, question is always 5pt bigger ──
   const maxOptLen = Math.max(
     (opts.optionA || '').length,
     (opts.optionB || '').length,
     (opts.optionC || '').length
   );
   let answerFontSize;
-  if (maxOptLen <= 15) answerFontSize = 82;
-  else if (maxOptLen <= 22) answerFontSize = 74;
-  else if (maxOptLen <= 30) answerFontSize = 66;
-  else answerFontSize = 58;
-
-  // Question is always answer size + 5
+  if (maxOptLen <= 15) answerFontSize = 80;
+  else if (maxOptLen <= 22) answerFontSize = 72;
+  else if (maxOptLen <= 30) answerFontSize = 64;
+  else answerFontSize = 56;
   const questionFontSize = answerFontSize + 5;
 
-  // Chars per line scales with font size (canvas is 1080px wide, ~70% usable)
+  // Chars per line for wrapping (~70% of 1080px canvas)
   const qCharsPerLine = Math.floor(756 / (questionFontSize * 0.55));
   const wrappedQuestion = wrapText((opts.question || '').trim().toUpperCase(), qCharsPerLine);
   const questionLineCount = wrappedQuestion.split('\\N').length;
 
-  // ── Fixed 3-zone layout (1080×1920) ──────────────────────────────────────
-  // Zone 1 — Question: top-center anchor at Y=100, grows downward
-  // Zone 2 — Middle divider: progress bar strip + countdown number
-  // Zone 3 — Answers: fixed bottom anchor, 3 rows spaced evenly
-  const BANNER_H = 80;          // category banner at very top
-  const Q_TOP = BANNER_H + 20;  // question starts just below banner
+  // ── Evenly distributed 3-zone layout (1080×1920) ──────────────────────────
+  // Screen height: 1920px. Usable area: 60–1860 (leaving 60px top/bottom margin).
+  // Zone 1 — Category banner: 60–130 (70px tall)
+  // Zone 2 — Question block: starts at 150, height depends on line count
+  // Zone 3 — Progress bar + countdown: vertically centered between question and answers
+  // Zone 4 — Answers: bottom third, 3 rows spaced by answerFontSize * 1.6
+  // Zone 5 — Answer reveal: full screen center
 
-  // Progress bar strip sits in the middle of the screen
-  const PROGRESS_Y = 960;       // center of screen
-  const PROGRESS_H = 8;         // thin bar height
-  const PROGRESS_W = 900;       // bar width (px), centered
-  const PROGRESS_X = (1080 - PROGRESS_W) / 2; // 90px left margin
-  const COUNTDOWN_Y = PROGRESS_Y - 80; // countdown number just above the bar
+  const BANNER_H = 70;
+  const BANNER_TOP = 60;
 
-  // Answer zone — three rows anchored from Y=1150 downward
-  const OPT_START_Y = 1180;
-  const OPT_SPACING = Math.round((answerFontSize * 1.5));
-  const optY = {
-    A: OPT_START_Y,
-    B: OPT_START_Y + OPT_SPACING,
-    C: OPT_START_Y + OPT_SPACING * 2
-  };
+  // Question: top-anchored just below banner
+  const Q_TOP = BANNER_TOP + BANNER_H + 20;  // ~150px from top
+  const questionBlockH = questionLineCount * Math.round(questionFontSize * 1.3);
+
+  // Answers: 3 rows, bottom-anchored. Each row = answerFontSize * 1.6 spacing
+  const OPT_SPACING = Math.round(answerFontSize * 1.6);
+  const answersBlockH = OPT_SPACING * 3;
+  const ANSWERS_BOTTOM = 1860;  // 60px from bottom
+  const OPT_C_Y = ANSWERS_BOTTOM - Math.round(OPT_SPACING * 0.5);
+  const OPT_B_Y = OPT_C_Y - OPT_SPACING;
+  const OPT_A_Y = OPT_B_Y - OPT_SPACING;
+
+  // Progress bar: horizontally centered between question bottom and answer top
+  const questionBottom = Q_TOP + questionBlockH;
+  const answersTop = OPT_A_Y - Math.round(answerFontSize * 0.8);
+  const PROGRESS_Y = Math.round((questionBottom + answersTop) / 2);
+  const PROGRESS_H = 12;
+  const PROGRESS_W = 900;
+  const PROGRESS_X = (1080 - PROGRESS_W) / 2;  // 90px margin each side
+  const pbTop = PROGRESS_Y - Math.round(PROGRESS_H / 2);
+
+  // Countdown number: centered on the progress bar itself (large, inline)
+  const COUNTDOWN_Y = PROGRESS_Y;
 
   const assContent = `[Script Info]
 Title: Orbix Trivia
@@ -863,16 +865,14 @@ PlayResY: 1920
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Interrupt,Arial,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,80,80,10,1
-Style: Banner,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
+Style: Banner,Arial,40,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
 Style: BannerBg,Arial,12,&H00FF8000,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 Style: Question,Arial,${questionFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,60,60,10,1
 Style: Option,Arial,${answerFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,20,20,10,1
-Style: OptionDim,Arial,${answerFontSize},&H66FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
 Style: ProgressBg,Arial,12,&H33FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 Style: ProgressFill,Arial,12,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
-Style: CountdownNum,Arial,140,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,5,80,80,10,1
-Style: AnswerBig,Arial,${questionFontSize},&H00FFFF00,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,5,80,80,10,1
-Style: LoopTrigger,Arial,80,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,60,60,10,1
+Style: CountdownNum,Arial,120,&H00FFFF00,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,5,80,80,10,1
+Style: AnswerBig,Arial,${questionFontSize + 4},&H00FFFF00,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,5,80,80,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -883,53 +883,45 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   // ── 0–1s: Hook (full screen center) ──────────────────────────────────────
   lines.push(`Dialogue: 0,${t(0)},${t(TRIVIA_HOOK_END)},Interrupt,,0,0,0,,{\\an5\\pos(540,960)}${esc(hookDisplay.toUpperCase())}`);
 
-  // ── 1–9s: Zone 1 — Category banner ───────────────────────────────────────
-  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},BannerBg,,0,0,0,,{\\an7\\pos(0,0)\\p1}m 0 0 l 1080 0 l 1080 ${BANNER_H} l 0 ${BANNER_H}{\\p0}`);
-  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Banner,,0,0,0,,{\\an5\\pos(540,${Math.round(BANNER_H / 2)})}${esc(bannerText)}`);
+  // ── 1–9s: Category banner (top strip) ────────────────────────────────────
+  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},BannerBg,,0,0,0,,{\\an7\\pos(0,${BANNER_TOP})\\p1}m 0 0 l 1080 0 l 1080 ${BANNER_H} l 0 ${BANNER_H}{\\p0}`);
+  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Banner,,0,0,0,,{\\an5\\pos(540,${BANNER_TOP + Math.round(BANNER_H / 2)})}${esc(bannerText)}`);
 
-  // ── 1–9s: Zone 1 — Question (top-center, grows downward) ─────────────────
+  // ── 1–9s: Question (top-center, top-anchored, grows downward) ─────────────
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Question,,0,0,0,,{\\an8\\pos(540,${Q_TOP})}${wrappedQuestion}`);
 
-  // ── 1–9s: Zone 2 — Progress bar background strip ─────────────────────────
-  const pbTop = PROGRESS_Y - Math.round(PROGRESS_H / 2);
-  const pbBot = PROGRESS_Y + Math.round(PROGRESS_H / 2);
+  // ── 1–9s: Progress bar background ─────────────────────────────────────────
   lines.push(`Dialogue: 2,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},ProgressBg,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${PROGRESS_W} 0 l ${PROGRESS_W} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
 
-  // Progress bar fill: animates from full (at 1s) to empty (at 9s) — 8s window
-  // We draw 4 steps: 100% → 75% → 50% → 25% → gone
-  const fillSteps = [
-    { start: TRIVIA_HOOK_END,      end: TRIVIA_HOOK_END + 2, pct: 1.0  },
-    { start: TRIVIA_HOOK_END + 2,  end: TRIVIA_HOOK_END + 4, pct: 0.75 },
-    { start: TRIVIA_HOOK_END + 4,  end: TRIVIA_HOOK_END + 6, pct: 0.5  },
-    { start: TRIVIA_HOOK_END + 6,  end: TRIVIA_COUNTDOWN_END, pct: 0.25 },
-  ];
-  for (const step of fillSteps) {
-    const w = Math.round(PROGRESS_W * step.pct);
-    lines.push(`Dialogue: 3,${t(step.start)},${t(step.end)},ProgressFill,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${w} 0 l ${w} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
+  // Progress bar fill: 8 steps over 1–9s (one per second), shrinks left→right
+  // At t=1s: 100%, t=2s: 87.5%, t=3s: 75%, t=4s: 62.5%, t=5s: 50%, t=6s: 37.5%, t=7s: 25%, t=8s: 12.5%, t=9s: gone
+  const FILL_WINDOW = TRIVIA_COUNTDOWN_END - TRIVIA_HOOK_END; // 8s
+  for (let i = 0; i < 8; i++) {
+    const stepStart = TRIVIA_HOOK_END + i;
+    const stepEnd = TRIVIA_HOOK_END + i + 1;
+    const pct = (8 - i) / 8;
+    const w = Math.max(1, Math.round(PROGRESS_W * pct));
+    lines.push(`Dialogue: 3,${t(stepStart)},${t(stepEnd)},ProgressFill,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${w} 0 l ${w} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
   }
 
-  // ── 1–9s: Zone 2 — Countdown number (above the progress bar) ─────────────
-  // Shown 6–9s (last 3 seconds of the question phase)
+  // ── 6–9s: Countdown numbers (3-2-1, centered on progress bar) ────────────
   lines.push(`Dialogue: 4,${t(6)},${t(7)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${COUNTDOWN_Y})}3`);
   lines.push(`Dialogue: 4,${t(7)},${t(8)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${COUNTDOWN_Y})}2`);
   lines.push(`Dialogue: 4,${t(8)},${t(9)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${COUNTDOWN_Y})}1`);
 
-  // ── 1–9s: Zone 3 — Answer options (bottom zone) ───────────────────────────
+  // ── 1–9s: Answer options (bottom zone, evenly spaced) ─────────────────────
+  const optYMap = { A: OPT_A_Y, B: OPT_B_Y, C: OPT_C_Y };
   for (const letter of ['A', 'B', 'C']) {
-    const y = optY[letter];
     const rawText = letter === 'A' ? opts.optionA : letter === 'B' ? opts.optionB : opts.optionC;
     const label = `${letter})  ${rawText || ''}`;
-    lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Option,,0,0,0,,{\\an5\\pos(540,${y})}${esc(label)}`);
+    lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Option,,0,0,0,,{\\an5\\pos(540,${optYMap[letter]})}${esc(label)}`);
   }
 
-  // ── 9–9.5s: Answer reveal (yellow, centered) ──────────────────────────────
+  // ── 9–11s: Answer reveal (yellow, full screen center, 2 full seconds) ─────
   const answerOnly = (opts.answerText || '').replace(/^ANSWER:\s*[ABC]\)\s*/i, '').trim();
   const answerDisplay = `${correctLetter})  ${answerOnly}`;
-  lines.push(`Dialogue: 5,${t(TRIVIA_COUNTDOWN_END)},${t(TRIVIA_REVEAL_END)},AnswerBig,,0,0,0,,{\\an5\\pos(540,960)}${esc(answerDisplay)}`);
-
-  // ── 9.5–11s: Loop trigger line ────────────────────────────────────────────
-  const loopEnd = Math.min(TRIVIA_LOOP_END, duration);
-  lines.push(`Dialogue: 5,${t(TRIVIA_REVEAL_END)},${t(loopEnd)},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopTriggerText)}`);
+  const revealEnd = Math.min(TRIVIA_REVEAL_END, duration);
+  lines.push(`Dialogue: 5,${t(TRIVIA_COUNTDOWN_END)},${t(revealEnd)},AnswerBig,,0,0,0,,{\\an5\\pos(540,960)}${esc(answerDisplay)}`);
 
   await fs.promises.writeFile(assPath, assContent + lines.join('\n') + '\n', 'utf8');
   return assPath;
