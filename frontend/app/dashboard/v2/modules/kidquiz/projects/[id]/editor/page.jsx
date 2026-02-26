@@ -113,7 +113,7 @@ export default function EditorPage() {
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Paste failed'); }
       const data = await res.json();
-      setPhotoUrl(data.photo_url);
+      setPhotoUrl(`${data.photo_url}?v=${Date.now()}`);
     } catch (err) {
       if (err.name === 'NotAllowedError') {
         setError('Clipboard access denied. Please allow clipboard access in your browser and try again.');
@@ -139,7 +139,7 @@ export default function EditorPage() {
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Photo upload failed'); }
       const data = await res.json();
-      setPhotoUrl(data.photo_url);
+      setPhotoUrl(`${data.photo_url}?v=${Date.now()}`);
     } catch (err) { setError(err.message); }
     finally { setUploadingPhoto(false); }
   }
