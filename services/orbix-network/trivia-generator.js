@@ -136,17 +136,31 @@ Return JSON only: { "approved": true } or { "approved": false, "reason": "brief 
  * Generate one trivia question via LLM.
  * @param {Object} options
  * @param {number} [options.episodeNumber] - Trivia #01, #02, etc.
- * @param {string[]} [options.avoidCategories] - Categories to avoid this run
- * @param {string[]} [options.recentQuestions] - Recent question snippets to avoid repetition
+ * @param {string[]} [options.avoidCategories] - Categories to avoid this run (policy rejects)
+ * @param {string[]} [options.recentQuestions] - The 20 most-recent questions (freshness block)
+ * @param {Record<string,string[]>} [options.questionsByCategory] - All historical questions grouped by category
  * @returns {Promise<Object|null>} Trivia payload or null on failure
  */
 export async function generateTriviaQuestion(options = {}) {
-  const { episodeNumber = 1, avoidCategories = [], recentQuestions = [] } = options;
+  const { episodeNumber = 1, avoidCategories = [], recentQuestions = [], questionsByCategory = {} } = options;
   const openai = getOpenAIClient();
 
   const avoidCatText = avoidCategories.length ? `\nAvoid these categories for this question: ${avoidCategories.join(', ')}` : '';
-  const avoidQText = recentQuestions.length
-    ? `\nDo NOT create a question similar to these recently used:\n${recentQuestions.slice(0, 5).map(q => `- ${q}`).join('\n')}`
+
+  // Build a per-category history block so the LLM can see what topics are exhausted
+  const historyLines = [];
+  for (const [cat, qs] of Object.entries(questionsByCategory)) {
+    if (qs.length === 0) continue;
+    historyLines.push(`${cat} (${qs.length} asked so far):`);
+    // Show up to 15 examples per category — enough for the model to understand coverage
+    qs.slice(0, 15).forEach(q => historyLines.push(`  - ${q}`));
+  }
+  const categoryHistoryText = historyLines.length
+    ? `\n\nCOMPLETE QUESTION HISTORY BY CATEGORY (NEVER repeat any of these or ask about the same fact):\n${historyLines.join('\n')}`
+    : '';
+
+  const recentText = recentQuestions.length
+    ? `\n\nMost recent questions (avoid topic overlap):\n${recentQuestions.map(q => `- ${q}`).join('\n')}`
     : '';
 
   const systemPrompt = `You are a trivia script writer for Orbix Trivia Patterns, a high-retention YouTube Shorts channel.
@@ -169,7 +183,7 @@ QUESTION FORMAT:
 
 OUTPUT: Return valid JSON only, no markdown, no commentary.`;
 
-  const userPrompt = `Generate one trivia question.${avoidCatText}${avoidQText}
+  const userPrompt = `Generate one trivia question.${avoidCatText}${categoryHistoryText}${recentText}
 
 Episode number: ${episodeNumber}
 
@@ -219,33 +233,55 @@ Return JSON:
 }
 
 /**
- * Load recent trivia questions from orbix_raw_items so we can pass them to the LLM
- * and avoid regenerating the same question with slight wording variations.
- * @returns {Promise<string[]>} Array of question strings
+ * Load ALL historical trivia questions from orbix_raw_items, grouped by category.
+ * We pull every question ever generated so the LLM never repeats one — even questions
+ * from episode 1 that were asked 100+ episodes ago.
+ *
+ * To stay within the LLM context window we send:
+ *  - Up to 30 questions per category (the most recently scraped ones, so classic
+ *    over-used questions at the top of every category appear first)
+ *  - Plus the 20 most-recent questions across all categories as a "freshness" block
+ *
+ * @returns {Promise<{ byCategory: Record<string,string[]>, recent: string[], all: string[] }>}
  */
-async function loadRecentTriviaQuestions(businessId, channelId, limit = 15) {
-  if (!businessId || !channelId) return [];
+async function loadAllTriviaQuestions(businessId, channelId) {
+  const empty = { byCategory: {}, recent: [], all: [] };
+  if (!businessId || !channelId) return empty;
   try {
+    // Pull all trivia rows — just snippet (small JSON string per row)
     const { data, error } = await supabaseClient
       .from('orbix_raw_items')
-      .select('snippet')
+      .select('snippet, created_at')
       .eq('business_id', businessId)
       .eq('channel_id', channelId)
       .eq('category', 'trivia')
       .order('created_at', { ascending: false })
-      .limit(limit);
-    if (error) return [];
-    const questions = [];
-    for (const row of data || []) {
+      .limit(1000); // safety cap — 1000 questions is ~200KB of snippet data
+    if (error || !data) return empty;
+
+    const byCategory = {};
+    const all = [];
+
+    for (const row of data) {
       try {
         const parsed = typeof row.snippet === 'string' ? JSON.parse(row.snippet) : row.snippet;
-        if (parsed?.question) questions.push(parsed.question);
-      } catch (_) { /* skip bad snippet */ }
+        if (!parsed?.question) continue;
+        const q = parsed.question.trim();
+        const cat = (parsed.category || 'GENERAL KNOWLEDGE').toUpperCase();
+        if (!byCategory[cat]) byCategory[cat] = [];
+        // Keep up to 30 per category (already sorted newest-first)
+        if (byCategory[cat].length < 30) byCategory[cat].push(q);
+        all.push(q);
+      } catch (_) { /* skip malformed rows */ }
     }
-    return questions;
+
+    // First 20 overall = most recent questions (already newest-first from ORDER BY)
+    const recent = all.slice(0, 20);
+
+    return { byCategory, recent, all };
   } catch (err) {
-    console.warn('[Trivia Generator] Failed to load recent questions:', err?.message);
-    return [];
+    console.warn('[Trivia Generator] Failed to load question history:', err?.message);
+    return { byCategory: {}, recent: [], all: [] };
   }
 }
 
@@ -262,21 +298,25 @@ async function loadRecentTriviaQuestions(businessId, channelId, limit = 15) {
 export async function generateAndValidateTrivia(businessId, channelId, options = {}) {
   const { episodeNumber = 1, maxRetries = 5 } = options;
   let avoidCategories = [];
-  // Load existing trivia questions so LLM explicitly avoids them
-  let recentQuestions = await loadRecentTriviaQuestions(businessId, channelId, 15);
+
+  // Load ALL historical trivia questions grouped by category.
+  // This is the key fix: the LLM now sees every question ever generated, not just the last 15.
+  const { byCategory, recent, all } = await loadAllTriviaQuestions(businessId, channelId);
+  console.log(`[Trivia Generator] Loaded ${all.length} historical questions across ${Object.keys(byCategory).length} categories`);
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     const trivia = await generateTriviaQuestion({
       episodeNumber,
       avoidCategories,
-      recentQuestions
+      recentQuestions: recent,
+      questionsByCategory: byCategory,
     });
     if (!trivia) continue;
 
     const policy = await checkTriviaContentPolicy(trivia);
     if (!policy.approved) {
       console.log(`[Trivia Generator] Policy reject: ${policy.reason || 'unknown'}`);
-      avoidCategories.push(trivia.category);
+      if (!avoidCategories.includes(trivia.category)) avoidCategories.push(trivia.category);
       continue;
     }
 
@@ -285,7 +325,10 @@ export async function generateAndValidateTrivia(businessId, channelId, options =
     const isDup = await isTriviaDuplicate(businessId, channelId, fingerprint);
     if (isDup) {
       console.log(`[Trivia Generator] Duplicate fingerprint, retrying`);
-      recentQuestions.push(trivia.question);
+      // Add to recent + category history so this attempt informs the next
+      recent.push(trivia.question);
+      if (!byCategory[trivia.category]) byCategory[trivia.category] = [];
+      byCategory[trivia.category].unshift(trivia.question);
       continue;
     }
 
