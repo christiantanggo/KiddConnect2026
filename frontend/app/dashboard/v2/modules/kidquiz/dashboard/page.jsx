@@ -1,11 +1,16 @@
 'use client'; // v2
 
 import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import Link from 'next/link';
 import { Plus, Play, Upload, CheckCircle, Clock, XCircle, Eye } from 'lucide-react';
+
+const TABS = [
+  { label: '🎯 My Quizzes', href: '/dashboard/v2/modules/kidquiz/dashboard' },
+  { label: '⚙️ Settings',   href: '/dashboard/v2/modules/kidquiz/settings' },
+];
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
@@ -33,6 +38,7 @@ function getBusinessId() {
 
 export default function KidQuizDashboard() {
   const router = useRouter();
+  const pathname = usePathname();
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -92,6 +98,27 @@ export default function KidQuizDashboard() {
     <AuthGuard>
       <V2AppShell>
         <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
+
+          {/* Module tabs */}
+          <div className="flex gap-1 mb-6 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', display: 'inline-flex' }}>
+            {TABS.map(tab => {
+              const active = pathname === tab.href;
+              return (
+                <Link
+                  key={tab.href}
+                  href={tab.href}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                  style={{
+                    background: active ? 'linear-gradient(135deg, #6366f1, #ec4899)' : 'transparent',
+                    color: active ? '#fff' : 'var(--color-text-muted)',
+                  }}
+                >
+                  {tab.label}
+                </Link>
+              );
+            })}
+          </div>
+
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
             <div>
@@ -195,16 +222,6 @@ export default function KidQuizDashboard() {
             })}
           </div>
 
-          {/* Settings link */}
-          <div className="mt-8 text-center">
-            <Link
-              href="/dashboard/v2/modules/kidquiz/settings"
-              className="text-sm"
-              style={{ color: 'var(--color-text-muted)' }}
-            >
-              ⚙️ Parent Settings &amp; YouTube Connection
-            </Link>
-          </div>
         </div>
       </V2AppShell>
     </AuthGuard>

@@ -1,10 +1,15 @@
 'use client';
 
 import { useEffect, useState, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, usePathname } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import Link from 'next/link';
+
+const TABS = [
+  { label: '🎯 My Quizzes', href: '/dashboard/v2/modules/kidquiz/dashboard' },
+  { label: '⚙️ Settings',   href: '/dashboard/v2/modules/kidquiz/settings' },
+];
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
@@ -20,6 +25,7 @@ function getBusinessId() {
 
 function KidQuizSettingsInner() {
   const searchParams = useSearchParams();
+  const pathname = usePathname();
   const [settings, setSettings] = useState({ timer_seconds: 6, enable_auto_correct: true, enable_auto_metadata: true });
   const [ytStatus, setYtStatus] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -99,10 +105,26 @@ function KidQuizSettingsInner() {
     <AuthGuard>
       <V2AppShell>
         <div style={{ maxWidth: 680, margin: '0 auto', padding: '24px 16px' }}>
-          <Link href="/dashboard/v2/modules/kidquiz/dashboard" className="text-sm mb-4 inline-block" style={{ color: 'var(--color-text-muted)' }}>
-            ← Back to Quizzes
-          </Link>
 
+          {/* Module tabs */}
+          <div className="flex gap-1 mb-6 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', display: 'inline-flex' }}>
+            {TABS.map(tab => {
+              const active = pathname === tab.href;
+              return (
+                <Link
+                  key={tab.href}
+                  href={tab.href}
+                  className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                  style={{
+                    background: active ? 'linear-gradient(135deg, #6366f1, #ec4899)' : 'transparent',
+                    color: active ? '#fff' : 'var(--color-text-muted)',
+                  }}
+                >
+                  {tab.label}
+                </Link>
+              );
+            })}
+          </div>
 
           <h1 className="text-2xl font-bold mb-1" style={{ color: 'var(--color-text-main)' }}>⚙️ Parent Settings</h1>
           <p className="text-sm mb-6" style={{ color: 'var(--color-text-muted)' }}>Control defaults for Kid Quiz Studio</p>
