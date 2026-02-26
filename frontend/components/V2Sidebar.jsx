@@ -7,13 +7,13 @@ import { CheckCircle2, Lock, AlertTriangle, Layout } from 'lucide-react';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
-export default function V2Sidebar() {
+export default function V2Sidebar({ mobileOpen = false, onClose }) {
   const pathname = usePathname();
   const [modules, setModules] = useState([]);
   const [loading, setLoading] = useState(true);
-  const isLoadingRef = useRef(false); // Prevent concurrent calls
-  const hasLoadedRef = useRef(false); // Prevent multiple loads
-  const rateLimitedRef = useRef(false); // Track rate limiting
+  const isLoadingRef = useRef(false);
+  const hasLoadedRef = useRef(false);
+  const rateLimitedRef = useRef(false);
 
   useEffect(() => {
     // Only load once
@@ -100,42 +100,49 @@ export default function V2Sidebar() {
   // Check if we're on the main dashboard
   const isDashboardActive = pathname === '/dashboard' && !pathname?.startsWith('/dashboard/v2');
 
+  const handleLinkClick = () => { if (onClose) onClose(); };
+
   return (
-    <aside 
-      className="fixed left-0 top-16 bottom-0 overflow-y-auto border-r"
+    <>
+      {/* Mobile backdrop */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-40 z-30 md:hidden"
+          onClick={onClose}
+        />
+      )}
+
+    <aside
+      className="fixed left-0 bottom-0 overflow-y-auto border-r z-40 transition-transform duration-300"
       style={{
         width: 'var(--sidebar-width)',
         backgroundColor: 'var(--color-surface)',
         borderColor: 'var(--color-border)',
         top: 'var(--topbar-height)',
+        // On mobile: slide in/out. On desktop: always visible.
+        transform: mobileOpen ? 'translateX(0)' : undefined,
       }}
+      // Hide on mobile unless open
+      data-mobile-open={mobileOpen}
     >
+      <style>{`
+        @media (max-width: 767px) {
+          aside[data-mobile-open="false"] { transform: translateX(-100%); }
+          aside[data-mobile-open="true"]  { transform: translateX(0); }
+        }
+      `}</style>
       <nav className="p-6 space-y-1">
         {/* Tavari AI Dashboard Button */}
         <div className="mb-6">
           <Link
             href="/dashboard"
+            onClick={handleLinkClick}
             className={`flex items-center px-3 py-2 text-sm font-medium transition-colors`}
             style={{
               borderRadius: 'var(--button-radius)',
               ...(isDashboardActive
-                ? { 
-                    backgroundColor: 'rgba(20, 184, 166, 0.1)', 
-                    color: 'var(--color-accent)' 
-                  }
-                : { 
-                    color: 'var(--color-text-main)' 
-                  }),
-            }}
-            onMouseEnter={(e) => {
-              if (!isDashboardActive) {
-                e.target.style.backgroundColor = 'rgba(0, 0, 0, 0.05)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (!isDashboardActive) {
-                e.target.style.backgroundColor = 'transparent';
-              }
+                ? { backgroundColor: 'rgba(20, 184, 166, 0.1)', color: 'var(--color-accent)' }
+                : { color: 'var(--color-text-main)' }),
             }}
           >
             <Layout className="w-4 h-4 mr-2" style={{ color: isDashboardActive ? 'var(--color-accent)' : 'var(--color-text-muted)' }} />
@@ -167,6 +174,7 @@ export default function V2Sidebar() {
                 <Link
                   key={module.key}
                   href={href}
+                  onClick={handleLinkClick}
                   className={`flex items-center justify-between px-3 py-2 text-sm font-medium transition-colors`}
                   style={{
                     borderRadius: 'var(--button-radius)',
@@ -216,6 +224,7 @@ export default function V2Sidebar() {
               <Link
                 key={module.key}
                 href={`/dashboard/v2/modules/${module.key}`}
+                onClick={handleLinkClick}
                 className={`flex items-center justify-between px-3 py-2 text-sm font-medium transition-colors`}
                 style={{
                   borderRadius: 'var(--button-radius)',
@@ -255,5 +264,6 @@ export default function V2Sidebar() {
         )}
       </nav>
     </aside>
+    </>
   );
 }
