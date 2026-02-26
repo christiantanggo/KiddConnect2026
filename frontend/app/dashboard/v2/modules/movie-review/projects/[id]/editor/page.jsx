@@ -69,7 +69,7 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
-  const [localBlobUrl, setLocalBlobUrl] = useState(null);
+  const [audioError, setAudioError] = useState(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
   const streamRef = useRef(null);
@@ -78,37 +78,33 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
   async function startRecording() {
     setError(null);
-    setLocalBlobUrl(null);
+    setAudioError(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
       chunksRef.current = [];
 
-      // Pick best supported format
+      // Pick best supported format — prefer mp4 for Edge compatibility
       const mimeType = [
+        'audio/mp4',
         'audio/webm;codecs=opus',
         'audio/webm',
         'audio/ogg;codecs=opus',
         'audio/ogg',
-        'audio/mp4',
       ].find(m => MediaRecorder.isTypeSupported(m)) || '';
 
       const mr = new MediaRecorder(stream, mimeType ? { mimeType } : {});
 
-      // Collect chunks every 250ms — ensures data is available before onstop
       mr.ondataavailable = e => {
-        console.log('[VoiceRecorder] ondataavailable size:', e.data?.size);
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       mr.onstop = () => {
-        // Stop all tracks to release mic
         streamRef.current?.getTracks().forEach(t => t.stop());
         uploadRecording(mr.mimeType || mimeType || 'audio/webm');
       };
 
-      console.log('[VoiceRecorder] Starting with mimeType:', mimeType || '(browser default)');
-      mr.start(250); // timeslice = 250ms
+      mr.start(250);
       mediaRecorderRef.current = mr;
       setRecording(true);
       setElapsed(0);
@@ -122,7 +118,7 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
     clearInterval(timerRef.current);
     setRecording(false);
     if (mediaRecorderRef.current?.state !== 'inactive') {
-      mediaRecorderRef.current.stop(); // triggers onstop after final ondataavailable
+      mediaRecorderRef.current.stop();
     }
   }
 
@@ -131,18 +127,13 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
     const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
     const blob = new Blob(chunksRef.current, { type });
 
-    console.log('[VoiceRecorder] chunks:', chunksRef.current.length, '| size:', blob.size, '| type:', type);
-
     if (blob.size === 0) {
-      setError(`Recording captured 0 bytes. Please try again or check your microphone permissions.`);
+      setError('Recording captured 0 bytes — please try again.');
       return;
     }
 
-    // Show local preview immediately (webm blob) — will be replaced by MP3 after upload
-    const localUrl = URL.createObjectURL(blob);
-    setLocalBlobUrl(localUrl);
-
     setUploading(true);
+    setError(null);
     try {
       const fd = new FormData();
       fd.append('voice', blob, `voice.${ext}`);
@@ -159,8 +150,6 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
-      // Clear local blob — switch player to the server's MP3 URL
-      setLocalBlobUrl(null);
       onVoiceChange(data.asset);
     } catch (err) {
       setError('Upload failed: ' + err.message);
@@ -171,7 +160,7 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
   async function deleteVoice() {
     if (!confirm('Delete voice recording?')) return;
-    setLocalBlobUrl(null);
+    setAudioError(null);
     await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/voice`, {
       method: 'DELETE', headers: apiHeaders(),
     });
@@ -180,8 +169,9 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-  // Use local blob URL first (instant playback), fall back to Supabase URL
-  const audioSrc = localBlobUrl || voiceAsset?.public_url;
+  const hasVoice = !!voiceAsset?.public_url;
+  const mp3Url = voiceAsset?.public_url;
+  const durationSec = voiceAsset?.duration_seconds;
 
   return (
     <div className="space-y-4">
@@ -193,23 +183,41 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
         {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
 
-        {voiceAsset || localBlobUrl ? (
+        {hasVoice ? (
           <div className="space-y-3">
-            {/* Native audio player — always visible, uses local blob or Supabase URL */}
-            <audio
-              key={audioSrc}
-              src={audioSrc}
-              controls
-              className="w-full rounded-xl"
-              style={{ minHeight: 44 }}
-              onError={(e) => { if (e.target.src) setError('Playback failed — try re-recording.'); }}
-            />
-
-            {uploading && (
-              <p className="text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
-                ⏳ Converting & saving… (this takes a few seconds)
-              </p>
-            )}
+            {/* MP3 player — served from Supabase after server conversion */}
+            <div className="rounded-xl p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-2 h-2 rounded-full bg-green-500" />
+                <span className="text-xs font-medium" style={{ color: 'var(--color-text-main)' }}>
+                  Recording saved as MP3{durationSec ? ` · ${Math.round(durationSec)}s` : ''}
+                </span>
+              </div>
+              <audio
+                key={mp3Url}
+                src={mp3Url}
+                controls
+                preload="metadata"
+                className="w-full"
+                style={{ minHeight: 44 }}
+                onCanPlay={() => setAudioError(null)}
+                onError={() => setAudioError('Player error — use the download link below to verify the file.')}
+              />
+              {audioError && (
+                <p className="text-xs mt-2" style={{ color: '#dc2626' }}>{audioError}</p>
+              )}
+              {/* Always show a direct download link so you can verify the file */}
+              <a
+                href={mp3Url}
+                download="voice.mp3"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-block mt-2 text-xs underline"
+                style={{ color: 'var(--color-text-muted)' }}
+              >
+                Download MP3 to verify
+              </a>
+            </div>
 
             <div className="flex gap-2">
               <button onClick={startRecording} disabled={recording || uploading}
@@ -241,7 +249,8 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
             ) : uploading ? (
               <div className="text-center py-6">
                 <Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" style={{ color: '#9333ea' }} />
-                <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>Saving recording…</p>
+                <p className="text-sm font-medium" style={{ color: 'var(--color-text-main)' }}>Converting to MP3…</p>
+                <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>This takes a few seconds</p>
               </div>
             ) : (
               <button onClick={startRecording}
