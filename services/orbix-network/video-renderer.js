@@ -792,16 +792,55 @@ export async function generateTriviaASSFile(opts, duration = 11) {
   const triviaNum = opts.triviaNumber ?? 1;
   const bannerText = `${categoryDisplay}  #${triviaNum}`;
   const correctLetter = (opts.correctLetter || 'A').toUpperCase().charAt(0);
-  const hookDisplay = (opts.hookText || '').trim().slice(0, 60) || `ONLY ${[25, 30, 35, 40][(triviaNum - 1) % 4]}% GET THIS RIGHT.`;
+  const hookDisplay = (opts.hookText || '').trim().slice(0, 60) || `Think you know this one?`;
   const loopTriggerText = (opts.loopTriggerText || 'Did you get it right?').trim().slice(0, 80);
 
   const t = (s) => formatASSTimeFromSeconds(s);
-  const questionCaps = (opts.question || '').toUpperCase();
-  const questionCenterY = 495;
-  const optCenterY = Math.round((910 + 1920) / 2);
-  const optY = { A: optCenterY - 80, B: optCenterY, C: optCenterY + 80 };
-  // Countdown position: between question (495) and first option (optY.A ~1335) — center of gap
-  const countdownY = Math.round((questionCenterY + optY.A) / 2);
+
+  // Clean question: strip any trailing option text (A) / B) / C)) that might have been included
+  const rawQuestion = (opts.question || '').trim();
+  const questionCaps = rawQuestion.toUpperCase();
+
+  // Dynamic font size based on question character length — shorter questions get bigger text
+  const qLen = rawQuestion.length;
+  let questionFontSize;
+  if (qLen <= 40) questionFontSize = 110;
+  else if (qLen <= 60) questionFontSize = 90;
+  else if (qLen <= 80) questionFontSize = 76;
+  else if (qLen <= 100) questionFontSize = 64;
+  else questionFontSize = 54;
+
+  // Explicit line wrapping for question (chars per line scales with font size)
+  const charsPerLine = Math.floor(1000 / questionFontSize) + 2; // ~9–19 chars per line
+  const wrapText = (text, maxChars) => {
+    const words = text.split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+      const next = cur ? cur + ' ' + w : w;
+      if (next.length <= maxChars) { cur = next; }
+      else { if (cur) lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    return lines.join('\\N');
+  };
+  const wrappedQuestion = wrapText(questionCaps, charsPerLine);
+
+  // Layout: question in upper half, options evenly in lower half
+  // Question block center Y — sits in top 40% of screen
+  const questionCenterY = 420;
+  // Options occupy the middle band (roughly 60–85% of screen height)
+  const optStartY = 1050;
+  const optSpacing = 145;
+  const optY = { A: optStartY, B: optStartY + optSpacing, C: optStartY + optSpacing * 2 };
+  // Countdown between question base and first option — visually centered in the gap
+  const countdownY = Math.round((questionCenterY + 80 + optY.A) / 2);
+
+  // Option font size — scale down slightly if option text is long
+  const maxOptLen = Math.max(
+    (opts.optionA || '').length, (opts.optionB || '').length, (opts.optionC || '').length
+  );
+  const optFontSize = maxOptLen > 25 ? 68 : maxOptLen > 18 ? 78 : 88;
 
   const assContent = `[Script Info]
 Title: Orbix Trivia
@@ -811,15 +850,16 @@ PlayResY: 1920
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Interrupt,Arial,128,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,60,60,10,1
+Style: Interrupt,Arial,120,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,60,60,10,1
 Style: Banner,Arial,42,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
 Style: BannerBg,Arial,12,&H00FF8000,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
-Style: Question,Arial,120,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
-Style: Option,Arial,90,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
-Style: OptionCorrect,Arial,90,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
-Style: OptionDim,Arial,90,&H66FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
-Style: AnswerBig,Arial,168,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,80,80,10,1
-Style: LoopTrigger,Arial,96,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,60,60,10,1
+Style: Question,Arial,${questionFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,60,60,10,1
+Style: Option,Arial,${optFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,20,20,10,1
+Style: OptionCorrect,Arial,${optFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,20,20,10,1
+Style: OptionDim,Arial,${optFontSize},&H66FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,0,5,20,20,10,1
+Style: CountdownNum,Arial,160,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,4,2,5,80,80,10,1
+Style: AnswerBig,Arial,110,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,80,80,10,1
+Style: LoopTrigger,Arial,90,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,60,60,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -827,13 +867,14 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   const lines = [];
 
-  // === 0–1s: Hook text ===
+  // === 0–1s: Hook text (centered, large) ===
   lines.push(`Dialogue: 0,${t(0)},${t(TRIVIA_HOOK_END)},Interrupt,,0,0,0,,{\\an5\\pos(540,960)}${esc(hookDisplay.toUpperCase())}`);
 
-  // === 1–9s: Banner + question + all 3 options (all stay on through countdown) ===
+  // === 1–9s: Banner + question (wrapped) + all 3 options ===
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},BannerBg,,0,0,0,,{\\an7\\pos(0,0)\\p1}m 0 0 l 1080 0 l 1080 80 l 0 80{\\p0}`);
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Banner,,0,0,0,,{\\an5\\pos(540,40)}${esc(bannerText)}`);
-  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Question,,0,0,0,,{\\an5\\pos(540,${questionCenterY})}${esc(questionCaps)}`);
+  // Question sits in the upper zone; \an8 = top-center anchor so it grows downward
+  lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Question,,0,0,0,,{\\an8\\pos(540,100)}${wrappedQuestion}`);
 
   for (const letter of ['A', 'B', 'C']) {
     const y = optY[letter];
@@ -841,17 +882,19 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Option,,0,0,0,,{\\an5\\pos(540,${y})}${esc(text)}`);
   }
 
-  // === 5–9s: 3-2-1 countdown (6,7,8) between question and options ===
-  lines.push(`Dialogue: 2,${t(6)},${t(7)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}3`);
-  lines.push(`Dialogue: 2,${t(7)},${t(8)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}2`);
-  lines.push(`Dialogue: 2,${t(8)},${t(9)},AnswerBig,,0,0,0,,{\\an5\\pos(540,${countdownY})}1`);
+  // === 5–9s: 3-2-1 countdown (centered in gap between question and options) ===
+  lines.push(`Dialogue: 2,${t(6)},${t(7)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${countdownY})}3`);
+  lines.push(`Dialogue: 2,${t(7)},${t(8)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${countdownY})}2`);
+  lines.push(`Dialogue: 2,${t(8)},${t(9)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${countdownY})}1`);
 
+  // Answer: strip "ANSWER: A) " prefix, show just the answer text
   const answerOnly = (opts.answerText || '').replace(/^ANSWER:\s*[ABC]\)\s*/i, '').trim();
+  const answerDisplay = `${correctLetter}) ${answerOnly}`;
 
-  // === 9–10.5s: Answer reveal (1.5s) ===
-  lines.push(`Dialogue: 3,${t(TRIVIA_COUNTDOWN_END)},${t(TRIVIA_REVEAL_END)},AnswerBig,,0,0,0,,{\\an5\\pos(540,960)}${esc(answerOnly || opts.answerText || '')}`);
+  // === 9–9.5s: Answer reveal (flash) ===
+  lines.push(`Dialogue: 3,${t(TRIVIA_COUNTDOWN_END)},${t(TRIVIA_REVEAL_END)},AnswerBig,,0,0,0,,{\\an5\\pos(540,960)}${esc(answerDisplay)}`);
 
-  // === 10.5–11.7s: Single loop line only (1.2s), then hard cut ===
+  // === 9.5–11s: Loop line ===
   const loopEnd = Math.min(TRIVIA_LOOP_END, duration);
   lines.push(`Dialogue: 3,${t(TRIVIA_REVEAL_END)},${t(loopEnd)},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopTriggerText)}`);
 
