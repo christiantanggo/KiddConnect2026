@@ -431,9 +431,11 @@ Return JSON only: hook, what_happened (2 lines with \\n), why_it_matters, what_h
         console.error('[Script Generator] Trivia snippet is not valid JSON');
         throw new Error('Trivia snippet must be valid JSON');
       }
+      // Strip any A)/B)/C) options accidentally baked into the question field
+      const cleanTriviaQuestion = (trivia.question || '').replace(/\s*A\)\s*.+?\s*B\)\s*.+?\s*C\)\s*.+$/i, '').trim();
       const script = {
         hook: (trivia.hook || 'Let\'s test your knowledge.').trim(),
-        what_happened: trivia.question || '',
+        what_happened: cleanTriviaQuestion,
         why_it_matters: '',
         what_happens_next: 'Comment A, B, or C.',
         cta_line: trivia.voice_script?.includes('Comment') ? 'Comment A, B, or C.' : 'Did you get it right?',

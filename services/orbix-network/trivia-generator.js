@@ -198,10 +198,10 @@ Return JSON:
   "hook": "<3-7 words, calm competitive>",
   "category": "<HISTORY|SCIENCE|GENERAL KNOWLEDGE|GEOGRAPHY|LOGIC|POP CULTURE>",
   "topic": "<3-6 word label for the specific fact being tested>",
-  "question": "<one question, max 2 lines>",
-  "option_a": "<text>",
-  "option_b": "<text>",
-  "option_c": "<text>",
+  "question": "<the question ONLY — do NOT include A) B) C) options in this field>",
+  "option_a": "<answer text only, no letter prefix>",
+  "option_b": "<answer text only, no letter prefix>",
+  "option_c": "<answer text only, no letter prefix>",
   "correct_answer": "A" | "B" | "C",
   "voice_script": "<full spoken script: hook, then question, then A/B/C, pause, then answer reveal and CTA like 'Did you get it right?' or 'Comment A, B, or C.'>"
 }`;
@@ -220,14 +220,22 @@ Return JSON:
     const raw = JSON.parse(completion.choices[0].message.content || '{}');
     const correct = String(raw.correct_answer || 'A').toUpperCase().charAt(0);
     const letter = ['A', 'B', 'C'].includes(correct) ? correct : 'A';
+
+    // Strip any A)/B)/C) options the LLM may have accidentally included in the question field
+    const stripOptionsFromQuestion = (q) => {
+      if (!q) return '';
+      // Remove trailing "A) ... B) ... C) ..." pattern
+      return q.replace(/\s*A\)\s*.+?\s*B\)\s*.+?\s*C\)\s*.+$/i, '').trim();
+    };
+
     const opts = {
       hook: (raw.hook || '').trim().slice(0, 80),
       category: (raw.category || 'GENERAL KNOWLEDGE').toUpperCase().replace(/\s+/g, ' ').slice(0, 50),
-      topic: (raw.topic || '').trim().slice(0, 80), // specific fact label for dedup tracking
-      question: (raw.question || '').trim().slice(0, 200),
-      option_a: (raw.option_a || '').trim().slice(0, 100),
-      option_b: (raw.option_b || '').trim().slice(0, 100),
-      option_c: (raw.option_c || '').trim().slice(0, 100),
+      topic: (raw.topic || '').trim().slice(0, 80),
+      question: stripOptionsFromQuestion((raw.question || '').trim()).slice(0, 200),
+      option_a: (raw.option_a || '').trim().replace(/^[A-Ca-c]\)\s*/, '').slice(0, 100),
+      option_b: (raw.option_b || '').trim().replace(/^[A-Ca-c]\)\s*/, '').slice(0, 100),
+      option_c: (raw.option_c || '').trim().replace(/^[A-Ca-c]\)\s*/, '').slice(0, 100),
       correct_answer: letter,
       voice_script: (raw.voice_script || '').trim().slice(0, 500),
       episode_number: episodeNumber
