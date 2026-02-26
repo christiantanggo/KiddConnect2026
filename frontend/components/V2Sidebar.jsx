@@ -59,7 +59,8 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
       if (res.ok) {
         const data = await res.json();
         setModules(data.modules || []);
-        rateLimitedRef.current = false; // Clear rate limit flag on success
+        setLoading(false);
+        rateLimitedRef.current = false;
         console.log('[V2Sidebar] Modules loaded successfully');
       } else if (res.status === 429) {
         // Rate limited - stop trying
