@@ -68,55 +68,102 @@ function StepBar({ step, steps, onStep }) {
 function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
-  const [playing, setPlaying] = useState(false);
   const [error, setError] = useState(null);
+  const [localBlobUrl, setLocalBlobUrl] = useState(null);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
-  const audioRef = useRef(null);
+  const streamRef = useRef(null);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
 
   async function startRecording() {
     setError(null);
+    setLocalBlobUrl(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      streamRef.current = stream;
       chunksRef.current = [];
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-      mr.ondataavailable = e => { if (e.data.size > 0) chunksRef.current.push(e.data); };
-      mr.onstop = handleRecordingStop;
-      mr.start();
+
+      // Pick best supported format
+      const mimeType = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/ogg',
+        'audio/mp4',
+      ].find(m => MediaRecorder.isTypeSupported(m)) || '';
+
+      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+
+      // Collect chunks every 250ms — ensures data is available before onstop
+      mr.ondataavailable = e => {
+        console.log('[VoiceRecorder] ondataavailable size:', e.data?.size);
+        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mr.onstop = () => {
+        // Stop all tracks to release mic
+        streamRef.current?.getTracks().forEach(t => t.stop());
+        uploadRecording(mr.mimeType || mimeType || 'audio/webm');
+      };
+
+      console.log('[VoiceRecorder] Starting with mimeType:', mimeType || '(browser default)');
+      mr.start(250); // timeslice = 250ms
       mediaRecorderRef.current = mr;
       setRecording(true);
       setElapsed(0);
       timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
     } catch (err) {
-      setError('Microphone access denied: ' + err.message);
+      setError('Microphone error: ' + err.message);
     }
   }
 
   function stopRecording() {
-    if (mediaRecorderRef.current?.state !== 'inactive') {
-      mediaRecorderRef.current?.stop();
-    }
     clearInterval(timerRef.current);
     setRecording(false);
+    if (mediaRecorderRef.current?.state !== 'inactive') {
+      mediaRecorderRef.current.stop(); // triggers onstop after final ondataavailable
+    }
   }
 
-  async function handleRecordingStop() {
-    const blob = new Blob(chunksRef.current, { type: 'audio/webm' });
+  async function uploadRecording(mimeType) {
+    const type = mimeType || 'audio/webm';
+    const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
+    const blob = new Blob(chunksRef.current, { type });
+
+    console.log('[VoiceRecorder] chunks:', chunksRef.current.length, '| size:', blob.size, '| type:', type);
+
+    if (blob.size === 0) {
+      setError(`Recording captured 0 bytes. Please try again or check your microphone permissions.`);
+      return;
+    }
+
+    // Show local preview immediately (webm blob) — will be replaced by MP3 after upload
+    const localUrl = URL.createObjectURL(blob);
+    setLocalBlobUrl(localUrl);
+
     setUploading(true);
     try {
       const fd = new FormData();
-      fd.append('voice', blob, 'voice.webm');
+      fd.append('voice', blob, `voice.${ext}`);
+      const token = typeof document !== 'undefined'
+        ? document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1]
+        : null;
       const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/voice`, {
-        method: 'POST', headers: getAuthHeaders(), body: fd,
-        headers: { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() },
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'X-Active-Business-Id': getBusinessId(),
+        },
+        body: fd,
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      // Clear local blob — switch player to the server's MP3 URL
+      setLocalBlobUrl(null);
       onVoiceChange(data.asset);
     } catch (err) {
-      setError(err.message);
+      setError('Upload failed: ' + err.message);
     } finally {
       setUploading(false);
     }
@@ -124,19 +171,17 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
   async function deleteVoice() {
     if (!confirm('Delete voice recording?')) return;
+    setLocalBlobUrl(null);
     await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/voice`, {
       method: 'DELETE', headers: apiHeaders(),
     });
     onVoiceChange(null);
   }
 
-  function togglePlay() {
-    if (!audioRef.current) return;
-    if (playing) { audioRef.current.pause(); setPlaying(false); }
-    else { audioRef.current.play(); setPlaying(true); }
-  }
+  const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-  const fmtTime = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  // Use local blob URL first (instant playback), fall back to Supabase URL
+  const audioSrc = localBlobUrl || voiceAsset?.public_url;
 
   return (
     <div className="space-y-4">
@@ -148,30 +193,35 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
         {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
 
-        {voiceAsset ? (
+        {voiceAsset || localBlobUrl ? (
           <div className="space-y-3">
-            <div className="flex items-center gap-3 p-3 rounded-xl" style={{ background: 'var(--color-background)' }}>
-              <button onClick={togglePlay} className="w-10 h-10 flex items-center justify-center rounded-full flex-shrink-0"
-                style={{ background: 'linear-gradient(135deg,#e11d48,#9333ea)', color: '#fff' }}>
-                {playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+            {/* Native audio player — always visible, uses local blob or Supabase URL */}
+            <audio
+              key={audioSrc}
+              src={audioSrc}
+              controls
+              className="w-full rounded-xl"
+              style={{ minHeight: 44 }}
+              onError={(e) => { if (e.target.src) setError('Playback failed — try re-recording.'); }}
+            />
+
+            {uploading && (
+              <p className="text-xs text-center" style={{ color: 'var(--color-text-muted)' }}>
+                ⏳ Converting & saving… (this takes a few seconds)
+              </p>
+            )}
+
+            <div className="flex gap-2">
+              <button onClick={startRecording} disabled={recording || uploading}
+                className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+                style={{ border: '2px dashed var(--color-border)', color: 'var(--color-text-muted)' }}>
+                🔄 Re-record
               </button>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold" style={{ color: 'var(--color-text-main)' }}>Voice Recording</p>
-                {voiceAsset.duration_seconds && (
-                  <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>{fmtTime(Math.round(voiceAsset.duration_seconds))}</p>
-                )}
-              </div>
-              <button onClick={deleteVoice} className="p-2 rounded-lg" style={{ color: '#dc2626', background: '#fee2e2' }}>
+              <button onClick={deleteVoice} className="px-4 py-2.5 rounded-xl text-sm"
+                style={{ background: '#fee2e2', color: '#dc2626' }}>
                 <Trash2 className="w-4 h-4" />
               </button>
             </div>
-            <audio ref={audioRef} src={voiceAsset.public_url} onEnded={() => setPlaying(false)} />
-
-            <button onClick={startRecording} disabled={recording || uploading}
-              className="w-full py-2.5 rounded-xl text-sm font-semibold"
-              style={{ border: '2px dashed var(--color-border)', color: 'var(--color-text-muted)' }}>
-              🔄 Re-record
-            </button>
           </div>
         ) : (
           <div className="space-y-3">
