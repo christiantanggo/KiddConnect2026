@@ -97,37 +97,31 @@ export default function KidQuizDashboard() {
   return (
     <AuthGuard>
       <V2AppShell>
-        <div style={{ maxWidth: 680, margin: '0 auto', padding: '24px 16px' }}>
+        <div style={{ maxWidth: '100%', padding: '24px 16px' }}>
 
-          {/* Module tabs */}
-          <div className="flex gap-1 mb-6 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', display: 'inline-flex' }}>
-            {TABS.map(tab => {
-              const active = pathname === tab.href;
-              return (
-                <Link
-                  key={tab.href}
-                  href={tab.href}
-                  className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
-                  style={{
-                    background: active ? 'linear-gradient(135deg, #6366f1, #ec4899)' : 'transparent',
-                    color: active ? '#fff' : 'var(--color-text-muted)',
-                  }}
-                >
-                  {tab.label}
-                </Link>
-              );
-            })}
-          </div>
-
-          {/* Header */}
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h1 className="text-2xl font-bold" style={{ color: 'var(--color-text-main)' }}>My Quiz Projects</h1>
-              <p className="text-sm mt-1" style={{ color: 'var(--color-text-muted)' }}>Each project becomes one YouTube Short</p>
+          {/* Tabs + New Quiz button */}
+          <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
+            <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', display: 'inline-flex' }}>
+              {TABS.map(tab => {
+                const active = pathname === tab.href;
+                return (
+                  <Link
+                    key={tab.href}
+                    href={tab.href}
+                    className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                    style={{
+                      background: active ? 'linear-gradient(135deg, #6366f1, #ec4899)' : 'transparent',
+                      color: active ? '#fff' : 'var(--color-text-muted)',
+                    }}
+                  >
+                    {tab.label}
+                  </Link>
+                );
+              })}
             </div>
             <Link
               href="/dashboard/v2/modules/kidquiz/projects/new"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white text-sm"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white text-sm whitespace-nowrap"
               style={{ background: 'linear-gradient(135deg, #6366f1, #ec4899)' }}
             >
               <Plus className="w-4 h-4" /> New Quiz
