@@ -97,18 +97,19 @@ export default function KidQuizDashboard() {
   return (
     <AuthGuard>
       <V2AppShell>
-        <div style={{ maxWidth: '100%', padding: '24px 16px' }}>
+        <div style={{ padding: '16px' }}>
 
-          {/* Tabs + New Quiz button */}
-          <div className="flex items-center justify-between gap-3 mb-6 flex-wrap">
-            <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', display: 'inline-flex' }}>
+          {/* Toolbar: tabs + New Quiz — always one row, never wraps */}
+          <div className="flex items-center gap-2 mb-4" style={{ minWidth: 0 }}>
+            {/* Tab pill group — shrinks on small screens */}
+            <div className="flex gap-1 p-1 rounded-xl flex-shrink-0" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
               {TABS.map(tab => {
                 const active = pathname === tab.href;
                 return (
                   <Link
                     key={tab.href}
                     href={tab.href}
-                    className="px-4 py-2 rounded-lg text-sm font-semibold transition-all"
+                    className="px-3 py-1.5 rounded-lg text-sm font-semibold transition-all whitespace-nowrap"
                     style={{
                       background: active ? 'linear-gradient(135deg, #6366f1, #ec4899)' : 'transparent',
                       color: active ? '#fff' : 'var(--color-text-muted)',
@@ -119,9 +120,13 @@ export default function KidQuizDashboard() {
                 );
               })}
             </div>
+
+            {/* Spacer pushes button to the right */}
+            <div className="flex-1" />
+
             <Link
               href="/dashboard/v2/modules/kidquiz/projects/new"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-white text-sm whitespace-nowrap"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold text-white text-sm whitespace-nowrap flex-shrink-0"
               style={{ background: 'linear-gradient(135deg, #6366f1, #ec4899)' }}
             >
               <Plus className="w-4 h-4" /> New Quiz
@@ -151,7 +156,7 @@ export default function KidQuizDashboard() {
             </div>
           )}
 
-          <div className="grid gap-4">
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))' }}>
             {projects.map(project => {
               const cfg = STATUS_CONFIG[project.status] || STATUS_CONFIG.DRAFT;
               const StatusIcon = cfg.icon;
@@ -161,55 +166,58 @@ export default function KidQuizDashboard() {
                 <div
                   key={project.id}
                   onClick={() => router.push(cardHref)}
-                  className="p-5 rounded-xl border cursor-pointer transition-all"
+                  className="p-4 rounded-xl border cursor-pointer transition-all flex flex-col gap-3"
                   style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)' }}
                   onMouseEnter={e => e.currentTarget.style.borderColor = cfg.color}
                   onMouseLeave={e => e.currentTarget.style.borderColor = 'var(--color-border)'}
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <span
-                          className="text-xs font-bold uppercase px-2 py-0.5 rounded-full"
-                          style={{ background: `${cfg.color}22`, color: cfg.color }}
-                        >
-                          <StatusIcon className="w-3 h-3 inline mr-1" />
-                          {cfg.label}
-                        </span>
-                        <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#f3f4f6', color: '#6b7280' }}>
-                          {project.category}
-                        </span>
-                      </div>
-                      <h3 className="font-bold text-lg leading-tight truncate" style={{ color: 'var(--color-text-main)' }}>
-                        {project.topic}
-                      </h3>
-                      {project.generated_title && (
-                        <p className="text-xs mt-1 truncate" style={{ color: 'var(--color-text-muted)' }}>
-                          📺 {project.generated_title}
-                        </p>
-                      )}
-                      <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-                        {new Date(project.created_at).toLocaleDateString()}
+                  {/* Status + category badges */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span
+                      className="text-xs font-bold uppercase px-2 py-0.5 rounded-full"
+                      style={{ background: `${cfg.color}22`, color: cfg.color }}
+                    >
+                      <StatusIcon className="w-3 h-3 inline mr-1" />
+                      {cfg.label}
+                    </span>
+                    <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: '#f3f4f6', color: '#6b7280' }}>
+                      {project.category}
+                    </span>
+                  </div>
+
+                  {/* Title */}
+                  <div className="flex-1 min-w-0">
+                    <h3 className="font-bold text-base leading-tight" style={{ color: 'var(--color-text-main)', wordBreak: 'break-word' }}>
+                      {project.topic}
+                    </h3>
+                    {project.generated_title && (
+                      <p className="text-xs mt-1 truncate" style={{ color: 'var(--color-text-muted)' }}>
+                        📺 {project.generated_title}
                       </p>
-                    </div>
-                    <div className="flex items-center gap-2 flex-shrink-0" onClick={e => e.stopPropagation()}>
-                      {nextStep && (
-                        <Link
-                          href={nextStep.href}
-                          className="px-3 py-1.5 rounded-lg text-sm font-semibold text-white"
-                          style={{ background: project.status === 'FAILED' ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}
-                        >
-                          {nextStep.label}
-                        </Link>
-                      )}
-                      <button
-                        onClick={() => deleteProject(project.id)}
-                        className="px-2 py-1.5 rounded-lg text-sm"
-                        style={{ background: '#fee2e2', color: '#dc2626' }}
+                    )}
+                    <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+                      {new Date(project.created_at).toLocaleDateString()}
+                    </p>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                    {nextStep && (
+                      <Link
+                        href={nextStep.href}
+                        className="flex-1 text-center px-3 py-1.5 rounded-lg text-sm font-semibold text-white"
+                        style={{ background: project.status === 'FAILED' ? 'linear-gradient(135deg, #ef4444, #dc2626)' : 'linear-gradient(135deg, #6366f1, #8b5cf6)' }}
                       >
-                        ✕
-                      </button>
-                    </div>
+                        {nextStep.label}
+                      </Link>
+                    )}
+                    <button
+                      onClick={() => deleteProject(project.id)}
+                      className="px-2 py-1.5 rounded-lg text-sm flex-shrink-0"
+                      style={{ background: '#fee2e2', color: '#dc2626' }}
+                    >
+                      ✕
+                    </button>
                   </div>
                 </div>
               );
