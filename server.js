@@ -494,6 +494,15 @@ try {
   } catch (kqErr) {
     console.warn('⚠️  Kid Quiz Studio routes not loaded:', kqErr.message);
   }
+
+  // Movie Review Studio (PUBLIC callback must be before authenticated routes)
+  try {
+    const movieReviewRoutes = (await import("./routes/v2/movie-review.js")).default;
+    app.use("/api/v2/movie-review", movieReviewRoutes);
+    console.log('✅ Movie Review Studio routes loaded at /api/v2/movie-review');
+  } catch (mrErr) {
+    console.warn('⚠️  Movie Review Studio routes not loaded:', mrErr.message);
+  }
   
   // V2 routes health check
   app.get("/api/v2/health", (_req, res) => {

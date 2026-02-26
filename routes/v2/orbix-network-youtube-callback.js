@@ -27,6 +27,7 @@ router.get('/youtube/callback', async (req, res) => {
     let orbixChannelId = null;
     let redirectToSetup = false;
     let isKidquiz = false;
+    let isMovieReview = false;
     if (state && state.includes(':')) {
       const parts = state.split(':');
       if (parts[parts.length - 1] === 'setup') {
@@ -35,6 +36,10 @@ router.get('/youtube/callback', async (req, res) => {
       }
       if (parts[parts.length - 1] === 'kidquiz') {
         isKidquiz = true;
+        parts.pop();
+      }
+      if (parts[parts.length - 1] === 'movie-review') {
+        isMovieReview = true;
         parts.pop();
       }
       businessId = parts[0];
@@ -97,13 +102,21 @@ router.get('/youtube/callback', async (req, res) => {
     const base = process.env.FRONTEND_URL || 'http://localhost:3000';
 
     if (isKidquiz) {
-      // Save under kidquiz module settings
       const kqExisting = await ModuleSettings.findByBusinessAndModule(businessId, 'kidquiz');
       const kqSettings = kqExisting?.settings ? { ...kqExisting.settings } : {};
       kqSettings.youtube = ytCreds;
       await ModuleSettings.update(businessId, 'kidquiz', kqSettings);
       console.log('[YouTube Callback] Saved YouTube credentials for KidQuiz businessId=', businessId, 'youtube_channel_id=', channel.id);
       return res.redirect(`${base}/dashboard/v2/modules/kidquiz/settings?youtube_connected=true`);
+    }
+
+    if (isMovieReview) {
+      const mrExisting = await ModuleSettings.findByBusinessAndModule(businessId, 'movie-review');
+      const mrSettings = mrExisting?.settings ? { ...mrExisting.settings } : {};
+      mrSettings.youtube = ytCreds;
+      await ModuleSettings.update(businessId, 'movie-review', mrSettings);
+      console.log('[YouTube Callback] Saved YouTube credentials for Movie Review Studio businessId=', businessId, 'youtube_channel_id=', channel.id);
+      return res.redirect(`${base}/dashboard/v2/modules/movie-review/settings?youtube_connected=true`);
     }
 
     const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
