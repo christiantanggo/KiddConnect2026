@@ -212,8 +212,24 @@ export default function EditorPage() {
                 {(uploadingPhoto || pastingPhoto) && <span className="text-xs" style={{ color: '#6366f1' }}>Saving...</span>}
               </div>
               {photoUrl && (
-                <div className="mt-3 rounded-xl overflow-hidden" style={{ height: 120, background: '#f3f4f6' }}>
+                <div className="mt-3 rounded-xl overflow-hidden relative" style={{ height: 120, background: '#f3f4f6' }}>
                   <img src={photoUrl} alt="Background preview" className="w-full h-full object-cover" />
+                  <button
+                    onClick={async () => {
+                      try {
+                        const token = document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1];
+                        const businessId = localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
+                        await fetch(`${API_URL}/api/v2/kidquiz/projects/${id}/photo`, {
+                          method: 'DELETE',
+                          headers: { Authorization: `Bearer ${token}`, 'X-Active-Business-Id': businessId }
+                        });
+                        setPhotoUrl(null);
+                      } catch (err) { setError(err.message); }
+                    }}
+                    className="absolute top-2 right-2 w-7 h-7 rounded-full flex items-center justify-center font-bold text-sm"
+                    style={{ background: 'rgba(0,0,0,0.6)', color: '#fff', lineHeight: 1 }}
+                    title="Remove photo"
+                  >✕</button>
                 </div>
               )}
             </div>

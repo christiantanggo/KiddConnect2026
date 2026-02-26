@@ -408,6 +408,23 @@ router.post('/projects/:id/photo', upload.single('photo'), async (req, res) => {
   }
 });
 
+router.delete('/projects/:id/photo', authenticate, requireBusinessContext, async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const project = await getProjectOrFail(res, req.params.id, businessId);
+    if (!project) return;
+
+    await supabaseClient
+      .from('kidquiz_projects')
+      .update({ photo_url: null, updated_at: new Date().toISOString() })
+      .eq('id', req.params.id);
+
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/projects/:id/submit', async (req, res) => {
   try {
     const businessId = req.active_business_id;
