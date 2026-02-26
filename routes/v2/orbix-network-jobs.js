@@ -794,41 +794,23 @@ export async function runYouTubeUploadJob() {
 const YOUTUBE_UPLOAD_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0; // 0 = start upload immediately after render
 
 /**
- * Process one PENDING render; if it completes as READY_FOR_UPLOAD, wait 30s then run one YouTube upload.
- * Used so a single manual "Force Render" runs the full pipeline (render → 30s → upload) without another process.
+ * Process one PENDING render. Stops at READY_FOR_UPLOAD — YouTube upload is manual only.
  */
 export async function runOneRenderThenUpload() {
   const result = await processOnePendingRender();
   if (result.processed && result.status === 'RENDER_COMPLETE') {
-    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
-      console.log('[Orbix Jobs] runOneRenderThenUpload: render complete, pausing', YOUTUBE_UPLOAD_DELAY_MS / 1000, 's before upload...');
-      await new Promise((r) => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
-    }
-    const uploadResult = await processOneYouTubeUpload();
-    if (uploadResult.processed) {
-      console.log('[Orbix Jobs] runOneRenderThenUpload: upload', uploadResult.status, uploadResult.renderId);
-    }
-    return { render: result, upload: uploadResult };
+    console.log('[Orbix Jobs] runOneRenderThenUpload: render complete — waiting for manual YouTube upload via UI');
   }
   return { render: result, upload: null };
 }
 
 /**
- * Process a specific render by ID, then run YouTube upload if it completes as READY_FOR_UPLOAD.
- * Used by Force Render so the full flow runs immediately.
+ * Process a specific render by ID. Stops at READY_FOR_UPLOAD — YouTube upload is manual only.
  */
 export async function runRenderByIdThenUpload(renderId) {
   const result = await processRenderById(renderId);
   if (result.processed && result.status === 'RENDER_COMPLETE') {
-    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
-      console.log('[Orbix Jobs] runRenderByIdThenUpload: render complete, pausing', YOUTUBE_UPLOAD_DELAY_MS / 1000, 's before upload...');
-      await new Promise((r) => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
-    }
-    const uploadResult = await processOneYouTubeUpload();
-    if (uploadResult.processed) {
-      console.log('[Orbix Jobs] runRenderByIdThenUpload: upload', uploadResult.status, uploadResult.renderId);
-    }
-    return { render: result, upload: uploadResult };
+    console.log('[Orbix Jobs] runRenderByIdThenUpload: render complete — waiting for manual YouTube upload via UI');
   }
   return { render: result, upload: null };
 }
