@@ -369,8 +369,8 @@ export async function renderKidQuizShort(render, project) {
     const cdD  = COUNTDOWN_DUR;
 
     const filterComplex = [
-      // Dark overlay over whole frame
-      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill[ov]`,
+      // Dark overlay over whole frame — light enough to keep background colors visible
+      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.25:t=fill[ov]`,
       // Grey bar track (visible during countdown only)
       `[ov]drawbox=x=${barX}:y=${barY}:w=${barW}:h=${barH}:color=0x404040:t=fill:enable='between(t\\,${cdS}\\,${cdE})'[v1]`,
       // Red bar filling from full to empty left-to-right countdown
