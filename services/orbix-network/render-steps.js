@@ -857,24 +857,7 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
     writeProgressLog('STEP_8_PUBLISH_DONE', { renderId, videoId: result?.videoId });
     console.log(`[Step 8 YouTube] SUCCESS videoId=${result.videoId} url=${result.url}`);
 
-    writeProgressLog('STEP_8_CAPTIONS_START', { renderId, videoId: result?.videoId });
-    try {
-      if (render.script_id) {
-        const { data: script } = await supabaseClient.from('orbix_scripts').select('*').eq('id', render.script_id).single();
-        if (script) {
-          const { generateCaptionSegments, estimateAudioDurationFromScript, captionSegmentsToSrt } = await import('./video-renderer.js');
-          const estimatedDuration = estimateAudioDurationFromScript(script);
-          const segments = generateCaptionSegments(script, estimatedDuration);
-          if (segments.length > 0) {
-            const srt = captionSegmentsToSrt(segments);
-            await uploadCaptions(businessId, result.videoId, srt, 'en', 'English', publishOptions);
-            console.log(`[Step 8 YouTube] Captions uploaded segments=${segments.length}`);
-          }
-        }
-      }
-    } catch (captionErr) {
-      console.error('[Step 8 YouTube] Caption upload failed (video already published)', captionErr?.message);
-    }
+    // Captions disabled — all text is already rendered as on-screen overlays
     writeProgressLog('STEP_8_CAPTIONS_DONE', { renderId });
 
     await updateStepStatus(renderId, step, 100);
