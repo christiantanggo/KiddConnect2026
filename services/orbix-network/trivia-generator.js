@@ -15,7 +15,7 @@ const TRIVIA_HOOK_EXAMPLES = [
   "Let's test your knowledge.",
   "Think you know this?",
   "This one surprises people.",
-  "Hard history question.",
+  "Most people get this wrong.",
   "Ready for a challenge?"
 ];
 
@@ -169,7 +169,7 @@ HOOK RULES (3–7 words):
 - Calm but competitive. Not exaggerated.
 - NO fake statistics ("Only 5% get this", "Genius only").
 - NO clickbait.
-- Approved: "Let's test your knowledge.", "Think you know this?", "This one surprises people.", "Hard history question.", "Ready for a challenge?"
+- Approved: "Let's test your knowledge.", "Think you know this?", "This one surprises people.", "Most people get this wrong.", "Ready for a challenge?"
 
 QUESTION FORMAT:
 - One question per video. Multiple choice only (A, B, C).
@@ -177,13 +177,13 @@ QUESTION FORMAT:
 - NO political, controversial, or sensitive topics.
 - NO copyrighted material requiring images.
 - Difficulty: 40% medium, 30% easy, 20% hard, 10% trick.
-- Categories and TARGET MIX — follow this distribution, do NOT over-index on Geography:
-  History 30%: events, dates, empires, wars, discoveries, famous people
-  Science 25%: biology, chemistry, physics, space, nature, medicine
-  General knowledge 20%: everyday facts, records, language, food, animals
-  Geography 15%: capitals, countries, landmarks (already well-covered — keep low)
-  Logic 5%: riddles, patterns, sequences
-  Pop culture 5%: non-copyright-dependent music, film, sports facts
+- Categories and TARGET MIX — follow this distribution closely. Do NOT over-index on any single category:
+  General knowledge 35%: everyday facts, records, language, food, animals, body, sports, money, culture
+  Science 25%: biology, chemistry, physics, space, nature, medicine, inventions
+  History 15%: events, dates, empires, wars, discoveries, famous people (already well-covered — keep low)
+  Geography 10%: capitals, countries, landmarks (already well-covered — keep low)
+  Logic 8%: riddles, patterns, sequences, math puzzles
+  Pop culture 7%: non-copyright-dependent music, film, sports facts
 
 TOPIC FIELD: You must also return a "topic" field — a 3–6 word label for the specific fact being tested (e.g. "gold chemical symbol", "Vatican City smallest country", "Nile river longest", "speed of light value"). This is used to track what has been covered.
 
@@ -196,7 +196,7 @@ Episode number: ${episodeNumber}
 Return JSON:
 {
   "hook": "<3-7 words, calm competitive>",
-  "category": "<HISTORY|SCIENCE|GENERAL KNOWLEDGE|GEOGRAPHY|LOGIC|POP CULTURE>",
+  "category": "<GENERAL KNOWLEDGE|SCIENCE|HISTORY|GEOGRAPHY|LOGIC|POP CULTURE>",
   "topic": "<3-6 word label for the specific fact being tested>",
   "question": "<the question ONLY — do NOT include A) B) C) options in this field>",
   "option_a": "<answer text only, no letter prefix>",
