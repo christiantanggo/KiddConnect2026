@@ -9,7 +9,7 @@ import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
 import { useOrbixChannel } from '../OrbixChannelContext';
-import { Loader, TrendingUp, Video, FileText, Eye, Play, RefreshCw, X, XCircle, RotateCw, AlertTriangle } from 'lucide-react';
+import { Loader, TrendingUp, Video, FileText, Eye, Play, RefreshCw, X, XCircle, RotateCw, AlertTriangle, Settings2 } from 'lucide-react';
 import PipelineView from './PipelineView';
 import VideoDetailModal from './VideoDetailModal';
 import OrbixChannelSelector from '../OrbixChannelSelector';
@@ -28,7 +28,7 @@ function isRenderStuck(r) {
 export default function OrbixNetworkDashboard() {
   const router = useRouter();
   const { success, error: showErrorToast } = useToast();
-  const { currentChannelId, apiParams, apiBody, channels, loading: channelsLoading } = useOrbixChannel();
+  const { currentChannelId, apiParams, apiBody, channels, loading: channelsLoading, channelsError: channelsErrorMsg, refetchChannels: refetchChannelsFn } = useOrbixChannel();
   const [loading, setLoading] = useState(true);
   const [rawItems, setRawItems] = useState([]);
   const [stories, setStories] = useState([]);
@@ -56,6 +56,7 @@ export default function OrbixNetworkDashboard() {
     publish: false
   });
   const [cancellingStuck, setCancellingStuck] = useState(false);
+  const [dashboardLoadError, setDashboardLoadError] = useState(null); // Last error from loadDashboardData so we can show it
   const isLoadingDataRef = useRef(false); // Prevent concurrent loadDashboardData calls
   const rateLimitedRef = useRef(false); // Track if we're rate limited
   const serverUnreachableRef = useRef(false); // When true, stop polling to avoid console flood
@@ -86,7 +87,7 @@ export default function OrbixNetworkDashboard() {
   // Auto-refresh every 5s only for renders that are actually in progress (not stuck)
   useEffect(() => {
     const activeRenders = renders.filter(r =>
-      (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+      (r.render_status === 'PENDING' || r.render_status === 'PROCESSING' || r.render_status === 'READY_FOR_UPLOAD') && !isRenderStuck(r)
     );
     const hasActiveRenders = activeRenders.length > 0;
 
@@ -99,7 +100,7 @@ export default function OrbixNetworkDashboard() {
     autoRefreshIntervalRef.current = setInterval(() => {
       const currentRenders = rendersRef.current;
       const stillActive = currentRenders.some(r =>
-        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING' || r.render_status === 'READY_FOR_UPLOAD') && !isRenderStuck(r)
       );
       if (!stillActive) {
         if (autoRefreshIntervalRef.current) {
@@ -197,10 +198,10 @@ export default function OrbixNetworkDashboard() {
       const newRenders = rendersRes.data.renders || [];
       const previousRenders = rendersRef.current;
       const hadActiveRenders = previousRenders.some(r =>
-        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING' || r.render_status === 'READY_FOR_UPLOAD') && !isRenderStuck(r)
       );
       const hasActiveRenders = newRenders.some(r =>
-        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING') && !isRenderStuck(r)
+        (r.render_status === 'PENDING' || r.render_status === 'PROCESSING' || r.render_status === 'READY_FOR_UPLOAD') && !isRenderStuck(r)
       );
       const statusChanged = previousRenders.some(prev => {
         const next = newRenders.find(r => r.id === prev.id);
@@ -224,7 +225,7 @@ export default function OrbixNetworkDashboard() {
   const refreshPipelineData = async () => {
     if (isLoadingDataRef.current || rateLimitedRef.current) return;
     try {
-      const pipelineRes = await orbixNetworkAPI.getPipeline({ ...apiParams(), limit: 20 });
+      const pipelineRes = await orbixNetworkAPI.getPipeline({ ...apiParams(), limit: 100 });
       setPipeline(pipelineRes.data.pipeline || []);
       serverUnreachableRef.current = false; // Backend is reachable
     } catch (error) {
@@ -267,7 +268,7 @@ export default function OrbixNetworkDashboard() {
         orbixNetworkAPI.getStories({ ...params, limit: 10 }),
         orbixNetworkAPI.getRenders({ ...params, limit: 5 }),
         orbixNetworkAPI.getPublishes({ ...params, limit: 5 }),
-        orbixNetworkAPI.getPipeline({ ...params, limit: 20 })
+        orbixNetworkAPI.getPipeline({ ...params, limit: 100 })
       ]);
       
       console.log('[Orbix Dashboard] Dashboard data fetched successfully');
@@ -276,6 +277,7 @@ export default function OrbixNetworkDashboard() {
       setRenders(rendersRes.data.renders || []);
       setPublishes(publishesRes.data.publishes || []);
       setPipeline(pipelineRes.data.pipeline || []);
+      setDashboardLoadError(null);
       
       // Calculate stats
       setStats({
@@ -322,6 +324,7 @@ export default function OrbixNetworkDashboard() {
       }
       
       const errorInfo = handleAPIError(error);
+      setDashboardLoadError(errorInfo.message || 'Failed to load dashboard data');
       showErrorToast(errorInfo.message || 'Failed to load dashboard data');
       if (errorInfo.redirect) {
         router.push(errorInfo.redirect);
@@ -343,15 +346,32 @@ export default function OrbixNetworkDashboard() {
   const getStepName = (step) => {
     const stepNames = {
       'PENDING': 'Waiting to start',
+      'STEP_3_BACKGROUND': 'Step 3: Background',
       'STEP_3_BACKGROUND_VOICE': 'Step 3: Background + Voice',
+      'STEP_4_VOICE': 'Step 4: Voice',
       'STEP_4_HOOK_TEXT': 'Step 4: Hook Text',
+      'STEP_5_HOOK_TEXT': 'Step 5: Hook Text',
       'STEP_5_CAPTIONS': 'Step 5: Captions',
+      'STEP_6_CAPTIONS': 'Step 6: Captions',
       'STEP_6_METADATA': 'Step 6: Metadata',
+      'STEP_7_METADATA': 'Step 7: Metadata',
       'STEP_7_YOUTUBE_UPLOAD': 'Step 7: YouTube Upload',
+      'STEP_8_YOUTUBE_UPLOAD': 'Step 8: YouTube Upload',
       'COMPLETED': 'Completed',
       'FAILED': 'Failed'
     };
     return stepNames[step] || step || 'Unknown';
+  };
+
+  const getRenderStatusLabel = (status) => {
+    const labels = {
+      PENDING: 'Waiting to start',
+      PROCESSING: 'Rendering',
+      READY_FOR_UPLOAD: 'Ready for upload',
+      COMPLETED: 'Completed',
+      FAILED: 'Failed'
+    };
+    return labels[status] || status;
   };
 
   const getStatusBadge = (status) => {
@@ -363,13 +383,14 @@ export default function OrbixNetworkDashboard() {
       'PUBLISHED': 'bg-purple-100 text-purple-800',
       'PENDING': 'bg-gray-100 text-gray-800',
       'PROCESSING': 'bg-blue-100 text-blue-800',
+      'READY_FOR_UPLOAD': 'bg-amber-100 text-amber-800',
       'COMPLETED': 'bg-green-100 text-green-800',
       'FAILED': 'bg-red-100 text-red-800'
     };
     
     return (
       <span className={`px-2 py-1 text-xs font-medium rounded ${statusColors[status] || 'bg-gray-100 text-gray-800'}`}>
-        {status}
+        {getRenderStatusLabel(status)}
       </span>
     );
   };
@@ -412,8 +433,8 @@ export default function OrbixNetworkDashboard() {
   };
 
   const handleRenderClick = async (render) => {
-    // Allow clicking on PENDING, PROCESSING, COMPLETED, or FAILED renders
-    if (!['PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'].includes(render.render_status)) {
+    // Allow clicking on PENDING, PROCESSING, READY_FOR_UPLOAD, COMPLETED, or FAILED renders
+    if (!['PENDING', 'PROCESSING', 'READY_FOR_UPLOAD', 'COMPLETED', 'FAILED'].includes(render.render_status)) {
       return;
     }
     
@@ -543,35 +564,33 @@ export default function OrbixNetworkDashboard() {
       
       console.log('[Orbix Dashboard] Job response:', response);
       
-      // For scrape job, show detailed results
-      if (jobName === 'scrape' && response.data?.results) {
-        const result = response.data.results[0]; // First business result
-        if (result) {
-          const message = result.error 
-            ? `Scrape failed: ${result.error}`
-            : `Scraped ${result.scraped || 0} items from ${result.enabled_sources || 0} source(s). Saved ${result.saved || 0} items.`;
-          if (result.error) {
-            showErrorToast(message);
-          } else {
-            success(message);
-            if (result.disabled_sources > 0) {
-              showErrorToast(`${result.disabled_sources} source(s) are disabled. Enable them in Settings to scrape.`);
-            }
+      // For scrape job, always show feedback: prefer API message, then build from results[0]
+      if (jobName === 'scrape') {
+        const apiMessage = response.data?.message;
+        const result = response.data?.results?.[0];
+        if (result?.error) {
+          showErrorToast(`Scrape failed: ${result.error}`);
+        } else if (apiMessage) {
+          success(apiMessage);
+          if (result?.disabled_sources > 0) {
+            showErrorToast(`${result.disabled_sources} source(s) are disabled. Enable them in Settings to scrape.`);
           }
+        } else if (result) {
+          success(
+            `Scraped ${result.scraped || 0} items from ${result.enabled_sources ?? 0} source(s). Saved ${result.saved || 0} items.`
+          );
         } else {
-          success(`${jobName} job completed successfully`);
+          success('Scrape job completed successfully.');
         }
       } else {
         success(`${jobName} job completed successfully`);
       }
-      
-      // Reload dashboard data after a short delay
-      console.log('[Orbix Dashboard] Scheduling dashboard reload in 2 seconds...');
-      setTimeout(async () => {
-        console.log('[Orbix Dashboard] Reloading dashboard data after job completion...');
-        await loadDashboardData();
-        console.log('[Orbix Dashboard] Dashboard data reloaded after job');
-      }, 2000);
+
+      // Reload dashboard so new scraped items and pipeline show (only if we have a channel)
+      if (currentChannelId) {
+        console.log('[Orbix Dashboard] Reloading dashboard data after job...');
+        setTimeout(() => loadDashboardData(), 1500);
+      }
       
       console.log('[Orbix Dashboard] ========== TRIGGER JOB SUCCESS ==========');
       return response;
@@ -588,7 +607,11 @@ export default function OrbixNetworkDashboard() {
       console.error('[Orbix Dashboard] ========== END ERROR ==========');
       
       const errorInfo = handleAPIError(error);
-      showErrorToast(errorInfo.message || `Failed to trigger ${jobName} job`);
+      const isTimeout = error?.code === 'ECONNABORTED' || error?.message?.toLowerCase().includes('timeout');
+      const msg = jobName === 'scrape' && isTimeout
+        ? 'Scrape request timed out. The job may have completed on the server—refresh the page to see new items.'
+        : (errorInfo.message || `Failed to trigger ${jobName} job`);
+      showErrorToast(msg);
     } finally {
       setRunningJobs(prev => ({ ...prev, [jobName]: false }));
       console.log('[Orbix Dashboard] Job running state set to false for:', jobName);
@@ -613,6 +636,19 @@ export default function OrbixNetworkDashboard() {
     <AuthGuard>
       <V2AppShell>
         <div className="p-6 space-y-6">
+          {channelsErrorMsg && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-red-800 font-medium">Channels failed to load: {channelsErrorMsg}</p>
+              <button
+                type="button"
+                onClick={() => refetchChannelsFn()}
+                className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 flex items-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Retry
+              </button>
+            </div>
+          )}
           {noChannel ? (
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
               <p className="text-gray-600 mb-2">
@@ -633,6 +669,13 @@ export default function OrbixNetworkDashboard() {
               <span className="text-sm text-gray-600">Channel:</span>
               <OrbixChannelSelector />
               <Link
+                href={`/dashboard/v2/modules/orbix-network/settings${currentChannelId ? `?channel=${currentChannelId}` : ''}`}
+                className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50"
+              >
+                <Settings2 className="w-4 h-4" />
+                Channel Settings
+              </Link>
+              <Link
                 href="/dashboard/v2/modules/orbix-network/stories"
                 className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
               >
@@ -649,7 +692,13 @@ export default function OrbixNetworkDashboard() {
             </p>
             <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
               <button
-                onClick={() => triggerJob('scrape', () => orbixNetworkAPI.triggerScrapeJob(apiBody()))}
+                onClick={() => {
+                  if (!currentChannelId) {
+                    showErrorToast('Select a channel first so scraped items show on this dashboard.');
+                    return;
+                  }
+                  triggerJob('scrape', () => orbixNetworkAPI.triggerScrapeJob(apiBody()));
+                }}
                 disabled={runningJobs.scrape}
                 className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
@@ -774,6 +823,28 @@ export default function OrbixNetworkDashboard() {
               >
                 {cancellingStuck ? <Loader className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
                 Cancel stuck renders
+              </button>
+            </div>
+          )}
+
+          {/* Load error banner + Refresh - so production issues are visible instead of blank */}
+          {(dashboardLoadError || (pipeline.length === 0 && currentChannelId && !loading)) && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                {dashboardLoadError ? (
+                  <p className="text-amber-800 font-medium">Could not load dashboard: {dashboardLoadError}</p>
+                ) : (
+                  <p className="text-amber-800">No pipeline items for this channel yet. Scrape or run Full Pipeline, then refresh.</p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => { setDashboardLoadError(null); loadDashboardData(); }}
+                disabled={loading}
+                className="px-4 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 flex items-center gap-2"
+              >
+                {loading ? <Loader className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                Refresh
               </button>
             </div>
           )}

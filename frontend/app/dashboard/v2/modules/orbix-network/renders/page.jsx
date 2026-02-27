@@ -9,7 +9,7 @@ import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
 import { useOrbixChannel } from '../OrbixChannelContext';
-import { ArrowLeft, Loader, Video, Download, ExternalLink, RotateCw, Upload } from 'lucide-react';
+import { ArrowLeft, Loader, Video, Download, ExternalLink, RotateCw, Upload, Settings2 } from 'lucide-react';
 
 export default function OrbixNetworkRendersPage() {
   const router = useRouter();
@@ -134,7 +134,7 @@ export default function OrbixNetworkRendersPage() {
       <V2AppShell>
         <div className="p-6 space-y-6">
           {/* Header */}
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-start flex-wrap gap-4">
             <div>
               <Link
                 href="/dashboard/v2/modules/orbix-network/dashboard"
@@ -146,6 +146,13 @@ export default function OrbixNetworkRendersPage() {
               <h1 className="text-3xl font-bold mb-2">Video Renders</h1>
               <p className="text-gray-600">Review renders before uploading to YouTube</p>
             </div>
+            <Link
+              href={`/dashboard/v2/modules/orbix-network/settings${currentChannelId ? `?channel=${currentChannelId}` : ''}`}
+              className="inline-flex items-center gap-2 px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm mt-8"
+            >
+              <Settings2 className="w-4 h-4" />
+              Channel Settings
+            </Link>
           </div>
 
           {/* Filter */}

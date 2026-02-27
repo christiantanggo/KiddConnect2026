@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { orbixNetworkAPI } from '@/lib/api';
@@ -626,6 +627,7 @@ function ChannelSettingsTab({ channel }) {
 export default function OrbixNetworkSettingsPage() {
   const { success, error: showError } = useToast();
   const { channels, currentChannelId, setCurrentChannelId, loading: channelsLoading, refetchChannels } = useOrbixChannel();
+  const searchParams = useSearchParams();
 
   // Which top-level tab: 'global' or a channel id
   const [activeTab, setActiveTab] = useState(null);
@@ -642,18 +644,21 @@ export default function OrbixNetworkSettingsPage() {
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // When channels load, default active tab to the current channel or first channel
+  // When channels load, default active tab to ?channel= param, then current channel, then first channel
   useEffect(() => {
     if (channelsLoading) return;
+    const paramChannelId = searchParams?.get('channel');
     if (channels.length > 0) {
       setActiveTab((prev) => {
         if (prev && (prev === 'global' || channels.some((c) => c.id === prev))) return prev;
+        // Prefer the URL param if it matches a real channel
+        if (paramChannelId && channels.some((c) => c.id === paramChannelId)) return paramChannelId;
         return currentChannelId || channels[0].id;
       });
     } else {
       setActiveTab('global');
     }
-  }, [channels, channelsLoading, currentChannelId]);
+  }, [channels, channelsLoading, currentChannelId, searchParams]);
 
   // Load global settings once
   useEffect(() => {
