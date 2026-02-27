@@ -302,12 +302,29 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
       }
     }
 
-    // Store the webm directly — browsers that can record webm can always play it back.
-    // FFmpeg can also read webm/opus fine during rendering.
-    // We avoid re-encoding to prevent the silent-MP3 bug from Chrome's non-compliant opus header.
     const inExt = req.file.originalname.split('.').pop() || 'webm';
     const contentType = req.file.mimetype || 'audio/webm';
     const fileName = `${businessId}/${project.id}/voice-${Date.now()}.${inExt}`;
+
+    // Get actual duration via ffprobe before uploading
+    let durationSeconds = null;
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const { writeFile, unlink } = await import('fs');
+      const { join } = await import('path');
+      const { tmpdir } = await import('os');
+      const execAsync = promisify(exec);
+      const writeAsync = promisify(writeFile);
+      const unlinkAsync = promisify(unlink);
+      const tmpIn = join(tmpdir(), `mr-probe-${randomUUID()}.${inExt}`);
+      await writeAsync(tmpIn, audioBuffer);
+      const { stdout } = await execAsync(`ffprobe -v quiet -print_format json -show_streams "${tmpIn}"`);
+      unlinkAsync(tmpIn).catch(() => {});
+      const info = JSON.parse(stdout);
+      const stream = info.streams?.find(s => s.codec_type === 'audio');
+      if (stream?.duration) durationSeconds = parseFloat(stream.duration);
+    } catch (_) {}
 
     const { error: uploadErr } = await supabaseClient.storage
       .from(VOICE_BUCKET)
@@ -315,9 +332,6 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
     if (uploadErr) throw new Error(`Storage upload failed: ${uploadErr.message}`);
 
     const { data: { publicUrl } } = supabaseClient.storage.from(VOICE_BUCKET).getPublicUrl(fileName);
-
-    // Estimate duration from file size (webm opus ~30kbps typical)
-    const durationSeconds = Math.round(audioBuffer.length / (30000 / 8));
 
     const { data: asset, error: assetErr } = await supabaseClient
       .from('movie_review_assets')
