@@ -884,11 +884,45 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
           onLoadedMetadata={onAudioMetadata} />
       )}
 
+      {/* Inject Ken Burns keyframes once */}
+      <style>{`
+        @keyframes mr-zoom-in   { from { transform: scale(1.0) } to { transform: scale(1.3) } }
+        @keyframes mr-zoom-out  { from { transform: scale(1.3) } to { transform: scale(1.0) } }
+        @keyframes mr-pan-left  { from { transform: scale(1.15) translateX(8%)  } to { transform: scale(1.15) translateX(-8%) } }
+        @keyframes mr-pan-right { from { transform: scale(1.15) translateX(-8%) } to { transform: scale(1.15) translateX(8%)  } }
+      `}</style>
+
       {/* ── Preview monitor ── */}
       <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f0f', border: '1px solid var(--color-border)', aspectRatio: '9/16', maxHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
-        {activeImageItem?.asset_url ? (
-          <img src={activeImageItem.asset_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-        ) : (
+        {activeImageItem?.asset_url ? (() => {
+          const motion = activeImageItem.motion_preset || 'ZOOM_IN';
+          const clipDur = activeImageItem.end_time - activeImageItem.start_time;
+          // Negative delay = start the animation mid-way through (matches playhead position)
+          const elapsed = currentTime - activeImageItem.start_time;
+          const animName = { ZOOM_IN: 'mr-zoom-in', ZOOM_OUT: 'mr-zoom-out', PAN_LEFT: 'mr-pan-left', PAN_RIGHT: 'mr-pan-right' }[motion] || 'mr-zoom-in';
+          return (
+            <img
+              key={`${activeImageItem.id}-${motion}`}
+              src={activeImageItem.asset_url}
+              alt=""
+              style={{
+                width: '100%', height: '100%', objectFit: 'cover',
+                animation: playing
+                  ? `${animName} ${clipDur}s linear -${elapsed.toFixed(2)}s 1 both`
+                  : 'none',
+                transform: (() => {
+                  // When paused, show the correct static frame position
+                  const p = Math.min(1, elapsed / Math.max(clipDur, 0.001));
+                  if (motion === 'ZOOM_IN')  return `scale(${1.0 + 0.3 * p})`;
+                  if (motion === 'ZOOM_OUT') return `scale(${1.3 - 0.3 * p})`;
+                  if (motion === 'PAN_LEFT') return `scale(1.15) translateX(${8 - 16 * p}%)`;
+                  if (motion === 'PAN_RIGHT') return `scale(1.15) translateX(${-8 + 16 * p}%)`;
+                  return 'none';
+                })(),
+              }}
+            />
+          );
+        })() : (
           <div className="text-center" style={{ color: '#555' }}>
             <Play className="w-10 h-10 mx-auto mb-2 opacity-30" />
             <p className="text-xs opacity-50">No image at this point</p>
