@@ -469,36 +469,39 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   const [selectedId, setSelectedId] = useState(null);
 
   // Real waveform peaks decoded from the audio file
-  // peaks is Float32Array of normalised values 0–1, one per pixel-column we'll render
   const [waveformPeaks, setWaveformPeaks] = useState(null);
   useEffect(() => {
     if (!voiceAsset?.public_url) return;
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch(voiceAsset.public_url);
+        // Add cache-busting param so the browser sends fresh CORS headers
+        const url = voiceAsset.public_url + (voiceAsset.public_url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+        const res = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+        if (!res.ok) throw new Error(`fetch failed ${res.status}`);
         const arrayBuffer = await res.arrayBuffer();
+        if (cancelled) return;
         const actx = new (window.AudioContext || window.webkitAudioContext)();
         const decoded = await actx.decodeAudioData(arrayBuffer);
         actx.close();
         if (cancelled) return;
-        // Mix down to mono
         const raw = decoded.getChannelData(0);
-        // Downsample into 600 buckets (enough for any clip width)
         const BUCKETS = 600;
-        const blockSize = Math.floor(raw.length / BUCKETS);
+        const blockSize = Math.max(1, Math.floor(raw.length / BUCKETS));
         const peaks = new Float32Array(BUCKETS);
         for (let b = 0; b < BUCKETS; b++) {
           let max = 0;
           const off = b * blockSize;
-          for (let s = 0; s < blockSize; s++) {
+          for (let s = 0; s < blockSize && off + s < raw.length; s++) {
             const abs = Math.abs(raw[off + s]);
             if (abs > max) max = abs;
           }
           peaks[b] = max;
         }
         setWaveformPeaks(peaks);
-      } catch (_) {}
+      } catch (err) {
+        console.warn('[Waveform] decode failed:', err.message);
+      }
     })();
     return () => { cancelled = true; };
   }, [voiceAsset?.public_url]); // eslint-disable-line react-hooks/exhaustive-deps
