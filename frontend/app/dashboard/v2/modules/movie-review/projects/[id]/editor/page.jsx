@@ -647,7 +647,15 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     return best;
   }
 
-  // ── Global pointer listeners for drag (avoids pointer-capture / container issues) ──
+  // ── Global pointer listeners for drag ────────────────────────────────────
+  // We store pxPerSec in a ref so the stable window listener always reads the latest value
+  const pxPerSecRef = useRef(pxPerSec);
+  useEffect(() => { pxPerSecRef.current = pxPerSec; }, [pxPerSec]);
+  const durRef = useRef(dur);
+  useEffect(() => { durRef.current = dur; }, [dur]);
+  const audioDurRef = useRef(audioDur);
+  useEffect(() => { audioDurRef.current = audioDur; }, [audioDur]);
+
   useEffect(() => {
     const move = (e) => {
       if (!dragState.current) return;
@@ -660,8 +668,9 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
     };
+  // Stable — handleDragMove reads from refs, not closures
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pxPerSec, dur, audioDur, audioClip, items]);
+  }, []);
 
   // ── Clip drag logic ───────────────────────────────────────────────────────
   function onClipPointerDown(e, itemId, type) {
@@ -678,76 +687,76 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
 
   function handleDragMove(clientX) {
     if (!dragState.current) return;
-    const { type, startX, origStart, origEnd } = dragState.current;
+    // Always read live values from refs — never from closure-captured state
+    const pps = pxPerSecRef.current;
+    const totalDur = durRef.current;
+    const maxAudioDur = audioDurRef.current;
+
+    const { type, startX, origStart, origEnd, origFileStart, itemId } = dragState.current;
     const dx = clientX - startX;
-    const dSec = dx / pxPerSec;
-    const maxAudioEnd = audioDur || origEnd; // can't trim audio past its real length
+    const dSec = dx / pps;
 
     // ── Audio clip drag ──────────────────────────────────────────────────────
-    const { origFileStart } = dragState.current;
-    const clipLen = origEnd - origStart;
-
     if (type === 'audio-move') {
-      // Move the clip on the timeline — fileStart stays the same
-      const newStart = Math.max(0, Math.min(dur - clipLen, origStart + dSec));
+      const clipLen = origEnd - origStart;
+      const newStart = Math.max(0, Math.min(totalDur - clipLen, origStart + dSec));
       setAudioClip({ start: parseFloat(newStart.toFixed(2)), end: parseFloat((newStart + clipLen).toFixed(2)), fileStart: origFileStart });
       return;
     }
+
     if (type === 'audio-left') {
-      // Left trim: start moves right → skip further into the file
-      // newStart can't go past right edge, and fileStart can't exceed real audio length
-      const rawNewStart = origStart + dSec;
-      const maxFileStart = maxAudioEnd - MIN_CLIP_S;
-      const newFileStart = Math.max(0, Math.min(maxFileStart, origFileStart + dSec));
-      const newStart = Math.max(0, Math.min(origEnd - MIN_CLIP_S, rawNewStart));
+      // Drag LEFT handle RIGHT → cut beginning, right edge stays fixed
+      // Drag LEFT handle LEFT → restore beginning, right edge stays fixed
+      const maxShrink = origEnd - MIN_CLIP_S; // can't push start past the right edge
+      const newStart = Math.max(0, Math.min(maxShrink, origStart + dSec));
+      // fileStart advances by the same amount we moved start (skip that many seconds into the file)
+      const fileDelta = newStart - origStart;
+      const newFileStart = Math.max(0, (origFileStart || 0) + fileDelta);
       setAudioClip({ start: parseFloat(newStart.toFixed(2)), end: origEnd, fileStart: parseFloat(newFileStart.toFixed(2)) });
       return;
     }
+
     if (type === 'audio-right') {
-      // Right trim: shorten the clip from the end — fileStart stays the same
-      // Can't play audio past the real file length
-      const maxEnd = origStart + (maxAudioEnd - origFileStart);
-      const newEnd = Math.min(dur, Math.min(maxEnd, Math.max(origStart + MIN_CLIP_S, origEnd + dSec)));
-      setAudioClip({ start: origStart, end: parseFloat(newEnd.toFixed(2)), fileStart: origFileStart });
+      // Drag RIGHT handle LEFT → cut end, left edge stays fixed
+      const maxEnd = maxAudioDur ? origStart + (maxAudioDur - (origFileStart || 0)) : totalDur;
+      const newEnd = Math.min(totalDur, Math.min(maxEnd, Math.max(origStart + MIN_CLIP_S, origEnd + dSec)));
+      setAudioClip({ start: origStart, end: parseFloat(newEnd.toFixed(2)), fileStart: origFileStart || 0 });
       return;
     }
 
     // ── Image / text clip drag ───────────────────────────────────────────────
-    const { itemId } = dragState.current;
-    setItems(prev => {
-      return prev.map(item => {
-        if (item.id !== itemId) return item;
-        const clipLen = origEnd - origStart;
-        let start_time, end_time;
+    setItems(prev => prev.map(item => {
+      if (item.id !== itemId) return item;
+      const clipLen = origEnd - origStart;
+      let start_time, end_time;
 
-        if (type === 'move') {
-          let rawStart = Math.max(0, Math.min(dur - clipLen, origStart + dSec));
-          const snappedStart = snapValue(rawStart, itemId, prev);
-          const snappedEnd = snapValue(rawStart + clipLen, itemId, prev);
-          if (snappedStart !== rawStart) {
-            start_time = snappedStart;
-          } else if (snappedEnd !== rawStart + clipLen) {
-            start_time = snappedEnd - clipLen;
-          } else {
-            start_time = rawStart;
-          }
-          start_time = Math.max(0, Math.min(dur - clipLen, start_time));
-          end_time = start_time + clipLen;
-        } else if (type === 'resize-left') {
-          let rawStart = Math.max(0, Math.min(origEnd - MIN_CLIP_S, origStart + dSec));
-          start_time = snapValue(rawStart, itemId, prev);
-          start_time = Math.max(0, Math.min(origEnd - MIN_CLIP_S, start_time));
-          end_time = origEnd;
+      if (type === 'move') {
+        let rawStart = Math.max(0, Math.min(totalDur - clipLen, origStart + dSec));
+        const snappedStart = snapValue(rawStart, itemId, prev);
+        const snappedEnd = snapValue(rawStart + clipLen, itemId, prev);
+        if (snappedStart !== rawStart) {
+          start_time = snappedStart;
+        } else if (snappedEnd !== rawStart + clipLen) {
+          start_time = snappedEnd - clipLen;
         } else {
-          let rawEnd = Math.min(dur, Math.max(origStart + MIN_CLIP_S, origEnd + dSec));
-          end_time = snapValue(rawEnd, itemId, prev);
-          end_time = Math.min(dur, Math.max(origStart + MIN_CLIP_S, end_time));
-          start_time = origStart;
+          start_time = rawStart;
         }
+        start_time = Math.max(0, Math.min(totalDur - clipLen, start_time));
+        end_time = start_time + clipLen;
+      } else if (type === 'resize-left') {
+        let rawStart = Math.max(0, Math.min(origEnd - MIN_CLIP_S, origStart + dSec));
+        start_time = snapValue(rawStart, itemId, prev);
+        start_time = Math.max(0, Math.min(origEnd - MIN_CLIP_S, start_time));
+        end_time = origEnd;
+      } else {
+        let rawEnd = Math.min(totalDur, Math.max(origStart + MIN_CLIP_S, origEnd + dSec));
+        end_time = snapValue(rawEnd, itemId, prev);
+        end_time = Math.min(totalDur, Math.max(origStart + MIN_CLIP_S, end_time));
+        start_time = origStart;
+      }
 
-        return { ...item, start_time: parseFloat(start_time.toFixed(2)), end_time: parseFloat(end_time.toFixed(2)) };
-      });
-    });
+      return { ...item, start_time: parseFloat(start_time.toFixed(2)), end_time: parseFloat(end_time.toFixed(2)) };
+    }));
   }
 
 
