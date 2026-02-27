@@ -485,11 +485,14 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
         const decoded = await actx.decodeAudioData(arrayBuffer);
         actx.close();
         if (cancelled) return;
-        // Use the decoded duration as the authoritative real duration
+        // decoded.duration is the ground truth — always use it
         if (decoded.duration && isFinite(decoded.duration)) {
-          setAudioDur(decoded.duration);
-          fixAudioClipEnd(decoded.duration);
-          if (!maxDuration || maxDuration === 50) setDur(decoded.duration);
+          const realDur = decoded.duration;
+          setAudioDur(realDur);
+          // Always correct the audio clip end to the real duration
+          setAudioClip(prev => ({ ...prev, end: prev.end > realDur ? realDur : prev.end }));
+          // Correct the video timeline length too if it was based on the bad server estimate
+          setDur(prev => prev > realDur + 1 ? realDur : prev);
         }
         const raw = decoded.getChannelData(0);
         const BUCKETS = 600;
@@ -529,16 +532,13 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
 
   useEffect(() => { setItems(timelineItems || []); }, [timelineItems]);
 
-  // When <audio> metadata loads — most reliable source of real duration
+  // When <audio> metadata loads
   function onAudioMetadata() {
     const realDur = audioRef.current?.duration;
     if (!realDur || !isFinite(realDur)) return;
     setAudioDur(realDur);
-    fixAudioClipEnd(realDur);
-    // Only auto-set video end time if it hasn't been explicitly set
-    if (!maxDuration || maxDuration === 50) {
-      setDur(realDur);
-    }
+    setAudioClip(prev => ({ ...prev, end: prev.end > realDur ? realDur : prev.end }));
+    setDur(prev => prev > realDur + 1 ? realDur : prev);
   }
 
   // Save the new video end time to the project
@@ -567,12 +567,6 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   // ── Audio clip state ──────────────────────────────────────────────────────
   const [audioClip, setAudioClip] = useState({ start: 0, end: voiceAsset?.duration_seconds || 50, fileStart: 0 });
 
-  // Called whenever we get the real duration (from <audio> metadata or decodeAudioData)
-  // Always overwrite end with the real value — the server estimate is unreliable
-  function fixAudioClipEnd(realDur) {
-    if (!realDur || !isFinite(realDur) || realDur <= 0) return;
-    setAudioClip(prev => ({ ...prev, end: realDur }));
-  }
 
   // ── Playback — purely time-based RAF, audio just follows ─────────────────
   const playingRef = useRef(false); // ref so RAF closure always sees latest value
