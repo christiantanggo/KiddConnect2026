@@ -468,6 +468,41 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   const [saved, setSaved] = useState(false);
   const [selectedId, setSelectedId] = useState(null);
 
+  // Real waveform peaks decoded from the audio file
+  // peaks is Float32Array of normalised values 0–1, one per pixel-column we'll render
+  const [waveformPeaks, setWaveformPeaks] = useState(null);
+  useEffect(() => {
+    if (!voiceAsset?.public_url) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(voiceAsset.public_url);
+        const arrayBuffer = await res.arrayBuffer();
+        const actx = new (window.AudioContext || window.webkitAudioContext)();
+        const decoded = await actx.decodeAudioData(arrayBuffer);
+        actx.close();
+        if (cancelled) return;
+        // Mix down to mono
+        const raw = decoded.getChannelData(0);
+        // Downsample into 600 buckets (enough for any clip width)
+        const BUCKETS = 600;
+        const blockSize = Math.floor(raw.length / BUCKETS);
+        const peaks = new Float32Array(BUCKETS);
+        for (let b = 0; b < BUCKETS; b++) {
+          let max = 0;
+          const off = b * blockSize;
+          for (let s = 0; s < blockSize; s++) {
+            const abs = Math.abs(raw[off + s]);
+            if (abs > max) max = abs;
+          }
+          peaks[b] = max;
+        }
+        setWaveformPeaks(peaks);
+      } catch (_) {}
+    })();
+    return () => { cancelled = true; };
+  }, [voiceAsset?.public_url]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Playback state
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -1000,7 +1035,6 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                 {voiceAsset?.public_url ? (() => {
                   const clipW = Math.max((audioClip.end - audioClip.start) * pxPerSec, 24);
                   const clipL = audioClip.start * pxPerSec;
-                  const totalAudioBars = Math.floor((audioDur || 10) * 4);
                   return (
                   <div style={{ position: 'absolute', left: clipL, top: 6, width: clipW, height: TRACK_H - 12, userSelect: 'none', boxSizing: 'border-box' }}>
                     {/* Left resize handle — rendered FIRST so it sits above the body in z-order */}
@@ -1013,13 +1047,42 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                     <div
                       onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
                       style={{ position: 'absolute', left: 14, right: 14, top: 0, bottom: 0, cursor: 'grab', borderRadius: 4, background: 'linear-gradient(90deg,#1e3a5f,#2563eb)', overflow: 'hidden', border: '2px solid rgba(96,165,250,0.5)', boxSizing: 'border-box' }}>
-                      {/* Waveform bars */}
-                      <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', overflow: 'hidden' }}>
-                        {Array.from({ length: totalAudioBars }).map((_, i) => (
-                          <div key={i} style={{ width: 2, borderRadius: 1, flexShrink: 0, height: `${20 + Math.sin(i * 0.7) * 14 + Math.cos(i * 1.3) * 10}%`, background: 'rgba(147,197,253,0.7)' }} />
-                        ))}
-                      </div>
-                      <span style={{ position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)', color: '#93c5fd', fontSize: 10, fontWeight: 700, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                      {/* Real waveform SVG */}
+                      {(() => {
+                        const svgW = Math.max(clipW - 28, 10);
+                        const svgH = TRACK_H - 12;
+                        const mid = svgH / 2;
+                        if (waveformPeaks) {
+                          // Which portion of the full waveform to show (respects left trim)
+                          const fullDur = audioDur || (audioClip.end - audioClip.start);
+                          const startFrac = (audioClip.fileStart || 0) / fullDur;
+                          const endFrac = Math.min(1, startFrac + (audioClip.end - audioClip.start) / fullDur);
+                          const startBucket = Math.floor(startFrac * waveformPeaks.length);
+                          const endBucket = Math.ceil(endFrac * waveformPeaks.length);
+                          const slice = waveformPeaks.slice(startBucket, endBucket);
+                          const cols = Math.max(slice.length, 1);
+                          // Build SVG polyline points
+                          const pts = slice.map((v, i) => {
+                            const x = (i / cols) * svgW;
+                            const h = Math.max(1, v * mid * 0.95);
+                            return `${x},${mid - h} ${x},${mid + h}`;
+                          }).join(' ');
+                          return (
+                            <svg width={svgW} height={svgH} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
+                              <polyline points={pts} fill="none" stroke="rgba(147,197,253,0.85)" strokeWidth="1.5" strokeLinecap="round" />
+                            </svg>
+                          );
+                        }
+                        // Fallback: animated placeholder bars while decoding
+                        return (
+                          <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', overflow: 'hidden', paddingInline: 4 }}>
+                            {Array.from({ length: 40 }).map((_, i) => (
+                              <div key={i} style={{ width: 2, borderRadius: 1, flexShrink: 0, height: `${20 + Math.sin(i * 0.7) * 14}%`, background: 'rgba(147,197,253,0.4)' }} />
+                            ))}
+                          </div>
+                        );
+                      })()}
+                      <span style={{ position: 'absolute', left: 6, bottom: 3, color: '#93c5fd', fontSize: 9, fontWeight: 700, pointerEvents: 'none', whiteSpace: 'nowrap', opacity: 0.8 }}>
                         🎙 {(audioClip.end - audioClip.start).toFixed(1)}s
                       </span>
                     </div>
