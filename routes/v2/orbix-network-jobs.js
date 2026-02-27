@@ -1046,9 +1046,110 @@ export async function runPublishJob() {
           continue;
         }
 
-        // YouTube uploads are now MANUAL ONLY — user must click "Upload to YouTube" in the UI.
-        // The scheduled publish job no longer auto-uploads anything.
-        console.log(`[Orbix Publish] Business ${businessId}: auto-publish disabled — uploads are manual via UI.`);
+        // Get completed renders that haven't been published yet; schedule allows only one post per slot
+        const { data: allRenders, error: rendersError } = await supabaseClient
+          .from('orbix_renders')
+          .select('*, orbix_stories(*), orbix_scripts(*)')
+          .eq('business_id', businessId)
+          .eq('render_status', 'COMPLETED')
+          .limit(10);
+
+        if (rendersError) throw rendersError;
+
+        // Take at most 1 so we hit the next slot on a later run (spread evenly through the day)
+        const completedRenders = (allRenders || []).filter(r => r.output_url).slice(0, 1);
+
+        if (!completedRenders || completedRenders.length === 0) {
+          console.log(`[Orbix Publish] Business ${businessId}: no completed renders to publish`);
+          continue;
+        }
+
+        for (const render of completedRenders) {
+          // Skip if already published
+          const { data: existingPublish } = await supabaseClient
+            .from('orbix_publishes')
+            .select('id')
+            .eq('render_id', render.id)
+            .eq('publish_status', 'PUBLISHED')
+            .maybeSingle();
+
+          if (existingPublish) {
+            console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already published, skipping`);
+            continue;
+          }
+
+          try {
+            const story = render.orbix_stories;
+            const script = render.orbix_scripts;
+            const orbixChannelId = story?.channel_id || null;
+            const channelSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+            const byChannel = channelSettings?.settings?.youtube_by_channel || {};
+            const legacyYt = channelSettings?.settings?.youtube;
+            const hasCreds = (orbixChannelId && byChannel[orbixChannelId]?.access_token) || legacyYt?.access_token;
+
+            if (!hasCreds) {
+              console.log(`[Orbix Publish] Business ${businessId}: YouTube not connected${orbixChannelId ? ` for channel ${orbixChannelId}` : ''}, skipping render ${render.id}`);
+              continue;
+            }
+
+            const title = (render.youtube_title || script?.hook || story?.title || 'Orbix Network Video').trim();
+            const description = (render.youtube_description || `${script?.what_happened || ''}\n\n${script?.why_it_matters || ''}\n\n${script?.what_happens_next || ''}`).trim();
+            const tags = render.hashtags ? render.hashtags.split(/\s+/).map(t => t.replace(/^#/, '')) : [story?.category || 'news'];
+            const publishOptions = orbixChannelId ? { orbixChannelId } : {};
+
+            console.log(`[Orbix Publish] Business ${businessId}: uploading render ${render.id} to YouTube (channel ${orbixChannelId || 'legacy'})`);
+            const { publishVideo, SKIP_YOUTUBE_UPLOAD_CODE } = await import('../../services/orbix-network/youtube-publisher.js');
+            const publishResult = await publishVideo(
+              businessId,
+              render.id,
+              render.output_url,
+              { title, description, tags },
+              publishOptions
+            );
+
+            await supabaseClient
+              .from('orbix_publishes')
+              .insert({
+                business_id: businessId,
+                render_id: render.id,
+                platform: 'YOUTUBE',
+                platform_video_id: publishResult.videoId,
+                title,
+                description,
+                publish_status: 'PUBLISHED',
+                posted_at: new Date().toISOString()
+              });
+
+            if (story?.id) {
+              await supabaseClient
+                .from('orbix_stories')
+                .update({ status: 'PUBLISHED' })
+                .eq('id', story.id);
+            }
+
+            console.log(`[Orbix Publish] Business ${businessId}: published render ${render.id} → videoId=${publishResult.videoId}`);
+            totalPublished++;
+          } catch (publishErr) {
+            const { SKIP_YOUTUBE_UPLOAD_CODE } = await import('../../services/orbix-network/youtube-publisher.js');
+            if (publishErr?.code === SKIP_YOUTUBE_UPLOAD_CODE) {
+              console.warn(`[Orbix Publish] Business ${businessId}: skipping render ${render.id} — ${publishErr.message}`);
+              await supabaseClient
+                .from('orbix_publishes')
+                .insert({
+                  business_id: businessId,
+                  render_id: render.id,
+                  platform: 'YOUTUBE',
+                  title: 'Skipped',
+                  publish_status: 'FAILED',
+                  error_message: publishErr.message
+                })
+                .select()
+                .maybeSingle();
+            } else {
+              console.error(`[Orbix Publish] Business ${businessId}: error publishing render ${render.id}:`, publishErr.message);
+            }
+          }
+        }
       } catch (error) {
         console.error(`[Orbix Jobs] Error publishing for business ${businessId}:`, error.message);
       }
