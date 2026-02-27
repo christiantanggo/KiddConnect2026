@@ -886,27 +886,20 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
           onLoadedMetadata={onAudioMetadata} />
       )}
 
-      {/* Inject Ken Burns keyframes once */}
-      <style>{`
-        @keyframes mr-zoom-in   { from { transform: scale(1.0) } to { transform: scale(1.3) } }
-        @keyframes mr-zoom-out  { from { transform: scale(1.3) } to { transform: scale(1.0) } }
-        @keyframes mr-pan-left  { from { transform: scale(1.15) translateX(8%)  } to { transform: scale(1.15) translateX(-8%) } }
-        @keyframes mr-pan-right { from { transform: scale(1.15) translateX(-8%) } to { transform: scale(1.15) translateX(8%)  } }
-      `}</style>
-
       {/* ── Preview monitor ── */}
       <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f0f', border: '1px solid var(--color-border)', aspectRatio: '9/16', maxHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         {activeImageItem?.asset_url ? (() => {
           const motion = activeImageItem.motion_preset || 'ZOOM_IN';
           const clipDur = Math.max(0.1, activeImageItem.end_time - activeImageItem.start_time);
-          const elapsed = Math.min(currentTime - activeImageItem.start_time, clipDur);
-          // Progress 0→1 through the clip at current playhead
-          const p = Math.min(1, elapsed / clipDur);
+          const elapsed = Math.min(Math.max(0, currentTime - activeImageItem.start_time), clipDur);
+          // p = progress 0→1 through the clip at current playhead
+          const p = elapsed / clipDur;
+          // remaining = real seconds left in this clip from the current playhead
+          const remaining = Math.max(0.05, clipDur - elapsed);
 
-          // Compute the exact transform at the current playhead position
-          // This is used both for the paused static view AND as the animation start point
-          const transformAt = (prog) => {
-            const q = Math.min(1, Math.max(0, prog));
+          // Returns the CSS transform string at progress q (0=clip start, 1=clip end)
+          const transformAt = (q) => {
+            q = Math.min(1, Math.max(0, q));
             if (motion === 'ZOOM_IN')   return `scale(${(1.0 + 0.3 * q).toFixed(4)})`;
             if (motion === 'ZOOM_OUT')  return `scale(${(1.3 - 0.3 * q).toFixed(4)})`;
             if (motion === 'PAN_LEFT')  return `scale(1.15) translateX(${(8 - 16 * q).toFixed(2)}%)`;
@@ -914,25 +907,37 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
             return 'scale(1)';
           };
 
-          const animName = { ZOOM_IN: 'mr-zoom-in', ZOOM_OUT: 'mr-zoom-out', PAN_LEFT: 'mr-pan-left', PAN_RIGHT: 'mr-pan-right' }[motion] || 'mr-zoom-in';
+          // Unique keyframe name per play-start so it's always fresh
+          const kfName = `mr-clip-${playStartKey}`;
+          // from = where we are RIGHT NOW, to = where we end at clip finish
+          const kfFrom = transformAt(p);
+          const kfTo   = transformAt(1);
 
           return (
-            <img
-              key={`${activeImageItem.id}-${motion}-${playStartKey}`}
-              src={activeImageItem.asset_url}
-              alt=""
-              style={{
-                width: '100%', height: '100%', objectFit: 'cover',
-                // When playing: animate from current position to end over remaining duration
-                // When paused: static transform matching current playhead position
-                animation: playing
-                  ? `${animName} ${clipDur.toFixed(3)}s linear -${elapsed.toFixed(3)}s 1 both`
-                  : 'none',
-                transform: playing ? undefined : transformAt(p),
-                transformOrigin: 'center center',
-                willChange: 'transform',
-              }}
-            />
+            <>
+              <style>{`
+                @keyframes ${kfName} {
+                  from { transform: ${kfFrom}; }
+                  to   { transform: ${kfTo}; }
+                }
+              `}</style>
+              <img
+                key={`${activeImageItem.id}-${motion}-${playStartKey}`}
+                src={activeImageItem.asset_url}
+                alt=""
+                style={{
+                  width: '100%', height: '100%', objectFit: 'cover',
+                  // When playing: run from current position to end, taking exactly the remaining seconds
+                  // When paused: static transform at current playhead position
+                  animation: playing
+                    ? `${kfName} ${remaining.toFixed(3)}s linear 0s 1 forwards`
+                    : 'none',
+                  transform: playing ? undefined : transformAt(p),
+                  transformOrigin: 'center center',
+                  willChange: 'transform',
+                }}
+              />
+            </>
           );
         })() : (
           <div className="text-center" style={{ color: '#555' }}>
