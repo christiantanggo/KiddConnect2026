@@ -13,7 +13,7 @@ import { scrapeAllSources } from '../../services/orbix-network/scraper.js';
 import { processRawItem } from '../../services/orbix-network/classifier.js';
 import { generateAndSaveScript } from '../../services/orbix-network/script-generator.js';
 import { processRenderJob, selectTemplate, selectBackground } from '../../services/orbix-network/video-renderer.js';
-import { publishVideo } from '../../services/orbix-network/youtube-publisher.js';
+import { publishVideo, SKIP_YOUTUBE_UPLOAD_CODE } from '../../services/orbix-network/youtube-publisher.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { runAutomatedPipeline } from '../../services/orbix-network/pipeline-scheduler.js';
 
@@ -1098,7 +1098,6 @@ export async function runPublishJob() {
             const publishOptions = orbixChannelId ? { orbixChannelId } : {};
 
             console.log(`[Orbix Publish] Business ${businessId}: uploading render ${render.id} to YouTube (channel ${orbixChannelId || 'legacy'})`);
-            const { publishVideo, SKIP_YOUTUBE_UPLOAD_CODE } = await import('../../services/orbix-network/youtube-publisher.js');
             const publishResult = await publishVideo(
               businessId,
               render.id,
@@ -1130,7 +1129,6 @@ export async function runPublishJob() {
             console.log(`[Orbix Publish] Business ${businessId}: published render ${render.id} → videoId=${publishResult.videoId}`);
             totalPublished++;
           } catch (publishErr) {
-            const { SKIP_YOUTUBE_UPLOAD_CODE } = await import('../../services/orbix-network/youtube-publisher.js');
             if (publishErr?.code === SKIP_YOUTUBE_UPLOAD_CODE) {
               console.warn(`[Orbix Publish] Business ${businessId}: skipping render ${render.id} — ${publishErr.message}`);
               await supabaseClient

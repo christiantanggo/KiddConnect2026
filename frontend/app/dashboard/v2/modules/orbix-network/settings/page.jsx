@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
@@ -624,7 +624,7 @@ function ChannelSettingsTab({ channel }) {
 
 // ─── Main settings page ───────────────────────────────────────────────────────
 
-export default function OrbixNetworkSettingsPage() {
+function OrbixNetworkSettingsInner() {
   const { success, error: showError } = useToast();
   const { channels, currentChannelId, setCurrentChannelId, loading: channelsLoading, refetchChannels } = useOrbixChannel();
   const searchParams = useSearchParams();
@@ -791,5 +791,13 @@ export default function OrbixNetworkSettingsPage() {
         </div>
       </V2AppShell>
     </AuthGuard>
+  );
+}
+
+export default function OrbixNetworkSettingsPage() {
+  return (
+    <Suspense>
+      <OrbixNetworkSettingsInner />
+    </Suspense>
   );
 }
