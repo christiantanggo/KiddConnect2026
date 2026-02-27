@@ -518,6 +518,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   // Playback state
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [playStartKey, setPlayStartKey] = useState(0); // increments each time play starts, forces img remount
   const audioRef = useRef(null);
   const rafRef = useRef(null);
 
@@ -583,6 +584,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     const audio = audioRef.current;
     playingRef.current = true;
     setPlaying(true);
+    setPlayStartKey(k => k + 1); // force img remount so CSS animation restarts
     lastRafTs.current = null;
 
     // Only play audio if we're inside the audio clip window
@@ -902,7 +904,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
           const animName = { ZOOM_IN: 'mr-zoom-in', ZOOM_OUT: 'mr-zoom-out', PAN_LEFT: 'mr-pan-left', PAN_RIGHT: 'mr-pan-right' }[motion] || 'mr-zoom-in';
           return (
             <img
-              key={`${activeImageItem.id}-${motion}`}
+              key={`${activeImageItem.id}-${motion}-${playStartKey}`}
               src={activeImageItem.asset_url}
               alt=""
               style={{
