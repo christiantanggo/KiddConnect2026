@@ -495,23 +495,35 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   const totalPx = dur * pxPerSec;
 
   // ── Audio playback ────────────────────────────────────────────────────────
-  function togglePlay() {
+  function startRaf(audio) {
+    cancelAnimationFrame(rafRef.current);
+    const tick = () => {
+      if (!audioRef.current || audioRef.current.paused) {
+        setPlaying(false);
+        return;
+      }
+      setCurrentTime(audioRef.current.currentTime);
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }
+
+  async function togglePlay() {
     const audio = audioRef.current;
-    if (!audio || !voiceAsset?.public_url) return;
+    if (!audio) return;
     if (playing) {
       audio.pause();
       cancelAnimationFrame(rafRef.current);
       setPlaying(false);
     } else {
       audio.currentTime = currentTime;
-      audio.play().catch(() => {});
-      setPlaying(true);
-      const tick = () => {
-        setCurrentTime(audio.currentTime);
-        if (!audio.paused) rafRef.current = requestAnimationFrame(tick);
-        else setPlaying(false);
-      };
-      rafRef.current = requestAnimationFrame(tick);
+      try {
+        await audio.play();
+        setPlaying(true);
+        startRaf(audio);
+      } catch (err) {
+        console.error('Playback failed:', err);
+      }
     }
   }
 
@@ -680,7 +692,8 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
       {/* Hidden audio for playback */}
       {voiceAsset?.public_url && (
         <audio ref={audioRef} src={voiceAsset.public_url} preload="auto" style={{ display: 'none' }}
-          onEnded={() => { setPlaying(false); cancelAnimationFrame(rafRef.current); }} />
+          onEnded={() => { cancelAnimationFrame(rafRef.current); setPlaying(false); setCurrentTime(0); }}
+          onPause={() => { cancelAnimationFrame(rafRef.current); setPlaying(false); }} />
       )}
 
       {/* ── Preview monitor ── */}
