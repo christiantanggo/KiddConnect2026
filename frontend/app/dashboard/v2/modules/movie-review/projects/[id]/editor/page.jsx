@@ -485,6 +485,12 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
         const decoded = await actx.decodeAudioData(arrayBuffer);
         actx.close();
         if (cancelled) return;
+        // Use the decoded duration as the authoritative real duration
+        if (decoded.duration && isFinite(decoded.duration)) {
+          setAudioDur(decoded.duration);
+          fixAudioClipEnd(decoded.duration);
+          if (!maxDuration || maxDuration === 50) setDur(decoded.duration);
+        }
         const raw = decoded.getChannelData(0);
         const BUCKETS = 600;
         const blockSize = Math.max(1, Math.floor(raw.length / BUCKETS));
@@ -523,17 +529,15 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
 
   useEffect(() => { setItems(timelineItems || []); }, [timelineItems]);
 
-  // When audio metadata loads, get the real duration from the element itself
+  // When <audio> metadata loads — most reliable source of real duration
   function onAudioMetadata() {
     const realDur = audioRef.current?.duration;
-    if (realDur && isFinite(realDur)) {
-      setAudioDur(realDur);
-      onAudioMetadataFixed(realDur);
-      // Only auto-set video dur if no explicit maxDuration has been saved
-      if (!maxDuration || maxDuration === 50) {
-        const rounded = parseFloat(realDur.toFixed(1));
-        setDur(rounded);
-      }
+    if (!realDur || !isFinite(realDur)) return;
+    setAudioDur(realDur);
+    fixAudioClipEnd(realDur);
+    // Only auto-set video end time if it hasn't been explicitly set
+    if (!maxDuration || maxDuration === 50) {
+      setDur(realDur);
     }
   }
 
@@ -560,21 +564,14 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   const pxPerSec = (timelineWidth / dur) * zoom;
   const totalPx = dur * pxPerSec;
 
-  // ── Audio clip state (trimming the voice clip on the track) ─────────────
-  // audioClip:
-  //   start      — where on the timeline (seconds) this clip begins
-  //   end        — where on the timeline (seconds) this clip ends
-  //   fileStart  — how many seconds into the audio FILE to begin reading (left-trim offset)
-  // The clip's visible duration = end - start
-  // The file plays from fileStart to fileStart + (end - start)
+  // ── Audio clip state ──────────────────────────────────────────────────────
   const [audioClip, setAudioClip] = useState({ start: 0, end: voiceAsset?.duration_seconds || 50, fileStart: 0 });
 
-  // Once we get real metadata, fix the clip end if it was the placeholder 50
-  function onAudioMetadataFixed(realDur) {
-    setAudioClip(prev => ({
-      ...prev,
-      end: prev.end === 50 || prev.end > realDur ? realDur : prev.end,
-    }));
+  // Called whenever we get the real duration (from <audio> metadata or decodeAudioData)
+  // Always overwrite end with the real value — the server estimate is unreliable
+  function fixAudioClipEnd(realDur) {
+    if (!realDur || !isFinite(realDur) || realDur <= 0) return;
+    setAudioClip(prev => ({ ...prev, end: realDur }));
   }
 
   // ── Playback — purely time-based RAF, audio just follows ─────────────────
