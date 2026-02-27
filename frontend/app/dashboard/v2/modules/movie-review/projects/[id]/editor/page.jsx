@@ -647,10 +647,25 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     return best;
   }
 
+  // ── Global pointer listeners for drag (avoids pointer-capture / container issues) ──
+  useEffect(() => {
+    const move = (e) => {
+      if (!dragState.current) return;
+      handleDragMove(e.clientX);
+    };
+    const up = () => { dragState.current = null; };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pxPerSec, dur, audioDur, audioClip, items]);
+
   // ── Clip drag logic ───────────────────────────────────────────────────────
   function onClipPointerDown(e, itemId, type) {
     e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
     const item = items.find(i => i.id === itemId);
     dragState.current = {
       type,
@@ -661,10 +676,10 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     };
   }
 
-  function onPointerMove(e) {
+  function handleDragMove(clientX) {
     if (!dragState.current) return;
     const { type, startX, origStart, origEnd } = dragState.current;
-    const dx = e.clientX - startX;
+    const dx = clientX - startX;
     const dSec = dx / pxPerSec;
     const maxAudioEnd = audioDur || origEnd; // can't trim audio past its real length
 
@@ -735,9 +750,6 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     });
   }
 
-  function onPointerUp() {
-    dragState.current = null;
-  }
 
   // ── Add / remove items ────────────────────────────────────────────────────
   function addImageItem(asset) {
@@ -976,10 +988,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
       {/* ── TikTok-style timeline ── */}
       <div className="rounded-2xl overflow-hidden" style={{ background: '#111', border: '1px solid var(--color-border)' }}>
         {/* Scrollable track area */}
-        <div ref={timelineRef} data-scroll style={{ overflowX: 'auto', overflowY: 'hidden', cursor: 'default' }}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}>
+        <div ref={timelineRef} data-scroll style={{ overflowX: 'auto', overflowY: 'hidden', cursor: 'default' }}>
 
           <div style={{ width: Math.max(totalPx + 32, timelineWidth), minWidth: '100%', position: 'relative' }}>
 
@@ -1015,9 +1024,9 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                     style={{ position: 'absolute', left: clipL, top: 6, width: clipW, height: TRACK_H - 12, borderRadius: 6, background: 'linear-gradient(90deg,#1e3a5f,#2563eb)', overflow: 'hidden', cursor: 'grab', userSelect: 'none', boxSizing: 'border-box', border: '2px solid rgba(96,165,250,0.5)' }}
                     onPointerDown={e => {
                       e.stopPropagation();
-                      e.currentTarget.setPointerCapture(e.pointerId);
                       dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart };
-                    }}>
+                    }}
+                    >
                     {/* Waveform bars */}
                     <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', paddingInline: 10, overflow: 'hidden' }}>
                       {Array.from({ length: totalAudioBars }).map((_, i) => (
@@ -1028,10 +1037,10 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                       🎙 {(audioClip.end - audioClip.start).toFixed(1)}s
                     </span>
                     {/* Left resize */}
-                    <div onPointerDown={e => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); dragState.current = { type: 'audio-left', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
+                    <div onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-left', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
                       style={{ position: 'absolute', left: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(96,165,250,0.4)', zIndex: 4 }} />
                     {/* Right resize */}
-                    <div onPointerDown={e => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); dragState.current = { type: 'audio-right', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
+                    <div onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-right', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
                       style={{ position: 'absolute', right: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(96,165,250,0.4)', zIndex: 4 }} />
                   </div>
                   );
