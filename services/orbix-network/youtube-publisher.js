@@ -82,10 +82,12 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
       console.warn('[YouTube Publisher] No refresh_token for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'n/a');
     }
 
+    const raw = process.env.YOUTUBE_REDIRECT_URI || '';
+    const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
     const oauth2Client = new google.auth.OAuth2(
       process.env.YOUTUBE_CLIENT_ID,
       process.env.YOUTUBE_CLIENT_SECRET,
-      process.env.YOUTUBE_REDIRECT_URI
+      redirectUri
     );
 
     const expiryDate = yt.token_expiry ? new Date(yt.token_expiry).getTime() : null;
@@ -94,6 +96,44 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
       refresh_token: yt.refresh_token,
       ...(expiryDate ? { expiry_date: expiryDate } : {})
     });
+
+    // Proactively refresh the access token if it is expired or expiring within 2 minutes.
+    // This prevents silent 401s when the googleapis library does not auto-refresh (e.g. expiry_date missing).
+    const nowMs = Date.now();
+    const isExpiredOrMissing = !expiryDate || expiryDate < nowMs + 2 * 60 * 1000;
+    if (isExpiredOrMissing && yt.refresh_token) {
+      try {
+        console.log('[YouTube Publisher] Access token expired/missing expiry — proactively refreshing for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        oauth2Client.setCredentials(credentials);
+        // Persist the new access token immediately so it is available for future calls
+        const updatedSettings2 = { ...moduleSettings.settings };
+        const updatedYt2 = {
+          ...(usePerChannel ? byChannel[orbixChannelId] : updatedSettings2.youtube),
+          access_token: credentials.access_token,
+          ...(credentials.expiry_date ? { token_expiry: new Date(credentials.expiry_date).toISOString() } : {})
+        };
+        if (usePerChannel) {
+          updatedSettings2.youtube_by_channel = { ...byChannel, [orbixChannelId]: updatedYt2 };
+        } else {
+          updatedSettings2.youtube = updatedYt2;
+        }
+        await ModuleSettings.update(businessId, 'orbix-network', updatedSettings2);
+        console.log('[YouTube Publisher] Proactive token refresh SUCCESS for businessId=', businessId);
+      } catch (refreshErr) {
+        console.error('[YouTube Publisher] Proactive token refresh FAILED for businessId=', businessId, 'error=', refreshErr.message);
+        // If refresh explicitly fails with invalid_grant the token is revoked — surface a clear error
+        if (refreshErr.message?.includes('invalid_grant') || refreshErr.message?.includes('Token has been expired or revoked')) {
+          const err = new Error('YouTube token has been revoked or is no longer valid. Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.');
+          err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+          throw err;
+        }
+        // Otherwise fall through and let the API call attempt with the existing token
+        console.warn('[YouTube Publisher] Continuing with existing token despite refresh failure');
+      }
+    } else if (isExpiredOrMissing && !yt.refresh_token) {
+      console.error('[YouTube Publisher] Access token expired and NO refresh_token available — will likely get 401. businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
+    }
 
     oauth2Client.on('tokens', async (tokens) => {
       if (tokens.access_token) {
@@ -283,7 +323,11 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
     }
 
     if (isAuthError) {
-      const err = new Error('YouTube credentials invalid or expired. Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.');
+      // Include the actual Google error message to make it easier to diagnose
+      const googleMsg = responseData?.error?.message || error.message || '';
+      const googleReasons = responseData?.error?.errors?.map(e => e.reason).join(', ') || '';
+      console.error('[YouTube Publisher] AUTH ERROR details — googleMsg:', googleMsg, 'reasons:', googleReasons || 'none');
+      const err = new Error(`YouTube credentials invalid or expired (${googleMsg || 'auth error'}). Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.`);
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;
     }
