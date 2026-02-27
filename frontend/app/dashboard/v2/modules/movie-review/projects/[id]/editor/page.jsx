@@ -453,21 +453,129 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
   );
 }
 
-// ─── Timeline panel ───────────────────────────────────────────────────────────
+// ─── TikTok-style Timeline editor ─────────────────────────────────────────────
+const TRACK_H = 52; // px height of each track row
+const MIN_CLIP_S = 0.5; // minimum clip width in seconds
+
 function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelineChange, maxDuration }) {
+  const dur = voiceAsset?.duration_seconds || maxDuration || 50;
   const [items, setItems] = useState(timelineItems || []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [dragIdx, setDragIdx] = useState(null);
-  const [dragOverIdx, setDragOverIdx] = useState(null);
-  const dur = voiceAsset?.duration_seconds || maxDuration || 50;
+  const [selectedId, setSelectedId] = useState(null);
+
+  // Playback state
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const audioRef = useRef(null);
+  const rafRef = useRef(null);
+
+  // Timeline scroll/zoom
+  const [zoom, setZoom] = useState(1); // px per second multiplier (base = container width / dur)
+  const rulerRef = useRef(null);
+  const timelineRef = useRef(null);
+  const [timelineWidth, setTimelineWidth] = useState(600);
+
+  // Drag state for clips
+  const dragState = useRef(null); // { type: 'move'|'resize-left'|'resize-right', itemId, startX, origStart, origEnd }
 
   useEffect(() => { setItems(timelineItems || []); }, [timelineItems]);
 
+  useEffect(() => {
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setTimelineWidth(w);
+    });
+    if (timelineRef.current) ro.observe(timelineRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // px per second based on zoom level
+  const pxPerSec = (timelineWidth / dur) * zoom;
+  const totalPx = dur * pxPerSec;
+
+  // ── Audio playback ────────────────────────────────────────────────────────
+  function togglePlay() {
+    const audio = audioRef.current;
+    if (!audio || !voiceAsset?.public_url) return;
+    if (playing) {
+      audio.pause();
+      cancelAnimationFrame(rafRef.current);
+      setPlaying(false);
+    } else {
+      audio.currentTime = currentTime;
+      audio.play().catch(() => {});
+      setPlaying(true);
+      const tick = () => {
+        setCurrentTime(audio.currentTime);
+        if (!audio.paused) rafRef.current = requestAnimationFrame(tick);
+        else setPlaying(false);
+      };
+      rafRef.current = requestAnimationFrame(tick);
+    }
+  }
+
+  function seekTo(t) {
+    const clamped = Math.max(0, Math.min(dur, t));
+    setCurrentTime(clamped);
+    if (audioRef.current) audioRef.current.currentTime = clamped;
+  }
+
+  // Click on ruler to seek
+  function handleRulerClick(e) {
+    const rect = rulerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left + (rulerRef.current.parentElement.scrollLeft || 0);
+    seekTo(x / pxPerSec);
+  }
+
+  // ── Clip drag logic ───────────────────────────────────────────────────────
+  function onClipPointerDown(e, itemId, type) {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const item = items.find(i => i.id === itemId);
+    dragState.current = {
+      type,
+      itemId,
+      startX: e.clientX,
+      origStart: item.start_time,
+      origEnd: item.end_time,
+    };
+  }
+
+  function onPointerMove(e) {
+    if (!dragState.current) return;
+    const { type, itemId, startX, origStart, origEnd } = dragState.current;
+    const dx = e.clientX - startX;
+    const dSec = dx / pxPerSec;
+
+    setItems(prev => prev.map(item => {
+      if (item.id !== itemId) return item;
+      let { start_time, end_time } = item;
+      const clipLen = origEnd - origStart;
+
+      if (type === 'move') {
+        start_time = Math.max(0, Math.min(dur - clipLen, origStart + dSec));
+        end_time = start_time + clipLen;
+      } else if (type === 'resize-left') {
+        start_time = Math.max(0, Math.min(origEnd - MIN_CLIP_S, origStart + dSec));
+        end_time = origEnd;
+      } else if (type === 'resize-right') {
+        end_time = Math.min(dur, Math.max(origStart + MIN_CLIP_S, origEnd + dSec));
+        start_time = origStart;
+      }
+      return { ...item, start_time: parseFloat(start_time.toFixed(2)), end_time: parseFloat(end_time.toFixed(2)) };
+    }));
+  }
+
+  function onPointerUp() {
+    dragState.current = null;
+  }
+
+  // ── Add / remove items ────────────────────────────────────────────────────
   function addImageItem(asset) {
-    const last = items[items.length - 1];
-    const start = last ? last.end_time : 0;
-    const end = Math.min(start + 5, dur);
+    // Place at current playhead, or find first gap, defaulting to 0
+    const start = parseFloat(Math.min(currentTime, dur - 5).toFixed(2));
+    const end = parseFloat(Math.min(start + 5, dur).toFixed(2));
     setItems(prev => [...prev, {
       id: `tmp-${Date.now()}`,
       type: 'IMAGE',
@@ -482,9 +590,8 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   }
 
   function addTextItem() {
-    const last = items[items.length - 1];
-    const start = last ? last.end_time : 0;
-    const end = Math.min(start + 3, dur);
+    const start = parseFloat(Math.min(currentTime, dur - 3).toFixed(2));
+    const end = parseFloat(Math.min(start + 3, dur).toFixed(2));
     setItems(prev => [...prev, {
       id: `tmp-${Date.now()}`,
       type: 'TEXT',
@@ -497,12 +604,31 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     }]);
   }
 
-  function updateItem(idx, field, value) {
-    setItems(prev => prev.map((item, i) => i === idx ? { ...item, [field]: value } : item));
+  function updateItem(id, field, value) {
+    setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
   }
 
-  function removeItem(idx) {
-    setItems(prev => prev.filter((_, i) => i !== idx));
+  function removeItem(id) {
+    setItems(prev => prev.filter(item => item.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  }
+
+  function autoDistribute() {
+    if (!images.length) return;
+    const segLen = dur / images.length;
+    const textItems = items.filter(i => i.type === 'TEXT');
+    const newImageItems = images.map((img, i) => ({
+      id: `tmp-${Date.now()}-${i}`,
+      type: 'IMAGE',
+      asset_id: img.id,
+      asset_url: img.public_url,
+      start_time: parseFloat((i * segLen).toFixed(2)),
+      end_time: parseFloat(((i + 1) * segLen).toFixed(2)),
+      motion_preset: ['ZOOM_IN','ZOOM_OUT','PAN_LEFT','PAN_RIGHT'][i % 4],
+      position_preset: 'CENTER',
+      order_index: i,
+    }));
+    setItems([...newImageItems, ...textItems.map((t, i) => ({ ...t, order_index: newImageItems.length + i }))]);
   }
 
   async function saveTimeline() {
@@ -529,188 +655,328 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     }
   }
 
-  // Auto-distribute all images evenly
-  function autoDistribute() {
-    if (!images.length) return;
-    const segLen = dur / images.length;
-    const textItems = items.filter(i => i.type === 'TEXT');
-    const newImageItems = images.map((img, i) => ({
-      id: `tmp-${Date.now()}-${i}`,
-      type: 'IMAGE',
-      asset_id: img.id,
-      asset_url: img.public_url,
-      start_time: parseFloat((i * segLen).toFixed(2)),
-      end_time: parseFloat(((i + 1) * segLen).toFixed(2)),
-      motion_preset: ['ZOOM_IN','ZOOM_OUT','PAN_LEFT','PAN_RIGHT'][i % 4],
-      position_preset: 'CENTER',
-      order_index: i,
-    }));
-    setItems([...newImageItems, ...textItems.map((t, i) => ({ ...t, order_index: newImageItems.length + i }))]);
-  }
+  // ── Current frame preview ─────────────────────────────────────────────────
+  const activeImageItem = items
+    .filter(i => i.type === 'IMAGE' && i.start_time <= currentTime && i.end_time > currentTime)
+    .sort((a, b) => b.start_time - a.start_time)[0];
 
-  function handleDragEnd(targetIdx) {
-    if (dragIdx === null || dragIdx === targetIdx) { setDragIdx(null); setDragOverIdx(null); return; }
-    const newItems = [...items];
-    const [moved] = newItems.splice(dragIdx, 1);
-    newItems.splice(targetIdx, 0, moved);
-    setItems(newItems.map((it, i) => ({ ...it, order_index: i })));
-    setDragIdx(null); setDragOverIdx(null);
-  }
+  const selectedItem = items.find(i => i.id === selectedId);
+  const imageItems = items.filter(i => i.type === 'IMAGE');
+  const textItems = items.filter(i => i.type === 'TEXT');
+
+  // Ruler tick marks
+  const tickStep = dur <= 15 ? 1 : dur <= 60 ? 5 : 10;
+  const ticks = [];
+  for (let t = 0; t <= dur; t += tickStep) ticks.push(parseFloat(t.toFixed(1)));
+
+  const fmtT = s => {
+    const m = Math.floor(s / 60);
+    const sec = (s % 60).toFixed(1);
+    return m > 0 ? `${m}:${sec.padStart(4,'0')}` : `${parseFloat(sec).toFixed(1)}s`;
+  };
 
   return (
     <div className="space-y-3">
-      <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-bold text-base" style={{ color: 'var(--color-text-main)' }}>📽️ Timeline</h2>
-          <div className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Duration: {dur.toFixed(1)}s</div>
-        </div>
+      {/* Hidden audio for playback */}
+      {voiceAsset?.public_url && (
+        <audio ref={audioRef} src={voiceAsset.public_url} preload="auto" style={{ display: 'none' }}
+          onEnded={() => { setPlaying(false); cancelAnimationFrame(rafRef.current); }} />
+      )}
 
-        {/* Controls row */}
-        <div className="flex flex-wrap gap-2 mb-4">
-          <button onClick={autoDistribute} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold"
-            style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>
-            <Wand2 className="w-3 h-3" /> Auto-distribute
-          </button>
-          <button onClick={addTextItem} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold"
-            style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>
-            <Type className="w-3 h-3" /> Add Text
-          </button>
-        </div>
-
-        {/* Add images from library */}
-        {images.length > 0 && (
-          <div className="mb-4">
-            <p className="text-xs font-semibold mb-2" style={{ color: 'var(--color-text-muted)' }}>Tap an image to add to timeline:</p>
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {images.map(img => (
-                <button key={img.id} onClick={() => addImageItem(img)}
-                  className="flex-shrink-0 rounded-lg overflow-hidden border-2"
-                  style={{ width: 48, height: 72, border: '2px solid var(--color-border)' }}>
-                  <img src={img.public_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Visual timeline bar */}
-        {items.length > 0 && dur > 0 && (
-          <div className="mb-4 relative rounded-lg overflow-hidden" style={{ height: 28, background: 'var(--color-background)' }}>
-            {items.filter(i => i.type === 'IMAGE').map((item, idx) => {
-              const left = (item.start_time / dur) * 100;
-              const width = ((item.end_time - item.start_time) / dur) * 100;
-              return (
-                <div key={item.id} className="absolute top-0 h-full rounded flex items-center justify-center text-xs text-white font-bold"
-                  style={{
-                    left: `${left}%`, width: `${width}%`,
-                    background: `hsl(${(idx * 67) % 360},70%,50%)`,
-                    fontSize: 9, overflow: 'hidden', paddingInline: 2,
-                  }}>
-                  {idx + 1}
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {/* Items list */}
-        {items.length === 0 ? (
-          <div className="text-center py-6" style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
-            No items yet — add images or text above, or use Auto-distribute
-          </div>
+      {/* ── Preview monitor ── */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f0f', border: '1px solid var(--color-border)', aspectRatio: '9/16', maxHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+        {activeImageItem?.asset_url ? (
+          <img src={activeImageItem.asset_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
         ) : (
-          <div className="space-y-2">
-            {items.map((item, idx) => (
-              <div key={item.id}
-                draggable
-                onDragStart={() => setDragIdx(idx)}
-                onDragOver={e => { e.preventDefault(); setDragOverIdx(idx); }}
-                onDrop={() => handleDragEnd(idx)}
-                onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
-                className="rounded-xl p-3 transition-all"
-                style={{
-                  background: 'var(--color-background)',
-                  border: `1px solid ${dragOverIdx === idx ? '#e11d48' : 'var(--color-border)'}`,
-                  opacity: dragIdx === idx ? 0.5 : 1,
-                  cursor: 'grab',
-                }}
-              >
-                <div className="flex items-start gap-2">
-                  <GripVertical className="w-4 h-4 mt-1 flex-shrink-0" style={{ color: 'var(--color-text-muted)' }} />
+          <div className="text-center" style={{ color: '#555' }}>
+            <Play className="w-10 h-10 mx-auto mb-2 opacity-30" />
+            <p className="text-xs opacity-50">No image at this point</p>
+          </div>
+        )}
+        {/* Text overlays */}
+        {textItems.filter(t => t.start_time <= currentTime && t.end_time > currentTime).map(t => (
+          <div key={t.id} className="absolute left-0 right-0 text-center px-3 py-1 text-white font-bold text-sm"
+            style={{
+              bottom: t.position_preset === 'BOTTOM' ? 12 : undefined,
+              top: t.position_preset === 'TOP' ? 12 : undefined,
+              inset: t.position_preset === 'CENTER' ? 'auto' : undefined,
+              textShadow: '0 1px 4px rgba(0,0,0,0.9)',
+              background: 'rgba(0,0,0,0.4)',
+            }}>
+            {t.text_content}
+          </div>
+        ))}
+        {/* Time badge */}
+        <div className="absolute top-2 right-2 text-xs px-2 py-0.5 rounded-full font-mono"
+          style={{ background: 'rgba(0,0,0,0.7)', color: '#fff' }}>
+          {fmtT(currentTime)} / {fmtT(dur)}
+        </div>
+      </div>
 
-                  {item.type === 'IMAGE' && item.asset_url && (
-                    <img src={item.asset_url} alt="" className="flex-shrink-0 rounded"
-                      style={{ width: 32, height: 48, objectFit: 'cover' }} />
-                  )}
-                  {item.type === 'TEXT' && (
-                    <div className="flex-shrink-0 flex items-center justify-center rounded"
-                      style={{ width: 32, height: 48, background: '#1e1b2e', color: '#c084fc', fontSize: 18 }}>
-                      T
-                    </div>
-                  )}
+      {/* ── Transport controls ── */}
+      <div className="flex items-center gap-3">
+        <button onClick={togglePlay}
+          className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full text-white"
+          style={{ background: 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+          {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+        </button>
+        <input type="range" min={0} max={dur} step={0.1} value={currentTime}
+          onChange={e => seekTo(parseFloat(e.target.value))}
+          className="flex-1" style={{ accentColor: '#9333ea' }} />
+        <span className="text-xs font-mono flex-shrink-0" style={{ color: 'var(--color-text-muted)', minWidth: 40, textAlign: 'right' }}>
+          {fmtT(currentTime)}
+        </span>
+      </div>
 
-                  <div className="flex-1 min-w-0 space-y-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-semibold px-2 py-0.5 rounded-full"
-                        style={{ background: item.type === 'IMAGE' ? 'rgba(147,51,234,0.15)' : 'rgba(225,29,72,0.15)', color: item.type === 'IMAGE' ? '#9333ea' : '#e11d48' }}>
-                        {item.type === 'IMAGE' ? '🖼️ Image' : '📝 Text'}
-                      </span>
-                    </div>
-
-                    {item.type === 'TEXT' && (
-                      <input value={item.text_content || ''} onChange={e => updateItem(idx, 'text_content', e.target.value)}
-                        className="w-full px-2 py-1 rounded text-xs"
-                        style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }} />
-                    )}
-
-                    {/* Time range */}
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <label className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Start</label>
-                      <input type="number" min={0} max={dur} step={0.1}
-                        value={item.start_time}
-                        onChange={e => updateItem(idx, 'start_time', parseFloat(e.target.value) || 0)}
-                        className="w-16 px-1.5 py-0.5 rounded text-xs text-center"
-                        style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }} />
-                      <label className="text-xs" style={{ color: 'var(--color-text-muted)' }}>End</label>
-                      <input type="number" min={0} max={dur} step={0.1}
-                        value={item.end_time}
-                        onChange={e => updateItem(idx, 'end_time', parseFloat(e.target.value) || 0)}
-                        className="w-16 px-1.5 py-0.5 rounded text-xs text-center"
-                        style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }} />
-                    </div>
-
-                    {/* Presets row */}
-                    <div className="flex gap-2 flex-wrap">
-                      {item.type === 'IMAGE' && (
-                        <select value={item.motion_preset} onChange={e => updateItem(idx, 'motion_preset', e.target.value)}
-                          className="text-xs rounded px-1.5 py-0.5"
-                          style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}>
-                          {MOTION_PRESETS.map(m => <option key={m} value={m}>{m.replace('_',' ')}</option>)}
-                        </select>
-                      )}
-                      <select value={item.position_preset} onChange={e => updateItem(idx, 'position_preset', e.target.value)}
-                        className="text-xs rounded px-1.5 py-0.5"
-                        style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}>
-                        {POSITION_PRESETS.map(p => <option key={p} value={p}>{p}</option>)}
-                      </select>
-                    </div>
-                  </div>
-
-                  <button onClick={() => removeItem(idx)} className="p-1 flex-shrink-0" style={{ color: '#dc2626' }}>
-                    <X className="w-4 h-4" />
-                  </button>
+      {/* ── Image library shelf ── */}
+      {images.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold mb-2" style={{ color: 'var(--color-text-muted)' }}>
+            Tap image to add at playhead · {fmtT(currentTime)}
+          </p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {images.map(img => (
+              <button key={img.id} onClick={() => addImageItem(img)}
+                className="flex-shrink-0 rounded-lg overflow-hidden relative"
+                style={{ width: 44, height: 66, border: '2px solid var(--color-border)' }}>
+                <img src={img.public_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity"
+                  style={{ background: 'rgba(147,51,234,0.5)' }}>
+                  <Plus className="w-5 h-5 text-white" />
                 </div>
-              </div>
+              </button>
             ))}
           </div>
-        )}
+        </div>
+      )}
 
-        <button onClick={saveTimeline} disabled={saving}
-          className="w-full mt-4 py-2.5 rounded-xl font-bold text-sm text-white"
-          style={{ background: saved ? '#059669' : saving ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
-          {saved ? '✅ Saved!' : saving ? 'Saving…' : '💾 Save Timeline'}
+      {/* ── Controls row ── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={autoDistribute} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+          style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>
+          <Wand2 className="w-3 h-3" /> Auto-fill
         </button>
+        <button onClick={addTextItem} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+          style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>
+          <Type className="w-3 h-3" /> Add Text
+        </button>
+        <div className="flex items-center gap-1 ml-auto">
+          <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Zoom</span>
+          <button onClick={() => setZoom(z => Math.max(0.5, parseFloat((z - 0.25).toFixed(2))))}
+            className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold"
+            style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>−</button>
+          <button onClick={() => setZoom(z => Math.min(8, parseFloat((z + 0.25).toFixed(2))))}
+            className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold"
+            style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>+</button>
+        </div>
       </div>
+
+      {/* ── TikTok-style timeline ── */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: '#111', border: '1px solid var(--color-border)' }}>
+        {/* Scrollable track area */}
+        <div ref={timelineRef} style={{ overflowX: 'auto', overflowY: 'hidden', cursor: 'default' }}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}>
+
+          <div style={{ width: Math.max(totalPx + 32, timelineWidth), minWidth: '100%', position: 'relative' }}>
+
+            {/* ── Time ruler ── */}
+            <div ref={rulerRef} onClick={handleRulerClick}
+              style={{ height: 24, position: 'relative', background: '#1a1a1a', cursor: 'pointer', userSelect: 'none', borderBottom: '1px solid #333' }}>
+              {ticks.map(t => (
+                <div key={t} style={{ position: 'absolute', left: t * pxPerSec, top: 0, height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                  <div style={{ width: 1, height: t % (tickStep * 2) === 0 ? 12 : 6, background: '#555', marginTop: 0 }} />
+                  {t % (tickStep * 2) === 0 && (
+                    <span style={{ fontSize: 9, color: '#888', marginLeft: 3, lineHeight: 1 }}>{fmtT(t)}</span>
+                  )}
+                </div>
+              ))}
+              {/* Playhead line on ruler */}
+              <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none' }} />
+            </div>
+
+            {/* ── Track rows ── */}
+
+            {/* AUDIO track */}
+            <div style={{ display: 'flex', alignItems: 'center', height: TRACK_H, borderBottom: '1px solid #222', position: 'relative' }}>
+              <div style={{ width: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#888', fontWeight: 700, background: '#0d0d0d', height: '100%', borderRight: '1px solid #222' }}>
+                🎙<br /><span style={{ fontSize: 8 }}>AUDIO</span>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+                {voiceAsset?.public_url ? (
+                  <div style={{
+                    position: 'absolute', left: 0, top: 8,
+                    width: dur * pxPerSec,
+                    height: TRACK_H - 16,
+                    borderRadius: 6,
+                    background: 'linear-gradient(90deg,#1e3a5f,#2563eb)',
+                    display: 'flex', alignItems: 'center', paddingInline: 8,
+                    overflow: 'hidden',
+                  }}>
+                    <div style={{ display: 'flex', gap: 2, alignItems: 'center', height: '100%', width: '100%', overflow: 'hidden' }}>
+                      {Array.from({ length: Math.floor(dur * 4) }).map((_, i) => (
+                        <div key={i} style={{
+                          width: 2, borderRadius: 1, flexShrink: 0,
+                          height: `${20 + Math.sin(i * 0.7) * 14 + Math.cos(i * 1.3) * 10}%`,
+                          background: 'rgba(147,197,253,0.7)',
+                        }} />
+                      ))}
+                    </div>
+                    <span style={{ position: 'absolute', left: 8, color: '#93c5fd', fontSize: 10, fontWeight: 700, pointerEvents: 'none' }}>
+                      Voice · {dur.toFixed(1)}s
+                    </span>
+                  </div>
+                ) : (
+                  <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#444', fontSize: 11 }}>
+                    No voice recorded
+                  </div>
+                )}
+                {/* Playhead */}
+                <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none', zIndex: 10 }} />
+              </div>
+            </div>
+
+            {/* VIDEO track */}
+            <div style={{ display: 'flex', alignItems: 'center', height: TRACK_H, borderBottom: '1px solid #222', position: 'relative' }}>
+              <div style={{ width: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#888', fontWeight: 700, background: '#0d0d0d', height: '100%', borderRight: '1px solid #222' }}>
+                🖼️<br /><span style={{ fontSize: 8 }}>VIDEO</span>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+                {imageItems.map(item => {
+                  const left = item.start_time * pxPerSec;
+                  const width = Math.max((item.end_time - item.start_time) * pxPerSec, 24);
+                  const isSelected = selectedId === item.id;
+                  return (
+                    <div key={item.id}
+                      style={{ position: 'absolute', left, top: 6, width, height: TRACK_H - 12, borderRadius: 6, overflow: 'hidden', cursor: 'grab', border: isSelected ? '2px solid #e11d48' : '2px solid rgba(255,255,255,0.15)', boxSizing: 'border-box', userSelect: 'none' }}
+                      onClick={e => { e.stopPropagation(); setSelectedId(isSelected ? null : item.id); }}
+                      onPointerDown={e => onClipPointerDown(e, item.id, 'move')}>
+                      {/* Thumbnail */}
+                      {item.asset_url && (
+                        <img src={item.asset_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
+                      )}
+                      {/* Delete button */}
+                      {isSelected && (
+                        <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); removeItem(item.id); }}
+                          style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: '50%', background: '#e11d48', color: '#fff', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5 }}>
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      )}
+                      {/* Left resize handle */}
+                      <div
+                        onPointerDown={e => onClipPointerDown(e, item.id, 'resize-left')}
+                        style={{ position: 'absolute', left: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(255,255,255,0.25)', zIndex: 4 }} />
+                      {/* Right resize handle */}
+                      <div
+                        onPointerDown={e => onClipPointerDown(e, item.id, 'resize-right')}
+                        style={{ position: 'absolute', right: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(255,255,255,0.25)', zIndex: 4 }} />
+                    </div>
+                  );
+                })}
+                {imageItems.length === 0 && (
+                  <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#444', fontSize: 11 }}>
+                    Tap an image above to place it
+                  </div>
+                )}
+                {/* Playhead */}
+                <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none', zIndex: 10 }} />
+              </div>
+            </div>
+
+            {/* TEXT track */}
+            <div style={{ display: 'flex', alignItems: 'center', height: TRACK_H, position: 'relative' }}>
+              <div style={{ width: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#888', fontWeight: 700, background: '#0d0d0d', height: '100%', borderRight: '1px solid #222' }}>
+                📝<br /><span style={{ fontSize: 8 }}>TEXT</span>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+                {textItems.map(item => {
+                  const left = item.start_time * pxPerSec;
+                  const width = Math.max((item.end_time - item.start_time) * pxPerSec, 32);
+                  const isSelected = selectedId === item.id;
+                  return (
+                    <div key={item.id}
+                      style={{ position: 'absolute', left, top: 6, width, height: TRACK_H - 12, borderRadius: 6, overflow: 'hidden', cursor: 'grab', border: isSelected ? '2px solid #c084fc' : '2px solid rgba(192,132,252,0.4)', background: '#2d1b4e', boxSizing: 'border-box', userSelect: 'none', display: 'flex', alignItems: 'center', paddingInline: 10 }}
+                      onClick={e => { e.stopPropagation(); setSelectedId(isSelected ? null : item.id); }}
+                      onPointerDown={e => onClipPointerDown(e, item.id, 'move')}>
+                      <span style={{ color: '#c084fc', fontSize: 10, fontWeight: 700, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', pointerEvents: 'none', flex: 1 }}>
+                        {item.text_content || 'Text'}
+                      </span>
+                      {isSelected && (
+                        <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); removeItem(item.id); }}
+                          style={{ width: 14, height: 14, borderRadius: '50%', background: '#e11d48', color: '#fff', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, zIndex: 5 }}>
+                          <X className="w-2 h-2" />
+                        </button>
+                      )}
+                      <div onPointerDown={e => onClipPointerDown(e, item.id, 'resize-left')}
+                        style={{ position: 'absolute', left: 0, top: 0, width: 8, height: '100%', cursor: 'ew-resize', zIndex: 4 }} />
+                      <div onPointerDown={e => onClipPointerDown(e, item.id, 'resize-right')}
+                        style={{ position: 'absolute', right: 0, top: 0, width: 8, height: '100%', cursor: 'ew-resize', zIndex: 4 }} />
+                    </div>
+                  );
+                })}
+                {textItems.length === 0 && (
+                  <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#444', fontSize: 11 }}>
+                    Use "Add Text" to place captions
+                  </div>
+                )}
+                {/* Playhead */}
+                <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none', zIndex: 10 }} />
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      {/* ── Selected clip inspector ── */}
+      {selectedItem && (
+        <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-bold" style={{ color: 'var(--color-text-main)' }}>
+              {selectedItem.type === 'IMAGE' ? '🖼️ Image clip' : '📝 Text clip'} — {fmtT(selectedItem.start_time)} → {fmtT(selectedItem.end_time)}
+            </span>
+            <button onClick={() => removeItem(selectedItem.id)} className="text-xs px-2 py-1 rounded-lg"
+              style={{ background: '#fee2e2', color: '#dc2626' }}>
+              Remove
+            </button>
+          </div>
+
+          {selectedItem.type === 'TEXT' && (
+            <input value={selectedItem.text_content || ''} onChange={e => updateItem(selectedItem.id, 'text_content', e.target.value)}
+              placeholder="Caption text…"
+              className="w-full px-3 py-2 rounded-xl text-sm mb-3"
+              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }} />
+          )}
+
+          <div className="flex gap-3 flex-wrap">
+            {selectedItem.type === 'IMAGE' && (
+              <div className="flex-1 min-w-0">
+                <label className="text-xs mb-1 block" style={{ color: 'var(--color-text-muted)' }}>Motion</label>
+                <select value={selectedItem.motion_preset} onChange={e => updateItem(selectedItem.id, 'motion_preset', e.target.value)}
+                  className="w-full text-xs rounded-lg px-2 py-1.5"
+                  style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}>
+                  {MOTION_PRESETS.map(m => <option key={m} value={m}>{m.replace(/_/g,' ')}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <label className="text-xs mb-1 block" style={{ color: 'var(--color-text-muted)' }}>Position</label>
+              <select value={selectedItem.position_preset} onChange={e => updateItem(selectedItem.id, 'position_preset', e.target.value)}
+                className="w-full text-xs rounded-lg px-2 py-1.5"
+                style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}>
+                {POSITION_PRESETS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button onClick={saveTimeline} disabled={saving}
+        className="w-full py-2.5 rounded-xl font-bold text-sm text-white"
+        style={{ background: saved ? '#059669' : saving ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+        {saved ? '✅ Saved!' : saving ? 'Saving…' : '💾 Save Timeline'}
+      </button>
     </div>
   );
 }
