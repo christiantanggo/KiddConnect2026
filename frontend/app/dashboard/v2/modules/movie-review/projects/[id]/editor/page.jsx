@@ -1029,7 +1029,6 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                   const clipL = audioClip.start * pxPerSec;
                   const totalAudioBars = Math.floor((audioDur || 10) * 4);
                   return (
-                  {/* Clip wrapper — overflow visible so handles stick out and receive pointer events */}
                   <div style={{ position: 'absolute', left: clipL, top: 6, width: clipW, height: TRACK_H - 12, userSelect: 'none', boxSizing: 'border-box' }}>
                     {/* Left resize handle — rendered FIRST so it sits above the body in z-order */}
                     <div
