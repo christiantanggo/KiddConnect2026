@@ -1029,28 +1029,34 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                   const clipL = audioClip.start * pxPerSec;
                   const totalAudioBars = Math.floor((audioDur || 10) * 4);
                   return (
-                  <div
-                    style={{ position: 'absolute', left: clipL, top: 6, width: clipW, height: TRACK_H - 12, borderRadius: 6, background: 'linear-gradient(90deg,#1e3a5f,#2563eb)', overflow: 'hidden', cursor: 'grab', userSelect: 'none', boxSizing: 'border-box', border: '2px solid rgba(96,165,250,0.5)' }}
-                    onPointerDown={e => {
-                      e.stopPropagation();
-                      dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart };
-                    }}
-                    >
-                    {/* Waveform bars */}
-                    <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', paddingInline: 10, overflow: 'hidden' }}>
-                      {Array.from({ length: totalAudioBars }).map((_, i) => (
-                        <div key={i} style={{ width: 2, borderRadius: 1, flexShrink: 0, height: `${20 + Math.sin(i * 0.7) * 14 + Math.cos(i * 1.3) * 10}%`, background: 'rgba(147,197,253,0.7)' }} />
-                      ))}
+                  {/* Clip wrapper — overflow visible so handles stick out and receive pointer events */}
+                  <div style={{ position: 'absolute', left: clipL, top: 6, width: clipW, height: TRACK_H - 12, userSelect: 'none', boxSizing: 'border-box' }}>
+                    {/* Left resize handle — rendered FIRST so it sits above the body in z-order */}
+                    <div
+                      onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-left', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
+                      style={{ position: 'absolute', left: 0, top: 0, width: 14, height: '100%', cursor: 'ew-resize', zIndex: 10, borderRadius: '6px 0 0 6px', background: 'rgba(96,165,250,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ width: 2, height: '50%', background: '#fff', borderRadius: 2, opacity: 0.8 }} />
                     </div>
-                    <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: '#93c5fd', fontSize: 10, fontWeight: 700, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
-                      🎙 {(audioClip.end - audioClip.start).toFixed(1)}s
-                    </span>
-                    {/* Left resize */}
-                    <div onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-left', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
-                      style={{ position: 'absolute', left: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(96,165,250,0.4)', zIndex: 4 }} />
-                    {/* Right resize */}
-                    <div onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-right', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
-                      style={{ position: 'absolute', right: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(96,165,250,0.4)', zIndex: 4 }} />
+                    {/* Clip body — move drag, between the two handles */}
+                    <div
+                      onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
+                      style={{ position: 'absolute', left: 14, right: 14, top: 0, bottom: 0, cursor: 'grab', borderRadius: 4, background: 'linear-gradient(90deg,#1e3a5f,#2563eb)', overflow: 'hidden', border: '2px solid rgba(96,165,250,0.5)', boxSizing: 'border-box' }}>
+                      {/* Waveform bars */}
+                      <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', overflow: 'hidden' }}>
+                        {Array.from({ length: totalAudioBars }).map((_, i) => (
+                          <div key={i} style={{ width: 2, borderRadius: 1, flexShrink: 0, height: `${20 + Math.sin(i * 0.7) * 14 + Math.cos(i * 1.3) * 10}%`, background: 'rgba(147,197,253,0.7)' }} />
+                        ))}
+                      </div>
+                      <span style={{ position: 'absolute', left: 6, top: '50%', transform: 'translateY(-50%)', color: '#93c5fd', fontSize: 10, fontWeight: 700, pointerEvents: 'none', whiteSpace: 'nowrap' }}>
+                        🎙 {(audioClip.end - audioClip.start).toFixed(1)}s
+                      </span>
+                    </div>
+                    {/* Right resize handle */}
+                    <div
+                      onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-right', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
+                      style={{ position: 'absolute', right: 0, top: 0, width: 14, height: '100%', cursor: 'ew-resize', zIndex: 10, borderRadius: '0 6px 6px 0', background: 'rgba(96,165,250,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ width: 2, height: '50%', background: '#fff', borderRadius: 2, opacity: 0.8 }} />
+                    </div>
                   </div>
                   );
                 })() : (
