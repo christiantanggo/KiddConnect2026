@@ -794,25 +794,35 @@ export async function runYouTubeUploadJob() {
 const YOUTUBE_UPLOAD_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0; // 0 = start upload immediately after render
 
 /**
- * Process one PENDING render. Stops at READY_FOR_UPLOAD — YouTube upload is manual only.
+ * Process one PENDING render, then immediately attempt YouTube upload if render succeeded.
  */
 export async function runOneRenderThenUpload() {
   const result = await processOnePendingRender();
-  if (result.processed && result.status === 'RENDER_COMPLETE') {
-    console.log('[Orbix Jobs] runOneRenderThenUpload: render complete — waiting for manual YouTube upload via UI');
+  let uploadResult = null;
+  if (result.processed && (result.status === 'RENDER_COMPLETE' || result.status === 'COMPLETED')) {
+    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
+      await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
+    }
+    uploadResult = await processOneYouTubeUpload();
+    console.log('[Orbix Jobs] runOneRenderThenUpload: upload result =', uploadResult?.status || 'no-op');
   }
-  return { render: result, upload: null };
+  return { render: result, upload: uploadResult };
 }
 
 /**
- * Process a specific render by ID. Stops at READY_FOR_UPLOAD — YouTube upload is manual only.
+ * Process a specific render by ID, then immediately attempt YouTube upload if render succeeded.
  */
 export async function runRenderByIdThenUpload(renderId) {
   const result = await processRenderById(renderId);
-  if (result.processed && result.status === 'RENDER_COMPLETE') {
-    console.log('[Orbix Jobs] runRenderByIdThenUpload: render complete — waiting for manual YouTube upload via UI');
+  let uploadResult = null;
+  if (result.processed && (result.status === 'RENDER_COMPLETE' || result.status === 'COMPLETED')) {
+    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
+      await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
+    }
+    uploadResult = await processOneYouTubeUpload();
+    console.log('[Orbix Jobs] runRenderByIdThenUpload: upload result =', uploadResult?.status || 'no-op');
   }
-  return { render: result, upload: null };
+  return { render: result, upload: uploadResult };
 }
 
 /**

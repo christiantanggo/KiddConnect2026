@@ -730,12 +730,13 @@ try {
     runScheduledPipelineCheck,
     processOnePendingRender,
     processOneYouTubeUpload,
+    runOneRenderThenUpload,
     runPublishJob,
     runScheduledAnalyticsCheck
   } = await import('./routes/v2/orbix-network-jobs.js');
 
-  if (typeof processOnePendingRender !== 'function' || typeof processOneYouTubeUpload !== 'function') {
-    console.warn('[Orbix Jobs] processOnePendingRender or processOneYouTubeUpload missing from orbix-network-jobs.js — skipping PENDING render / YouTube upload intervals');
+  if (typeof runOneRenderThenUpload !== 'function') {
+    console.warn('[Orbix Jobs] runOneRenderThenUpload missing from orbix-network-jobs.js — skipping PENDING render / YouTube upload intervals');
   }
 
   // Wrapper so any promise rejection from the job is never unhandled (keeps process alive). Guard so we never call non-functions.
@@ -762,11 +763,11 @@ try {
   }
   console.log('✅ Orbix Network scheduled pipeline (7am, 10am, 1pm, 4pm, 7pm in business timezone)');
 
-  // When no separate worker is running, the web server picks up PENDING renders every 30s.
-  // YouTube upload is now MANUAL ONLY — user clicks "Upload to YouTube" in the UI after reviewing the render.
-  if (process.env.RUN_ORBIX_WORKER !== 'true' && typeof processOnePendingRender === 'function') {
-    orbixNetworkIntervals.processPending = setInterval(runSafe(processOnePendingRender, 'ProcessOne'), 30 * 1000);
-    console.log('✅ Orbix Network: web server will process PENDING renders every 30s (YouTube upload is manual via UI button)');
+  // When no separate worker is running, the web server picks up PENDING renders every 30s,
+  // then immediately attempts YouTube upload for any newly completed render.
+  if (process.env.RUN_ORBIX_WORKER !== 'true' && typeof runOneRenderThenUpload === 'function') {
+    orbixNetworkIntervals.processPending = setInterval(runSafe(runOneRenderThenUpload, 'ProcessOne'), 30 * 1000);
+    console.log('✅ Orbix Network: web server will process PENDING renders every 30s (auto-upload to YouTube after render)');
   }
 
   // 5. Publish Videos (every 5 minutes) — fixed post times 8am, 11am, 2pm, 5pm, 8pm in business timezone
