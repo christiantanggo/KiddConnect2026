@@ -898,10 +898,24 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
       <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f0f', border: '1px solid var(--color-border)', aspectRatio: '9/16', maxHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
         {activeImageItem?.asset_url ? (() => {
           const motion = activeImageItem.motion_preset || 'ZOOM_IN';
-          const clipDur = activeImageItem.end_time - activeImageItem.start_time;
-          // Negative delay = start the animation mid-way through (matches playhead position)
-          const elapsed = currentTime - activeImageItem.start_time;
+          const clipDur = Math.max(0.1, activeImageItem.end_time - activeImageItem.start_time);
+          const elapsed = Math.min(currentTime - activeImageItem.start_time, clipDur);
+          // Progress 0→1 through the clip at current playhead
+          const p = Math.min(1, elapsed / clipDur);
+
+          // Compute the exact transform at the current playhead position
+          // This is used both for the paused static view AND as the animation start point
+          const transformAt = (prog) => {
+            const q = Math.min(1, Math.max(0, prog));
+            if (motion === 'ZOOM_IN')   return `scale(${(1.0 + 0.3 * q).toFixed(4)})`;
+            if (motion === 'ZOOM_OUT')  return `scale(${(1.3 - 0.3 * q).toFixed(4)})`;
+            if (motion === 'PAN_LEFT')  return `scale(1.15) translateX(${(8 - 16 * q).toFixed(2)}%)`;
+            if (motion === 'PAN_RIGHT') return `scale(1.15) translateX(${(-8 + 16 * q).toFixed(2)}%)`;
+            return 'scale(1)';
+          };
+
           const animName = { ZOOM_IN: 'mr-zoom-in', ZOOM_OUT: 'mr-zoom-out', PAN_LEFT: 'mr-pan-left', PAN_RIGHT: 'mr-pan-right' }[motion] || 'mr-zoom-in';
+
           return (
             <img
               key={`${activeImageItem.id}-${motion}-${playStartKey}`}
@@ -909,18 +923,14 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
               alt=""
               style={{
                 width: '100%', height: '100%', objectFit: 'cover',
+                // When playing: animate from current position to end over remaining duration
+                // When paused: static transform matching current playhead position
                 animation: playing
-                  ? `${animName} ${clipDur}s linear -${elapsed.toFixed(2)}s 1 both`
+                  ? `${animName} ${clipDur.toFixed(3)}s linear -${elapsed.toFixed(3)}s 1 both`
                   : 'none',
-                transform: (() => {
-                  // When paused, show the correct static frame position
-                  const p = Math.min(1, elapsed / Math.max(clipDur, 0.001));
-                  if (motion === 'ZOOM_IN')  return `scale(${1.0 + 0.3 * p})`;
-                  if (motion === 'ZOOM_OUT') return `scale(${1.3 - 0.3 * p})`;
-                  if (motion === 'PAN_LEFT') return `scale(1.15) translateX(${8 - 16 * p}%)`;
-                  if (motion === 'PAN_RIGHT') return `scale(1.15) translateX(${-8 + 16 * p}%)`;
-                  return 'none';
-                })(),
+                transform: playing ? undefined : transformAt(p),
+                transformOrigin: 'center center',
+                willChange: 'transform',
               }}
             />
           );
