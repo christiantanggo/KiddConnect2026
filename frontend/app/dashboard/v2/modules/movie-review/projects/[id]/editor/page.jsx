@@ -457,8 +457,12 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
 const TRACK_H = 52; // px height of each track row
 const MIN_CLIP_S = 0.5; // minimum clip width in seconds
 
-function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelineChange, maxDuration }) {
-  const dur = voiceAsset?.duration_seconds || maxDuration || 50;
+function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelineChange, maxDuration, onMaxDurationChange }) {
+  // audioDur = the actual recorded voice length (from the <audio> element metadata)
+  const [audioDur, setAudioDur] = useState(voiceAsset?.duration_seconds || null);
+  // dur = total video length — user can extend this beyond the audio to show extra images
+  const [dur, setDur] = useState(maxDuration || voiceAsset?.duration_seconds || 50);
+
   const [items, setItems] = useState(timelineItems || []);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -471,15 +475,38 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   const rafRef = useRef(null);
 
   // Timeline scroll/zoom
-  const [zoom, setZoom] = useState(1); // px per second multiplier (base = container width / dur)
+  const [zoom, setZoom] = useState(1);
   const rulerRef = useRef(null);
   const timelineRef = useRef(null);
   const [timelineWidth, setTimelineWidth] = useState(600);
 
   // Drag state for clips
-  const dragState = useRef(null); // { type: 'move'|'resize-left'|'resize-right', itemId, startX, origStart, origEnd }
+  const dragState = useRef(null);
 
   useEffect(() => { setItems(timelineItems || []); }, [timelineItems]);
+
+  // When audio metadata loads get the real duration
+  function onAudioMetadata() {
+    const realDur = audioRef.current?.duration;
+    if (realDur && isFinite(realDur)) {
+      setAudioDur(realDur);
+      // Only auto-set video dur if no explicit maxDuration has been saved yet
+      if (!maxDuration || maxDuration === 50) {
+        const rounded = parseFloat(realDur.toFixed(1));
+        setDur(rounded);
+      }
+    }
+  }
+
+  // Save the new video end time to the project
+  async function saveDuration(newDur) {
+    const clamped = Math.max(1, parseFloat(newDur.toFixed(1)));
+    setDur(clamped);
+    try {
+      await api.put(`/api/v2/movie-review/projects/${projectId}`, { max_duration_seconds: clamped });
+      if (onMaxDurationChange) onMaxDurationChange(clamped);
+    } catch (_) {}
+  }
 
   useEffect(() => {
     const ro = new ResizeObserver(entries => {
@@ -739,7 +766,8 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
       {/* Hidden audio for playback */}
       {voiceAsset?.public_url && (
         <audio ref={audioRef} src={voiceAsset.public_url} preload="auto" style={{ display: 'none' }}
-          onEnded={() => { cancelAnimationFrame(rafRef.current); setPlaying(false); setCurrentTime(0); }}
+          onLoadedMetadata={onAudioMetadata}
+          onEnded={() => { cancelAnimationFrame(rafRef.current); setPlaying(false); }}
           onPause={() => { cancelAnimationFrame(rafRef.current); setPlaying(false); }} />
       )}
 
@@ -831,6 +859,30 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
         </div>
       </div>
 
+      {/* ── Video end time control ── */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <span className="text-xs font-semibold flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>🎬 Video ends at</span>
+        <input
+          type="number" min={1} max={300} step={0.5}
+          value={dur}
+          onChange={e => setDur(parseFloat(e.target.value) || dur)}
+          onBlur={e => saveDuration(parseFloat(e.target.value) || dur)}
+          className="w-16 px-2 py-0.5 rounded text-xs text-center font-mono"
+          style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+        />
+        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>s</span>
+        {audioDur && (
+          <button onClick={() => saveDuration(audioDur)} className="text-xs px-2 py-0.5 rounded-lg ml-1"
+            style={{ background: 'rgba(37,99,235,0.15)', color: '#60a5fa', border: '1px solid rgba(37,99,235,0.3)' }}>
+            Match audio ({audioDur.toFixed(1)}s)
+          </button>
+        )}
+        <button onClick={() => saveDuration(Math.max(dur, ...(items.map(i => i.end_time)), audioDur || 0))} className="text-xs px-2 py-0.5 rounded-lg"
+          style={{ background: 'rgba(147,51,234,0.15)', color: '#c084fc', border: '1px solid rgba(147,51,234,0.3)' }}>
+          Fit clips
+        </button>
+      </div>
+
       {/* ── TikTok-style timeline ── */}
       <div className="rounded-2xl overflow-hidden" style={{ background: '#111', border: '1px solid var(--color-border)' }}>
         {/* Scrollable track area */}
@@ -864,10 +916,12 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                 🎙<br /><span style={{ fontSize: 8 }}>AUDIO</span>
               </div>
               <div style={{ flex: 1, position: 'relative', height: '100%' }}>
-                {voiceAsset?.public_url ? (
+                {voiceAsset?.public_url ? (() => {
+                  const barDur = audioDur || voiceAsset.duration_seconds || dur;
+                  return (
                   <div style={{
                     position: 'absolute', left: 0, top: 8,
-                    width: dur * pxPerSec,
+                    width: barDur * pxPerSec,
                     height: TRACK_H - 16,
                     borderRadius: 6,
                     background: 'linear-gradient(90deg,#1e3a5f,#2563eb)',
@@ -875,7 +929,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                     overflow: 'hidden',
                   }}>
                     <div style={{ display: 'flex', gap: 2, alignItems: 'center', height: '100%', width: '100%', overflow: 'hidden' }}>
-                      {Array.from({ length: Math.floor(dur * 4) }).map((_, i) => (
+                      {Array.from({ length: Math.floor(barDur * 4) }).map((_, i) => (
                         <div key={i} style={{
                           width: 2, borderRadius: 1, flexShrink: 0,
                           height: `${20 + Math.sin(i * 0.7) * 14 + Math.cos(i * 1.3) * 10}%`,
@@ -884,10 +938,11 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                       ))}
                     </div>
                     <span style={{ position: 'absolute', left: 8, color: '#93c5fd', fontSize: 10, fontWeight: 700, pointerEvents: 'none' }}>
-                      Voice · {dur.toFixed(1)}s
+                      Voice · {barDur.toFixed(1)}s
                     </span>
                   </div>
-                ) : (
+                  );
+                })() : (
                   <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#444', fontSize: 11 }}>
                     No voice recorded
                   </div>
@@ -1376,7 +1431,8 @@ export default function MovieReviewEditor() {
               voiceAsset={voiceAsset}
               timelineItems={timeline}
               onTimelineChange={tl => setTimeline(tl)}
-              maxDuration={project?.max_duration_seconds || 50}
+              maxDuration={project?.max_duration_seconds || null}
+              onMaxDurationChange={d => setProject(p => ({ ...p, max_duration_seconds: d }))}
             />
           )}
           {step === 3 && (
