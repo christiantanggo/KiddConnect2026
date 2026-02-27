@@ -540,6 +540,25 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     seekTo(x / pxPerSec);
   }
 
+  // ── Snapping ──────────────────────────────────────────────────────────────
+  // Returns the nearest snap point within SNAP_THRESHOLD seconds, or the value itself
+  const SNAP_THRESHOLD_S = 0.4; // seconds within which an edge snaps
+
+  function snapValue(value, excludeId, currentItems) {
+    const snapPoints = [0, dur];
+    for (const item of currentItems) {
+      if (item.id === excludeId) continue;
+      snapPoints.push(item.start_time, item.end_time);
+    }
+    let best = value;
+    let bestDist = SNAP_THRESHOLD_S;
+    for (const p of snapPoints) {
+      const d = Math.abs(value - p);
+      if (d < bestDist) { bestDist = d; best = p; }
+    }
+    return best;
+  }
+
   // ── Clip drag logic ───────────────────────────────────────────────────────
   function onClipPointerDown(e, itemId, type) {
     e.stopPropagation();
@@ -560,23 +579,41 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     const dx = e.clientX - startX;
     const dSec = dx / pxPerSec;
 
-    setItems(prev => prev.map(item => {
-      if (item.id !== itemId) return item;
-      let { start_time, end_time } = item;
-      const clipLen = origEnd - origStart;
+    setItems(prev => {
+      return prev.map(item => {
+        if (item.id !== itemId) return item;
+        const clipLen = origEnd - origStart;
+        let start_time, end_time;
 
-      if (type === 'move') {
-        start_time = Math.max(0, Math.min(dur - clipLen, origStart + dSec));
-        end_time = start_time + clipLen;
-      } else if (type === 'resize-left') {
-        start_time = Math.max(0, Math.min(origEnd - MIN_CLIP_S, origStart + dSec));
-        end_time = origEnd;
-      } else if (type === 'resize-right') {
-        end_time = Math.min(dur, Math.max(origStart + MIN_CLIP_S, origEnd + dSec));
-        start_time = origStart;
-      }
-      return { ...item, start_time: parseFloat(start_time.toFixed(2)), end_time: parseFloat(end_time.toFixed(2)) };
-    }));
+        if (type === 'move') {
+          let rawStart = Math.max(0, Math.min(dur - clipLen, origStart + dSec));
+          // Snap the leading edge, then snap the trailing edge if leading didn't snap
+          const snappedStart = snapValue(rawStart, itemId, prev);
+          const snappedEnd = snapValue(rawStart + clipLen, itemId, prev);
+          if (snappedStart !== rawStart) {
+            start_time = snappedStart;
+          } else if (snappedEnd !== rawStart + clipLen) {
+            start_time = snappedEnd - clipLen;
+          } else {
+            start_time = rawStart;
+          }
+          start_time = Math.max(0, Math.min(dur - clipLen, start_time));
+          end_time = start_time + clipLen;
+        } else if (type === 'resize-left') {
+          let rawStart = Math.max(0, Math.min(origEnd - MIN_CLIP_S, origStart + dSec));
+          start_time = snapValue(rawStart, itemId, prev);
+          start_time = Math.max(0, Math.min(origEnd - MIN_CLIP_S, start_time));
+          end_time = origEnd;
+        } else {
+          let rawEnd = Math.min(dur, Math.max(origStart + MIN_CLIP_S, origEnd + dSec));
+          end_time = snapValue(rawEnd, itemId, prev);
+          end_time = Math.min(dur, Math.max(origStart + MIN_CLIP_S, end_time));
+          start_time = origStart;
+        }
+
+        return { ...item, start_time: parseFloat(start_time.toFixed(2)), end_time: parseFloat(end_time.toFixed(2)) };
+      });
+    });
   }
 
   function onPointerUp() {
@@ -585,20 +622,30 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
 
   // ── Add / remove items ────────────────────────────────────────────────────
   function addImageItem(asset) {
-    // Place at current playhead, or find first gap, defaulting to 0
-    const start = parseFloat(Math.min(currentTime, dur - 5).toFixed(2));
-    const end = parseFloat(Math.min(start + 5, dur).toFixed(2));
-    setItems(prev => [...prev, {
-      id: `tmp-${Date.now()}`,
-      type: 'IMAGE',
-      asset_id: asset.id,
-      asset_url: asset.public_url,
-      start_time: start,
-      end_time: end,
-      motion_preset: 'ZOOM_IN',
-      position_preset: 'CENTER',
-      order_index: prev.length,
-    }]);
+    // Place at playhead if there's space, otherwise pack at end of last image clip
+    setItems(prev => {
+      const imgClips = prev.filter(i => i.type === 'IMAGE').sort((a, b) => a.start_time - b.start_time);
+      // Try playhead position first
+      let start = parseFloat(Math.min(currentTime, dur - MIN_CLIP_S).toFixed(2));
+      // Check if another clip already covers that position — if so, pack after the last clip
+      const overlaps = imgClips.some(c => c.start_time < start + 0.1 && c.end_time > start + 0.1);
+      if (overlaps || imgClips.length > 0) {
+        const lastEnd = imgClips.length ? imgClips[imgClips.length - 1].end_time : 0;
+        start = parseFloat(Math.min(lastEnd, dur - MIN_CLIP_S).toFixed(2));
+      }
+      const end = parseFloat(Math.min(start + 5, dur).toFixed(2));
+      return [...prev, {
+        id: `tmp-${Date.now()}`,
+        type: 'IMAGE',
+        asset_id: asset.id,
+        asset_url: asset.public_url,
+        start_time: start,
+        end_time: end,
+        motion_preset: 'ZOOM_IN',
+        position_preset: 'CENTER',
+        order_index: prev.length,
+      }];
+    });
   }
 
   function addTextItem() {
