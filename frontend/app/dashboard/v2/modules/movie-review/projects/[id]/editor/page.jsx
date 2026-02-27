@@ -1051,40 +1051,42 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                       onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
                       style={{ position: 'absolute', left: 14, right: 14, top: 0, bottom: 0, cursor: 'grab', borderRadius: 4, background: 'linear-gradient(90deg,#1e3a5f,#2563eb)', overflow: 'hidden', border: '2px solid rgba(96,165,250,0.5)', boxSizing: 'border-box' }}>
                       {/* Real waveform SVG */}
-                      {(() => {
-                        const svgW = Math.max(clipW - 28, 10);
+                      {waveformPeaks ? (() => {
+                        const svgW = Math.max(clipW - 28, 4);
                         const svgH = TRACK_H - 12;
                         const mid = svgH / 2;
-                        if (waveformPeaks) {
-                          // Which portion of the full waveform to show (respects left trim)
-                          const fullDur = audioDur || (audioClip.end - audioClip.start);
-                          const startFrac = (audioClip.fileStart || 0) / fullDur;
-                          const endFrac = Math.min(1, startFrac + (audioClip.end - audioClip.start) / fullDur);
-                          const startBucket = Math.floor(startFrac * waveformPeaks.length);
-                          const endBucket = Math.ceil(endFrac * waveformPeaks.length);
-                          const slice = waveformPeaks.slice(startBucket, endBucket);
-                          const cols = Math.max(slice.length, 1);
-                          // Build SVG polyline points
-                          const pts = slice.map((v, i) => {
-                            const x = (i / cols) * svgW;
-                            const h = Math.max(1, v * mid * 0.95);
-                            return `${x},${mid - h} ${x},${mid + h}`;
-                          }).join(' ');
-                          return (
-                            <svg width={svgW} height={svgH} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
-                              <polyline points={pts} fill="none" stroke="rgba(147,197,253,0.85)" strokeWidth="1.5" strokeLinecap="round" />
-                            </svg>
-                          );
+                        // Work out which slice of the 600 buckets to show
+                        const totalBuckets = waveformPeaks.length;
+                        const realDur = audioDur && isFinite(audioDur) && audioDur > 0 ? audioDur : (audioClip.end - audioClip.start);
+                        const fileStart = audioClip.fileStart || 0;
+                        const clipDur = audioClip.end - audioClip.start;
+                        const s0 = Math.max(0, Math.floor((fileStart / realDur) * totalBuckets));
+                        const s1 = Math.min(totalBuckets, Math.ceil(((fileStart + clipDur) / realDur) * totalBuckets));
+                        const slice = Array.from(waveformPeaks.slice(s0, Math.max(s0 + 1, s1)));
+                        const n = slice.length;
+                        // Draw one vertical line per display column (max 300)
+                        const COLS = Math.min(n, Math.floor(svgW));
+                        const lines = [];
+                        for (let c = 0; c < COLS; c++) {
+                          const bi = Math.floor((c / COLS) * n);
+                          const amp = slice[bi] || 0;
+                          const h = Math.max(1, amp * mid * 0.95);
+                          const x = ((c + 0.5) / COLS) * svgW;
+                          lines.push(<line key={c} x1={x} y1={mid - h} x2={x} y2={mid + h} stroke="rgba(147,197,253,0.9)" strokeWidth="1.5" strokeLinecap="round" />);
                         }
-                        // Fallback: animated placeholder bars while decoding
                         return (
-                          <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', overflow: 'hidden', paddingInline: 4 }}>
-                            {Array.from({ length: 40 }).map((_, i) => (
-                              <div key={i} style={{ width: 2, borderRadius: 1, flexShrink: 0, height: `${20 + Math.sin(i * 0.7) * 14}%`, background: 'rgba(147,197,253,0.4)' }} />
-                            ))}
-                          </div>
+                          <svg width={svgW} height={svgH} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
+                            {lines}
+                          </svg>
                         );
-                      })()}
+                      })() : (
+                        // Placeholder while decoding
+                        <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', overflow: 'hidden', paddingInline: 4 }}>
+                          {Array.from({ length: 40 }).map((_, i) => (
+                            <div key={i} style={{ width: 2, borderRadius: 1, flexShrink: 0, height: `${20 + Math.sin(i * 0.7) * 14}%`, background: 'rgba(147,197,253,0.4)' }} />
+                          ))}
+                        </div>
+                      )}
                       <span style={{ position: 'absolute', left: 6, bottom: 3, color: '#93c5fd', fontSize: 9, fontWeight: 700, pointerEvents: 'none', whiteSpace: 'nowrap', opacity: 0.8 }}>
                         🎙 {(audioClip.end - audioClip.start).toFixed(1)}s
                       </span>
