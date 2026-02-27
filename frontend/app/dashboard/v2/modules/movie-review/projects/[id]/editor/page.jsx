@@ -523,12 +523,20 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
   const totalPx = dur * pxPerSec;
 
   // ── Audio clip state (trimming the voice clip on the track) ─────────────
-  // audioClip = { start: number, end: number } in seconds on the timeline
-  // start = where in the timeline audio begins playing; end = where it stops
-  const [audioClip, setAudioClip] = useState({ start: 0, end: voiceAsset?.duration_seconds || 50 });
-  // Once we get real metadata, fix the clip end
+  // audioClip:
+  //   start      — where on the timeline (seconds) this clip begins
+  //   end        — where on the timeline (seconds) this clip ends
+  //   fileStart  — how many seconds into the audio FILE to begin reading (left-trim offset)
+  // The clip's visible duration = end - start
+  // The file plays from fileStart to fileStart + (end - start)
+  const [audioClip, setAudioClip] = useState({ start: 0, end: voiceAsset?.duration_seconds || 50, fileStart: 0 });
+
+  // Once we get real metadata, fix the clip end if it was the placeholder 50
   function onAudioMetadataFixed(realDur) {
-    setAudioClip(prev => ({ ...prev, end: prev.end === 50 || prev.end > realDur ? realDur : prev.end }));
+    setAudioClip(prev => ({
+      ...prev,
+      end: prev.end === 50 || prev.end > realDur ? realDur : prev.end,
+    }));
   }
 
   // ── Playback — purely time-based RAF, audio just follows ─────────────────
@@ -550,7 +558,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
 
     // Only play audio if we're inside the audio clip window
     if (audio && fromTime >= audioClip.start && fromTime < audioClip.end) {
-      const offsetInFile = fromTime - audioClip.start;
+      const offsetInFile = audioClip.fileStart + (fromTime - audioClip.start);
       audio.currentTime = Math.max(0, offsetInFile);
       audio.play().catch(() => {});
     }
@@ -573,7 +581,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
         if (audio) {
           const inAudioWindow = ct >= audioClip.start && ct < audioClip.end;
           if (inAudioWindow && audio.paused) {
-            const offsetInFile = ct - audioClip.start;
+            const offsetInFile = audioClip.fileStart + (ct - audioClip.start);
             audio.currentTime = Math.max(0, offsetInFile);
             audio.play().catch(() => {});
           } else if (!inAudioWindow && !audio.paused) {
@@ -603,7 +611,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     if (audioRef.current) {
       const inWindow = clamped >= audioClip.start && clamped < audioClip.end;
       if (inWindow) {
-        const offsetInFile = clamped - audioClip.start;
+        const offsetInFile = audioClip.fileStart + (clamped - audioClip.start);
         const safeDur = audioDur || audioRef.current.duration || 9999;
         audioRef.current.currentTime = Math.min(safeDur - 0.01, Math.max(0, offsetInFile));
       } else if (!audioRef.current.paused) {
@@ -661,22 +669,31 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
     const maxAudioEnd = audioDur || origEnd; // can't trim audio past its real length
 
     // ── Audio clip drag ──────────────────────────────────────────────────────
+    const { origFileStart } = dragState.current;
+    const clipLen = origEnd - origStart;
+
     if (type === 'audio-move') {
-      const clipLen = origEnd - origStart;
+      // Move the clip on the timeline — fileStart stays the same
       const newStart = Math.max(0, Math.min(dur - clipLen, origStart + dSec));
-      setAudioClip({ start: parseFloat(newStart.toFixed(2)), end: parseFloat((newStart + clipLen).toFixed(2)) });
+      setAudioClip({ start: parseFloat(newStart.toFixed(2)), end: parseFloat((newStart + clipLen).toFixed(2)), fileStart: origFileStart });
       return;
     }
     if (type === 'audio-left') {
-      // Trimming left = moves where on the timeline audio starts (can't go past right edge - min)
-      const newStart = Math.max(0, Math.min(origEnd - MIN_CLIP_S, origStart + dSec));
-      setAudioClip({ start: parseFloat(newStart.toFixed(2)), end: origEnd });
+      // Left trim: start moves right → skip further into the file
+      // newStart can't go past right edge, and fileStart can't exceed real audio length
+      const rawNewStart = origStart + dSec;
+      const maxFileStart = maxAudioEnd - MIN_CLIP_S;
+      const newFileStart = Math.max(0, Math.min(maxFileStart, origFileStart + dSec));
+      const newStart = Math.max(0, Math.min(origEnd - MIN_CLIP_S, rawNewStart));
+      setAudioClip({ start: parseFloat(newStart.toFixed(2)), end: origEnd, fileStart: parseFloat(newFileStart.toFixed(2)) });
       return;
     }
     if (type === 'audio-right') {
-      // Trimming right = shorten audio clip (can't exceed real audio length)
-      const newEnd = Math.min(dur, Math.min(maxAudioEnd, Math.max(origStart + MIN_CLIP_S, origEnd + dSec)));
-      setAudioClip({ start: origStart, end: parseFloat(newEnd.toFixed(2)) });
+      // Right trim: shorten the clip from the end — fileStart stays the same
+      // Can't play audio past the real file length
+      const maxEnd = origStart + (maxAudioEnd - origFileStart);
+      const newEnd = Math.min(dur, Math.min(maxEnd, Math.max(origStart + MIN_CLIP_S, origEnd + dSec)));
+      setAudioClip({ start: origStart, end: parseFloat(newEnd.toFixed(2)), fileStart: origFileStart });
       return;
     }
 
@@ -999,7 +1016,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                     onPointerDown={e => {
                       e.stopPropagation();
                       e.currentTarget.setPointerCapture(e.pointerId);
-                      dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end };
+                      dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart };
                     }}>
                     {/* Waveform bars */}
                     <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', paddingInline: 10, overflow: 'hidden' }}>
@@ -1011,10 +1028,10 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
                       🎙 {(audioClip.end - audioClip.start).toFixed(1)}s
                     </span>
                     {/* Left resize */}
-                    <div onPointerDown={e => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); dragState.current = { type: 'audio-left', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end }; }}
+                    <div onPointerDown={e => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); dragState.current = { type: 'audio-left', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
                       style={{ position: 'absolute', left: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(96,165,250,0.4)', zIndex: 4 }} />
                     {/* Right resize */}
-                    <div onPointerDown={e => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); dragState.current = { type: 'audio-right', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end }; }}
+                    <div onPointerDown={e => { e.stopPropagation(); e.currentTarget.setPointerCapture(e.pointerId); dragState.current = { type: 'audio-right', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart }; }}
                       style={{ position: 'absolute', right: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(96,165,250,0.4)', zIndex: 4 }} />
                   </div>
                   );
