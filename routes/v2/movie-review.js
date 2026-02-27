@@ -276,55 +276,31 @@ router.delete('/projects/:id', async (req, res) => {
 // ─── Voice Recording ──────────────────────────────────────────────────────────
 
 router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
-  const { exec } = await import('child_process');
-  const { promisify } = await import('util');
-  const { writeFile, unlink, readFile } = await import('fs');
-  const { join } = await import('path');
-  const { tmpdir } = await import('os');
-  const execAsync = promisify(exec);
-  const writeAsync = promisify(writeFile);
-  const readAsync = promisify(readFile);
-  const unlinkAsync = promisify(unlink);
-
-  const tmpFiles = [];
-  const cleanup = () => tmpFiles.forEach(f => unlinkAsync(f).catch(() => {}));
-
   try {
     const businessId = req.active_business_id;
     const project = await getProject(req.params.id, businessId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (!req.file) return res.status(400).json({ error: 'No audio file uploaded' });
 
-    // Write incoming buffer to tmp file (webm/ogg/mp4 from browser)
-    const inExt = req.file.originalname.split('.').pop()?.replace('weba','webm') || 'webm';
-    const tmpIn = join(tmpdir(), `mr-voice-in-${randomUUID()}.${inExt}`);
-    const tmpOut = join(tmpdir(), `mr-voice-out-${randomUUID()}.mp3`);
-    tmpFiles.push(tmpIn, tmpOut);
+    const audioBuffer = req.file.buffer;
+    if (!audioBuffer || audioBuffer.length === 0) {
+      return res.status(400).json({ error: 'Uploaded audio file is empty' });
+    }
 
-    await writeAsync(tmpIn, req.file.buffer);
-
-    // Convert to MP3 using FFmpeg — universally playable in browser and by FFmpeg renderer
-    console.log('[MovieReview Voice] Converting to MP3:', tmpIn, '→', tmpOut);
-    await execAsync(
-      `ffmpeg -y -i "${tmpIn}" -vn -acodec libmp3lame -q:a 4 -ar 44100 -ac 1 "${tmpOut}"`,
-      { maxBuffer: 50 * 1024 * 1024 }
-    );
-
-    const mp3Buffer = await readAsync(tmpOut);
-    if (!mp3Buffer || mp3Buffer.length === 0) throw new Error('FFmpeg conversion produced empty file');
-
-    // Get duration from the converted MP3
+    // Derive duration from WAV header (bytes 40-43 = data chunk size, bytes 24-27 = sample rate, bytes 34-35 = bits per sample)
     let durationSeconds = null;
     try {
-      const { stdout } = await execAsync(
-        `ffprobe -v quiet -print_format json -show_streams "${tmpOut}"`
-      );
-      const info = JSON.parse(stdout);
-      const audioStream = info.streams?.find(s => s.codec_type === 'audio');
-      if (audioStream?.duration) durationSeconds = parseFloat(audioStream.duration);
-    } catch (probeErr) {
-      console.warn('[MovieReview] ffprobe failed (non-fatal):', probeErr.message);
-    }
+      if (audioBuffer.length > 44 && audioBuffer.toString('ascii', 0, 4) === 'RIFF') {
+        const sampleRate = audioBuffer.readUInt32LE(24);
+        const bitsPerSample = audioBuffer.readUInt16LE(34);
+        const numChannels = audioBuffer.readUInt16LE(22);
+        const dataSize = audioBuffer.readUInt32LE(40);
+        const bytesPerSample = bitsPerSample / 8;
+        if (sampleRate > 0 && bytesPerSample > 0 && numChannels > 0) {
+          durationSeconds = dataSize / (sampleRate * numChannels * bytesPerSample);
+        }
+      }
+    } catch (_) {}
 
     // Delete old voice asset if exists
     if (project.voice_asset_id) {
@@ -339,11 +315,11 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
       }
     }
 
-    // Upload MP3 to Supabase
-    const fileName = `${businessId}/${project.id}/voice-${Date.now()}.mp3`;
+    // Upload WAV directly to Supabase — no FFmpeg needed
+    const fileName = `${businessId}/${project.id}/voice-${Date.now()}.wav`;
     const { error: uploadErr } = await supabaseClient.storage
       .from(VOICE_BUCKET)
-      .upload(fileName, mp3Buffer, { contentType: 'audio/mpeg', upsert: true });
+      .upload(fileName, audioBuffer, { contentType: 'audio/wav', upsert: true });
     if (uploadErr) throw new Error(`Storage upload failed: ${uploadErr.message}`);
 
     const { data: { publicUrl } } = supabaseClient.storage.from(VOICE_BUCKET).getPublicUrl(fileName);
@@ -357,7 +333,7 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
         storage_bucket: VOICE_BUCKET,
         storage_path: fileName,
         public_url: publicUrl,
-        original_name: 'voice.mp3',
+        original_name: 'voice.wav',
         duration_seconds: durationSeconds,
         order_index: 0,
       })
@@ -370,12 +346,10 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
       .update({ voice_asset_id: asset.id, updated_at: new Date().toISOString() })
       .eq('id', project.id);
 
-    console.log(`[MovieReview Voice] Saved MP3 ${mp3Buffer.length} bytes, duration=${durationSeconds}s`);
-    cleanup();
+    console.log(`[MovieReview Voice] Saved WAV ${audioBuffer.length} bytes, duration=${durationSeconds?.toFixed(1)}s`);
     res.json({ asset });
   } catch (err) {
     console.error('[MovieReview Voice] Error:', err.message);
-    cleanup();
     res.status(500).json({ error: err.message });
   }
 });

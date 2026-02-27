@@ -1,176 +1,221 @@
--- Movie Review Studio: tables, module registration, storage bucket policies
--- Run in Supabase SQL Editor. Does NOT touch any existing tables.
+-- Movie Review Studio — Full Migration
+-- Run this in Supabase SQL Editor: Dashboard → SQL Editor → New Query
+-- All statements are idempotent (safe to re-run).
 
--- ============================================================
--- PROJECTS
--- ============================================================
+-- ─── 1. Projects ─────────────────────────────────────────────────────────────
+
 CREATE TABLE IF NOT EXISTS movie_review_projects (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  business_id UUID NOT NULL,
-  movie_title VARCHAR(255) NOT NULL,
-  content_type VARCHAR(50) NOT NULL DEFAULT 'review'
-    CHECK (content_type IN ('review','facts','theory','ranking','other')),
-  notes_text TEXT,
-  tmdb_movie_id INTEGER,
-  tmdb_poster_url TEXT,
-  hook_text TEXT,
-  tagline_text TEXT,
-  yt_title TEXT,
-  yt_description TEXT,
-  yt_hashtags JSONB DEFAULT '[]'::jsonb,
-  voice_asset_id UUID,
-  music_asset_id UUID,
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id          UUID NOT NULL,
+  movie_title          TEXT NOT NULL,
+  content_type         TEXT NOT NULL DEFAULT 'review',  -- review | facts | theory | ranking | other
+  notes_text           TEXT,
+  hook_text            TEXT,
+  tagline_text         TEXT,
+  yt_title             TEXT,
+  yt_description       TEXT,
+  yt_hashtags          TEXT[] DEFAULT '{}',
+  tmdb_movie_id        INTEGER,
+  tmdb_poster_url      TEXT,
+  voice_asset_id       UUID,
+  music_asset_id       UUID,
+  render_url           TEXT,
+  yt_video_id          TEXT,
+  yt_video_url         TEXT,
   max_duration_seconds INTEGER NOT NULL DEFAULT 50,
-  privacy VARCHAR(20) NOT NULL DEFAULT 'UNLISTED'
-    CHECK (privacy IN ('PUBLIC','UNLISTED','PRIVATE')),
-  status VARCHAR(30) NOT NULL DEFAULT 'DRAFT'
-    CHECK (status IN ('DRAFT','RENDERING','READY','UPLOADING','PUBLISHED','FAILED')),
-  render_url TEXT,
-  youtube_video_id TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  privacy              TEXT NOT NULL DEFAULT 'UNLISTED',  -- PUBLIC | UNLISTED | PRIVATE
+  status               TEXT NOT NULL DEFAULT 'DRAFT',     -- DRAFT | RENDERING | DONE | UPLOADING | PUBLISHED | ERROR
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_mr_projects_business ON movie_review_projects(business_id);
-CREATE INDEX IF NOT EXISTS idx_mr_projects_status ON movie_review_projects(status);
-CREATE INDEX IF NOT EXISTS idx_mr_projects_created ON movie_review_projects(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_movie_review_projects_business_id
+  ON movie_review_projects (business_id);
 
--- ============================================================
--- ASSETS (images, voice recordings, music)
--- ============================================================
+CREATE INDEX IF NOT EXISTS idx_movie_review_projects_status
+  ON movie_review_projects (business_id, status);
+
+-- ─── 2. Assets ────────────────────────────────────────────────────────────────
+-- Stores uploaded images, voice recordings, and music files linked to a project.
+
 CREATE TABLE IF NOT EXISTS movie_review_assets (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  business_id UUID NOT NULL,
-  project_id UUID REFERENCES movie_review_projects(id) ON DELETE CASCADE,
-  type VARCHAR(20) NOT NULL CHECK (type IN ('IMAGE','AUDIO_VOICE','AUDIO_MUSIC')),
-  storage_bucket VARCHAR(100) NOT NULL,
-  storage_path TEXT NOT NULL,
-  public_url TEXT NOT NULL,
-  original_name TEXT,
+  id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  business_id      UUID NOT NULL,
+  project_id       UUID NOT NULL REFERENCES movie_review_projects (id) ON DELETE CASCADE,
+  type             TEXT NOT NULL,            -- IMAGE | AUDIO_VOICE | AUDIO_MUSIC
+  storage_bucket   TEXT NOT NULL,
+  storage_path     TEXT NOT NULL,
+  public_url       TEXT NOT NULL,
+  original_name    TEXT,
   duration_seconds NUMERIC,
-  order_index INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  order_index      INTEGER NOT NULL DEFAULT 0,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_mr_assets_project ON movie_review_assets(project_id);
-CREATE INDEX IF NOT EXISTS idx_mr_assets_business ON movie_review_assets(business_id);
-CREATE INDEX IF NOT EXISTS idx_mr_assets_type ON movie_review_assets(type);
+CREATE INDEX IF NOT EXISTS idx_movie_review_assets_project_id
+  ON movie_review_assets (project_id);
 
--- ============================================================
--- TIMELINE ITEMS
--- ============================================================
+CREATE INDEX IF NOT EXISTS idx_movie_review_assets_business_id
+  ON movie_review_assets (business_id);
+
+CREATE INDEX IF NOT EXISTS idx_movie_review_assets_type
+  ON movie_review_assets (project_id, type);
+
+-- ─── 3. Timeline Items ────────────────────────────────────────────────────────
+-- Each row is one item on the video timeline (image clip or text overlay).
+
 CREATE TABLE IF NOT EXISTS movie_review_timeline_items (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID NOT NULL REFERENCES movie_review_projects(id) ON DELETE CASCADE,
-  type VARCHAR(10) NOT NULL CHECK (type IN ('IMAGE','TEXT')),
-  asset_id UUID REFERENCES movie_review_assets(id) ON DELETE SET NULL,
-  text_content TEXT,
-  start_time NUMERIC NOT NULL DEFAULT 0,
-  end_time NUMERIC NOT NULL DEFAULT 5,
-  position_preset VARCHAR(10) NOT NULL DEFAULT 'CENTER'
-    CHECK (position_preset IN ('TOP','CENTER','BOTTOM')),
-  motion_preset VARCHAR(20) NOT NULL DEFAULT 'ZOOM_IN'
-    CHECK (motion_preset IN ('ZOOM_IN','ZOOM_OUT','PAN_LEFT','PAN_RIGHT')),
-  order_index INTEGER NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id      UUID NOT NULL REFERENCES movie_review_projects (id) ON DELETE CASCADE,
+  type            TEXT NOT NULL,           -- IMAGE | TEXT
+  asset_id        UUID REFERENCES movie_review_assets (id) ON DELETE SET NULL,
+  text_content    TEXT,
+  start_time      NUMERIC NOT NULL DEFAULT 0,
+  end_time        NUMERIC NOT NULL DEFAULT 5,
+  position_preset TEXT NOT NULL DEFAULT 'CENTER',  -- TOP | CENTER | BOTTOM
+  motion_preset   TEXT NOT NULL DEFAULT 'ZOOM_IN', -- ZOOM_IN | ZOOM_OUT | PAN_LEFT | PAN_RIGHT
+  order_index     INTEGER NOT NULL DEFAULT 0,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_mr_timeline_project ON movie_review_timeline_items(project_id);
+CREATE INDEX IF NOT EXISTS idx_movie_review_timeline_project_id
+  ON movie_review_timeline_items (project_id, order_index);
 
--- ============================================================
--- RENDERS
--- ============================================================
+-- ─── 4. Renders ───────────────────────────────────────────────────────────────
+-- One row per render attempt for a project.
+
 CREATE TABLE IF NOT EXISTS movie_review_renders (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  project_id UUID NOT NULL REFERENCES movie_review_projects(id) ON DELETE CASCADE,
-  business_id UUID NOT NULL,
-  status VARCHAR(20) NOT NULL DEFAULT 'PENDING'
-    CHECK (status IN ('PENDING','RENDERING','DONE','FAILED')),
-  progress INTEGER NOT NULL DEFAULT 0,
-  error_message TEXT,
-  output_url TEXT,
-  started_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id   UUID NOT NULL REFERENCES movie_review_projects (id) ON DELETE CASCADE,
+  business_id  UUID NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING | PROCESSING | DONE | ERROR
+  progress     INTEGER NOT NULL DEFAULT 0,       -- 0-100
+  error        TEXT,
+  output_path  TEXT,
+  started_at   TIMESTAMPTZ,
+  finished_at  TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_mr_renders_project ON movie_review_renders(project_id);
-CREATE INDEX IF NOT EXISTS idx_mr_renders_status ON movie_review_renders(status);
+CREATE INDEX IF NOT EXISTS idx_movie_review_renders_project_id
+  ON movie_review_renders (project_id);
 
--- ============================================================
--- MODULE REGISTRATION
--- ============================================================
+CREATE INDEX IF NOT EXISTS idx_movie_review_renders_business_id
+  ON movie_review_renders (business_id);
+
+-- ─── 5. Register module ───────────────────────────────────────────────────────
+
 INSERT INTO modules (key, name, description, category, is_active, health_status, version, metadata, created_at, updated_at)
 VALUES (
   'movie-review',
   'Movie Review Studio',
-  'Create YouTube Shorts reviewing movies, facts, and theories — record your voice, add images, and upload automatically',
+  'Create YouTube Shorts movie reviews with voice recording, images, and AI-generated metadata',
   'content',
   TRUE,
   'healthy',
   '1.0.0',
-  '{}'::jsonb,
+  '{
+    "pricing": {
+      "monthly_price_cents": 0,
+      "currency": "usd",
+      "interval": "month"
+    },
+    "features": {
+      "voice_recording": true,
+      "image_upload": true,
+      "ai_metadata": true,
+      "youtube_publishing": true,
+      "background_music": true
+    }
+  }'::jsonb,
   NOW(),
   NOW()
 ) ON CONFLICT (key) DO UPDATE SET
-  name = EXCLUDED.name,
-  description = EXCLUDED.description,
-  category = EXCLUDED.category,
-  is_active = EXCLUDED.is_active,
+  name         = EXCLUDED.name,
+  description  = EXCLUDED.description,
+  is_active    = EXCLUDED.is_active,
   health_status = EXCLUDED.health_status,
-  version = EXCLUDED.version,
-  updated_at = NOW();
+  version      = EXCLUDED.version,
+  metadata     = EXCLUDED.metadata,
+  updated_at   = NOW();
 
--- ============================================================
--- STORAGE BUCKET POLICIES (run after creating buckets in Supabase dashboard)
--- Buckets to create: movie-review-voices, movie-review-images, movie-review-renders, movie-review-music
--- ============================================================
+-- ─── 6. Storage buckets ───────────────────────────────────────────────────────
+-- Create all four buckets used by the module.
+-- If a bucket already exists the INSERT is silently ignored.
 
--- Allow service role full access (backend uses service role key)
--- These policies are for anon/authenticated reads of public URLs
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES
+  ('movie-review-voices',  'movie-review-voices',  TRUE,  52428800, ARRAY['audio/mpeg','audio/mp4','audio/webm','audio/ogg','audio/wav']),
+  ('movie-review-images',  'movie-review-images',  TRUE,  20971520, ARRAY['image/jpeg','image/png','image/gif','image/webp']),
+  ('movie-review-renders', 'movie-review-renders', TRUE, 524288000, ARRAY['video/mp4']),
+  ('movie-review-music',   'movie-review-music',   TRUE,  52428800, ARRAY['audio/mpeg','audio/mp4','audio/ogg','audio/wav','audio/aac'])
+ON CONFLICT (id) DO UPDATE SET
+  public             = EXCLUDED.public,
+  file_size_limit    = EXCLUDED.file_size_limit,
+  allowed_mime_types = EXCLUDED.allowed_mime_types;
 
--- movie-review-renders: public read so video player works
+-- ─── 7. Storage RLS policies — movie-review-voices ───────────────────────────
+-- Public read so the <audio> element in the browser can play the MP3 without auth.
+-- Service-role (backend) handles writes; anon/authenticated have no write access.
+
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'movie_review_renders_public_read'
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename  = 'objects'
+      AND policyname = 'movie-review-voices: public read'
   ) THEN
-    CREATE POLICY "movie_review_renders_public_read" ON storage.objects
-      FOR SELECT USING (bucket_id = 'movie-review-renders');
+    CREATE POLICY "movie-review-voices: public read"
+      ON storage.objects FOR SELECT TO public
+      USING (bucket_id = 'movie-review-voices');
   END IF;
 END $$;
 
--- movie-review-images: public read so images display in editor
+-- ─── 8. Storage RLS policies — movie-review-images ───────────────────────────
+
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'movie_review_images_public_read'
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename  = 'objects'
+      AND policyname = 'movie-review-images: public read'
   ) THEN
-    CREATE POLICY "movie_review_images_public_read" ON storage.objects
-      FOR SELECT USING (bucket_id = 'movie-review-images');
+    CREATE POLICY "movie-review-images: public read"
+      ON storage.objects FOR SELECT TO public
+      USING (bucket_id = 'movie-review-images');
   END IF;
 END $$;
 
--- movie-review-voices: public read for playback
+-- ─── 9. Storage RLS policies — movie-review-renders ──────────────────────────
+
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'movie_review_voices_public_read'
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename  = 'objects'
+      AND policyname = 'movie-review-renders: public read'
   ) THEN
-    CREATE POLICY "movie_review_voices_public_read" ON storage.objects
-      FOR SELECT USING (bucket_id = 'movie-review-voices');
+    CREATE POLICY "movie-review-renders: public read"
+      ON storage.objects FOR SELECT TO public
+      USING (bucket_id = 'movie-review-renders');
   END IF;
 END $$;
 
--- movie-review-music: public read for preview
+-- ─── 10. Storage RLS policies — movie-review-music ───────────────────────────
+
 DO $$
 BEGIN
   IF NOT EXISTS (
-    SELECT 1 FROM pg_policies WHERE tablename = 'objects' AND policyname = 'movie_review_music_public_read'
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage'
+      AND tablename  = 'objects'
+      AND policyname = 'movie-review-music: public read'
   ) THEN
-    CREATE POLICY "movie_review_music_public_read" ON storage.objects
-      FOR SELECT USING (bucket_id = 'movie-review-music');
+    CREATE POLICY "movie-review-music: public read"
+      ON storage.objects FOR SELECT TO public
+      USING (bucket_id = 'movie-review-music');
   END IF;
 END $$;

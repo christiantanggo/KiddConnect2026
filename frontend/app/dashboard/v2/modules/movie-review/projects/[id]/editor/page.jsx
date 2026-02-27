@@ -65,47 +65,91 @@ function StepBar({ step, steps, onStep }) {
 }
 
 // ─── Voice recorder panel ─────────────────────────────────────────────────────
+// ── WAV encoder helpers ───────────────────────────────────────────────────────
+// Encodes raw Float32 PCM samples into a standard WAV file blob.
+// No external libraries, no MediaRecorder, no FFmpeg needed for playback.
+function encodeWav(samples, sampleRate) {
+  const numChannels = 1;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
+  const blockAlign = numChannels * bitsPerSample / 8;
+  const dataLength = samples.length * 2; // 16-bit = 2 bytes per sample
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  function writeString(offset, str) {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  }
+  function writeInt16(offset, val) {
+    view.setInt16(offset, Math.max(-32768, Math.min(32767, val * 32767)), true);
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);           // PCM chunk size
+  view.setUint16(20, 1, true);            // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  for (let i = 0; i < samples.length; i++) writeInt16(44 + i * 2, samples[i]);
+
+  return new Blob([buffer], { type: 'audio/wav' });
+}
+
 function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const [audioError, setAudioError] = useState(null);
-  const mediaRecorderRef = useRef(null);
-  const chunksRef = useRef([]);
+  const [localUrl, setLocalUrl] = useState(null); // instant local preview URL
+  const audioCtxRef = useRef(null);
+  const processorRef = useRef(null);
   const streamRef = useRef(null);
+  const samplesRef = useRef([]);
+  const sampleRateRef = useRef(44100);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
+
+  // Clean up local object URL on unmount
+  useEffect(() => {
+    return () => { if (localUrl) URL.revokeObjectURL(localUrl); };
+  }, [localUrl]);
 
   async function startRecording() {
     setError(null);
     setAudioError(null);
+    setLocalUrl(null);
+    samplesRef.current = [];
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
-      chunksRef.current = [];
 
-      // Pick best supported format — prefer mp4 for Edge compatibility
-      const mimeType = [
-        'audio/mp4',
-        'audio/webm;codecs=opus',
-        'audio/webm',
-        'audio/ogg;codecs=opus',
-        'audio/ogg',
-      ].find(m => MediaRecorder.isTypeSupported(m)) || '';
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
+      audioCtxRef.current = ctx;
+      sampleRateRef.current = ctx.sampleRate;
 
-      const mr = new MediaRecorder(stream, mimeType ? { mimeType } : {});
+      const source = ctx.createMediaStreamSource(stream);
 
-      mr.ondataavailable = e => {
-        if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
+      // ScriptProcessor collects raw PCM — works in every browser
+      const bufferSize = 4096;
+      const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
+      processor.onaudioprocess = e => {
+        // Copy the Float32 samples into our accumulator
+        const input = e.inputBuffer.getChannelData(0);
+        samplesRef.current.push(new Float32Array(input));
       };
 
-      mr.onstop = () => {
-        streamRef.current?.getTracks().forEach(t => t.stop());
-        uploadRecording(mr.mimeType || mimeType || 'audio/webm');
-      };
+      source.connect(processor);
+      processor.connect(ctx.destination);
+      processorRef.current = processor;
 
-      mr.start(250);
-      mediaRecorderRef.current = mr;
       setRecording(true);
       setElapsed(0);
       timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
@@ -114,38 +158,46 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
     }
   }
 
-  function stopRecording() {
+  async function stopRecording() {
     clearInterval(timerRef.current);
     setRecording(false);
-    if (mediaRecorderRef.current?.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
-  }
 
-  async function uploadRecording(mimeType) {
-    const type = mimeType || 'audio/webm';
-    const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm';
-    const blob = new Blob(chunksRef.current, { type });
+    // Disconnect processor and stop mic stream
+    processorRef.current?.disconnect();
+    audioCtxRef.current?.close();
+    streamRef.current?.getTracks().forEach(t => t.stop());
 
-    if (blob.size === 0) {
-      setError('Recording captured 0 bytes — please try again.');
+    // Merge all collected Float32 chunks into one array
+    const chunks = samplesRef.current;
+    if (!chunks.length) {
+      setError('No audio captured — please check your microphone and try again.');
       return;
     }
+    const totalLen = chunks.reduce((n, c) => n + c.length, 0);
+    const merged = new Float32Array(totalLen);
+    let offset = 0;
+    for (const c of chunks) { merged.set(c, offset); offset += c.length; }
 
+    // Build WAV blob immediately
+    const wav = encodeWav(merged, sampleRateRef.current);
+
+    // Show instant local preview so user can hear it right now
+    const previewUrl = URL.createObjectURL(wav);
+    setLocalUrl(previewUrl);
+
+    // Upload in the background
+    await uploadRecording(wav);
+  }
+
+  async function uploadRecording(wavBlob) {
     setUploading(true);
     setError(null);
     try {
       const fd = new FormData();
-      fd.append('voice', blob, `voice.${ext}`);
-      const token = typeof document !== 'undefined'
-        ? document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1]
-        : null;
+      fd.append('voice', wavBlob, 'voice.wav');
       const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/voice`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'X-Active-Business-Id': getBusinessId(),
-        },
+        headers: apiHeaders(false),
         body: fd,
       });
       const data = await res.json();
@@ -161,6 +213,7 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   async function deleteVoice() {
     if (!confirm('Delete voice recording?')) return;
     setAudioError(null);
+    setLocalUrl(null);
     await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/voice`, {
       method: 'DELETE', headers: apiHeaders(),
     });
@@ -170,6 +223,8 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   const hasVoice = !!voiceAsset?.public_url;
+  // Use local preview URL first (instant), fall back to saved Supabase URL
+  const playbackUrl = localUrl || voiceAsset?.public_url;
   const mp3Url = voiceAsset?.public_url;
   const durationSec = voiceAsset?.duration_seconds;
 
@@ -183,40 +238,45 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
         {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
 
-        {hasVoice ? (
+        {(hasVoice || localUrl) ? (
           <div className="space-y-3">
-            {/* MP3 player — served from Supabase after server conversion */}
             <div className="rounded-xl p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-2 h-2 rounded-full bg-green-500" />
                 <span className="text-xs font-medium" style={{ color: 'var(--color-text-main)' }}>
-                  Recording saved as MP3{durationSec ? ` · ${Math.round(durationSec)}s` : ''}
+                  {uploading ? 'Saving recording…' : `Recording saved${durationSec ? ` · ${Math.round(durationSec)}s` : ''}`}
                 </span>
+                {uploading && <Loader2 className="w-3 h-3 animate-spin" style={{ color: '#9333ea' }} />}
               </div>
               <audio
-                key={mp3Url}
-                src={mp3Url}
+                key={playbackUrl}
+                src={playbackUrl}
                 controls
-                preload="metadata"
+                preload="auto"
                 className="w-full"
                 style={{ minHeight: 44 }}
                 onCanPlay={() => setAudioError(null)}
-                onError={() => setAudioError('Player error — use the download link below to verify the file.')}
+                onError={e => {
+                  const code = e.target?.error?.code;
+                  const msgs = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+                  setAudioError(`Player error: ${code ? msgs[code] || code : 'unknown'}`);
+                }}
               />
               {audioError && (
                 <p className="text-xs mt-2" style={{ color: '#dc2626' }}>{audioError}</p>
               )}
-              {/* Always show a direct download link so you can verify the file */}
-              <a
-                href={mp3Url}
-                download="voice.mp3"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-block mt-2 text-xs underline"
-                style={{ color: 'var(--color-text-muted)' }}
-              >
-                Download MP3 to verify
-              </a>
+              {mp3Url && (
+                <a
+                  href={mp3Url}
+                  download="voice.wav"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block mt-2 text-xs underline"
+                  style={{ color: 'var(--color-text-muted)' }}
+                >
+                  Download to verify
+                </a>
+              )}
             </div>
 
             <div className="flex gap-2">
@@ -245,12 +305,6 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
                   style={{ background: '#dc2626' }}>
                   ⏹ Stop Recording
                 </button>
-              </div>
-            ) : uploading ? (
-              <div className="text-center py-6">
-                <Loader2 className="w-8 h-8 mx-auto animate-spin mb-2" style={{ color: '#9333ea' }} />
-                <p className="text-sm font-medium" style={{ color: 'var(--color-text-main)' }}>Converting to MP3…</p>
-                <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>This takes a few seconds</p>
               </div>
             ) : (
               <button onClick={startRecording}
