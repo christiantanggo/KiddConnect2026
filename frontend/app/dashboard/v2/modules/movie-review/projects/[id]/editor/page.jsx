@@ -11,22 +11,25 @@ import {
   GripVertical, Type, Wand2, Loader2, CheckCircle
 } from 'lucide-react';
 
+import Cookies from 'js-cookie';
+import axios from 'axios';
+
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
-function getAuthHeaders() {
-  if (typeof document === 'undefined') return {};
-  const token = document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1];
-  return { Authorization: `Bearer ${token}` };
-}
 function getBusinessId() {
   if (typeof window === 'undefined') return null;
   return localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
 }
-function apiHeaders(json = false) {
-  const h = { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() };
-  if (json) h['Content-Type'] = 'application/json';
-  return h;
-}
+
+// Axios instance matching the pattern used by the rest of the app
+const api = axios.create({ baseURL: API_URL, timeout: 60000 });
+api.interceptors.request.use(cfg => {
+  const token = Cookies.get('token');
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  const biz = getBusinessId();
+  if (biz) cfg.headers['X-Active-Business-Id'] = biz;
+  return cfg;
+});
 
 const STEPS = ['Voice', 'Images', 'Timeline', 'AI'];
 const MOTION_PRESETS = ['ZOOM_IN','ZOOM_OUT','PAN_LEFT','PAN_RIGHT'];
@@ -65,91 +68,101 @@ function StepBar({ step, steps, onStep }) {
 }
 
 // ─── Voice recorder panel ─────────────────────────────────────────────────────
-// ── WAV encoder helpers ───────────────────────────────────────────────────────
-// Encodes raw Float32 PCM samples into a standard WAV file blob.
-// No external libraries, no MediaRecorder, no FFmpeg needed for playback.
-function encodeWav(samples, sampleRate) {
-  const numChannels = 1;
-  const bitsPerSample = 16;
-  const byteRate = sampleRate * numChannels * bitsPerSample / 8;
-  const blockAlign = numChannels * bitsPerSample / 8;
-  const dataLength = samples.length * 2; // 16-bit = 2 bytes per sample
-  const buffer = new ArrayBuffer(44 + dataLength);
-  const view = new DataView(buffer);
-
-  function writeString(offset, str) {
-    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
-  }
-  function writeInt16(offset, val) {
-    view.setInt16(offset, Math.max(-32768, Math.min(32767, val * 32767)), true);
-  }
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + dataLength, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);           // PCM chunk size
-  view.setUint16(20, 1, true);            // PCM format
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeString(36, 'data');
-  view.setUint32(40, dataLength, true);
-
-  for (let i = 0; i < samples.length; i++) writeInt16(44 + i * 2, samples[i]);
-
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
 function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const [audioError, setAudioError] = useState(null);
-  const [localUrl, setLocalUrl] = useState(null); // instant local preview URL
-  const audioCtxRef = useRef(null);
-  const processorRef = useRef(null);
+  const [localUrl, setLocalUrl] = useState(null);
+  const [micLabel, setMicLabel] = useState(null);
+  const [volume, setVolume] = useState(0);
+  const [devices, setDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
   const streamRef = useRef(null);
-  const samplesRef = useRef([]);
-  const sampleRateRef = useRef(44100);
+  const monitorRef = useRef(null);
+  const animFrameRef = useRef(null);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
 
-  // Clean up local object URL on unmount
+  // Load available microphones on mount
   useEffect(() => {
-    return () => { if (localUrl) URL.revokeObjectURL(localUrl); };
-  }, [localUrl]);
+    async function loadDevices() {
+      try {
+        // Must request permission first to get device labels
+        await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop()));
+        const all = await navigator.mediaDevices.enumerateDevices();
+        const mics = all.filter(d => d.kind === 'audioinput');
+        setDevices(mics);
+        if (mics.length > 0) setSelectedDeviceId(mics[0].deviceId);
+      } catch (_) {}
+    }
+    loadDevices();
+    return () => {
+      if (localUrl) URL.revokeObjectURL(localUrl);
+      monitorRef.current?.close().catch(() => {});
+      cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
 
   async function startRecording() {
     setError(null);
-    setAudioError(null);
     setLocalUrl(null);
-    samplesRef.current = [];
+    setVolume(0);
+    chunksRef.current = [];
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      const constraints = {
+        audio: selectedDeviceId ? { deviceId: selectedDeviceId } : true,
+        video: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
       streamRef.current = stream;
 
-      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
-      audioCtxRef.current = ctx;
-      sampleRateRef.current = ctx.sampleRate;
+      const track = stream.getAudioTracks()[0];
+      setMicLabel(track?.label || 'Microphone');
 
-      const source = ctx.createMediaStreamSource(stream);
+      // Live volume meter
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      monitorRef.current = ctx;
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((a, b) => a + b, 0) / data.length;
+        setVolume(Math.min(100, Math.round(avg * 2)));
+        animFrameRef.current = requestAnimationFrame(tick);
+      };
+      animFrameRef.current = requestAnimationFrame(tick);
 
-      // ScriptProcessor collects raw PCM — works in every browser
-      const bufferSize = 4096;
-      const processor = ctx.createScriptProcessor(bufferSize, 1, 1);
-      processor.onaudioprocess = e => {
-        // Copy the Float32 samples into our accumulator
-        const input = e.inputBuffer.getChannelData(0);
-        samplesRef.current.push(new Float32Array(input));
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+
+      mr.ondataavailable = e => {
+        if (e.data?.size > 0) chunksRef.current.push(e.data);
       };
 
-      source.connect(processor);
-      processor.connect(ctx.destination);
-      processorRef.current = processor;
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        ctx.close().catch(() => {});
+        cancelAnimationFrame(animFrameRef.current);
+        setVolume(0);
 
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType });
+        if (blob.size === 0) {
+          setError('No audio captured.');
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        setLocalUrl(url);
+        uploadRecording(blob, mr.mimeType);
+      };
+
+      mr.start(250);
       setRecording(true);
       setElapsed(0);
       timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
@@ -158,53 +171,24 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
     }
   }
 
-  async function stopRecording() {
+  function stopRecording() {
     clearInterval(timerRef.current);
     setRecording(false);
-
-    // Disconnect processor and stop mic stream
-    processorRef.current?.disconnect();
-    audioCtxRef.current?.close();
-    streamRef.current?.getTracks().forEach(t => t.stop());
-
-    // Merge all collected Float32 chunks into one array
-    const chunks = samplesRef.current;
-    if (!chunks.length) {
-      setError('No audio captured — please check your microphone and try again.');
-      return;
-    }
-    const totalLen = chunks.reduce((n, c) => n + c.length, 0);
-    const merged = new Float32Array(totalLen);
-    let offset = 0;
-    for (const c of chunks) { merged.set(c, offset); offset += c.length; }
-
-    // Build WAV blob immediately
-    const wav = encodeWav(merged, sampleRateRef.current);
-
-    // Show instant local preview so user can hear it right now
-    const previewUrl = URL.createObjectURL(wav);
-    setLocalUrl(previewUrl);
-
-    // Upload in the background
-    await uploadRecording(wav);
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== 'inactive') mr.stop();
   }
 
-  async function uploadRecording(wavBlob) {
+  async function uploadRecording(blob, mimeType) {
+    const ext = mimeType?.includes('ogg') ? 'ogg' : mimeType?.includes('mp4') ? 'mp4' : 'webm';
     setUploading(true);
     setError(null);
     try {
       const fd = new FormData();
-      fd.append('voice', wavBlob, 'voice.wav');
-      const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/voice`, {
-        method: 'POST',
-        headers: apiHeaders(false),
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      fd.append('voice', blob, `voice.${ext}`);
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/voice`, fd);
       onVoiceChange(data.asset);
     } catch (err) {
-      setError('Upload failed: ' + err.message);
+      setError('Upload failed: ' + (err.response?.data?.error || err.message));
     } finally {
       setUploading(false);
     }
@@ -212,18 +196,15 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
   async function deleteVoice() {
     if (!confirm('Delete voice recording?')) return;
-    setAudioError(null);
     setLocalUrl(null);
-    await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/voice`, {
-      method: 'DELETE', headers: apiHeaders(),
-    });
+    setAudioError(null);
+    await api.delete(`/api/v2/movie-review/projects/${projectId}/voice`);
     onVoiceChange(null);
   }
 
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   const hasVoice = !!voiceAsset?.public_url;
-  // Use local preview URL first (instant), fall back to saved Supabase URL
   const playbackUrl = localUrl || voiceAsset?.public_url;
   const mp3Url = voiceAsset?.public_url;
   const durationSec = voiceAsset?.duration_seconds;
@@ -237,6 +218,23 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
         </p>
 
         {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
+
+        {/* Microphone selector */}
+        {!recording && !hasVoice && !localUrl && devices.length > 1 && (
+          <div className="mb-3">
+            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--color-text-muted)' }}>🎙 Select Microphone</label>
+            <select
+              value={selectedDeviceId}
+              onChange={e => setSelectedDeviceId(e.target.value)}
+              className="w-full rounded-lg px-3 py-2 text-xs"
+              style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}
+            >
+              {devices.map(d => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label || `Microphone ${d.deviceId.slice(0,8)}`}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {(hasVoice || localUrl) ? (
           <div className="space-y-3">
@@ -294,12 +292,17 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
         ) : (
           <div className="space-y-3">
             {recording ? (
-              <div className="text-center py-6">
-                <div className="inline-flex items-center gap-3 mb-4">
+              <div className="text-center py-4">
+                <div className="inline-flex items-center gap-3 mb-3">
                   <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
                   <span className="text-2xl font-bold" style={{ color: '#dc2626' }}>{fmtTime(elapsed)}</span>
                 </div>
-                <p className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>Recording in progress…</p>
+                {micLabel && <p className="text-xs mb-2" style={{ color: 'var(--color-text-muted)' }}>🎙 {micLabel}</p>}
+                {/* Live volume meter */}
+                <div className="mx-auto mb-3 rounded-full overflow-hidden" style={{ width: '100%', height: 10, background: 'var(--color-border)' }}>
+                  <div className="h-full rounded-full transition-all" style={{ width: `${volume}%`, background: volume > 10 ? '#22c55e' : '#ef4444' }} />
+                </div>
+                {volume <= 5 && <p className="text-xs mb-2" style={{ color: '#ef4444' }}>⚠️ No mic signal detected — check Windows Sound Settings</p>}
                 <button onClick={stopRecording}
                   className="px-8 py-3 rounded-2xl font-bold text-white"
                   style={{ background: '#dc2626' }}>
@@ -346,13 +349,7 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
     try {
       const fd = new FormData();
       for (const f of files) fd.append('images', f);
-      const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/images`, {
-        method: 'POST',
-        headers: { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() },
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/images`, fd);
       onImagesChange([...images, ...data.assets]);
     } catch (err) {
       setError(err.message);
@@ -369,9 +366,7 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
 
   async function deleteImage(asset) {
     if (!confirm('Remove this image?')) return;
-    await fetch(`${API_URL}/api/v2/movie-review/assets/${asset.id}`, {
-      method: 'DELETE', headers: apiHeaders(),
-    });
+    await api.delete(`/api/v2/movie-review/assets/${asset.id}`);
     onImagesChange(images.filter(i => i.id !== asset.id));
   }
 
@@ -384,10 +379,7 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
     onImagesChange(newOrder);
     setDragIdx(null); setDragOverIdx(null);
     // Persist order
-    await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/images/reorder`, {
-      method: 'PUT', headers: apiHeaders(true),
-      body: JSON.stringify({ order: newOrder.map(i => i.id) }),
-    });
+    await api.put(`/api/v2/movie-review/projects/${projectId}/images/reorder`, { order: newOrder.map(i => i.id) });
   }
 
   return (
@@ -527,10 +519,7 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
         motion_preset: item.motion_preset || 'ZOOM_IN',
         order_index: i,
       }));
-      const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/timeline`, {
-        method: 'PUT', headers: apiHeaders(true), body: JSON.stringify({ items: payload }),
-      });
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      await api.put(`/api/v2/movie-review/projects/${projectId}/timeline`, { items: payload });
       onTimelineChange(items);
       setSaved(true); setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -743,11 +732,7 @@ function AIPanel({ projectId, project, onProjectUpdate, musicTracks, onMusicSele
   async function generateMetadata() {
     setMetaLoading(true); setMetaSaved(false);
     try {
-      const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/ai/metadata`, {
-        method: 'POST', headers: apiHeaders(true),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/ai/metadata`);
       onProjectUpdate(data.result);
       setMetaSaved(true); setTimeout(() => setMetaSaved(false), 3000);
     } catch (err) {
@@ -765,12 +750,7 @@ function AIPanel({ projectId, project, onProjectUpdate, musicTracks, onMusicSele
     setChatLoading(true);
     try {
       const history = [...chatMessages, userMsg].filter(m => m.role !== 'system');
-      const res = await fetch(`${API_URL}/api/v2/movie-review/ai/chat`, {
-        method: 'POST', headers: apiHeaders(true),
-        body: JSON.stringify({ messages: history, movie_title: project?.movie_title }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const { data } = await api.post('/api/v2/movie-review/ai/chat', { messages: history, movie_title: project?.movie_title });
       setChatMessages(m => [...m, { role: 'assistant', content: data.message }]);
     } catch (err) {
       setChatMessages(m => [...m, { role: 'assistant', content: `Error: ${err.message}` }]);
@@ -936,9 +916,7 @@ export default function MovieReviewEditor() {
 
   async function loadProject() {
     try {
-      const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}`, { headers: apiHeaders() });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const { data } = await api.get(`/api/v2/movie-review/projects/${projectId}`);
       const p = data.project;
       setProject(p);
       const imgs = (p.assets || []).filter(a => a.type === 'IMAGE');
@@ -963,8 +941,7 @@ export default function MovieReviewEditor() {
 
   async function loadMusic() {
     try {
-      const res = await fetch(`${API_URL}/api/v2/movie-review/music`, { headers: apiHeaders() });
-      const data = await res.json();
+      const { data } = await api.get('/api/v2/movie-review/music');
       setMusicTracks(data.tracks || []);
     } catch (_) {}
   }
@@ -977,29 +954,12 @@ export default function MovieReviewEditor() {
         // Check if this track is already an asset in this project
         const existing = (project?.assets || []).find(a => a.type === 'AUDIO_MUSIC' && a.storage_path === track.path);
         let musicAssetId = existing?.id;
-        if (!musicAssetId) {
-          // Create a music asset record linking to the selected track
-          const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}`, {
-            method: 'PUT', headers: apiHeaders(true),
-            body: JSON.stringify({ music_asset_id: null }), // will update below
-          });
-        }
-        // Update project with music selection stored as a note in music_asset_id
-        // For simplicity, store the track URL directly in project update via a temp asset
-        await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}`, {
-          method: 'PUT', headers: apiHeaders(true),
-          body: JSON.stringify({ notes_text: project?.notes_text }),
-        });
-        // Store music selection in localStorage for now (renderer will pick it up via music_asset_id lookup)
         localStorage.setItem(`mr-music-${projectId}`, JSON.stringify({ ...track }));
         setProject(p => ({ ...p, _selectedMusic: track }));
       } else {
         localStorage.removeItem(`mr-music-${projectId}`);
         setProject(p => ({ ...p, _selectedMusic: null, music_asset_id: null }));
-        await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}`, {
-          method: 'PUT', headers: apiHeaders(true),
-          body: JSON.stringify({ music_asset_id: null }),
-        });
+        await api.put(`/api/v2/movie-review/projects/${projectId}`, { music_asset_id: null });
       }
     } catch (err) {
       console.error('Music select error:', err.message);

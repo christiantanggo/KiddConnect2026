@@ -287,20 +287,7 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
       return res.status(400).json({ error: 'Uploaded audio file is empty' });
     }
 
-    // Derive duration from WAV header (bytes 40-43 = data chunk size, bytes 24-27 = sample rate, bytes 34-35 = bits per sample)
-    let durationSeconds = null;
-    try {
-      if (audioBuffer.length > 44 && audioBuffer.toString('ascii', 0, 4) === 'RIFF') {
-        const sampleRate = audioBuffer.readUInt32LE(24);
-        const bitsPerSample = audioBuffer.readUInt16LE(34);
-        const numChannels = audioBuffer.readUInt16LE(22);
-        const dataSize = audioBuffer.readUInt32LE(40);
-        const bytesPerSample = bitsPerSample / 8;
-        if (sampleRate > 0 && bytesPerSample > 0 && numChannels > 0) {
-          durationSeconds = dataSize / (sampleRate * numChannels * bytesPerSample);
-        }
-      }
-    } catch (_) {}
+    console.log(`[MovieReview Voice] Received ${audioBuffer.length} bytes, mimetype=${req.file.mimetype}, name=${req.file.originalname}`);
 
     // Delete old voice asset if exists
     if (project.voice_asset_id) {
@@ -315,14 +302,22 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
       }
     }
 
-    // Upload WAV directly to Supabase — no FFmpeg needed
-    const fileName = `${businessId}/${project.id}/voice-${Date.now()}.wav`;
+    // Store the webm directly — browsers that can record webm can always play it back.
+    // FFmpeg can also read webm/opus fine during rendering.
+    // We avoid re-encoding to prevent the silent-MP3 bug from Chrome's non-compliant opus header.
+    const inExt = req.file.originalname.split('.').pop() || 'webm';
+    const contentType = req.file.mimetype || 'audio/webm';
+    const fileName = `${businessId}/${project.id}/voice-${Date.now()}.${inExt}`;
+
     const { error: uploadErr } = await supabaseClient.storage
       .from(VOICE_BUCKET)
-      .upload(fileName, audioBuffer, { contentType: 'audio/wav', upsert: true });
+      .upload(fileName, audioBuffer, { contentType, upsert: true });
     if (uploadErr) throw new Error(`Storage upload failed: ${uploadErr.message}`);
 
     const { data: { publicUrl } } = supabaseClient.storage.from(VOICE_BUCKET).getPublicUrl(fileName);
+
+    // Estimate duration from file size (webm opus ~30kbps typical)
+    const durationSeconds = Math.round(audioBuffer.length / (30000 / 8));
 
     const { data: asset, error: assetErr } = await supabaseClient
       .from('movie_review_assets')
@@ -333,7 +328,7 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
         storage_bucket: VOICE_BUCKET,
         storage_path: fileName,
         public_url: publicUrl,
-        original_name: 'voice.wav',
+        original_name: req.file.originalname,
         duration_seconds: durationSeconds,
         order_index: 0,
       })
@@ -346,7 +341,7 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
       .update({ voice_asset_id: asset.id, updated_at: new Date().toISOString() })
       .eq('id', project.id);
 
-    console.log(`[MovieReview Voice] Saved WAV ${audioBuffer.length} bytes, duration=${durationSeconds?.toFixed(1)}s`);
+    console.log(`[MovieReview Voice] Saved ${inExt} ${audioBuffer.length} bytes, est. duration=${durationSeconds}s`);
     res.json({ asset });
   } catch (err) {
     console.error('[MovieReview Voice] Error:', err.message);
