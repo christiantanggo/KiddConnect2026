@@ -22,12 +22,13 @@ import {
 } from './video-renderer.js';
 import { buildYouTubeMetadata } from './youtube-metadata.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
+import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
 // Timing constants (11s total)
-// 0–1s: hook | 1–9s: question + progress bar + answers | 9–11s: answer reveal (spoken + on screen)
+// 0–1s: hook (when enabled) | then: question + progress bar + answers | 9–11s: answer reveal
 const DURATION = 11;
 
 /**
@@ -37,6 +38,11 @@ export async function processTriviaRenderJob(render, story, script) {
   const renderId = render.id;
   const businessId = render.business_id;
   const channelId = story?.channel_id ?? null;
+
+  // Read feature toggles from stored module settings (UI-controlled).
+  // Falls back to safe defaults if settings are missing.
+  const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network').catch(() => null);
+  const ENABLE_INTRO_HOOK = moduleSettings?.settings?.enable_intro_hook === true; // default: off
 
   writeProgressLog('TRIVIA_RENDER_START', { renderId });
   setCurrentRender(renderId, 'TRIVIA_RENDER');
@@ -107,7 +113,7 @@ export async function processTriviaRenderJob(render, story, script) {
     ];
     const loopTriggerText = TRIVIA_LOOP_LINES[randomInt(TRIVIA_LOOP_LINES.length)];
 
-    // 3. Generate ASS overlay per retention blueprint (12s timeline)
+    // 3. Generate ASS overlay per retention blueprint (11s timeline)
     const assFilePath = await generateTriviaASSFile(
       {
         category,
@@ -119,7 +125,8 @@ export async function processTriviaRenderJob(render, story, script) {
         answerText: `ANSWER: ${correctLetter}) ${correctText}`,
         correctLetter,
         loopTriggerText,
-        hookText: hook
+        hookText: ENABLE_INTRO_HOOK ? hook : null,
+        enableIntroHook: ENABLE_INTRO_HOOK
       },
       DURATION
     );
@@ -142,9 +149,14 @@ export async function processTriviaRenderJob(render, story, script) {
     try { await unlinkAsync(assFilePath); } catch (_) {}
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
 
-    // 5. Generate trivia TTS: hook 0s, question 1s, answer spoken at 9s (on-screen 9–11s)
+    // 5. Generate trivia TTS: question starts at 1s (hook enabled) or 0s (hook disabled)
     const audioResult = await generateTriviaAudio(
-      { hook, question, answerText: `The answer is ${correctText}.` },
+      {
+        hook: ENABLE_INTRO_HOOK ? hook : null,
+        question,
+        answerText: `The answer is ${correctText}.`,
+        enableIntroHook: ENABLE_INTRO_HOOK
+      },
       DURATION
     );
     audioPath = audioResult.audioPath;

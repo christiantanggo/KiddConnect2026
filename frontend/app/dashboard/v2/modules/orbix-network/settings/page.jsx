@@ -105,6 +105,44 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave }) {
         </div>
       </div>
 
+      {/* Video Behaviour */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">Video Behaviour</h2>
+        <p className="text-xs text-gray-500 mb-4">Toggle features for A/B testing. Changes take effect on the next render.</p>
+        <div className="space-y-4">
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.auto_upload_enabled}
+              onChange={(e) => setSettings((s) => ({ ...s, auto_upload_enabled: e.target.checked }))}
+              className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
+            />
+            <span className="text-sm text-gray-700">
+              <span className="font-medium">Auto-upload to YouTube after render</span>
+              <span className="block text-xs text-gray-500 mt-0.5">
+                When off, rendered videos stay in &quot;Ready for Upload&quot; for manual review before going live.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={settings.enable_intro_hook}
+              onChange={(e) => setSettings((s) => ({ ...s, enable_intro_hook: e.target.checked }))}
+              className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
+            />
+            <span className="text-sm text-gray-700">
+              <span className="font-medium">Show intro hook text (0–1s)</span>
+              <span className="block text-xs text-gray-500 mt-0.5">
+                When off, videos start immediately with the trivia question — no &quot;Can you guess this?&quot; frame.
+                Recommended off to reduce early swipe-aways.
+              </span>
+            </span>
+          </label>
+        </div>
+      </div>
+
       <div className="flex justify-end">
         <button
           onClick={onSave}
@@ -640,6 +678,8 @@ function OrbixNetworkSettingsInner() {
     enable_rumble: false,
     daily_video_cap: 5,
     shock_score_threshold: 45,
+    auto_upload_enabled: true,
+    enable_intro_hook: false,
   });
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -674,6 +714,8 @@ function OrbixNetworkSettingsInner() {
           enable_rumble: data.enable_rumble || false,
           daily_video_cap: data.daily_video_cap || 5,
           shock_score_threshold: data.shock_score_threshold ?? 45,
+          auto_upload_enabled: data.auto_upload_enabled !== false,
+          enable_intro_hook: data.enable_intro_hook === true,
         });
       } catch (e) {
         showError('Failed to load settings');
@@ -691,6 +733,8 @@ function OrbixNetworkSettingsInner() {
         review_mode_enabled: settings.review_mode_enabled,
         auto_approve_minutes: settings.auto_approve_minutes,
         shock_score_threshold: settings.shock_score_threshold,
+        auto_upload_enabled: settings.auto_upload_enabled,
+        enable_intro_hook: settings.enable_intro_hook,
       });
       await orbixNetworkAPI.saveSetup(4, {
         youtube_visibility: settings.youtube_visibility,

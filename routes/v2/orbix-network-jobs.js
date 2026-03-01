@@ -693,6 +693,19 @@ export async function processOneYouTubeUpload() {
   const render = ready;
   const videoUrl = render.output_url;
 
+  // ── Auto-upload toggle ────────────────────────────────────────────────────
+  // Check the business's auto_upload_enabled setting before claiming the render.
+  // When disabled, leave render in READY_FOR_UPLOAD so it can be uploaded manually.
+  {
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(render.business_id, 'orbix-network');
+    const autoUploadEnabled = moduleSettings?.settings?.auto_upload_enabled !== false; // default: enabled
+    if (!autoUploadEnabled) {
+      console.log(`[Orbix YouTube] Auto-upload DISABLED for business ${render.business_id} — render id=${render.id} left in READY_FOR_UPLOAD for manual review`);
+      return { processed: false, skippedAutoUploadDisabled: true, renderId: render.id };
+    }
+  }
+  // ─────────────────────────────────────────────────────────────────────────
+
   // Atomic claim: only we run upload; others will skip this render
   const { data: claimed, error: claimError } = await supabaseClient
     .from('orbix_renders')

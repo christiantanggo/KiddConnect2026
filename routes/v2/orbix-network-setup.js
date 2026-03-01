@@ -61,6 +61,8 @@ router.get('/setup/status', async (req, res) => {
       posting_window_start: moduleSettings?.settings?.posting_schedule?.start ?? '07:00',
       posting_window_end: moduleSettings?.settings?.posting_schedule?.end ?? '20:00',
       posting_timezone: moduleSettings?.settings?.posting_schedule?.timezone ?? 'America/New_York',
+      auto_upload_enabled: moduleSettings?.settings?.auto_upload_enabled !== false,
+      enable_intro_hook: moduleSettings?.settings?.enable_intro_hook === true,
       current_step: setupState?.current_step || 1,
       completed_steps: setupState?.completed_steps || [],
       is_complete: isComplete,
@@ -172,6 +174,32 @@ router.post('/setup/save', async (req, res) => {
     
     if (error) throw error;
 
+    // When saving step 3 (review/scoring/toggles), persist critical runtime settings immediately.
+    if (step === 3 && stepData) {
+      try {
+        const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+        const current = existing?.settings || {};
+        const next = {
+          ...current,
+          review_mode: {
+            ...(current.review_mode || {}),
+            enabled: stepData.review_mode_enabled !== false,
+            auto_approve_minutes: stepData.auto_approve_minutes ?? current.review_mode?.auto_approve_minutes ?? 60
+          },
+          scoring: {
+            ...(current.scoring || {}),
+            shock_score_threshold: stepData.shock_score_threshold ?? current.scoring?.shock_score_threshold ?? 45
+          },
+          // Feature toggles — read directly by the render pipeline and upload job
+          auto_upload_enabled: stepData.auto_upload_enabled !== false,
+          enable_intro_hook: stepData.enable_intro_hook === true
+        };
+        await ModuleSettings.update(businessId, MODULE_KEY, next);
+      } catch (settingsErr) {
+        console.error('[POST /api/v2/orbix-network/setup/save] Failed to persist step 3 to module_settings:', settingsErr);
+      }
+    }
+
     // When saving step 4 (publishing), persist to module_settings so the YouTube publisher
     // and jobs use the correct youtube_visibility and other settings immediately.
     if (step === 4 && stepData) {
@@ -254,6 +282,8 @@ router.post('/setup/complete', async (req, res) => {
       scoring: {
         shock_score_threshold: setupState?.setup_data?.step3?.shock_score_threshold ?? 45
       },
+      auto_upload_enabled: setupState?.setup_data?.step3?.auto_upload_enabled !== false,
+      enable_intro_hook: setupState?.setup_data?.step3?.enable_intro_hook === true,
       backgrounds: {
         random_mode: setupState?.setup_data?.step5?.background_random_mode || 'uniform'
       },

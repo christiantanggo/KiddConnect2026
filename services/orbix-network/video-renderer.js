@@ -484,18 +484,24 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
     throw new Error('OPENAI_API_KEY not set');
   }
 
-  const hookPhrase = (opts.hook || "Let's test your knowledge.").trim().slice(0, 80);
+  // enableIntroHook: when false, skip hook TTS and start question at 0s instead of 1s
+  const enableIntroHook = opts.enableIntroHook !== false && opts.hook != null;
+  const hookPhrase = enableIntroHook ? (opts.hook || "Let's test your knowledge.").trim().slice(0, 80) : null;
   const questionPhrase = (opts.question || '').trim().slice(0, 200);
   const answerPhrase = (opts.answerText || '').trim().slice(0, 100);
-  const loopPhrase = (opts.loopTriggerText || 'Did you get it right?').trim().slice(0, 80);
   if (!questionPhrase) throw new Error('No question text for trivia TTS');
+
+  if (enableIntroHook) {
+    console.log('[Trivia Audio] Intro hook ENABLED — hook TTS at 0s, question at 1s');
+  } else {
+    console.log('[Trivia Audio] Intro hook DISABLED — starting with question at 0s (no hook TTS)');
+  }
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const hookPath = join(tmpdir(), `trivia-hook-${Date.now()}.mp3`);
   const questionPath = join(tmpdir(), `trivia-q-${Date.now()}.mp3`);
   const answerPath = join(tmpdir(), `trivia-a-${Date.now()}.mp3`);
-  const loopPath = join(tmpdir(), `trivia-loop-${Date.now()}.mp3`);
   const mixedPath = join(tmpdir(), `trivia-mixed-${Date.now()}.mp3`);
 
   const getDur = async (p) => {
@@ -510,30 +516,37 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
     }
   };
 
+  // When hook is disabled, question starts at 0s; when enabled, question starts at 1s
   const HOOK_START = 0;
-  const QUESTION_START = 1;
-  const ANSWER_START = 9;   // answer spoken at 9s, matches on-screen reveal (9–11s)
-  // answerPhrase is passed in — speak the correct answer aloud at 9s
-  const answerTtsPhrase = answerPhrase; // e.g. "The correct answer is Paris."
+  const QUESTION_START = enableIntroHook ? 1 : 0;
+  const ANSWER_START = 9;
+  const answerTtsPhrase = answerPhrase;
 
   try {
-    const [hookResp, qResp, aResp] = await Promise.all([
-      openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: hookPhrase }),
-      openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: questionPhrase }),
-      answerTtsPhrase ? openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: answerTtsPhrase }) : null,
-    ]);
+    const ttsRequests = [];
+    if (enableIntroHook) ttsRequests.push(openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: hookPhrase }));
+    ttsRequests.push(openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: questionPhrase }));
+    ttsRequests.push(answerTtsPhrase ? openai.audio.speech.create({ model: 'tts-1', voice: 'alloy', input: answerTtsPhrase }) : null);
 
-    await fs.promises.writeFile(hookPath, Buffer.from(await hookResp.arrayBuffer()));
+    const ttsResults = await Promise.all(ttsRequests);
+    let ttsIdx = 0;
+    const hookResp = enableIntroHook ? ttsResults[ttsIdx++] : null;
+    const qResp = ttsResults[ttsIdx++];
+    const aResp = ttsResults[ttsIdx] || null;
+
+    if (hookResp) await fs.promises.writeFile(hookPath, Buffer.from(await hookResp.arrayBuffer()));
     await fs.promises.writeFile(questionPath, Buffer.from(await qResp.arrayBuffer()));
     if (aResp) await fs.promises.writeFile(answerPath, Buffer.from(await aResp.arrayBuffer()));
 
-    const hookDur = await getDur(hookPath);
+    const hookDur = hookResp ? await getDur(hookPath) : 0;
     const qDur = await getDur(questionPath);
     const aDur = aResp ? await getDur(answerPath) : 0;
 
-    const inputs = [hookPath, questionPath];
-    const delays = [HOOK_START, QUESTION_START];
-    const durs = [hookDur, qDur];
+    const inputs = [];
+    const delays = [];
+    const durs = [];
+    if (hookResp) { inputs.push(hookPath); delays.push(HOOK_START); durs.push(hookDur); }
+    inputs.push(questionPath); delays.push(QUESTION_START); durs.push(qDur);
     if (aResp && answerTtsPhrase) {
       inputs.push(answerPath);
       delays.push(ANSWER_START);
@@ -555,7 +568,7 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
 
     return { audioPath: mixedPath, duration: totalDuration };
   } finally {
-    for (const p of [hookPath, questionPath, answerPath]) {
+    for (const p of [hookPath, questionPath, answerPath].filter(Boolean)) {
       try { await unlinkAsync(p); } catch (_) {}
     }
   }
@@ -762,10 +775,10 @@ function formatASSTimeFromSeconds(seconds) {
   return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
 }
 
-/** Trivia 11s timing constants */
-const TRIVIA_HOOK_END = 1.0;       // hook 0–1s
-const TRIVIA_COUNTDOWN_END = 9.0;  // question + options + progress bar 1–9s
-const TRIVIA_REVEAL_END = 10.0;    // answer reveal 9–10s (1.5s so viewer can read it)
+/** Trivia 11s timing constants (base, hook-enabled path) */
+const TRIVIA_HOOK_END_BASE = 1.0;  // hook occupies 0–1s when enabled
+const TRIVIA_COUNTDOWN_END = 9.0;  // question + options + progress bar ends at 9s
+const TRIVIA_REVEAL_END = 10.0;    // answer reveal 9–10s
 const TRIVIA_LOOP_END = 11.0;      // loop trigger 10–11s, then hard cut
 
 /**
@@ -779,6 +792,10 @@ export async function generateTriviaASSFile(opts, duration = 11) {
   const fs = (await import('fs')).default;
   const assPath = join(tmpdir(), `orbix-trivia-${Date.now()}.ass`);
   const esc = (s) => (s || '').toString().replace(/\\/g, '\\\\').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+
+  // When enableIntroHook is false, question starts at 0s instead of 1s
+  const enableIntroHook = opts.enableIntroHook !== false;
+  const TRIVIA_HOOK_END = enableIntroHook ? TRIVIA_HOOK_END_BASE : 0.0;
 
   const categoryDisplay = (opts.category || 'GENERAL').toUpperCase();
   const triviaNum = opts.triviaNumber ?? 1;
@@ -883,10 +900,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   const lines = [];
 
-  // ── 0–1s: Hook (full screen center) ──────────────────────────────────────
-  lines.push(`Dialogue: 0,${t(0)},${t(TRIVIA_HOOK_END)},Interrupt,,0,0,0,,{\\an5\\pos(540,960)}${esc(hookDisplay.toUpperCase())}`);
+  // ── 0–1s: Hook (full screen center) — only rendered when hook is enabled ──
+  if (enableIntroHook) {
+    lines.push(`Dialogue: 0,${t(0)},${t(TRIVIA_HOOK_END)},Interrupt,,0,0,0,,{\\an5\\pos(540,960)}${esc(hookDisplay.toUpperCase())}`);
+  }
 
-  // ── 1–9s: Category banner (top strip) ────────────────────────────────────
+  // ── Category banner (top strip, starts at TRIVIA_HOOK_END = 0s or 1s) ────
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},BannerBg,,0,0,0,,{\\an7\\pos(0,${BANNER_Y})\\p1}m 0 0 l 1080 0 l 1080 ${BANNER_H} l 0 ${BANNER_H}{\\p0}`);
   lines.push(`Dialogue: 1,${t(TRIVIA_HOOK_END)},${t(TRIVIA_COUNTDOWN_END)},Banner,,0,0,0,,{\\an5\\pos(540,${BANNER_Y + Math.round(BANNER_H / 2)})}${esc(bannerText)}`);
 
