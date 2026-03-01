@@ -112,6 +112,30 @@ export async function runAutomatedPipeline(businessId) {
     const { ModuleSettings } = await import('../../models/v2/ModuleSettings.js');
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
     const threshold = moduleSettings?.settings?.scoring?.shock_score_threshold ?? 45;
+    const reviewModeEnabled = moduleSettings?.settings?.review_mode?.enabled !== false;
+
+    // AUTO-APPROVE: When review mode is OFF, immediately approve all freshly-created PENDING
+    // stories so they are available for rendering in the same pipeline run.
+    // Without this, stories created in Step 2 would always miss Step 3 and require a second run.
+    if (!reviewModeEnabled && processedStories.length > 0) {
+      const pendingIds = processedStories.map(s => s.id);
+      const { error: approveError } = await supabaseClient
+        .from('orbix_stories')
+        .update({ status: 'APPROVED', updated_at: new Date().toISOString() })
+        .in('id', pendingIds)
+        .eq('status', 'PENDING'); // only update ones still PENDING (trivia/facts may already be APPROVED)
+      if (approveError) {
+        console.error('[Pipeline Scheduler] Auto-approve error:', approveError.message);
+      } else {
+        console.log(`[Pipeline Scheduler] Review mode OFF — auto-approved ${pendingIds.length} freshly-classified stories`);
+        // Update our local copies so Step 3 sees them as APPROVED
+        for (const story of processedStories) {
+          story.status = 'APPROVED';
+        }
+      }
+    } else if (reviewModeEnabled) {
+      console.log(`[Pipeline Scheduler] Review mode ON — ${processedStories.length} new stories need approval before rendering`);
+    }
 
     // STEP 3: Filter for shock_score >= threshold (or evergreen: psychology/money) and select highest
     console.log(`[Pipeline Scheduler] STEP 3: Filtering stories (shock_score >= ${threshold} or category psychology/money)...`);
