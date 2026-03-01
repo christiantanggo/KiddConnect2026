@@ -64,7 +64,7 @@ router.get('/settings', async (req, res) => {
       settings: {
         max_duration_seconds: settings.max_duration_seconds ?? 50,
         enable_ai: settings.enable_ai ?? true,
-        default_privacy: settings.default_privacy ?? 'UNLISTED',
+        default_privacy: settings.default_privacy ?? 'PUBLIC',
       }
     });
   } catch (err) {
@@ -82,7 +82,7 @@ router.put('/settings', async (req, res) => {
       ...existing,
       max_duration_seconds: max_duration_seconds ?? existing.max_duration_seconds ?? 50,
       enable_ai: enable_ai ?? existing.enable_ai ?? true,
-      default_privacy: default_privacy ?? existing.default_privacy ?? 'UNLISTED',
+      default_privacy: default_privacy ?? existing.default_privacy ?? 'PUBLIC',
     };
     await ModuleSettings.update(businessId, MODULE_KEY, updated);
     res.json({ success: true });
@@ -175,7 +175,7 @@ router.post('/projects', async (req, res) => {
     // Get max_duration from settings
     const ms = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
     const maxDuration = ms?.settings?.max_duration_seconds ?? 50;
-    const defaultPrivacy = ms?.settings?.default_privacy ?? 'UNLISTED';
+    const defaultPrivacy = ms?.settings?.default_privacy ?? 'PUBLIC';
 
     const { data, error } = await supabaseClient
       .from('movie_review_projects')
@@ -482,6 +482,109 @@ router.post('/projects/:id/voice/transform', async (req, res) => {
     res.json({ asset: updatedAsset });
   } catch (err) {
     console.error('[MovieReview Voice Transform] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── AI Voice TTS ─────────────────────────────────────────────────────────────
+
+const TTS_VOICES = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'];
+
+router.post('/projects/:id/voice/tts', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'AI not configured' });
+    const businessId = req.active_business_id;
+    const project = await getProject(req.params.id, businessId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const { script_text, voice = 'nova' } = req.body;
+    if (!script_text?.trim()) return res.status(400).json({ error: 'script_text is required' });
+    if (!TTS_VOICES.includes(voice)) return res.status(400).json({ error: `Invalid voice. Valid: ${TTS_VOICES.join(', ')}` });
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    console.log(`[MovieReview TTS] Generating speech voice=${voice} chars=${script_text.length}`);
+
+    // Generate TTS audio via OpenAI
+    const ttsResponse = await openai.audio.speech.create({
+      model: 'tts-1',
+      voice,
+      input: script_text.trim(),
+      response_format: 'mp3',
+      speed: 1.0,
+    });
+
+    const audioBuffer = Buffer.from(await ttsResponse.arrayBuffer());
+
+    // Get duration via ffprobe
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const { writeFile, unlink } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const execAsync = promisify(exec);
+    const writeAsync = promisify(writeFile);
+    const unlinkAsync = promisify(unlink);
+
+    let durationSeconds = null;
+    const tmpPath = join(tmpdir(), `mr-tts-${randomUUID()}.mp3`);
+    try {
+      await writeAsync(tmpPath, audioBuffer);
+      const { stdout } = await execAsync(`ffprobe -v quiet -print_format json -show_streams "${tmpPath}"`);
+      const info = JSON.parse(stdout);
+      const stream = info.streams?.find(s => s.codec_type === 'audio');
+      if (stream?.duration) durationSeconds = parseFloat(stream.duration);
+    } catch (_) {}
+    await unlinkAsync(tmpPath).catch(() => {});
+
+    // Delete old voice asset if exists
+    if (project.voice_asset_id) {
+      const { data: oldAsset } = await supabaseClient
+        .from('movie_review_assets')
+        .select('storage_bucket,storage_path')
+        .eq('id', project.voice_asset_id)
+        .single();
+      if (oldAsset) {
+        await supabaseClient.storage.from(oldAsset.storage_bucket).remove([oldAsset.storage_path]).catch(() => {});
+        await supabaseClient.from('movie_review_assets').delete().eq('id', project.voice_asset_id);
+      }
+    }
+
+    // Upload to Supabase Storage
+    const fileName = `${businessId}/${project.id}/voice-tts-${Date.now()}.mp3`;
+    const { error: uploadErr } = await supabaseClient.storage
+      .from(VOICE_BUCKET)
+      .upload(fileName, audioBuffer, { contentType: 'audio/mpeg', upsert: true });
+    if (uploadErr) throw new Error(`Storage upload failed: ${uploadErr.message}`);
+
+    const { data: { publicUrl } } = supabaseClient.storage.from(VOICE_BUCKET).getPublicUrl(fileName);
+
+    // Insert asset row
+    const { data: asset, error: assetErr } = await supabaseClient
+      .from('movie_review_assets')
+      .insert({
+        project_id: project.id,
+        business_id: businessId,
+        type: 'AUDIO_VOICE',
+        storage_bucket: VOICE_BUCKET,
+        storage_path: fileName,
+        public_url: publicUrl,
+        original_name: `ai-voice-${voice}.mp3`,
+        duration_seconds: durationSeconds,
+      })
+      .select()
+      .single();
+    if (assetErr) throw assetErr;
+
+    // Link to project
+    await supabaseClient
+      .from('movie_review_projects')
+      .update({ voice_asset_id: asset.id, updated_at: new Date().toISOString() })
+      .eq('id', project.id);
+
+    console.log(`[MovieReview TTS] Done voice=${voice} duration=${durationSeconds}s`);
+    res.json({ asset });
+  } catch (err) {
+    console.error('[MovieReview TTS] Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
