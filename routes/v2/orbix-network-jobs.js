@@ -768,6 +768,20 @@ export async function processOneYouTubeUpload(options = {}) {
           updated_at: new Date().toISOString()
         })
         .eq('id', claimedRender.id);
+
+      // Write an orbix_publishes record so publishesToday counts this upload correctly
+      await supabaseClient.from('orbix_publishes').insert({
+        business_id: claimedRender.business_id,
+        render_id: claimedRender.id,
+        publish_status: 'PUBLISHED',
+        youtube_url: youtubeUrl,
+        posted_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }).then(({ error }) => {
+        if (error) console.warn(`[Orbix YouTube] Could not write orbix_publishes record: ${error.message}`);
+      });
+
       console.log(`[Orbix YouTube] Upload COMPLETED render id=${claimedRender.id} url=${youtubeUrl} (attempt ${attempt})`);
       return { processed: true, renderId: claimedRender.id, status: 'COMPLETED', url: youtubeUrl };
     } catch (err) {
@@ -1055,11 +1069,29 @@ export async function runPublishJob() {
         const publishSlotsLeft = Math.max(0, dailyVideoCap - publishesToday);
         const currentMinutes = getMinutesSinceMidnightInZone(timezone);
         const slotMinutes = getPostSlotMinutes(posting, dailyVideoCap);
-        const nextSlotMinutes = slotMinutes && publishesToday < slotMinutes.length
-          ? slotMinutes[publishesToday]
-          : (dailyVideoCap <= 1
+
+        // Find the next slot: start from publishesToday index, but if that slot has
+        // already passed (and nothing was published in it), advance to the next future slot.
+        // This prevents getting stuck on slotMinutes[0]=8am all day when publishesToday=0.
+        let nextSlotMinutes;
+        if (slotMinutes && slotMinutes.length > 0) {
+          // Find the first slot that is at or past current time (allowing us to post now),
+          // starting from the publishesToday position
+          const startIdx = Math.min(publishesToday, slotMinutes.length - 1);
+          nextSlotMinutes = slotMinutes[startIdx];
+          // If that slot is already in the past, try subsequent slots
+          for (let si = startIdx; si < slotMinutes.length; si++) {
+            if (slotMinutes[si] >= currentMinutes || si === slotMinutes.length - 1) {
+              nextSlotMinutes = slotMinutes[si];
+              break;
+            }
+          }
+        } else {
+          nextSlotMinutes = dailyVideoCap <= 1
             ? startMinutes
-            : startMinutes + ((endMinutes - startMinutes) * publishesToday / Math.max(1, dailyVideoCap - 1)));
+            : startMinutes + ((endMinutes - startMinutes) * publishesToday / Math.max(1, dailyVideoCap - 1));
+        }
+
         const currentTimeStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
         const nextSlotStr = `${Math.floor(nextSlotMinutes / 60)}:${String(Math.round(nextSlotMinutes) % 60).padStart(2, '0')}`;
         console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${publishesToday}/${dailyVideoCap} nextSlot=${nextSlotStr}`);
