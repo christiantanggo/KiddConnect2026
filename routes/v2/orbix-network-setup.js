@@ -63,6 +63,7 @@ router.get('/setup/status', async (req, res) => {
       posting_timezone: moduleSettings?.settings?.posting_schedule?.timezone ?? 'America/New_York',
       auto_upload_enabled: moduleSettings?.settings?.auto_upload_enabled !== false,
       enable_intro_hook: moduleSettings?.settings?.enable_intro_hook === true,
+      slot_times: Array.isArray(moduleSettings?.settings?.posting_schedule?.slot_times) ? moduleSettings.settings.posting_schedule.slot_times : [],
       current_step: setupState?.current_step || 1,
       completed_steps: setupState?.completed_steps || [],
       is_complete: isComplete,
@@ -221,7 +222,9 @@ router.post('/setup/save', async (req, res) => {
             ...(current.posting_schedule || {}),
             start: stepData.posting_window_start ?? current.posting_schedule?.start ?? '07:00',
             end: stepData.posting_window_end ?? current.posting_schedule?.end ?? '20:00',
-            timezone: stepData.posting_timezone ?? current.posting_schedule?.timezone ?? 'America/New_York'
+            timezone: stepData.posting_timezone ?? current.posting_schedule?.timezone ?? 'America/New_York',
+            // slot_times: array of "HH:mm" strings — empty array = use defaults (8am,11am,2pm,5pm,8pm)
+            slot_times: Array.isArray(stepData.slot_times) ? stepData.slot_times : (current.posting_schedule?.slot_times ?? [])
           }
         };
         await ModuleSettings.update(businessId, MODULE_KEY, next);
@@ -293,7 +296,8 @@ router.post('/setup/complete', async (req, res) => {
       posting_schedule: {
         start: setupState?.setup_data?.step4?.posting_window_start ?? '07:00',
         end: setupState?.setup_data?.step4?.posting_window_end ?? '20:00',
-        timezone: setupState?.setup_data?.step4?.posting_timezone ?? 'America/New_York'
+        timezone: setupState?.setup_data?.step4?.posting_timezone ?? 'America/New_York',
+        slot_times: Array.isArray(setupState?.setup_data?.step4?.slot_times) ? setupState.setup_data.step4.slot_times : []
       }
     };
     

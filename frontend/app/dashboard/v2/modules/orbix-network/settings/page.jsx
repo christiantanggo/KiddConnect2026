@@ -11,8 +11,23 @@ import { handleAPIError } from '@/lib/errorHandler';
 import { useOrbixChannel } from '../OrbixChannelContext';
 import {
   ArrowLeft, Loader, Save, Plus, Trash2, CheckCircle2, Upload,
-  Youtube, Image, Music, Rss, Settings2, Loader2, X
+  Youtube, Image, Music, Rss, Settings2, Loader2, X, Clock
 } from 'lucide-react';
+
+// Common timezone list for the schedule picker
+const TIMEZONES = [
+  'America/New_York', 'America/Chicago', 'America/Denver', 'America/Los_Angeles',
+  'America/Phoenix', 'America/Anchorage', 'America/Honolulu',
+  'America/Toronto', 'America/Vancouver', 'America/Edmonton', 'America/Winnipeg',
+  'Europe/London', 'Europe/Paris', 'Europe/Berlin', 'Europe/Madrid', 'Europe/Rome',
+  'Europe/Amsterdam', 'Europe/Stockholm', 'Europe/Warsaw', 'Europe/Athens',
+  'Asia/Dubai', 'Asia/Kolkata', 'Asia/Singapore', 'Asia/Tokyo', 'Asia/Seoul',
+  'Asia/Shanghai', 'Asia/Hong_Kong', 'Asia/Bangkok', 'Asia/Jakarta',
+  'Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Perth',
+  'Pacific/Auckland', 'Pacific/Auckland',
+  'America/Sao_Paulo', 'America/Buenos_Aires', 'America/Bogota', 'America/Mexico_City',
+  'Africa/Cairo', 'Africa/Johannesburg', 'Africa/Lagos',
+];
 
 // ─── Global settings (not per-channel) ───────────────────────────────────────
 
@@ -102,6 +117,138 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave }) {
             />
             <span className="text-sm text-gray-700">Enable Rumble publishing (coming soon)</span>
           </label>
+        </div>
+      </div>
+
+      {/* Posting Schedule */}
+      <div className="bg-white rounded-xl border border-gray-200 p-6">
+        <h2 className="text-lg font-semibold text-gray-900 mb-1 flex items-center gap-2">
+          <Clock className="w-5 h-5 text-gray-500" />
+          Posting Schedule
+        </h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Set the times videos are auto-created and posted each day. The pipeline runs 1 hour before each post time to scrape, render, and prepare the video.
+        </p>
+        <div className="space-y-5">
+
+          {/* Timezone */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Timezone</label>
+            <select
+              value={settings.posting_timezone}
+              onChange={(e) => setSettings((s) => ({ ...s, posting_timezone: e.target.value }))}
+              className="w-full max-w-xs px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+            >
+              {TIMEZONES.map((tz) => (
+                <option key={tz} value={tz}>{tz.replace(/_/g, ' ')}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Posting window */}
+          <div className="flex items-center gap-4 flex-wrap">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Posting window start</label>
+              <input
+                type="time"
+                value={settings.posting_window_start}
+                onChange={(e) => setSettings((s) => ({ ...s, posting_window_start: e.target.value }))}
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Posting window end</label>
+              <input
+                type="time"
+                value={settings.posting_window_end}
+                onChange={(e) => setSettings((s) => ({ ...s, posting_window_end: e.target.value }))}
+                className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-gray-400 -mt-3">Videos will only post within this window. Posts outside the window are skipped until the next day.</p>
+
+          {/* Custom slot times */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Post times</label>
+            <p className="text-xs text-gray-400 mb-3">
+              Each time = one video posted. The pipeline runs 1 hour before each slot to scrape &amp; render.
+              {settings.slot_times.length === 0 && ' Using defaults: 8am, 11am, 2pm, 5pm, 8pm.'}
+            </p>
+            <div className="space-y-2">
+              {settings.slot_times.map((t, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="time"
+                    value={t}
+                    onChange={(e) => {
+                      const updated = [...settings.slot_times];
+                      updated[i] = e.target.value;
+                      setSettings((s) => ({ ...s, slot_times: updated.sort() }));
+                    }}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                  />
+                  <button
+                    onClick={() => setSettings((s) => ({ ...s, slot_times: s.slot_times.filter((_, idx) => idx !== i) }))}
+                    className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg border border-red-200"
+                    title="Remove this slot"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => {
+                // Default new slot to 1 hour after the last slot, or 09:00
+                const last = settings.slot_times[settings.slot_times.length - 1];
+                let next = '09:00';
+                if (last) {
+                  const [h, m] = last.split(':').map(Number);
+                  const newH = (h + 1) % 24;
+                  next = `${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                }
+                setSettings((s) => ({ ...s, slot_times: [...s.slot_times, next].sort() }));
+              }}
+              className="mt-3 flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium"
+            >
+              <Plus className="w-4 h-4" />
+              Add post time
+            </button>
+            {settings.slot_times.length > 0 && (
+              <button
+                onClick={() => setSettings((s) => ({ ...s, slot_times: [] }))}
+                className="mt-2 flex items-center gap-1.5 text-xs text-gray-400 hover:text-red-500"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Reset to defaults (8am, 11am, 2pm, 5pm, 8pm)
+              </button>
+            )}
+          </div>
+
+          {/* Live preview */}
+          {settings.slot_times.length > 0 && (
+            <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
+              <p className="text-xs font-medium text-blue-700 mb-1">Schedule preview</p>
+              <div className="space-y-0.5">
+                {settings.slot_times.map((t, i) => {
+                  const [h, m] = t.split(':').map(Number);
+                  const pipelineH = Math.max(0, h - 1);
+                  const pipelineTime = `${String(pipelineH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                  const fmt = (hh, mm) => {
+                    const ampm = hh < 12 ? 'am' : 'pm';
+                    const h12 = hh % 12 || 12;
+                    return `${h12}:${String(mm).padStart(2, '0')}${ampm}`;
+                  };
+                  return (
+                    <p key={i} className="text-xs text-blue-600">
+                      {fmt(pipelineH, m)} pipeline runs &rarr; {fmt(h, m)} video posts
+                    </p>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -680,6 +827,10 @@ function OrbixNetworkSettingsInner() {
     shock_score_threshold: 45,
     auto_upload_enabled: true,
     enable_intro_hook: false,
+    posting_timezone: 'America/New_York',
+    posting_window_start: '07:00',
+    posting_window_end: '20:00',
+    slot_times: [],
   });
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -716,6 +867,10 @@ function OrbixNetworkSettingsInner() {
           shock_score_threshold: data.shock_score_threshold ?? 45,
           auto_upload_enabled: data.auto_upload_enabled !== false,
           enable_intro_hook: data.enable_intro_hook === true,
+          posting_timezone: data.posting_timezone || 'America/New_York',
+          posting_window_start: data.posting_window_start || '07:00',
+          posting_window_end: data.posting_window_end || '20:00',
+          slot_times: Array.isArray(data.slot_times) ? data.slot_times : [],
         });
       } catch (e) {
         showError('Failed to load settings');
@@ -740,6 +895,10 @@ function OrbixNetworkSettingsInner() {
         youtube_visibility: settings.youtube_visibility,
         enable_rumble: settings.enable_rumble,
         daily_video_cap: settings.daily_video_cap,
+        posting_window_start: settings.posting_window_start,
+        posting_window_end: settings.posting_window_end,
+        posting_timezone: settings.posting_timezone,
+        slot_times: settings.slot_times,
       });
       success('Settings saved');
     } catch (e) {
