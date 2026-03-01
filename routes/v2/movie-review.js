@@ -875,7 +875,7 @@ Respond ONLY with valid JSON in this exact format:
 }`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4.1-nano',
       messages: [{ role: 'user', content: prompt }],
       response_format: { type: 'json_object' },
       max_tokens: 500,
@@ -916,7 +916,7 @@ Keep your answers clear, fun, and accurate. If asked about facts, be honest abou
 Keep responses concise — under 150 words unless more detail is needed.`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4.1-nano',
       messages: [
         { role: 'system', content: systemPrompt },
         ...messages,
@@ -962,24 +962,29 @@ router.post('/projects/:id/ai/script', async (req, res) => {
         }`
       : '';
 
-    const systemPrompt = `You are a YouTube Shorts script writer helping a young creator make a ${contentTypeLabel} about "${project.movie_title}".
+    const systemPrompt = `You are a YouTube Shorts script writer helping a 12-year-old creator make a ${contentTypeLabel} about "${project.movie_title}".
 
-Write a clear, spoken-word script they can read aloud while recording. The script should:
-- Be 30–50 seconds when read at a natural pace (roughly 80–130 words)
-- Start with an attention-grabbing hook (first 2 seconds)
-- Flow naturally as spoken dialogue — NOT bullet points
-- End with a call to action ("Like and subscribe!", "Comment your thoughts!", etc.)
-- Be energetic, fun, and age-appropriate
-- Use short sentences that are easy to read while recording
+The script will be read aloud on camera by a kid. Write it so it sounds like a real kid talking — not a professional presenter.
 
-Return ONLY the script text — no labels, no stage directions, no "Script:" prefix. Just the words they speak.`;
+Rules you MUST follow:
+- Use simple, everyday words a 12-year-old would naturally say. No big vocabulary words.
+- Keep every sentence SHORT — 8 words or fewer if possible. One idea per sentence.
+- NEVER use actor names or director names. Instead say things like "the director", "the actor who played [character name]", "the guy who made it", "the actor who plays the villain", etc.
+- NEVER use words that are hard to pronounce or spell.
+- Be 30–50 seconds when read at a natural pace (roughly 80–120 words).
+- Start with a punchy one-sentence hook that grabs attention instantly.
+- Flow naturally — like the kid is talking to a friend, NOT reading an essay.
+- End with a fun call to action ("Drop a comment!", "Like if you agree!", "Subscribe for more!", etc.)
+- Be energetic and fun — short bursts of excitement, not long flowing sentences.
+
+Return ONLY the script text. No labels, no stage directions, no "Script:" prefix. Just the exact words they speak.`;
 
     const userPrompt = `Write a YouTube Shorts script for a ${contentTypeLabel} about ${project.movie_title}.${notesContext}${chatContext}
 
-The script should be ready to read aloud — natural, energetic, and 30–50 seconds long.`;
+Remember: simple words, short sentences, no real names of actors or directors — just describe them by their role or character. Ready to read aloud by a 12-year-old.`;
 
     const completion = await openai.chat.completions.create({
-      model: 'gpt-4o-mini',
+      model: 'gpt-4.1-nano',
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt },
