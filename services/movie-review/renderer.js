@@ -70,14 +70,17 @@ async function downloadToTmp(url, ext) {
 
 function motionFilter(preset, duration) {
   const frames = Math.ceil(duration * FPS);
-  // zoompan: z=zoom expression, x/y=pan, d=duration in frames, s=output size
+  // Scale to fill (cover) the frame first so no black bars appear, then apply motion.
+  // force_original_aspect_ratio=increase ensures the image covers the full canvas,
+  // then crop trims any overflow from the centre.
+  const coverScale = `scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT}`;
   switch (preset) {
     case 'ZOOM_OUT':
       return `scale=8000:-1,zoompan=z='if(lte(zoom,1.0),1.3,max(1.0,zoom-0.0015))':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
     case 'PAN_LEFT':
-      return `scale=${WIDTH * 2}:${HEIGHT},crop=${WIDTH}:${HEIGHT}:'t/${duration}*(iw-${WIDTH})':0`;
+      return `${coverScale},scale=${WIDTH * 2}:${HEIGHT},crop=${WIDTH}:${HEIGHT}:'t/${duration}*(iw-${WIDTH})':0`;
     case 'PAN_RIGHT':
-      return `scale=${WIDTH * 2}:${HEIGHT},crop=${WIDTH}:${HEIGHT}:'(iw-${WIDTH})-(t/${duration}*(iw-${WIDTH}))':0`;
+      return `${coverScale},scale=${WIDTH * 2}:${HEIGHT},crop=${WIDTH}:${HEIGHT}:'(iw-${WIDTH})-(t/${duration}*(iw-${WIDTH}))':0`;
     case 'ZOOM_IN':
     default:
       return `scale=8000:-1,zoompan=z='min(zoom+0.0015,1.3)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':d=${frames}:s=${WIDTH}x${HEIGHT}:fps=${FPS}`;
@@ -279,7 +282,7 @@ export async function renderMovieReviewShort(renderId, projectId, businessId) {
     }
 
     // Build video filter chain
-    let vFilter = `[0:v]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=decrease,pad=${WIDTH}:${HEIGHT}:(ow-iw)/2:(oh-ih)/2,setsar=1`;
+    let vFilter = `[0:v]scale=${WIDTH}:${HEIGHT}:force_original_aspect_ratio=increase,crop=${WIDTH}:${HEIGHT},setsar=1`;
     if (textFilters) {
       vFilter += `,${textFilters}`;
     }
