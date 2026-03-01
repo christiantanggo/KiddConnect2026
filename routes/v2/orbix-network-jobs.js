@@ -675,16 +675,28 @@ const YOUTUBE_UPLOAD_RETRY_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_RE
  * Process one READY_FOR_UPLOAD render: upload video (from output_url storage) to YouTube.
  * Safe to retry on failure without re-rendering. Retries up to 3 times with delay between attempts.
  * Uses atomic claim (READY_FOR_UPLOAD → PROCESSING + STEP_8) so only one process runs upload per render.
+ *
+ * @param {Object} [options]
+ * @param {boolean} [options.force] - When true, bypasses the auto_upload_enabled toggle (used for manual uploads).
+ * @param {string}  [options.renderId] - When provided, only upload this specific render (used for manual uploads).
  */
-export async function processOneYouTubeUpload() {
-  const { data: ready } = await supabaseClient
+export async function processOneYouTubeUpload(options = {}) {
+  const { force = false, renderId: targetRenderId = null } = options;
+
+  let baseQuery = supabaseClient
     .from('orbix_renders')
     .select('*')
     .eq('render_status', 'READY_FOR_UPLOAD')
     .not('output_url', 'is', null)
     .order('updated_at', { ascending: true })
-    .limit(1)
-    .maybeSingle();
+    .limit(1);
+
+  // When a specific render ID is requested (manual upload), target only that render
+  if (targetRenderId) {
+    baseQuery = baseQuery.eq('id', targetRenderId);
+  }
+
+  const { data: ready } = await baseQuery.maybeSingle();
 
   if (!ready) {
     return { processed: false };
@@ -694,9 +706,9 @@ export async function processOneYouTubeUpload() {
   const videoUrl = render.output_url;
 
   // ── Auto-upload toggle ────────────────────────────────────────────────────
-  // Check the business's auto_upload_enabled setting before claiming the render.
-  // When disabled, leave render in READY_FOR_UPLOAD so it can be uploaded manually.
-  {
+  // Only check when NOT a forced manual upload. Automatic scheduled uploads
+  // respect the toggle; manual "Force Upload" from the dashboard bypasses it.
+  if (!force) {
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(render.business_id, 'orbix-network');
     const autoUploadEnabled = moduleSettings?.settings?.auto_upload_enabled !== false; // default: enabled
     if (!autoUploadEnabled) {
