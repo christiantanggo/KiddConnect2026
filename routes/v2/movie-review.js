@@ -1033,6 +1033,67 @@ Keep responses concise — under 150 words unless more detail is needed.`;
   }
 });
 
+// ─── AI — Polish Metadata (spell-check, capitalisation, grammar) ──────────────
+
+router.post('/projects/:id/ai/polish', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'AI not configured' });
+    const businessId = req.active_business_id;
+    const project = await getProject(req.params.id, businessId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const { yt_title, yt_description, yt_hashtags } = req.body;
+
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const prompt = `You are a YouTube metadata editor. Fix spelling, grammar, and capitalisation in the fields below. Follow these rules:
+- Titles: Title Case (capitalise every major word)
+- Description: Proper sentence capitalisation and punctuation
+- Hashtags: Each tag should start with # and be CamelCase (e.g. #MovieReview, #HorrorMovie). Remove spaces inside tags. Keep them relevant.
+- Do NOT change the meaning, remove content, or rewrite creatively — only fix errors
+- Return valid JSON only with keys: yt_title, yt_description, yt_hashtags (array of strings with # prefix)
+
+Input:
+Title: ${yt_title || ''}
+Description: ${yt_description || ''}
+Hashtags: ${Array.isArray(yt_hashtags) ? yt_hashtags.join(', ') : (yt_hashtags || '')}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4.1-nano',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.1,
+      max_tokens: 500,
+      response_format: { type: 'json_object' },
+    });
+
+    const raw = completion.choices[0].message.content?.trim() || '{}';
+    const polished = JSON.parse(raw);
+
+    // Ensure hashtags have # prefix
+    if (Array.isArray(polished.yt_hashtags)) {
+      polished.yt_hashtags = polished.yt_hashtags.map(t =>
+        t.startsWith('#') ? t : `#${t}`
+      );
+    }
+
+    // Save polished values back to project
+    const updates = {};
+    if (polished.yt_title)       updates.yt_title = polished.yt_title;
+    if (polished.yt_description) updates.yt_description = polished.yt_description;
+    if (polished.yt_hashtags)    updates.yt_hashtags = polished.yt_hashtags;
+    if (Object.keys(updates).length) {
+      updates.updated_at = new Date().toISOString();
+      await supabaseClient.from('movie_review_projects').update(updates).eq('id', project.id);
+    }
+
+    console.log(`[MovieReview Polish] project=${project.id} polished metadata`);
+    res.json({ yt_title: polished.yt_title, yt_description: polished.yt_description, yt_hashtags: polished.yt_hashtags });
+  } catch (err) {
+    console.error('[MovieReview Polish] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── AI — Script Generator ────────────────────────────────────────────────────
 
 router.post('/projects/:id/ai/script', async (req, res) => {
