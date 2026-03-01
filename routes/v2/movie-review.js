@@ -363,6 +363,129 @@ router.post('/projects/:id/voice', upload.single('voice'), async (req, res) => {
   }
 });
 
+// ─── Voice Effect Transform ────────────────────────────────────────────────────
+
+const VOICE_EFFECTS = {
+  normal:   null, // no processing
+  deep:     'asetrate=44100*0.75,aresample=44100,atempo=1.333',
+  chipmunk: 'asetrate=44100*1.4,aresample=44100,atempo=0.714',
+  robotic:  'afftfilt=real=\'hypot(re,im)*sin(0)\':imag=\'hypot(re,im)*cos(0)\':win_size=512:overlap=0.75',
+  radio:    'highpass=f=400,lowpass=f=3400,acompressor=threshold=0.05:ratio=4:attack=5:release=50',
+  echo:     'aecho=0.8:0.88:80:0.4',
+};
+
+router.post('/projects/:id/voice/transform', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const project = await getProject(req.params.id, businessId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (!project.voice_asset_id) return res.status(400).json({ error: 'No voice recording to transform' });
+
+    const { effect } = req.body;
+    if (!effect || !(effect in VOICE_EFFECTS)) {
+      return res.status(400).json({ error: `Unknown effect. Valid: ${Object.keys(VOICE_EFFECTS).join(', ')}` });
+    }
+
+    const filter = VOICE_EFFECTS[effect];
+
+    // Load current voice asset
+    const { data: asset, error: assetErr } = await supabaseClient
+      .from('movie_review_assets')
+      .select('*')
+      .eq('id', project.voice_asset_id)
+      .single();
+    if (assetErr || !asset) return res.status(404).json({ error: 'Voice asset not found' });
+
+    // Download original audio from Supabase Storage
+    const { data: fileData, error: dlErr } = await supabaseClient.storage
+      .from(asset.storage_bucket)
+      .download(asset.storage_path);
+    if (dlErr) throw new Error(`Download failed: ${dlErr.message}`);
+
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const { writeFile, readFile, unlink } = await import('fs');
+    const { join } = await import('path');
+    const { tmpdir } = await import('os');
+    const execAsync = promisify(exec);
+    const writeAsync = promisify(writeFile);
+    const readAsync = promisify(readFile);
+    const unlinkAsync = promisify(unlink);
+
+    const inExt = asset.storage_path.split('.').pop() || 'webm';
+    const tmpIn  = join(tmpdir(), `mr-fx-in-${randomUUID()}.${inExt}`);
+    const tmpOut = join(tmpdir(), `mr-fx-out-${randomUUID()}.webm`);
+
+    const origBuffer = Buffer.from(await fileData.arrayBuffer());
+    await writeAsync(tmpIn, origBuffer);
+
+    // If normal (no filter), just re-probe duration — nothing to do
+    if (!filter) {
+      await unlinkAsync(tmpIn).catch(() => {});
+      // Restore original: store the original asset's path and url as the "effect" version
+      return res.json({ asset });
+    }
+
+    // Run FFmpeg with the effect filter, output as webm/opus for small file size
+    const ffmpegCmd = `ffmpeg -y -i "${tmpIn}" -af "${filter}" -c:a libopus -b:a 96k "${tmpOut}"`;
+    console.log(`[MovieReview Voice Transform] effect=${effect} cmd=${ffmpegCmd}`);
+    await execAsync(ffmpegCmd, { maxBuffer: 50 * 1024 * 1024 });
+    await unlinkAsync(tmpIn).catch(() => {});
+
+    const outBuffer = await readAsync(tmpOut);
+    await unlinkAsync(tmpOut).catch(() => {});
+
+    // Get duration of transformed audio
+    let durationSeconds = asset.duration_seconds;
+    try {
+      const tmpProbe = join(tmpdir(), `mr-probe-${randomUUID()}.webm`);
+      await writeAsync(tmpProbe, outBuffer);
+      const { stdout } = await execAsync(`ffprobe -v quiet -print_format json -show_streams "${tmpProbe}"`);
+      await unlinkAsync(tmpProbe).catch(() => {});
+      const info = JSON.parse(stdout);
+      const stream = info.streams?.find(s => s.codec_type === 'audio');
+      if (stream?.duration) durationSeconds = parseFloat(stream.duration);
+    } catch (_) {}
+
+    // Upload transformed file, replacing old one
+    const newFileName = `${businessId}/${project.id}/voice-${Date.now()}.webm`;
+    const { error: uploadErr } = await supabaseClient.storage
+      .from(VOICE_BUCKET)
+      .upload(newFileName, outBuffer, { contentType: 'audio/webm', upsert: true });
+    if (uploadErr) throw new Error(`Storage upload failed: ${uploadErr.message}`);
+
+    // Remove old file from storage
+    await supabaseClient.storage.from(asset.storage_bucket).remove([asset.storage_path]).catch(() => {});
+
+    const { data: { publicUrl } } = supabaseClient.storage.from(VOICE_BUCKET).getPublicUrl(newFileName);
+
+    // Update asset row
+    const { data: updatedAsset, error: updateErr } = await supabaseClient
+      .from('movie_review_assets')
+      .update({
+        storage_path: newFileName,
+        public_url: publicUrl,
+        original_name: `voice-${effect}.webm`,
+        duration_seconds: durationSeconds,
+      })
+      .eq('id', asset.id)
+      .select()
+      .single();
+    if (updateErr) throw updateErr;
+
+    await supabaseClient
+      .from('movie_review_projects')
+      .update({ updated_at: new Date().toISOString() })
+      .eq('id', project.id);
+
+    console.log(`[MovieReview Voice Transform] effect=${effect} done, duration=${durationSeconds}s`);
+    res.json({ asset: updatedAsset });
+  } catch (err) {
+    console.error('[MovieReview Voice Transform] Error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.delete('/projects/:id/voice', async (req, res) => {
   try {
     const businessId = req.active_business_id;

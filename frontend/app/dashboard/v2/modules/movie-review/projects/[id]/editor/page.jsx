@@ -68,6 +68,15 @@ function StepBar({ step, steps, onStep }) {
 }
 
 // ─── Voice recorder panel ─────────────────────────────────────────────────────
+const VOICE_EFFECTS = [
+  { id: 'normal',   label: 'Normal',   emoji: '🎙️', desc: 'Your original voice' },
+  { id: 'deep',     label: 'Deep',     emoji: '🔊', desc: 'Lower, deeper tone' },
+  { id: 'chipmunk', label: 'Chipmunk', emoji: '🐿️', desc: 'High & squeaky' },
+  { id: 'robotic',  label: 'Robotic',  emoji: '🤖', desc: 'Metallic robot voice' },
+  { id: 'radio',    label: 'Radio',    emoji: '📻', desc: 'Walkie-talkie filter' },
+  { id: 'echo',     label: 'Echo',     emoji: '🏔️', desc: 'Adds reverb echo' },
+];
+
 function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -85,6 +94,8 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const animFrameRef = useRef(null);
   const [elapsed, setElapsed] = useState(0);
   const timerRef = useRef(null);
+  const [activeEffect, setActiveEffect] = useState('normal');
+  const [applyingEffect, setApplyingEffect] = useState(false);
 
   // Load available microphones on mount
   useEffect(() => {
@@ -198,8 +209,27 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
     if (!confirm('Delete voice recording?')) return;
     setLocalUrl(null);
     setAudioError(null);
+    setActiveEffect('normal');
     await api.delete(`/api/v2/movie-review/projects/${projectId}/voice`);
     onVoiceChange(null);
+  }
+
+  async function applyEffect(effectId) {
+    if (applyingEffect) return;
+    setActiveEffect(effectId);
+    if (effectId === 'normal' && !voiceAsset) return;
+    setApplyingEffect(true);
+    setError(null);
+    setLocalUrl(null);
+    try {
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/voice/transform`, { effect: effectId });
+      onVoiceChange(data.asset);
+    } catch (err) {
+      setError('Effect failed: ' + (err.response?.data?.error || err.message));
+      setActiveEffect('normal');
+    } finally {
+      setApplyingEffect(false);
+    }
   }
 
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
@@ -275,6 +305,46 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
                   Download to verify
                 </a>
               )}
+            </div>
+
+            {/* Voice Effects */}
+            <div className="rounded-xl p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold" style={{ color: 'var(--color-text-main)' }}>🎛️ Voice Effect</span>
+                {applyingEffect && (
+                  <span className="text-xs flex items-center gap-1" style={{ color: 'var(--color-text-muted)' }}>
+                    <Loader2 className="w-3 h-3 animate-spin" /> Applying…
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {VOICE_EFFECTS.map(fx => (
+                  <button
+                    key={fx.id}
+                    onClick={() => applyEffect(fx.id)}
+                    disabled={applyingEffect || uploading}
+                    title={fx.desc}
+                    className="flex flex-col items-center gap-0.5 py-2 px-1 rounded-lg text-center transition-all"
+                    style={{
+                      background: activeEffect === fx.id ? 'var(--color-accent)' : 'var(--color-surface)',
+                      border: `1px solid ${activeEffect === fx.id ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                      opacity: (applyingEffect || uploading) ? 0.6 : 1,
+                      cursor: (applyingEffect || uploading) ? 'wait' : 'pointer',
+                    }}
+                  >
+                    <span className="text-base leading-none">{fx.emoji}</span>
+                    <span className="text-xs font-medium leading-tight" style={{ color: activeEffect === fx.id ? 'white' : 'var(--color-text-main)' }}>
+                      {fx.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
+                {VOICE_EFFECTS.find(f => f.id === activeEffect)?.desc || ''}
+                {activeEffect !== 'normal' && !applyingEffect && (
+                  <> · <button onClick={() => applyEffect('normal')} className="underline" style={{ color: 'var(--color-accent)' }}>Reset to normal</button></>
+                )}
+              </p>
             </div>
 
             <div className="flex gap-2">
