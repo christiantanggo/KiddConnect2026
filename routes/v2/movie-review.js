@@ -238,7 +238,7 @@ router.put('/projects/:id', async (req, res) => {
     if (!project) return res.status(404).json({ error: 'Project not found' });
 
     const allowed = [
-      'movie_title','content_type','notes_text','hook_text','tagline_text',
+      'movie_title','content_type','notes_text','script_text','hook_text','tagline_text',
       'yt_title','yt_description','yt_hashtags','voice_asset_id','music_asset_id',
       'max_duration_seconds','privacy','status',
     ];
@@ -926,6 +926,79 @@ Keep responses concise — under 150 words unless more detail is needed.`;
 
     res.json({ message: completion.choices[0].message.content });
   } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── AI — Script Generator ────────────────────────────────────────────────────
+
+router.post('/projects/:id/ai/script', async (req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) return res.status(400).json({ error: 'AI not configured' });
+    const businessId = req.active_business_id;
+    const project = await getProject(req.params.id, businessId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    const { chat_messages } = req.body; // optional: recent fact-check chat history to incorporate
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    const contentTypeLabel = {
+      review: 'movie review', facts: 'movie facts video', theory: 'fan theory',
+      ranking: 'movie ranking', other: 'movie video',
+    }[project.content_type] || 'movie video';
+
+    // Build context from notes and chat messages
+    const notesContext = project.notes_text
+      ? `\nTheir notes and talking points:\n${project.notes_text}`
+      : '';
+
+    const chatContext = Array.isArray(chat_messages) && chat_messages.length > 1
+      ? `\nKey facts they researched in their fact-check chat:\n${
+          chat_messages
+            .filter(m => m.role === 'assistant')
+            .slice(-6)
+            .map(m => `- ${m.content}`)
+            .join('\n')
+        }`
+      : '';
+
+    const systemPrompt = `You are a YouTube Shorts script writer helping a young creator make a ${contentTypeLabel} about "${project.movie_title}".
+
+Write a clear, spoken-word script they can read aloud while recording. The script should:
+- Be 30–50 seconds when read at a natural pace (roughly 80–130 words)
+- Start with an attention-grabbing hook (first 2 seconds)
+- Flow naturally as spoken dialogue — NOT bullet points
+- End with a call to action ("Like and subscribe!", "Comment your thoughts!", etc.)
+- Be energetic, fun, and age-appropriate
+- Use short sentences that are easy to read while recording
+
+Return ONLY the script text — no labels, no stage directions, no "Script:" prefix. Just the words they speak.`;
+
+    const userPrompt = `Write a YouTube Shorts script for a ${contentTypeLabel} about ${project.movie_title}.${notesContext}${chatContext}
+
+The script should be ready to read aloud — natural, energetic, and 30–50 seconds long.`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      temperature: 0.8,
+      max_tokens: 300,
+    });
+
+    const scriptText = completion.choices[0].message.content?.trim() || '';
+
+    // Save script to project
+    await supabaseClient
+      .from('movie_review_projects')
+      .update({ script_text: scriptText, updated_at: new Date().toISOString() })
+      .eq('id', project.id);
+
+    res.json({ script_text: scriptText });
+  } catch (err) {
+    console.error('[MovieReview AI Script] Error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });

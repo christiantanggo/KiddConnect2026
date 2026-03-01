@@ -8,7 +8,7 @@ import V2AppShell from '@/components/V2AppShell';
 import {
   Mic, MicOff, Play, Pause, Trash2, Upload, Image, Music,
   Sparkles, Send, ChevronLeft, ChevronRight, Plus, X,
-  GripVertical, Type, Wand2, Loader2, CheckCircle
+  GripVertical, Type, Wand2, Loader2, CheckCircle, FileText, Eye, EyeOff
 } from 'lucide-react';
 
 import Cookies from 'js-cookie';
@@ -31,7 +31,7 @@ api.interceptors.request.use(cfg => {
   return cfg;
 });
 
-const STEPS = ['Voice', 'Images', 'Timeline', 'AI'];
+const STEPS = ['Research', 'Voice', 'Images', 'Timeline', 'AI'];
 const MOTION_PRESETS = ['ZOOM_IN','ZOOM_OUT','PAN_LEFT','PAN_RIGHT'];
 const POSITION_PRESETS = ['TOP','CENTER','BOTTOM'];
 
@@ -67,6 +67,203 @@ function StepBar({ step, steps, onStep }) {
   );
 }
 
+// ─── Fact Check + Script Panel (Step 0) ───────────────────────────────────────
+function FactCheckPanel({ projectId, project, onProjectUpdate }) {
+  const [chatMessages, setChatMessages] = useState([
+    { role: 'assistant', content: `Hey! I'm your movie research assistant. Ask me anything about "${project?.movie_title || 'your movie'}" — plot, cast, trivia, facts — and I'll help you build a great script!` }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [scriptLoading, setScriptLoading] = useState(false);
+  const [scriptSaved, setScriptSaved] = useState(false);
+  const [editingScript, setEditingScript] = useState(false);
+  const [localScript, setLocalScript] = useState(project?.script_text || '');
+  const [savingScript, setSavingScript] = useState(false);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+  useEffect(() => { setLocalScript(project?.script_text || ''); }, [project?.script_text]);
+
+  async function sendChat() {
+    if (!chatInput.trim() || chatLoading) return;
+    const userMsg = { role: 'user', content: chatInput };
+    setChatMessages(m => [...m, userMsg]);
+    setChatInput('');
+    setChatLoading(true);
+    try {
+      const history = [...chatMessages, userMsg].filter(m => m.role !== 'system');
+      const { data } = await api.post('/api/v2/movie-review/ai/chat', { messages: history, movie_title: project?.movie_title });
+      setChatMessages(m => [...m, { role: 'assistant', content: data.message }]);
+    } catch (err) {
+      setChatMessages(m => [...m, { role: 'assistant', content: `Error: ${err.message}` }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function generateScript() {
+    setScriptLoading(true); setScriptSaved(false);
+    try {
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/ai/script`, {
+        chat_messages: chatMessages,
+      });
+      setLocalScript(data.script_text);
+      onProjectUpdate({ ...project, script_text: data.script_text });
+      setScriptSaved(true);
+      setEditingScript(false);
+      setTimeout(() => setScriptSaved(false), 3000);
+    } catch (err) {
+      alert('Script error: ' + err.message);
+    } finally {
+      setScriptLoading(false);
+    }
+  }
+
+  async function saveScript() {
+    setSavingScript(true);
+    try {
+      await api.put(`/api/v2/movie-review/projects/${projectId}`, { script_text: localScript });
+      onProjectUpdate({ ...project, script_text: localScript });
+      setEditingScript(false);
+      setScriptSaved(true);
+      setTimeout(() => setScriptSaved(false), 2500);
+    } catch (err) {
+      alert('Save error: ' + err.message);
+    } finally {
+      setSavingScript(false);
+    }
+  }
+
+  const wordCount = localScript.trim().split(/\s+/).filter(Boolean).length;
+  const estSeconds = Math.round(wordCount / 2.3); // ~2.3 words/sec spoken
+
+  return (
+    <div className="space-y-4">
+      {/* Chat */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <div className="px-4 pt-4 pb-2">
+          <h2 className="font-bold text-base mb-0.5" style={{ color: 'var(--color-text-main)' }}>🔍 Research & Fact Check</h2>
+          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            Ask the AI about {project?.movie_title || 'your movie'} to gather facts, quotes, and talking points before you record.
+          </p>
+        </div>
+        <div className="px-4 py-3 space-y-3 overflow-y-auto" style={{ maxHeight: 300 }}>
+          {chatMessages.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className="px-3 py-2 rounded-2xl text-sm" style={{
+                maxWidth: '85%',
+                background: msg.role === 'user' ? 'linear-gradient(135deg,#e11d48,#9333ea)' : 'var(--color-bg)',
+                color: msg.role === 'user' ? '#fff' : 'var(--color-text-main)',
+                border: msg.role === 'assistant' ? '1px solid var(--color-border)' : 'none',
+              }}>
+                {msg.content}
+              </div>
+            </div>
+          ))}
+          {chatLoading && (
+            <div className="flex justify-start">
+              <div className="px-3 py-2 rounded-2xl text-sm flex items-center gap-2" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Thinking…
+              </div>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+        <div className="px-3 pb-3 flex gap-2">
+          <input
+            value={chatInput}
+            onChange={e => setChatInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChat()}
+            placeholder={`Ask about ${project?.movie_title || 'this movie'}…`}
+            className="flex-1 px-3 py-2 rounded-xl text-sm"
+            style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+          />
+          <button onClick={sendChat} disabled={chatLoading || !chatInput.trim()}
+            className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-xl text-white"
+            style={{ background: chatLoading || !chatInput.trim() ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+            <Send className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Script generator */}
+      <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h2 className="font-bold text-base" style={{ color: 'var(--color-text-main)' }}>📝 Script</h2>
+            <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+              Generate a script to read while recording. You can edit it after.
+            </p>
+          </div>
+          {localScript && (
+            <span className="text-xs px-2 py-1 rounded-full ml-2 flex-shrink-0"
+              style={{ background: estSeconds <= 50 ? 'rgba(5,150,105,0.1)' : 'rgba(245,158,11,0.1)', color: estSeconds <= 50 ? '#059669' : '#d97706' }}>
+              ~{estSeconds}s
+            </span>
+          )}
+        </div>
+
+        <button onClick={generateScript} disabled={scriptLoading}
+          className="w-full py-3 rounded-xl font-bold text-white flex items-center justify-center gap-2 mb-3"
+          style={{ background: scriptSaved ? '#059669' : scriptLoading ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+          {scriptLoading
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Writing script…</>
+            : scriptSaved
+            ? '✅ Script saved!'
+            : <><Sparkles className="w-4 h-4" /> {localScript ? 'Regenerate Script' : 'Generate Script'}</>}
+        </button>
+
+        {localScript ? (
+          editingScript ? (
+            <div className="space-y-2">
+              <textarea
+                rows={8}
+                value={localScript}
+                onChange={e => setLocalScript(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl text-sm resize-none"
+                style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none', lineHeight: 1.6 }}
+              />
+              <div className="flex gap-2">
+                <button onClick={saveScript} disabled={savingScript}
+                  className="flex-1 py-2 rounded-xl text-sm font-bold text-white"
+                  style={{ background: savingScript ? '#9ca3af' : '#1d4ed8' }}>
+                  {savingScript ? 'Saving…' : '💾 Save Script'}
+                </button>
+                <button onClick={() => { setLocalScript(project?.script_text || ''); setEditingScript(false); }}
+                  className="px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl p-3 relative" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--color-text-main)' }}>{localScript}</p>
+              <button onClick={() => setEditingScript(true)}
+                className="mt-2 text-xs underline"
+                style={{ color: 'var(--color-accent)' }}>
+                ✏️ Edit script
+              </button>
+            </div>
+          )
+        ) : (
+          <p className="text-xs text-center py-3" style={{ color: 'var(--color-text-muted)' }}>
+            Chat with the AI above to gather facts, then generate your script.
+          </p>
+        )}
+      </div>
+
+      {/* Notes */}
+      {project?.notes_text && (
+        <div className="rounded-2xl p-3" style={{ background: '#fef3c7', border: '1px solid #fde68a' }}>
+          <p className="text-xs font-semibold mb-1" style={{ color: '#92400e' }}>📋 Your original notes</p>
+          <p className="text-xs whitespace-pre-wrap" style={{ color: '#92400e' }}>{project.notes_text}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Voice recorder panel ─────────────────────────────────────────────────────
 const VOICE_EFFECTS = [
   { id: 'normal',   label: 'Normal',   emoji: '🎙️', desc: 'Your original voice' },
@@ -77,7 +274,7 @@ const VOICE_EFFECTS = [
   { id: 'echo',     label: 'Echo',     emoji: '🏔️', desc: 'Adds reverb echo' },
 ];
 
-function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
+function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
@@ -96,6 +293,7 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
   const timerRef = useRef(null);
   const [activeEffect, setActiveEffect] = useState('normal');
   const [applyingEffect, setApplyingEffect] = useState(false);
+  const [showScript, setShowScript] = useState(true);
 
   // Load available microphones on mount
   useEffect(() => {
@@ -241,10 +439,32 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange }) {
 
   return (
     <div className="space-y-4">
+      {/* Teleprompter */}
+      {scriptText && (
+        <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f1a', border: '1px solid #9333ea' }}>
+          <button
+            onClick={() => setShowScript(s => !s)}
+            className="w-full flex items-center justify-between px-4 py-2.5"
+            style={{ background: 'rgba(147,51,234,0.15)' }}>
+            <span className="text-sm font-bold flex items-center gap-2" style={{ color: '#e9d5ff' }}>
+              <FileText className="w-4 h-4" /> Script — read this while recording
+            </span>
+            {showScript ? <EyeOff className="w-4 h-4" style={{ color: '#a78bfa' }} /> : <Eye className="w-4 h-4" style={{ color: '#a78bfa' }} />}
+          </button>
+          {showScript && (
+            <div className="px-5 py-4 overflow-y-auto" style={{ maxHeight: 220 }}>
+              <p className="text-base font-medium whitespace-pre-wrap leading-relaxed" style={{ color: '#f3e8ff', lineHeight: '1.9' }}>
+                {scriptText}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
         <h2 className="font-bold text-base mb-1" style={{ color: 'var(--color-text-main)' }}>🎙️ Voice Recording</h2>
         <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
-          Record yourself talking about the movie. This will be the audio track of your Short.
+          {scriptText ? 'Read your script above while recording.' : 'Record yourself talking about the movie. This will be the audio track of your Short.'}
         </p>
 
         {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
@@ -1019,9 +1239,11 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
         {textItems.filter(t => t.start_time <= currentTime && t.end_time > currentTime).map(t => (
           <div key={t.id} className="absolute left-0 right-0 text-center px-3 py-1 text-white font-bold text-sm"
             style={{
+              top: t.position_preset === 'TOP' ? 12
+                : t.position_preset === 'CENTER' ? '50%'
+                : undefined,
               bottom: t.position_preset === 'BOTTOM' ? 12 : undefined,
-              top: t.position_preset === 'TOP' ? 12 : undefined,
-              inset: t.position_preset === 'CENTER' ? 'auto' : undefined,
+              transform: t.position_preset === 'CENTER' ? 'translateY(-50%)' : undefined,
               textShadow: '0 1px 4px rgba(0,0,0,0.9)',
               background: 'rgba(0,0,0,0.4)',
             }}>
@@ -1367,17 +1589,10 @@ function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelin
 
 // ─── AI panel ─────────────────────────────────────────────────────────────────
 function AIPanel({ projectId, project, onProjectUpdate, musicTracks, onMusicSelect }) {
-  const [chatMessages, setChatMessages] = useState([
-    { role: 'assistant', content: `Hey! I'm here to help with ${project?.movie_title || 'your movie'}. Ask me anything — facts, plot details, or script ideas!` }
-  ]);
-  const [chatInput, setChatInput] = useState('');
-  const [chatLoading, setChatLoading] = useState(false);
   const [metaLoading, setMetaLoading] = useState(false);
   const [metaSaved, setMetaSaved] = useState(false);
+  const [savingMeta, setSavingMeta] = useState(false);
   const [activeTab, setActiveTab] = useState('metadata');
-  const chatEndRef = useRef(null);
-
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
 
   async function generateMetadata() {
     setMetaLoading(true); setMetaSaved(false);
@@ -1392,20 +1607,22 @@ function AIPanel({ projectId, project, onProjectUpdate, musicTracks, onMusicSele
     }
   }
 
-  async function sendChat() {
-    if (!chatInput.trim()) return;
-    const userMsg = { role: 'user', content: chatInput };
-    setChatMessages(m => [...m, userMsg]);
-    setChatInput('');
-    setChatLoading(true);
+  async function saveMetadata() {
+    setSavingMeta(true);
     try {
-      const history = [...chatMessages, userMsg].filter(m => m.role !== 'system');
-      const { data } = await api.post('/api/v2/movie-review/ai/chat', { messages: history, movie_title: project?.movie_title });
-      setChatMessages(m => [...m, { role: 'assistant', content: data.message }]);
+      await api.put(`/api/v2/movie-review/projects/${projectId}`, {
+        hook_text: project?.hook_text || null,
+        tagline_text: project?.tagline_text || null,
+        yt_title: project?.yt_title || null,
+        yt_description: project?.yt_description || null,
+        yt_hashtags: project?.yt_hashtags || [],
+      });
+      setMetaSaved(true);
+      setTimeout(() => setMetaSaved(false), 2500);
     } catch (err) {
-      setChatMessages(m => [...m, { role: 'assistant', content: `Error: ${err.message}` }]);
+      alert('Save error: ' + err.message);
     } finally {
-      setChatLoading(false);
+      setSavingMeta(false);
     }
   }
 
@@ -1413,7 +1630,7 @@ function AIPanel({ projectId, project, onProjectUpdate, musicTracks, onMusicSele
     <div className="space-y-3">
       {/* Sub-tabs */}
       <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-        {[{ key:'metadata', label:'🤖 AI Metadata' }, { key:'chat', label:'💬 Fact Check' }, { key:'music', label:'🎵 Music' }].map(t => (
+        {[{ key:'metadata', label:'🤖 AI Metadata' }, { key:'music', label:'🎵 Music' }].map(t => (
           <button key={t.key} onClick={() => setActiveTab(t.key)}
             className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all"
             style={{
@@ -1437,78 +1654,80 @@ function AIPanel({ projectId, project, onProjectUpdate, musicTracks, onMusicSele
             {metaLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating…</> : metaSaved ? '✅ Generated & Saved!' : <><Sparkles className="w-4 h-4" /> Generate AI Metadata</>}
           </button>
 
-          {/* Show current values */}
-          {project?.hook_text && (
-            <div className="space-y-2 text-sm">
-              <div className="p-3 rounded-xl" style={{ background: 'var(--color-background)' }}>
-                <p className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Hook</p>
-                <p style={{ color: 'var(--color-text-main)' }}>{project.hook_text}</p>
+          {/* Editable metadata fields — shown once generated (or pre-existing) */}
+          {(project?.hook_text || project?.yt_title || project?.yt_description) && (
+            <div className="space-y-3 text-sm">
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Hook</label>
+                <input
+                  value={project?.hook_text || ''}
+                  onChange={e => onProjectUpdate({ ...project, hook_text: e.target.value })}
+                  placeholder="Opening hook for your Short…"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
               </div>
-              {project.tagline_text && (
-                <div className="p-3 rounded-xl" style={{ background: 'var(--color-background)' }}>
-                  <p className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Tagline</p>
-                  <p style={{ color: 'var(--color-text-main)' }}>{project.tagline_text}</p>
-                </div>
-              )}
-              {project.yt_title && (
-                <div className="p-3 rounded-xl" style={{ background: 'var(--color-background)' }}>
-                  <p className="text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>YouTube Title</p>
-                  <p style={{ color: 'var(--color-text-main)' }}>{project.yt_title}</p>
-                </div>
-              )}
-              {project.yt_hashtags?.length > 0 && (
-                <div className="flex flex-wrap gap-1">
-                  {project.yt_hashtags.map((tag, i) => (
-                    <span key={i} className="px-2 py-0.5 rounded-full text-xs"
-                      style={{ background: 'rgba(147,51,234,0.1)', color: '#9333ea' }}>
-                      #{tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Chat tab */}
-      {activeTab === 'chat' && (
-        <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-          <div className="p-4 space-y-3 overflow-y-auto" style={{ maxHeight: 320 }}>
-            {chatMessages.map((msg, i) => (
-              <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className="px-3 py-2 rounded-2xl text-sm max-w-xs"
-                  style={{
-                    background: msg.role === 'user' ? 'linear-gradient(135deg,#e11d48,#9333ea)' : 'var(--color-background)',
-                    color: msg.role === 'user' ? '#fff' : 'var(--color-text-main)',
-                  }}>
-                  {msg.content}
-                </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Tagline</label>
+                <input
+                  value={project?.tagline_text || ''}
+                  onChange={e => onProjectUpdate({ ...project, tagline_text: e.target.value })}
+                  placeholder="Short catchy tagline…"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
               </div>
-            ))}
-            {chatLoading && (
-              <div className="flex justify-start">
-                <div className="px-3 py-2 rounded-2xl text-sm" style={{ background: 'var(--color-background)', color: 'var(--color-text-muted)' }}>
-                  <Loader2 className="w-4 h-4 animate-spin inline" />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>YouTube Title</label>
+                <input
+                  value={project?.yt_title || ''}
+                  onChange={e => onProjectUpdate({ ...project, yt_title: e.target.value })}
+                  maxLength={100}
+                  placeholder="YouTube video title…"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
               </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-          <div className="p-3 border-t" style={{ borderColor: 'var(--color-border)' }}>
-            <div className="flex gap-2">
-              <input value={chatInput} onChange={e => setChatInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } }}
-                placeholder="Ask about facts, plot, characters…"
-                className="flex-1 px-3 py-2 rounded-xl text-sm"
-                style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }} />
-              <button onClick={sendChat} disabled={chatLoading || !chatInput.trim()}
-                className="px-3 py-2 rounded-xl"
-                style={{ background: 'linear-gradient(135deg,#e11d48,#9333ea)', color: '#fff' }}>
-                <Send className="w-4 h-4" />
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Description</label>
+                <textarea
+                  rows={3}
+                  value={project?.yt_description || ''}
+                  onChange={e => onProjectUpdate({ ...project, yt_description: e.target.value })}
+                  placeholder="YouTube description…"
+                  className="w-full px-3 py-2 rounded-xl text-sm resize-none"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Hashtags (comma separated)</label>
+                <input
+                  value={(project?.yt_hashtags || []).join(', ')}
+                  onChange={e => onProjectUpdate({ ...project, yt_hashtags: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })}
+                  placeholder="MovieReview, Film, Shorts"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
+                {project?.yt_hashtags?.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {project.yt_hashtags.map((tag, i) => (
+                      <span key={i} className="px-2 py-0.5 rounded-full text-xs"
+                        style={{ background: 'rgba(147,51,234,0.1)', color: '#9333ea' }}>
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={saveMetadata}
+                disabled={savingMeta}
+                className="w-full py-2.5 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2"
+                style={{ background: metaSaved ? '#059669' : savingMeta ? '#9ca3af' : '#1d4ed8' }}>
+                {savingMeta ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</> : metaSaved ? '✅ Saved!' : '💾 Save Changes'}
               </button>
             </div>
-          </div>
+          )}
         </div>
       )}
 
@@ -1680,20 +1899,28 @@ export default function MovieReviewEditor() {
 
           {/* Step content */}
           {step === 0 && (
+            <FactCheckPanel
+              projectId={projectId}
+              project={project}
+              onProjectUpdate={handleProjectUpdate}
+            />
+          )}
+          {step === 1 && (
             <VoicePanel
               projectId={projectId}
               voiceAsset={voiceAsset}
               onVoiceChange={handleVoiceChange}
+              scriptText={project?.script_text || ''}
             />
           )}
-          {step === 1 && (
+          {step === 2 && (
             <ImagesPanel
               projectId={projectId}
               images={images}
               onImagesChange={setImages}
             />
           )}
-          {step === 2 && (
+          {step === 3 && (
             <TimelinePanel
               projectId={projectId}
               images={images}
@@ -1704,7 +1931,7 @@ export default function MovieReviewEditor() {
               onMaxDurationChange={d => setProject(p => ({ ...p, max_duration_seconds: d }))}
             />
           )}
-          {step === 3 && (
+          {step === 4 && (
             <AIPanel
               projectId={projectId}
               project={project}
