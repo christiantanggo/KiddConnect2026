@@ -797,12 +797,12 @@ export async function processOneYouTubeUpload(options = {}) {
   const errorMessage = lastError?.message || 'Unknown error';
   const fullMessage = `Failed after ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts: ${errorMessage}`;
   console.error(`[Orbix YouTube] Upload FAILED after ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts render id=${claimedRender.id} lastError="${errorMessage}"`);
-  // Set back to READY_FOR_UPLOAD so next interval can retry (and step_error for UI)
+  // Set to UPLOAD_FAILED (not READY_FOR_UPLOAD) so it stops retrying automatically — manual retry available in UI
   await supabaseClient
     .from('orbix_renders')
     .update({
-      render_status: 'READY_FOR_UPLOAD',
-      render_step: 'STEP_7_METADATA',
+      render_status: 'UPLOAD_FAILED',
+      render_step: 'STEP_8_YOUTUBE_UPLOAD',
       step_error: fullMessage,
       updated_at: new Date().toISOString()
     })

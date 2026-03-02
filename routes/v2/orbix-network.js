@@ -624,10 +624,10 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
     if (getError && getError.code !== 'PGRST116') throw getError;
     if (!render) return res.status(404).json({ error: 'Render not found' });
 
-    const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED'];
+    const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED'];
     if (!allowedStatuses.includes(render.render_status)) {
       return res.status(400).json({
-        error: `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD or COMPLETED renders can be uploaded.`
+        error: `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD, UPLOAD_FAILED, or COMPLETED renders can be uploaded.`
       });
     }
 

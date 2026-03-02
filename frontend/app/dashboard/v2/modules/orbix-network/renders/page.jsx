@@ -51,7 +51,8 @@ export default function OrbixNetworkRendersPage() {
       PROCESSING: 'Rendering',
       READY_FOR_UPLOAD: 'Ready to Review',
       COMPLETED: 'Published',
-      FAILED: 'Failed'
+      FAILED: 'Failed',
+      UPLOAD_FAILED: 'Upload Failed'
     };
     return labels[status] || status;
   };
@@ -62,7 +63,8 @@ export default function OrbixNetworkRendersPage() {
       PROCESSING: 'bg-blue-100 text-blue-800',
       READY_FOR_UPLOAD: 'bg-emerald-100 text-emerald-800',
       COMPLETED: 'bg-green-100 text-green-800',
-      FAILED: 'bg-red-100 text-red-800'
+      FAILED: 'bg-red-100 text-red-800',
+      UPLOAD_FAILED: 'bg-orange-100 text-orange-800'
     };
     return (
       <span className={`px-2 py-1 text-xs font-medium rounded ${statusColors[status] || 'bg-gray-100 text-gray-800'}`}>
@@ -168,6 +170,7 @@ export default function OrbixNetworkRendersPage() {
               <option value="READY_FOR_UPLOAD">Ready to Review</option>
               <option value="COMPLETED">Published</option>
               <option value="FAILED">Failed</option>
+              <option value="UPLOAD_FAILED">Upload Failed</option>
             </select>
           </div>
 
@@ -288,6 +291,38 @@ export default function OrbixNetworkRendersPage() {
                             <RotateCw className="w-4 h-4" />
                             Restart Render
                           </button>
+                        )}
+
+                        {/* UPLOAD_FAILED: video rendered OK, only YouTube upload failed */}
+                        {render.render_status === 'UPLOAD_FAILED' && (
+                          <>
+                            {render.step_error && (
+                              <div className="bg-orange-50 border border-orange-200 rounded p-2 mb-2">
+                                <p className="text-xs text-orange-800">{render.step_error}</p>
+                              </div>
+                            )}
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => handleUploadToYouTube(render.id)}
+                                disabled={uploadingId === render.id}
+                                className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-center text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+                              >
+                                {uploadingId === render.id ? (
+                                  <Loader className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Upload className="w-4 h-4" />
+                                )}
+                                Retry Upload
+                              </button>
+                              <button
+                                onClick={() => handleRestartRender(render.id, render.story_id)}
+                                className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 flex items-center gap-1 text-sm text-gray-600"
+                                title="Re-render from scratch"
+                              >
+                                <RotateCw className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </>
                         )}
                       </div>
                     </div>
