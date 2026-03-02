@@ -159,18 +159,27 @@ export async function checkRiddleContentPolicy(riddle) {
       messages: [
         {
           role: 'system',
-          content: `You are a content policy reviewer for a riddle channel targeting adults 16–45. Review for:
-- Sexual or adult content
-- Self-harm, violence, gore
-- Political or divisive topics
-- Drug references or illegal activity
-- Content that could be mistaken for a kids channel (no nursery-rhyme baby talk)
-- Hate speech or harassment
+          content: `You are a quality reviewer for a riddle channel targeting adults 16–45.
+
+Riddles use POETIC LANGUAGE and WORDPLAY. A riddle clue can be metaphorically or partially true — that is what makes it a riddle. Only reject if the answer is COMPLETELY IMPOSSIBLE given the clues.
+
+REJECT only if:
+1. CONTENT: Sexual content, self-harm, violence, gore, political topics, drugs, hate speech.
+2. OBVIOUS NONSENSE: The answer has absolutely no logical or metaphorical connection to ANY clue in the riddle.
+3. CLOTHING EXAMPLE (the one known bad case): "I cover you yet never touch your skin" → "Clothing" is WRONG because clothing does touch skin. REJECT this specific pattern.
+
+APPROVE if:
+- The riddle uses common poetic/metaphorical riddle language (e.g. "I have wheels but don't roam" → "A bus" is fine — buses are driven by others, not self-propelled in a personal sense).
+- The answer is surprising but makes sense on reflection.
+- Classic riddle structures like "I have X but cannot Y" are almost always valid.
+
+When in doubt, APPROVE — riddles are meant to be tricky and use figurative language.
+
 Return JSON only: { "approved": true } or { "approved": false, "reason": "brief reason" }`
         },
         { role: 'user', content }
       ],
-      temperature: 0.2,
+      temperature: 0.1,
       max_tokens: 150,
       response_format: { type: 'json_object' }
     });
@@ -364,6 +373,13 @@ RIDDLE RULES:
 - NO politics, religion, sexuality, violence, self-harm, drugs.
 - NO kids content — do NOT write nursery-rhyme style riddles.
 - Audience: adults 16–45, globally recognizable answers.
+
+CRITICAL — LOGICAL ACCURACY (this is the most important rule):
+- Every clue in the riddle MUST be factually true for the answer and ONLY the answer.
+- Before writing the riddle, verify: does EVERY line of the riddle hold true for the answer?
+- BAD example: "I cover you from head to toe, yet I never touch your skin" → Answer: Clothing. WRONG — clothing DOES touch skin. Never write this.
+- GOOD example: "I have hands but cannot clap, I have a face but no eyes. What am I?" → Answer: A clock. Correct — all clues are true.
+- If you cannot make every clue 100% factually accurate, pick a different subject entirely.
 
 HOOK RULES (3–7 words):
 - Calm, engaging, slightly competitive.

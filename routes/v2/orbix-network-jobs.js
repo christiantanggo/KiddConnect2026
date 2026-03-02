@@ -944,37 +944,46 @@ function parseTimeToMinutes(timeStr) {
 /** Default fixed post times (5/day): 8am, 11am, 2pm, 5pm, 8pm. Times in minutes since midnight. */
 const DEFAULT_POST_SLOT_MINUTES = [8 * 60, 11 * 60, 14 * 60, 17 * 60, 20 * 60]; // 480, 660, 840, 1020, 1200
 
-/** Default pipeline run times (1 hour before each post): 7am, 10am, 1pm, 4pm, 7pm. */
-const DEFAULT_PIPELINE_RUN_MINUTES = [7 * 60, 10 * 60, 13 * 60, 16 * 60, 19 * 60]; // 420, 600, 780, 960, 1140
+/**
+ * Build evenly-spaced slot times for a given daily cap within the posting window.
+ * Used when slot_times is empty but dailyVideoCap != 5.
+ */
+function buildDefaultSlots(dailyVideoCap, windowStartMinutes = 8 * 60, windowEndMinutes = 20 * 60) {
+  const cap = Math.max(1, dailyVideoCap);
+  if (cap === 1) return [windowStartMinutes];
+  const step = Math.floor((windowEndMinutes - windowStartMinutes) / (cap - 1));
+  return Array.from({ length: cap }, (_, i) => windowStartMinutes + i * step);
+}
 
-/** Get post slot times in minutes. Uses posting_schedule.slot_times if set, else default for daily cap 5. */
+/**
+ * Get post slot times in minutes.
+ * Priority: user-configured slot_times → default 8/11/2/5/8 (cap=5) → evenly spaced for other caps.
+ */
 function getPostSlotMinutes(posting, dailyVideoCap) {
   const slotTimes = posting?.slot_times;
   if (Array.isArray(slotTimes) && slotTimes.length > 0) {
     return slotTimes.map(t => parseTimeToMinutes(typeof t === 'string' ? t : String(t)));
   }
+  // No slot_times configured — use defaults
   if (dailyVideoCap === 5) return DEFAULT_POST_SLOT_MINUTES;
-  return null; // fallback to spread-evenly
+  // For any other cap, build evenly-spaced slots across the posting window
+  const startMins = parseTimeToMinutes(posting?.start ?? '08:00');
+  const endMins   = parseTimeToMinutes(posting?.end   ?? '20:00');
+  return buildDefaultSlots(dailyVideoCap, startMins, endMins);
 }
 
 /**
  * Get pipeline run times in minutes.
  * Uses posting_schedule.pipeline_run_times if set (user-configured).
- * Otherwise derives them as 1 hour before each post slot.
+ * Otherwise runs at the same time as each post slot (scrape → render → post in one shot).
  */
 function getPipelineRunMinutes(posting, dailyVideoCap) {
-  // User-configured pipeline run times take priority
   const configured = posting?.pipeline_run_times;
   if (Array.isArray(configured) && configured.length > 0) {
     return configured.map(t => parseTimeToMinutes(typeof t === 'string' ? t : String(t)));
   }
-  // Derive from post slots: same time (scrape, render, and post happen together)
-  const postMinutes = getPostSlotMinutes(posting, dailyVideoCap);
-  if (postMinutes && postMinutes.length > 0) {
-    return postMinutes;
-  }
-  if (dailyVideoCap === 5) return DEFAULT_POST_SLOT_MINUTES;
-  return null;
+  // Fall back to post slot times (pipeline and post happen together)
+  return getPostSlotMinutes(posting, dailyVideoCap);
 }
 
 /**
@@ -1123,51 +1132,23 @@ export async function runPublishJob() {
         const currentMinutes = getMinutesSinceMidnightInZone(timezone);
         const slotMinutes = getPostSlotMinutes(posting, dailyVideoCap);
 
-        // Find the next slot: start from publishesToday index, but if that slot has
-        // already passed (and nothing was published in it), advance to the next future slot.
-        // This prevents getting stuck on slotMinutes[0]=8am all day when publishesToday=0.
-        let nextSlotMinutes;
-        if (slotMinutes && slotMinutes.length > 0) {
-          // Find the first slot that is at or past current time (allowing us to post now),
-          // starting from the publishesToday position
-          const startIdx = Math.min(publishesToday, slotMinutes.length - 1);
-          nextSlotMinutes = slotMinutes[startIdx];
-          // If that slot is already in the past, try subsequent slots
-          for (let si = startIdx; si < slotMinutes.length; si++) {
-            if (slotMinutes[si] >= currentMinutes || si === slotMinutes.length - 1) {
-              nextSlotMinutes = slotMinutes[si];
-              break;
-            }
-          }
-        } else {
-          nextSlotMinutes = dailyVideoCap <= 1
-            ? startMinutes
-            : startMinutes + ((endMinutes - startMinutes) * publishesToday / Math.max(1, dailyVideoCap - 1));
-        }
-
         const currentTimeStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
-        const nextSlotStr = `${Math.floor(nextSlotMinutes / 60)}:${String(Math.round(nextSlotMinutes) % 60).padStart(2, '0')}`;
-        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${publishesToday}/${dailyVideoCap} nextSlot=${nextSlotStr}`);
+        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${publishesToday}/${dailyVideoCap}`);
 
         if (publishSlotsLeft <= 0) {
           console.log(`[Orbix Publish] Business ${businessId}: skip - daily cap reached (${publishesToday}/${dailyVideoCap})`);
           continue;
         }
 
-        // Only publish during posting window (e.g. 7am–8pm), not overnight.
-        // Allow a 90-minute grace period past window end so slots near the end of the window
-        // still get posted even if the scheduler check fires slightly late.
+        // Only block overnight — don't post while everyone is asleep.
+        // Allow a 90-minute grace period past window end.
         const gracePastEnd = endMinutes + 90;
         if (currentMinutes < startMinutes || currentMinutes > gracePastEnd) {
-          console.log(`[Orbix Publish] Business ${businessId}: skip - outside window (now ${currentTimeStr}, window ${startStr}-${endStr}, grace until ${Math.floor(gracePastEnd/60)}:${String(gracePastEnd%60).padStart(2,'0')})`);
+          console.log(`[Orbix Publish] Business ${businessId}: skip - outside window (now ${currentTimeStr}, window ${startStr}-${endStr})`);
           continue;
         }
 
-        // Next slot: fixed times (8,11,14,17,20) when slot_times/daily cap 5, else spread evenly. Uses timezone from settings.
-        if (currentMinutes < nextSlotMinutes) {
-          console.log(`[Orbix Publish] Business ${businessId}: skip - not yet slot time (now ${currentTimeStr}, next slot ${nextSlotStr})`);
-          continue;
-        }
+        // No slot-time gate — upload immediately whenever a render is ready.
 
         // Get completed renders that haven't been published yet; schedule allows only one post per slot
         const { data: allRenders, error: rendersError } = await supabaseClient
