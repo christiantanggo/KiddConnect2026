@@ -725,14 +725,14 @@ export async function processOneYouTubeUpload(options = {}) {
     const todayISO = getStartOfTodayISOInZone(timezone);
 
     const { data: channelPublishes } = await supabaseClient
-      .from('orbix_publishes')
-      .select('render_id, orbix_renders(orbix_stories(channel_id))')
+      .from('orbix_renders')
+      .select('id, orbix_stories(channel_id)')
       .eq('business_id', businessId)
-      .eq('publish_status', 'PUBLISHED')
-      .gte('posted_at', todayISO);
+      .eq('render_status', 'COMPLETED')
+      .gte('completed_at', todayISO);
 
     const countForChannel = (channelPublishes || []).filter(
-      p => (p.orbix_renders?.orbix_stories?.channel_id || '__legacy__') === channelId
+      r => (r.orbix_stories?.channel_id || '__legacy__') === channelId
     ).length;
 
     if (countForChannel >= dailyVideoCap) {
@@ -1172,13 +1172,13 @@ export async function runPublishJob() {
           continue;
         }
 
-        // Count today's publishes PER CHANNEL so the cap applies independently to each channel
-        const { data: todayPublishes, error: publishesCountError } = await supabaseClient
-          .from('orbix_publishes')
-          .select('render_id, orbix_renders(orbix_stories(channel_id))')
+        // Count today's publishes PER CHANNEL — join through renders to get channel_id reliably
+        const { data: todayPublishedRenders, error: publishesCountError } = await supabaseClient
+          .from('orbix_renders')
+          .select('id, orbix_stories(channel_id)')
           .eq('business_id', businessId)
-          .eq('publish_status', 'PUBLISHED')
-          .gte('posted_at', todayISO);
+          .eq('render_status', 'COMPLETED')
+          .gte('completed_at', todayISO);
         if (publishesCountError) {
           console.error(`[Orbix Jobs] Error counting today's publishes for business ${businessId}:`, publishesCountError);
           continue;
@@ -1186,13 +1186,13 @@ export async function runPublishJob() {
 
         // Build a map of { channelId -> countToday }
         const publishCountByChannel = {};
-        for (const p of (todayPublishes || [])) {
-          const chId = p.orbix_renders?.orbix_stories?.channel_id || '__legacy__';
+        for (const r of (todayPublishedRenders || [])) {
+          const chId = r.orbix_stories?.channel_id || '__legacy__';
           publishCountByChannel[chId] = (publishCountByChannel[chId] || 0) + 1;
         }
 
-        const totalPublishesToday = (todayPublishes || []).length;
-        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${totalPublishesToday} cap=${dailyVideoCap}/channel`);
+        const totalPublishesToday = (todayPublishedRenders || []).length;
+        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${totalPublishesToday} cap=${dailyVideoCap}/channel perChannel=${JSON.stringify(publishCountByChannel)}`);
 
         // No slot-time gate — upload immediately whenever a render is ready.
 
