@@ -161,9 +161,11 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
               Active Modules
             </div>
             {activeModules.map((module) => {
-              // Special handling for phone-agent module - link to existing Phone Agent dashboard
+              // Special handling for certain modules that have their own dashboard paths
               const href = module.key === 'phone-agent' 
                 ? '/dashboard' 
+                : module.key === 'reviews'
+                ? '/review-reply-ai/dashboard'
                 : `/dashboard/v2/modules/${module.key}/dashboard`;
               
               // For phone-agent, check if we're on the Phone Agent dashboard

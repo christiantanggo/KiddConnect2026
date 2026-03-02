@@ -217,6 +217,8 @@ export default function V2DashboardPage() {
                 {activeModules.map((module) => {
                   const dashboardHref = module.key === 'phone-agent' 
                     ? '/dashboard' 
+                    : module.key === 'reviews'
+                    ? '/review-reply-ai/dashboard'
                     : `/dashboard/v2/modules/${module.key}/dashboard`;
                   
                   return (

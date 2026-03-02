@@ -123,7 +123,7 @@ export default function ModuleSettingsPage() {
       'orbix-network': '/dashboard/v2/modules/orbix-network/dashboard',
       'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
     };
-    return paths[moduleKey] || `/dashboard/${moduleKey}`;
+    return paths[moduleKey] || `/dashboard/v2/modules/${moduleKey}/dashboard`;
   };
 
   if (loading) {
