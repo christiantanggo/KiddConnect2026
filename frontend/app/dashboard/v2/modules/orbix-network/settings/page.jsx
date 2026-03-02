@@ -553,9 +553,10 @@ function ChannelSettingsTab({ channel }) {
 
   // ── Source handlers ──
   const handleAddSource = async () => {
-    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS';
+    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR';
     if (needsUrl && !(sourceForm.url || '').trim()) { showError('Source URL is required'); return; }
     const defaultName = sourceForm.type === 'TRIVIA_GENERATOR' ? 'Trivia Generator'
+      : sourceForm.type === 'RIDDLE_GENERATOR' ? 'Riddle Generator'
       : sourceForm.type === 'WIKIDATA_FACTS' ? 'Wikidata Facts'
       : sourceForm.type === 'WIKIPEDIA' ? (sourceForm.category_hint === 'money' ? 'Money (Wikipedia)' : 'Psychology (Wikipedia)')
       : '';
@@ -811,6 +812,7 @@ function ChannelSettingsTab({ channel }) {
                     const v = e.target.value;
                     if (v === 'WIKIPEDIA_MONEY') setSourceForm((f) => ({ ...f, type: 'WIKIPEDIA', category_hint: 'money' }));
                     else if (v === 'TRIVIA_GENERATOR') setSourceForm((f) => ({ ...f, type: 'TRIVIA_GENERATOR', url: 'trivia://generator', category_hint: null }));
+                    else if (v === 'RIDDLE_GENERATOR') setSourceForm((f) => ({ ...f, type: 'RIDDLE_GENERATOR', url: 'riddle://generator', category_hint: null }));
                     else setSourceForm((f) => ({ ...f, type: v, category_hint: v === 'WIKIPEDIA' ? null : undefined }));
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
@@ -820,6 +822,7 @@ function ChannelSettingsTab({ channel }) {
                   <option value="WIKIPEDIA">Wikipedia (Psychology)</option>
                   <option value="WIKIPEDIA_MONEY">Wikipedia (Money)</option>
                   <option value="TRIVIA_GENERATOR">Trivia Generator</option>
+                  <option value="RIDDLE_GENERATOR">Riddle Generator</option>
                   <option value="WIKIDATA_FACTS">Wikidata Facts</option>
                 </select>
               </div>
@@ -827,11 +830,12 @@ function ChannelSettingsTab({ channel }) {
                 <label className="block text-xs font-medium text-gray-600 mb-1">URL</label>
                 <input
                   type="text"
-                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.url}
-                  onChange={(e) => sourceForm.type !== 'TRIVIA_GENERATOR' && setSourceForm((f) => ({ ...f, url: e.target.value }))}
-                  readOnly={sourceForm.type === 'TRIVIA_GENERATOR'}
+                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.url}
+                  onChange={(e) => sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'RIDDLE_GENERATOR' && setSourceForm((f) => ({ ...f, url: e.target.value }))}
+                  readOnly={sourceForm.type === 'TRIVIA_GENERATOR' || sourceForm.type === 'RIDDLE_GENERATOR'}
                   placeholder={
                     sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator (auto)' :
+                    sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator (auto)' :
                     sourceForm.type === 'WIKIPEDIA' ? 'Leave blank for default categories' :
                     'https://example.com/feed.xml'
                   }
@@ -883,7 +887,7 @@ function ChannelSettingsTab({ channel }) {
                         {src.enabled ? 'Active' : 'Disabled'}
                       </span>
                     </div>
-                    {src.url && src.url !== 'trivia://generator' && (
+                    {src.url && src.url !== 'trivia://generator' && src.url !== 'riddle://generator' && (
                       <p className="text-xs text-gray-500 truncate mt-0.5">{src.url}</p>
                     )}
                   </div>

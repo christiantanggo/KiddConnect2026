@@ -1080,11 +1080,13 @@ router.post('/sources', async (req, res) => {
     }
     const effectiveUrl = (type.toUpperCase() === 'TRIVIA_GENERATOR')
       ? 'trivia://generator'
-      : (type.toUpperCase() === 'WIKIDATA_FACTS')
-        ? (url && url.trim()) || 'facts://'
-        : (type.toUpperCase() === 'WIKIPEDIA' && !url)
-          ? 'https://en.wikipedia.org/wiki/Psychology'
-          : url;
+      : (type.toUpperCase() === 'RIDDLE_GENERATOR')
+        ? 'riddle://generator'
+        : (type.toUpperCase() === 'WIKIDATA_FACTS')
+          ? (url && url.trim()) || 'facts://'
+          : (type.toUpperCase() === 'WIKIPEDIA' && !url)
+            ? 'https://en.wikipedia.org/wiki/Psychology'
+            : url;
     if (!effectiveUrl) {
       return res.status(400).json({ error: 'url is required for this source type' });
     }

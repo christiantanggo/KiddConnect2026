@@ -12,7 +12,7 @@ import { processRawItem } from './classifier.js';
 import { supabaseClient } from '../../config/database.js';
 import { selectTemplate, selectBackground } from './video-renderer.js';
 
-const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia'];
+const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'riddle'];
 
 /**
  * For trivia/facts stories the voice_script is embedded in the raw item's snippet JSON.
@@ -171,7 +171,7 @@ export async function runAutomatedPipeline(businessId) {
       try {
         // Trivia/facts stories already have their script embedded in the raw item snippet —
         // extract it directly instead of calling the LLM script generator (which requires a raw_item_id).
-        if (story.category === 'trivia' || story.category === 'facts') {
+        if (story.category === 'trivia' || story.category === 'facts' || story.category === 'riddle') {
           await ensureTriviaScript(businessId, story);
         } else {
           const { generateAndSaveScript } = await import('./script-generator.js');
@@ -219,7 +219,7 @@ export async function runAutomatedPipeline(businessId) {
       .select('*')
       .eq('business_id', businessId)
       .eq('status', 'APPROVED')
-      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.money,category.eq.trivia,category.eq.facts`)
+      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.money,category.eq.trivia,category.eq.facts,category.eq.riddle`)
       .order('shock_score', { ascending: false });
     
     if (storiesError1) throw storiesError1;
@@ -294,7 +294,7 @@ export async function runAutomatedPipeline(businessId) {
           .eq('business_id', businessId);
 
         try {
-          if (newStory.category === 'trivia' || newStory.category === 'facts') {
+          if (newStory.category === 'trivia' || newStory.category === 'facts' || newStory.category === 'riddle') {
             await ensureTriviaScript(businessId, { ...newStory, raw_item_id: fallbackRaw.id });
           } else {
             await generateAndSaveScript(businessId, newStory);

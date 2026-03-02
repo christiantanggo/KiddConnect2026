@@ -1314,6 +1314,12 @@ export async function processRenderJob(render) {
       return await processTriviaRenderJob(render, story, script);
     }
 
+    // Riddle uses separate pipeline
+    if ((story?.category || '').toLowerCase() === 'riddle') {
+      const { processRiddleRenderJob } = await import('./riddle-renderer.js');
+      return await processRiddleRenderJob(render, story, script);
+    }
+
     // Psychology + Money: TTS speaks question first then body. Add a short breath pause (0.3s) before voice starts.
     const cat2 = (story?.category || '').toLowerCase();
     const isPsychology = cat2 === 'psychology';

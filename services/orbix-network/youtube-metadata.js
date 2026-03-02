@@ -39,6 +39,15 @@ const FACTS_HASHTAGS = [
   '#fact'
 ];
 
+const RIDDLE_HASHTAGS = [
+  '#riddles',
+  '#riddletime',
+  '#shorts',
+  '#brainteaser',
+  '#canyousolvethis',
+  '#riddleoftheday'
+];
+
 const CATEGORY_HASHTAGS = {
   'ai-automation': ['#AI', '#Automation', '#TechNews', '#ArtificialIntelligence'],
   'corporate-collapses': ['#Business', '#Corporate', '#Finance', '#News'],
@@ -47,7 +56,8 @@ const CATEGORY_HASHTAGS = {
   'money-markets': ['#Finance', '#Markets', '#Economy', '#Money'],
   'money': MONEY_HASHTAGS,
   'trivia': TRIVIA_HASHTAGS,
-  'facts': FACTS_HASHTAGS
+  'facts': FACTS_HASHTAGS,
+  'riddle': RIDDLE_HASHTAGS
 };
 
 /** Remove emojis and common Unicode symbols from a string. */
@@ -175,12 +185,19 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
   const isMoney = (story?.category || '').toLowerCase() === 'money';
   const isTrivia = (story?.category || '').toLowerCase() === 'trivia';
   const isFacts = (story?.category || '').toLowerCase() === 'facts';
+  const isRiddle = (story?.category || '').toLowerCase() === 'riddle';
 
   let title;
   let description;
   let hashtags;
 
-  if (isFacts) {
+  if (isRiddle) {
+    const riddleText = (content?.riddle_text || script?.what_happened || '').trim();
+    const answerText = (content?.answer_text || '').trim();
+    title = sanitizeTitleForYouTube(hookText || riddleText?.slice(0, 60) || story?.title?.slice(0, 60) || 'Can you solve this riddle?');
+    description = (riddleText ? `${riddleText}\n\n` : '') + (answerText ? `Answer: ${answerText}\n\n` : '') + 'Comment your answer below!';
+    hashtags = RIDDLE_HASHTAGS.slice(0, 6).join(' ');
+  } else if (isFacts) {
     const factText = (content?.fact_text || script?.what_happened || '').trim();
     title = sanitizeTitleForYouTube(hookText || content?.title || factText?.slice(0, 60) || story?.title?.slice(0, 60) || 'Fact');
     description = (factText ? `${factText}\n\n` : '') + 'Subscribe for more facts.';

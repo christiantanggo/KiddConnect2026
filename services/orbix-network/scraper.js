@@ -33,6 +33,8 @@ export async function scrapeSource(source) {
       return await scrapeTriviaSource(source);
     } else if (source.type === 'WIKIDATA_FACTS') {
       return await scrapeFactsSource(source);
+    } else if (source.type === 'RIDDLE_GENERATOR') {
+      return await scrapeRiddleSource(source);
     } else {
       throw new Error(`Unsupported source type: ${source.type}`);
     }
@@ -342,6 +344,62 @@ async function scrapeFactsSource(source) {
 }
 
 /**
+ * Generate one riddle via the Riddle Generator (RIDDLE_GENERATOR source type).
+ * Returns raw-item-shaped objects with content_fingerprint for dedup.
+ */
+async function scrapeRiddleSource(source) {
+  try {
+    const { generateAndValidateRiddle } = await import('./riddle-generator.js');
+    const businessId = source.business_id;
+    const channelId = source.channel_id;
+    if (!businessId || !channelId) {
+      console.warn('[Orbix Scraper] Riddle source missing business_id or channel_id');
+      return [];
+    }
+    // Episode number from existing riddles for this channel
+    const { count } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('category', 'riddle');
+    const episodeNumber = (count || 0) + 1;
+    const riddle = await generateAndValidateRiddle(businessId, channelId, { episodeNumber });
+    if (!riddle) {
+      console.log('[Orbix Scraper] Riddle generator produced no valid riddle');
+      return [];
+    }
+    const title = `Riddle #${String(episodeNumber).padStart(2, '0')} - ${riddle.category}`;
+    const url = `riddle://${riddle.content_fingerprint}`;
+    const snippet = JSON.stringify({
+      hook: riddle.hook,
+      category: riddle.category,
+      _category: riddle._category || null,
+      riddle_text: riddle.riddle_text,
+      answer_text: riddle.answer_text,
+      voice_script: riddle.voice_script,
+      episode_number: riddle.episode_number
+    });
+    return [{
+      source_id: source.id,
+      channel_id: channelId,
+      title,
+      snippet,
+      url,
+      published_at: new Date().toISOString(),
+      content_type: 'riddle',
+      category: 'riddle',
+      shock_score: 70,
+      content_fingerprint: riddle.content_fingerprint,
+      factors_json: { source: 'riddle_generator' }
+    }];
+  } catch (error) {
+    console.error('[Orbix Scraper] Riddle source error:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Extract first paragraph/snippet from text
  */
 function extractSnippet(text) {
@@ -439,7 +497,8 @@ export async function saveRawItem(businessId, item) {
     const isEvergreen = item.content_type === 'psychology' || item.category === 'psychology' ||
       item.content_type === 'money' || item.category === 'money' ||
       item.content_type === 'trivia' || item.category === 'trivia' ||
-      item.content_type === 'facts' || item.category === 'facts';
+      item.content_type === 'facts' || item.category === 'facts' ||
+      item.content_type === 'riddle' || item.category === 'riddle';
     const insertPayload = {
       business_id: businessId,
       channel_id: channelId,
@@ -460,6 +519,7 @@ export async function saveRawItem(businessId, item) {
       insertPayload.factors_json = item.factors_json || (
         item.category === 'trivia' ? { source: 'trivia_generator' } :
         item.category === 'facts' ? { source: 'wikidata_facts' } :
+        item.category === 'riddle' ? { source: 'riddle_generator' } :
         item.category === 'money' ? { source: 'wikipedia_money' } : { source: 'wikipedia_psychology' }
       );
     }
