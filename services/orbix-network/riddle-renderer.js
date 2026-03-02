@@ -92,9 +92,9 @@ async function getAnyMusicTrack(businessId) {
 /**
  * Generate ASS subtitle file for the riddle layout (1080x1920).
  *
- * Layout:
- *   0–5s:   Riddle text (large, centered, white)
- *   5–8s:   3-2-1 countdown (animated progress bar + digit)
+ * Layout (like trivia: question stays on during countdown):
+ *   Top 2/3: Riddle text (0–8s) — stays visible through countdown
+ *   Lower third: 3-2-1 countdown (5–8s, progress bar + digit)
  *   8–8.5s: Answer flash (large yellow text, centered)
  *   8.5–9s: Loop trigger line, hard cut
  */
@@ -143,11 +143,14 @@ async function generateRiddleASSFile(opts) {
   const charsPerLine = Math.floor(820 / (riddleFontSize * 0.55));
   const wrappedRiddle = wrapText(riddleText, charsPerLine);
 
-  // Progress bar dimensions
+  // Top 2/3 = 0–1280px (center y=640). Riddle centered in that zone.
+  const RIDDLE_CENTER_Y = 640;
+
+  // Lower third = 1280–1920px. Progress bar and countdown digit go here.
   const PROGRESS_W = 900;
   const PROGRESS_H = 14;
   const PROGRESS_X = (1080 - PROGRESS_W) / 2;
-  const PROGRESS_Y = 1200; // fixed position in lower third
+  const PROGRESS_Y = 1600; // center of lower third
   const pbTop = PROGRESS_Y - Math.round(PROGRESS_H / 2);
   const COUNTDOWN_NUM_Y = PROGRESS_Y - 70;
 
@@ -186,9 +189,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 
   const lines = [];
 
-  // Riddle text (0 → 5s), centered vertically in upper 2/3
-  // wrappedRiddle already has each line escaped; \N is the ASS newline tag — don't double-escape
-  lines.push(`Dialogue: 0,${t(RIDDLE_START)},${t(RIDDLE_END)},Riddle,,0,0,0,,{\\an5\\pos(540,820)}${wrappedRiddle}`);
+  // Riddle text (0 → 8s) — stays on screen during countdown, like trivia question
+  // Centered in top 2/3 of screen (y=640)
+  lines.push(`Dialogue: 0,${t(RIDDLE_START)},${t(COUNTDOWN_END)},Riddle,,0,0,0,,{\\an5\\pos(540,${RIDDLE_CENTER_Y})}${wrappedRiddle}`);
 
   // Progress bar background (5 → 8s)
   lines.push(`Dialogue: 1,${t(RIDDLE_END)},${t(COUNTDOWN_END)},ProgressBg,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${PROGRESS_W} 0 l ${PROGRESS_W} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
