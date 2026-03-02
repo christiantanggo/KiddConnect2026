@@ -165,15 +165,16 @@ Riddles use POETIC LANGUAGE and WORDPLAY. A riddle clue can be metaphorically or
 
 REJECT only if:
 1. CONTENT: Sexual content, self-harm, violence, gore, political topics, drugs, hate speech.
-2. OBVIOUS NONSENSE: The answer has absolutely no logical or metaphorical connection to ANY clue in the riddle.
-3. CLOTHING EXAMPLE (the one known bad case): "I cover you yet never touch your skin" → "Clothing" is WRONG because clothing does touch skin. REJECT this specific pattern.
+2. OBVIOUS NONSENSE: The answer has no logical or metaphorical connection to the clues.
+3. FACTUALLY FALSE CLUES: Any clue is literally false for the answer. Examples to REJECT:
+   - "I cover you yet never touch your skin" → Clothing. FALSE: clothing touches skin.
+   - "I have a shell but no feet" or "no legs" → Snail (or slug). FALSE: snails have a muscular foot; do not approve riddles that say they have "no feet" or "no legs".
+   - Any riddle where a biological/anatomical claim about the answer is wrong (e.g. saying a creature has no feet when it does, or no eyes when it does).
 
 APPROVE if:
-- The riddle uses common poetic/metaphorical riddle language (e.g. "I have wheels but don't roam" → "A bus" is fine — buses are driven by others, not self-propelled in a personal sense).
-- The answer is surprising but makes sense on reflection.
-- Classic riddle structures like "I have X but cannot Y" are almost always valid.
-
-When in doubt, APPROVE — riddles are meant to be tricky and use figurative language.
+- Every clue is factually true (or clearly metaphorical in a way that fits the answer).
+- Poetic language is fine (e.g. "I have wheels but don't roam" → "A bus").
+- When in doubt and the clues are all accurate, APPROVE.
 
 Return JSON only: { "approved": true } or { "approved": false, "reason": "brief reason" }`
         },
@@ -375,11 +376,13 @@ RIDDLE RULES:
 - Audience: adults 16–45, globally recognizable answers.
 
 CRITICAL — LOGICAL ACCURACY (this is the most important rule):
-- Every clue in the riddle MUST be factually true for the answer and ONLY the answer.
-- Before writing the riddle, verify: does EVERY line of the riddle hold true for the answer?
-- BAD example: "I cover you from head to toe, yet I never touch your skin" → Answer: Clothing. WRONG — clothing DOES touch skin. Never write this.
-- GOOD example: "I have hands but cannot clap, I have a face but no eyes. What am I?" → Answer: A clock. Correct — all clues are true.
-- If you cannot make every clue 100% factually accurate, pick a different subject entirely.
+- Every clue in the riddle MUST be factually true for the answer. No exceptions — including biology and anatomy.
+- Before writing, verify: is EVERY claim in the riddle true for the answer? If any single line is false, the riddle is invalid.
+- BAD: "I cover you from head to toe, yet I never touch your skin" → Clothing. WRONG — clothing touches skin.
+- BAD: "I have a shell but no feet, I glide through water yet never swim" → Snail. WRONG — snails have a muscular foot (they do have a "foot"); do not say "no feet" or "no legs" for snails, slugs, or similar creatures.
+- BAD: Any riddle that says the answer has "no feet", "no legs", or "no arms" when the creature/object actually has them (or has a biological "foot" like a snail).
+- GOOD: "I have hands but cannot clap, I have a face but no eyes. What am I?" → A clock. All clues are true.
+- If you cannot make every clue 100% factually accurate, pick a different subject.
 
 HOOK RULES (3–7 words):
 - Calm, engaging, slightly competitive.
