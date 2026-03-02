@@ -2504,6 +2504,38 @@ router.post('/backgrounds', upload.single('file'), async (req, res) => {
 });
 
 /**
+ * DELETE /api/v2/orbix-network/backgrounds
+ * Delete a specific background image for a channel.
+ * Body: { channel_id, path } where path is the full storage path e.g. businessId/channelId/bg_xxx.png
+ */
+router.delete('/backgrounds', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { path: filePath } = req.body;
+    if (!filePath) return res.status(400).json({ error: 'path is required' });
+
+    // Safety: ensure the path belongs to this business and channel
+    const expectedPrefix = `${businessId}/${channelId}/`;
+    if (!filePath.startsWith(expectedPrefix)) {
+      return res.status(403).json({ error: 'Cannot delete files outside your channel folder' });
+    }
+
+    const bucket = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_BACKGROUNDS || 'orbix-network-backgrounds';
+    const { error } = await supabaseClient.storage.from(bucket).remove([filePath]);
+    if (error) {
+      console.error('[DELETE /api/v2/orbix-network/backgrounds] Storage error:', error);
+      return res.status(500).json({ error: error.message || 'Delete failed' });
+    }
+    res.json({ success: true, path: filePath });
+  } catch (error) {
+    if (error.status) return res.status(error.status).json({ error: error.message });
+    console.error('[DELETE /api/v2/orbix-network/backgrounds] Error:', error);
+    res.status(500).json({ error: 'Failed to delete background' });
+  }
+});
+
+/**
  * GET /api/v2/orbix-network/music
  * List music tracks for a channel. Requires query channel_id.
  */

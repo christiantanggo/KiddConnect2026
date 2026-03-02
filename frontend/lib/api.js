@@ -432,6 +432,7 @@ export const orbixNetworkAPI = {
     headers: { 'Content-Type': 'multipart/form-data' },
     timeout: 60000
   }),
+  deleteBackground: (data) => api.delete('/v2/orbix-network/backgrounds', { data }),
   getMusic: (params) => api.get('/v2/orbix-network/music', { params }),
   uploadMusic: (formData) => api.post('/v2/orbix-network/music', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },

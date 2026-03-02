@@ -525,6 +525,17 @@ function ChannelSettingsTab({ channel }) {
     }
   };
 
+  const handleDeleteBg = async (bg) => {
+    if (!confirm(`Delete "${bg.name}"? This cannot be undone.`)) return;
+    try {
+      await orbixNetworkAPI.deleteBackground({ channel_id: channel.id, path: bg.path });
+      success('Background deleted');
+      setBackgrounds((prev) => prev.filter((b) => b.path !== bg.path));
+    } catch (e) {
+      showError(handleAPIError(e).message || 'Delete failed');
+    }
+  };
+
   // ── Music handlers ──
   const handleUploadMusic = async (e) => {
     const file = e?.target?.files?.[0];
@@ -731,10 +742,17 @@ function ChannelSettingsTab({ channel }) {
           ) : (
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
               {backgrounds.map((bg) => (
-                <div key={bg.path} className="rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+                <div key={bg.path} className="rounded-lg border border-gray-200 overflow-hidden bg-gray-50 relative group">
                   <a href={bg.url} target="_blank" rel="noopener noreferrer" className="block aspect-[9/16] max-h-32">
                     <img src={bg.url} alt={bg.name} className="w-full h-full object-cover" />
                   </a>
+                  <button
+                    onClick={() => handleDeleteBg(bg)}
+                    title="Delete image"
+                    className="absolute top-1 right-1 bg-red-600 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-700 shadow"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
                   <p className="p-2 text-xs text-gray-600 truncate" title={bg.name}>{bg.name}</p>
                 </div>
               ))}
