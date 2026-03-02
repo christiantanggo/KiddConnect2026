@@ -977,16 +977,13 @@ function getPipelineRunMinutes(posting, dailyVideoCap) {
  * Scheduled pipeline check — catch-up version.
  *
  * Instead of a narrow ±5 min window that breaks on server restarts, this uses a
- * "minimum interval" approach:
- *   1. We know the configured pipeline run times (e.g. 7am, 10am, 1pm, 4pm, 7pm)
- *   2. We calculate the minimum gap between any two consecutive run times
- *   3. If the last pipeline run was more than (gap - 10 min) ago AND we are inside
- *      the posting window AND there is a run time that has passed since last run,
- *      we trigger the pipeline now (catch-up).
- *   4. If the server was down all morning and restarts at 1:03pm, it will immediately
- *      catch up and run — not wait until 4pm.
- *
- * last_pipeline_run_at is stored in module settings so it survives server restarts.
+ * Simple slot-based scheduler:
+ *   - Every 5 min the server checks which pipeline slots are configured for today.
+ *   - It tracks which slots it has already run TODAY in module_settings.pipeline_runs_today
+ *     (an array of "HH:MM" strings, reset each calendar day).
+ *   - If a slot time has passed and is not in pipeline_runs_today → run it now.
+ *   - No intervals, no gaps, no thresholds. Just "did I run this slot today?"
+ *   - Server restarts catch up automatically within 5 minutes.
  */
 export async function runScheduledPipelineCheck() {
   try {
@@ -1007,56 +1004,53 @@ export async function runScheduledPipelineCheck() {
         const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
         const posting = moduleSettings?.settings?.posting_schedule || {};
         const timezone = posting.timezone ?? 'America/New_York';
-        const startStr = posting.start ?? '07:00';
-        const endStr = posting.end ?? '20:00';
-        const startMinutes = parseTimeToMinutes(startStr);
-        const endMinutes = parseTimeToMinutes(endStr);
 
         const pipelineRunMinutes = getPipelineRunMinutes(posting, dailyVideoCap);
         if (!pipelineRunMinutes || pipelineRunMinutes.length === 0) continue;
 
         const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+        const todayStr = getStartOfTodayISOInZone(timezone).slice(0, 10); // "YYYY-MM-DD"
         const nowISO = new Date().toISOString();
 
-        // Outside posting window entirely — don't run overnight.
-        // Give 90 min grace past end so slots near window close still get processed.
-        if (currentMinutes < startMinutes || currentMinutes > endMinutes + 90) continue;
-
-        // Calculate min interval between consecutive run times (in minutes)
-        const sortedRunMinutes = [...pipelineRunMinutes].sort((a, b) => a - b);
-        let minIntervalMins = sortedRunMinutes.length > 1 ? 180 : 60; // single-slot: 60min fallback
-        for (let i = 1; i < sortedRunMinutes.length; i++) {
-          minIntervalMins = Math.min(minIntervalMins, sortedRunMinutes[i] - sortedRunMinutes[i - 1]);
-        }
-        // Allow re-run if (interval - 10 min) has elapsed since last run
-        // Minimum floor of 20min to prevent rapid double-runs during testing
-        const rerunThresholdMins = Math.max(20, minIntervalMins - 10);
-
-        // Check when we last ran the pipeline for this business
-        const lastRunISO = moduleSettings?.settings?.last_pipeline_run_at;
-        const lastRunMinsAgo = lastRunISO
-          ? (Date.now() - new Date(lastRunISO).getTime()) / 60000
-          : Infinity;
-
-        // Has a scheduled run time passed that we haven't covered yet?
-        const missedRunTime = sortedRunMinutes.some(t => t <= currentMinutes);
-
-        if (!missedRunTime) {
-          console.log(`[Orbix Pipeline] Business ${businessId}: no run time has passed yet today (current ${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')})`);
+        // Which slots have passed so far today?
+        const slotsPassed = pipelineRunMinutes.filter(m => m <= currentMinutes);
+        if (slotsPassed.length === 0) {
+          console.log(`[Orbix Pipeline] Business ${businessId}: no slots have passed yet today`);
           continue;
         }
 
-        if (lastRunMinsAgo < rerunThresholdMins) {
-          console.log(`[Orbix Pipeline] Business ${businessId}: ran ${Math.round(lastRunMinsAgo)}min ago, threshold=${rerunThresholdMins}min — skipping`);
+        // Load which slots we already ran today from settings
+        const runsRecord = moduleSettings?.settings?.pipeline_runs_today || {};
+        const alreadyRanToday = runsRecord.date === todayStr ? (runsRecord.slots || []) : [];
+
+        // Find the latest slot that has passed but hasn't been run yet
+        const slotsToRun = slotsPassed.filter(m => {
+          const slotKey = `${Math.floor(m / 60).toString().padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+          return !alreadyRanToday.includes(slotKey);
+        });
+
+        if (slotsToRun.length === 0) {
+          const nextSlot = pipelineRunMinutes.find(m => m > currentMinutes);
+          const nextStr = nextSlot != null
+            ? `${Math.floor(nextSlot / 60)}:${String(nextSlot % 60).padStart(2, '0')}`
+            : 'none today';
+          console.log(`[Orbix Pipeline] Business ${businessId}: all passed slots already ran today. Next slot: ${nextStr}`);
           continue;
         }
 
-        console.log(`[Orbix Pipeline] Business ${businessId}: running pipeline (last ran ${lastRunMinsAgo === Infinity ? 'never' : Math.round(lastRunMinsAgo) + 'min ago'}, threshold=${rerunThresholdMins}min, tz=${timezone})`);
+        // Run for the latest missed slot (catches up if server was down)
+        const slotToRun = Math.max(...slotsToRun);
+        const slotKey = `${Math.floor(slotToRun / 60).toString().padStart(2, '0')}:${String(slotToRun % 60).padStart(2, '0')}`;
+        const currentStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
 
-        // Save last_pipeline_run_at BEFORE running to prevent double-runs if two instances start simultaneously
+        console.log(`[Orbix Pipeline] Business ${businessId}: running slot ${slotKey} (now=${currentStr}, tz=${timezone})`);
+
+        // Mark slot as ran BEFORE running to prevent double-runs
+        const updatedSlots = [...alreadyRanToday, slotKey];
         await ModuleSettings.update(businessId, 'orbix-network', {
           ...(moduleSettings?.settings || {}),
           last_pipeline_run_at: nowISO,
+          pipeline_runs_today: { date: todayStr, slots: updatedSlots },
         });
 
         await runReviewQueueJob();
