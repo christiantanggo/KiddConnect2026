@@ -127,7 +127,7 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
           Posting Schedule
         </h2>
         <p className="text-xs text-gray-500 mb-4">
-          Set the times videos are auto-created and posted each day. The pipeline runs 1 hour before each post time to scrape, render, and prepare the video.
+          Set the times videos are auto-created and posted each day. The pipeline scrapes, renders, and posts all at the same time by default.
         </p>
         <div className="space-y-5">
 
@@ -231,7 +231,7 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
             <p className="text-xs text-gray-400 mb-3">
               When the system scrapes content, generates scripts, and creates videos.
               {settings.pipeline_run_times.length === 0
-                ? ' Defaults to 1 hour before each post time. Set custom times here to override (e.g. set earlier for more buffer time).'
+                ? ' Defaults to same time as each post slot (scrape, render, and post happen together). Set custom times here if you want the pipeline to run earlier for more buffer.'
                 : ''}
             </p>
             <div className="space-y-2">
@@ -325,13 +325,15 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
                     const h12 = hh % 12 || 12;
                     return `${h12}:${String(mm).padStart(2, '0')}${ampm}`;
                   };
-                  // Find matching pipeline time (custom or derived)
+                  // Find matching pipeline time (custom or same as post slot)
                   const pipelineTime = settings.pipeline_run_times[i]
                     ? (() => { const [ph, pm] = settings.pipeline_run_times[i].split(':').map(Number); return fmt(ph, pm); })()
-                    : fmt(Math.max(0, h - 1), m);
+                    : null;
                   return (
                     <p key={i} className="text-xs text-blue-600">
-                      {pipelineTime} scrape &amp; render &rarr; {fmt(h, m)} post to YouTube
+                      {pipelineTime && pipelineTime !== fmt(h, m)
+                        ? `${pipelineTime} scrape & render → ${fmt(h, m)} post to YouTube`
+                        : `${fmt(h, m)} scrape, render & post to YouTube`}
                     </p>
                   );
                 })}

@@ -964,12 +964,12 @@ function getPipelineRunMinutes(posting, dailyVideoCap) {
   if (Array.isArray(configured) && configured.length > 0) {
     return configured.map(t => parseTimeToMinutes(typeof t === 'string' ? t : String(t)));
   }
-  // Derive from post slots: 1 hour before each
+  // Derive from post slots: same time (scrape, render, and post happen together)
   const postMinutes = getPostSlotMinutes(posting, dailyVideoCap);
   if (postMinutes && postMinutes.length > 0) {
-    return postMinutes.map(m => Math.max(0, m - 60));
+    return postMinutes;
   }
-  if (dailyVideoCap === 5) return DEFAULT_PIPELINE_RUN_MINUTES;
+  if (dailyVideoCap === 5) return DEFAULT_POST_SLOT_MINUTES;
   return null;
 }
 
