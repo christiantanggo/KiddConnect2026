@@ -687,26 +687,69 @@ const YOUTUBE_UPLOAD_RETRY_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_RE
 export async function processOneYouTubeUpload(options = {}) {
   const { force = false, renderId: targetRenderId = null } = options;
 
-  let baseQuery = supabaseClient
+  // When targeting a specific render (forced/manual), fetch only that one
+  if (targetRenderId) {
+    const { data: ready } = await supabaseClient
+      .from('orbix_renders')
+      .select('*')
+      .eq('render_status', 'READY_FOR_UPLOAD')
+      .not('output_url', 'is', null)
+      .eq('id', targetRenderId)
+      .maybeSingle();
+    if (!ready) return { processed: false };
+    // Fall through with this render selected
+    return _uploadRender(ready, force);
+  }
+
+  // For automatic 30s loop: fetch candidates and pick one that hasn't hit its per-channel cap
+  const { data: candidates } = await supabaseClient
     .from('orbix_renders')
-    .select('*')
+    .select('*, orbix_stories(channel_id)')
     .eq('render_status', 'READY_FOR_UPLOAD')
     .not('output_url', 'is', null)
     .order('updated_at', { ascending: true })
-    .limit(1);
+    .limit(20);
 
-  // When a specific render ID is requested (manual upload), target only that render
-  if (targetRenderId) {
-    baseQuery = baseQuery.eq('id', targetRenderId);
+  if (!candidates || candidates.length === 0) return { processed: false };
+
+  // Find the first candidate whose channel hasn't hit today's cap
+  let render = null;
+  for (const candidate of candidates) {
+    const businessId = candidate.business_id;
+    const channelId = candidate.orbix_stories?.channel_id || '__legacy__';
+
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+    const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
+    const posting = moduleSettings?.settings?.posting_schedule || {};
+    const timezone = posting.timezone ?? 'America/New_York';
+    const todayISO = getStartOfTodayISOInZone(timezone);
+
+    const { data: channelPublishes } = await supabaseClient
+      .from('orbix_publishes')
+      .select('render_id, orbix_renders(orbix_stories(channel_id))')
+      .eq('business_id', businessId)
+      .eq('publish_status', 'PUBLISHED')
+      .gte('posted_at', todayISO);
+
+    const countForChannel = (channelPublishes || []).filter(
+      p => (p.orbix_renders?.orbix_stories?.channel_id || '__legacy__') === channelId
+    ).length;
+
+    if (countForChannel >= dailyVideoCap) {
+      console.log(`[Orbix YouTube] Channel ${channelId} cap reached (${countForChannel}/${dailyVideoCap}), skipping render ${candidate.id}`);
+      continue;
+    }
+
+    render = candidate;
+    break;
   }
 
-  const { data: ready } = await baseQuery.maybeSingle();
+  if (!render) return { processed: false };
 
-  if (!ready) {
-    return { processed: false };
-  }
+  return _uploadRender(render, force);
+}
 
-  const render = ready;
+async function _uploadRender(render, force) {
   const videoUrl = render.output_url;
 
   // ── Auto-upload toggle ────────────────────────────────────────────────────
@@ -1118,28 +1161,8 @@ export async function runPublishJob() {
 
         // "Today" in the posting timezone so daily cap matches user's calendar day
         const todayISO = getStartOfTodayISOInZone(timezone);
-        const { data: todayPublishes, error: publishesCountError } = await supabaseClient
-          .from('orbix_publishes')
-          .select('id')
-          .eq('business_id', businessId)
-          .eq('publish_status', 'PUBLISHED')
-          .gte('posted_at', todayISO);
-        if (publishesCountError) {
-          console.error(`[Orbix Jobs] Error counting today's publishes for business ${businessId}:`, publishesCountError);
-          continue;
-        }
-        const publishesToday = todayPublishes?.length ?? 0;
-        const publishSlotsLeft = Math.max(0, dailyVideoCap - publishesToday);
         const currentMinutes = getMinutesSinceMidnightInZone(timezone);
-        const slotMinutes = getPostSlotMinutes(posting, dailyVideoCap);
-
         const currentTimeStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
-        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${publishesToday}/${dailyVideoCap}`);
-
-        if (publishSlotsLeft <= 0) {
-          console.log(`[Orbix Publish] Business ${businessId}: skip - daily cap reached (${publishesToday}/${dailyVideoCap})`);
-          continue;
-        }
 
         // Only block overnight — don't post while everyone is asleep.
         // Allow a 90-minute grace period past window end.
@@ -1149,6 +1172,28 @@ export async function runPublishJob() {
           continue;
         }
 
+        // Count today's publishes PER CHANNEL so the cap applies independently to each channel
+        const { data: todayPublishes, error: publishesCountError } = await supabaseClient
+          .from('orbix_publishes')
+          .select('render_id, orbix_renders(orbix_stories(channel_id))')
+          .eq('business_id', businessId)
+          .eq('publish_status', 'PUBLISHED')
+          .gte('posted_at', todayISO);
+        if (publishesCountError) {
+          console.error(`[Orbix Jobs] Error counting today's publishes for business ${businessId}:`, publishesCountError);
+          continue;
+        }
+
+        // Build a map of { channelId -> countToday }
+        const publishCountByChannel = {};
+        for (const p of (todayPublishes || [])) {
+          const chId = p.orbix_renders?.orbix_stories?.channel_id || '__legacy__';
+          publishCountByChannel[chId] = (publishCountByChannel[chId] || 0) + 1;
+        }
+
+        const totalPublishesToday = (todayPublishes || []).length;
+        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${totalPublishesToday} cap=${dailyVideoCap}/channel`);
+
         // No slot-time gate — upload immediately whenever a render is ready.
 
         // Get renders ready for upload or already completed that haven't been published yet
@@ -1157,12 +1202,24 @@ export async function runPublishJob() {
           .select('*, orbix_stories(*), orbix_scripts(*)')
           .eq('business_id', businessId)
           .in('render_status', ['READY_FOR_UPLOAD', 'COMPLETED'])
-          .limit(10);
+          .limit(50);
 
         if (rendersError) throw rendersError;
 
-        // Take at most 1 so we hit the next slot on a later run (spread evenly through the day)
-        const completedRenders = (allRenders || []).filter(r => r.output_url).slice(0, 1);
+        // Filter to one render per channel that hasn't hit its daily cap
+        const seen = new Set();
+        const completedRenders = [];
+        for (const r of (allRenders || []).filter(r => r.output_url)) {
+          const chId = r.orbix_stories?.channel_id || '__legacy__';
+          if (seen.has(chId)) continue; // already queuing one for this channel this run
+          const countForChannel = publishCountByChannel[chId] || 0;
+          if (countForChannel >= dailyVideoCap) {
+            console.log(`[Orbix Publish] Business ${businessId}: channel ${chId} cap reached (${countForChannel}/${dailyVideoCap}), skipping`);
+            continue;
+          }
+          seen.add(chId);
+          completedRenders.push(r);
+        }
 
         if (!completedRenders || completedRenders.length === 0) {
           console.log(`[Orbix Publish] Business ${businessId}: no completed renders to publish`);
