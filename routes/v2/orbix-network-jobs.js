@@ -1018,8 +1018,9 @@ export async function runScheduledPipelineCheck() {
         const currentMinutes = getMinutesSinceMidnightInZone(timezone);
         const nowISO = new Date().toISOString();
 
-        // Outside posting window entirely — don't run overnight
-        if (currentMinutes < startMinutes || currentMinutes > endMinutes) continue;
+        // Outside posting window entirely — don't run overnight.
+        // Give 90 min grace past end so slots near window close still get processed.
+        if (currentMinutes < startMinutes || currentMinutes > endMinutes + 90) continue;
 
         // Calculate min interval between consecutive run times (in minutes)
         const sortedRunMinutes = [...pipelineRunMinutes].sort((a, b) => a - b);
@@ -1154,9 +1155,12 @@ export async function runPublishJob() {
           continue;
         }
 
-        // Only publish during posting window (e.g. 7am–8pm), not overnight
-        if (currentMinutes < startMinutes || currentMinutes > endMinutes) {
-          console.log(`[Orbix Publish] Business ${businessId}: skip - outside window (now ${currentTimeStr}, window ${startStr}-${endStr})`);
+        // Only publish during posting window (e.g. 7am–8pm), not overnight.
+        // Allow a 90-minute grace period past window end so slots near the end of the window
+        // still get posted even if the scheduler check fires slightly late.
+        const gracePastEnd = endMinutes + 90;
+        if (currentMinutes < startMinutes || currentMinutes > gracePastEnd) {
+          console.log(`[Orbix Publish] Business ${businessId}: skip - outside window (now ${currentTimeStr}, window ${startStr}-${endStr}, grace until ${Math.floor(gracePastEnd/60)}:${String(gracePastEnd%60).padStart(2,'0')})`);
           continue;
         }
 
