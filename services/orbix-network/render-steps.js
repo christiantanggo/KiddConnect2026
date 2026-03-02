@@ -444,7 +444,7 @@ export async function step5HookText(renderId, renderJob, script, story, template
     
     const step5OutputPath = join(tmpdir(), `orbix-step5-${renderId}-${Date.now()}.mp4`);
     const step5Vf = `ass='${simpleAssPathEscaped}'`;
-    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "${step5Vf}" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p "${step5OutputPath}"`;
+    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "${step5Vf}" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p -movflags +faststart "${step5OutputPath}"`;
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
     await logStepEvent(renderId, step, 'PROGRESS', 'Executing FFmpeg command', {
@@ -636,7 +636,7 @@ export async function step6Captions(renderId, renderJob, script, story, template
     await logStepEvent(renderId, step, 'PROGRESS', 'Rendering captions overlay');
     
     const step6OutputPath = join(tmpdir(), `orbix-step6-${renderId}-${Date.now()}.mp4`);
-    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "ass='${simpleAssPathEscaped}'" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p "${step6OutputPath}"`;
+    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "ass='${simpleAssPathEscaped}'" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p -movflags +faststart "${step6OutputPath}"`;
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
     await logStepEvent(renderId, step, 'PROGRESS', 'Executing FFmpeg command', { 
