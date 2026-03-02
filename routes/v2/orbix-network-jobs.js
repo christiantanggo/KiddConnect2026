@@ -1150,12 +1150,12 @@ export async function runPublishJob() {
 
         // No slot-time gate — upload immediately whenever a render is ready.
 
-        // Get completed renders that haven't been published yet; schedule allows only one post per slot
+        // Get renders ready for upload or already completed that haven't been published yet
         const { data: allRenders, error: rendersError } = await supabaseClient
           .from('orbix_renders')
           .select('*, orbix_stories(*), orbix_scripts(*)')
           .eq('business_id', businessId)
-          .eq('render_status', 'COMPLETED')
+          .in('render_status', ['READY_FOR_UPLOAD', 'COMPLETED'])
           .limit(10);
 
         if (rendersError) throw rendersError;
@@ -1308,7 +1308,7 @@ router.get('/publish-diagnostics', async (req, res) => {
       .from('orbix_renders')
       .select('id, output_url, orbix_stories(channel_id)')
       .eq('business_id', businessId)
-      .eq('render_status', 'COMPLETED');
+      .in('render_status', ['READY_FOR_UPLOAD', 'COMPLETED']);
     const withUrl = (completedRenders || []).filter(r => r.output_url);
     const { data: alreadyPublished } = await supabaseClient
       .from('orbix_publishes')
