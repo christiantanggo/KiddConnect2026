@@ -951,6 +951,20 @@ router.post('/pipeline', async (req, res) => {
 });
 
 /**
+ * Current wall-clock time in the given IANA timezone.
+ * Uses date-fns-tz so behavior is consistent regardless of server TZ or Intl support.
+ */
+function getNowInZone(timezone = 'America/New_York') {
+  const now = new Date();
+  const zoned = toZonedTime(now, timezone);
+  return {
+    hours: zoned.getHours(),
+    minutes: zoned.getMinutes(),
+    minutesSinceMidnight: zoned.getHours() * 60 + zoned.getMinutes()
+  };
+}
+
+/**
  * Start of today (midnight) in the given timezone, as ISO string for DB comparison.
  * Used so "today" for daily caps matches the user's calendar day, not UTC.
  */
@@ -964,19 +978,10 @@ function getStartOfTodayISOInZone(timezone = 'America/New_York') {
 
 /**
  * Get current time in a timezone as minutes since midnight (00:00 in that zone).
+ * Uses date-fns-tz so it always reflects the USER's selected timezone, not server/UTC.
  */
 function getMinutesSinceMidnightInZone(timezone = 'America/New_York') {
-  const now = new Date();
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false
-  });
-  const parts = formatter.formatToParts(now);
-  const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
-  const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
-  return hour * 60 + minute;
+  return getNowInZone(timezone).minutesSinceMidnight;
 }
 
 /** Parse "HH:mm" to minutes since midnight. */
@@ -985,8 +990,11 @@ function parseTimeToMinutes(timeStr) {
   return (h || 7) * 60 + (m || 0);
 }
 
-/** Default fixed post times (5/day): 8am, 11am, 2pm, 5pm, 8pm. Times in minutes since midnight. */
+/** Default fixed post times (5/day): 8am, 11am, 2pm, 5pm, 8pm. Times in minutes since midnight in user's timezone. */
 const DEFAULT_POST_SLOT_MINUTES = [8 * 60, 11 * 60, 14 * 60, 17 * 60, 20 * 60]; // 480, 660, 840, 1020, 1200
+
+/** Default pipeline run times: 1hr before each post (7am, 10am, 1pm, 4pm, 7pm in user's timezone). */
+const DEFAULT_PIPELINE_RUN_MINUTES = [7 * 60, 10 * 60, 13 * 60, 16 * 60, 19 * 60]; // 420, 600, 780, 960, 1140
 
 /**
  * Build evenly-spaced slot times for a given daily cap within the posting window.
@@ -1017,17 +1025,16 @@ function getPostSlotMinutes(posting, dailyVideoCap) {
 }
 
 /**
- * Get pipeline run times in minutes.
- * Uses posting_schedule.pipeline_run_times if set (user-configured).
- * Otherwise runs at the same time as each post slot (scrape → render → post in one shot).
+ * Get pipeline run times in minutes (in user's timezone).
+ * Uses posting_schedule.pipeline_run_times if set (user-configured, e.g. ["07:00","10:00","13:00","16:00","19:00"]).
+ * Otherwise uses DEFAULT_PIPELINE_RUN_MINUTES (7am, 10am, 1pm, 4pm, 7pm in user's timezone).
  */
 function getPipelineRunMinutes(posting, dailyVideoCap) {
   const configured = posting?.pipeline_run_times;
   if (Array.isArray(configured) && configured.length > 0) {
     return configured.map(t => parseTimeToMinutes(typeof t === 'string' ? t : String(t)));
   }
-  // Fall back to post slot times (pipeline and post happen together)
-  return getPostSlotMinutes(posting, dailyVideoCap);
+  return [...DEFAULT_PIPELINE_RUN_MINUTES];
 }
 
 /**
@@ -1065,14 +1072,18 @@ export async function runScheduledPipelineCheck() {
         const pipelineRunMinutes = getPipelineRunMinutes(posting, dailyVideoCap);
         if (!pipelineRunMinutes || pipelineRunMinutes.length === 0) continue;
 
-        const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+        const nowInZone = getNowInZone(timezone);
+        const currentMinutes = nowInZone.minutesSinceMidnight;
+        const currentTimeStr = `${String(nowInZone.hours).padStart(2, '0')}:${String(nowInZone.minutes).padStart(2, '0')}`;
         const todayStr = getStartOfTodayISOInZone(timezone).slice(0, 10); // "YYYY-MM-DD"
         const nowISO = new Date().toISOString();
 
-        // Which slots have passed so far today?
+        // Which slots have passed so far today (in the user's timezone)?
         const slotsPassed = pipelineRunMinutes.filter(m => m <= currentMinutes);
         if (slotsPassed.length === 0) {
-          console.log(`[Orbix Pipeline] Business ${businessId}: no slots have passed yet today`);
+          const nextM = pipelineRunMinutes.find(m => m > currentMinutes);
+          const nextStr = nextM != null ? `${String(Math.floor(nextM / 60)).padStart(2, '0')}:${String(nextM % 60).padStart(2, '0')}` : 'none';
+          console.log(`[Orbix Pipeline] Business ${businessId}: tz=${timezone} now=${currentTimeStr} (local) — no slot passed yet. Next: ${nextStr}`);
           continue;
         }
 
@@ -1089,18 +1100,17 @@ export async function runScheduledPipelineCheck() {
         if (slotsToRun.length === 0) {
           const nextSlot = pipelineRunMinutes.find(m => m > currentMinutes);
           const nextStr = nextSlot != null
-            ? `${Math.floor(nextSlot / 60)}:${String(nextSlot % 60).padStart(2, '0')}`
+            ? `${String(Math.floor(nextSlot / 60)).padStart(2, '0')}:${String(nextSlot % 60).padStart(2, '0')}`
             : 'none today';
-          console.log(`[Orbix Pipeline] Business ${businessId}: all passed slots already ran today. Next slot: ${nextStr}`);
+          console.log(`[Orbix Pipeline] Business ${businessId}: tz=${timezone} now=${currentTimeStr} (local) — all passed slots already ran. Next: ${nextStr}`);
           continue;
         }
 
         // Run for the latest missed slot (catches up if server was down)
         const slotToRun = Math.max(...slotsToRun);
-        const slotKey = `${Math.floor(slotToRun / 60).toString().padStart(2, '0')}:${String(slotToRun % 60).padStart(2, '0')}`;
-        const currentStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
+        const slotKey = `${String(Math.floor(slotToRun / 60)).padStart(2, '0')}:${String(slotToRun % 60).padStart(2, '0')}`;
 
-        console.log(`[Orbix Pipeline] Business ${businessId}: running slot ${slotKey} (now=${currentStr}, tz=${timezone})`);
+        console.log(`[Orbix Pipeline] Business ${businessId}: RUNNING slot ${slotKey} (tz=${timezone}, now=${currentTimeStr} local)`);
 
         // Mark slot as ran BEFORE running to prevent double-runs
         const updatedSlots = [...alreadyRanToday, slotKey];
@@ -1159,10 +1169,11 @@ export async function runPublishJob() {
         const startMinutes = parseTimeToMinutes(startStr);
         const endMinutes = parseTimeToMinutes(endStr);
 
-        // "Today" in the posting timezone so daily cap matches user's calendar day
+        // "Today" and "current time" in the USER's timezone (not server/UTC)
         const todayISO = getStartOfTodayISOInZone(timezone);
-        const currentMinutes = getMinutesSinceMidnightInZone(timezone);
-        const currentTimeStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
+        const nowInZone = getNowInZone(timezone);
+        const currentMinutes = nowInZone.minutesSinceMidnight;
+        const currentTimeStr = `${String(nowInZone.hours).padStart(2, '0')}:${String(nowInZone.minutes).padStart(2, '0')}`;
 
         // Only block overnight — don't post while everyone is asleep.
         // Allow a 90-minute grace period past window end.
@@ -1192,7 +1203,7 @@ export async function runPublishJob() {
         }
 
         const totalPublishesToday = (todayPublishedRenders || []).length;
-        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} window=${startStr}-${endStr} publishesToday=${totalPublishesToday} cap=${dailyVideoCap}/channel perChannel=${JSON.stringify(publishCountByChannel)}`);
+        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} (local) window=${startStr}-${endStr} publishesToday=${totalPublishesToday} cap=${dailyVideoCap}/channel perChannel=${JSON.stringify(publishCountByChannel)}`);
 
         // No slot-time gate — upload immediately whenever a render is ready.
 
@@ -1345,7 +1356,9 @@ router.get('/publish-diagnostics', async (req, res) => {
     const startMinutes = parseTimeToMinutes(startStr);
     const endMinutes = parseTimeToMinutes(endStr);
     const todayISO = getStartOfTodayISOInZone(timezone);
-    const currentMinutes = getMinutesSinceMidnightInZone(timezone);
+    const nowInZone = getNowInZone(timezone);
+    const currentMinutes = nowInZone.minutesSinceMidnight;
+    const currentTimeStr = `${String(nowInZone.hours).padStart(2, '0')}:${String(nowInZone.minutes).padStart(2, '0')}`;
     const windowMinutes = endMinutes - startMinutes;
     const { data: todayPublishes } = await supabaseClient
       .from('orbix_publishes')
@@ -1358,8 +1371,7 @@ router.get('/publish-diagnostics', async (req, res) => {
     const nextSlotMinutes = slotMinutes && publishesToday < slotMinutes.length
       ? slotMinutes[publishesToday]
       : (dailyVideoCap <= 1 ? startMinutes : startMinutes + (windowMinutes * publishesToday / Math.max(1, dailyVideoCap - 1)));
-    const currentTimeStr = `${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')}`;
-    const nextSlotStr = `${Math.floor(nextSlotMinutes / 60)}:${String(Math.round(nextSlotMinutes) % 60).padStart(2, '0')}`;
+    const nextSlotStr = `${String(Math.floor(nextSlotMinutes / 60)).padStart(2, '0')}:${String(Math.round(nextSlotMinutes) % 60).padStart(2, '0')}`;
     const inWindow = currentMinutes >= startMinutes && currentMinutes <= endMinutes;
     const atOrPastSlot = currentMinutes >= nextSlotMinutes;
     const { data: completedRenders } = await supabaseClient
