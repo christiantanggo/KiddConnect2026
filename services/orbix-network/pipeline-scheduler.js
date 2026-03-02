@@ -12,7 +12,7 @@ import { processRawItem } from './classifier.js';
 import { supabaseClient } from '../../config/database.js';
 import { selectTemplate, selectBackground } from './video-renderer.js';
 
-const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'riddle'];
+const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'facts', 'riddle'];
 
 /**
  * For trivia/facts stories the voice_script is embedded in the raw item's snippet JSON.
@@ -50,8 +50,15 @@ async function ensureTriviaScript(businessId, story) {
     } catch (_) { /* snippet not JSON — use as-is */ }
   }
 
-  if (!voiceScript) {
-    console.warn(`[Pipeline Scheduler] No voice_script in snippet for trivia story ${story.id} — skipping script creation`);
+  // Riddles don't use voice_script — they use riddle_text + answer_text in content_json.
+  // Only bail out on missing voice_script for trivia/facts, not riddle.
+  const isRiddle = story.category === 'riddle';
+  if (!voiceScript && !isRiddle) {
+    console.warn(`[Pipeline Scheduler] No voice_script in snippet for story ${story.id} (${story.category}) — skipping script creation`);
+    return null;
+  }
+  if (isRiddle && !contentJson?.riddle_text) {
+    console.warn(`[Pipeline Scheduler] No riddle_text in snippet for riddle story ${story.id} — skipping script creation`);
     return null;
   }
 
