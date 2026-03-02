@@ -15,6 +15,73 @@ import { selectTemplate, selectBackground } from './video-renderer.js';
 const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia'];
 
 /**
+ * For trivia/facts stories the voice_script is embedded in the raw item's snippet JSON.
+ * Extract it and save directly to orbix_scripts so tryRenderStory can find it.
+ */
+async function ensureTriviaScript(businessId, story) {
+  // Check if a script already exists
+  const { data: existing } = await supabaseClient
+    .from('orbix_scripts')
+    .select('id')
+    .eq('story_id', story.id)
+    .maybeSingle();
+  if (existing) {
+    console.log(`[Pipeline Scheduler] Script already exists for trivia story ${story.id}`);
+    return existing;
+  }
+
+  // Fetch the raw item to get the snippet
+  const { data: rawItem } = await supabaseClient
+    .from('orbix_raw_items')
+    .select('snippet, title')
+    .eq('id', story.raw_item_id)
+    .maybeSingle();
+
+  let voiceScript = null;
+  let hook = null;
+  let contentJson = null;
+
+  if (rawItem?.snippet) {
+    try {
+      const parsed = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+      voiceScript = parsed.voice_script || null;
+      hook = parsed.hook || null;
+      contentJson = parsed;
+    } catch (_) { /* snippet not JSON — use as-is */ }
+  }
+
+  if (!voiceScript) {
+    console.warn(`[Pipeline Scheduler] No voice_script in snippet for trivia story ${story.id} — skipping script creation`);
+    return null;
+  }
+
+  const { data: script, error } = await supabaseClient
+    .from('orbix_scripts')
+    .insert({
+      business_id: businessId,
+      story_id: story.id,
+      hook: hook || '',
+      what_happened: voiceScript,
+      why_it_matters: '',
+      what_happens_next: '',
+      cta_line: '',
+      duration_target_seconds: 35,
+      content_type: story.category,
+      content_json: contentJson || null,
+    })
+    .select()
+    .single();
+
+  if (error) {
+    console.error(`[Pipeline Scheduler] Failed to save trivia script for story ${story.id}:`, error.message);
+    return null;
+  }
+
+  console.log(`[Pipeline Scheduler] Created trivia script ${script.id} for story ${story.id}`);
+  return script;
+}
+
+/**
  * Try to create and queue a render for one story. Returns { rendered: 0|1, render_id? }.
  */
 async function tryRenderStory(businessId, story) {
@@ -102,8 +169,14 @@ export async function runAutomatedPipeline(businessId) {
     // Generate scripts for newly created stories (so they can be rendered this run)
     for (const story of processedStories) {
       try {
-        const { generateAndSaveScript } = await import('./script-generator.js');
-        await generateAndSaveScript(businessId, story);
+        // Trivia/facts stories already have their script embedded in the raw item snippet —
+        // extract it directly instead of calling the LLM script generator (which requires a raw_item_id).
+        if (story.category === 'trivia' || story.category === 'facts') {
+          await ensureTriviaScript(businessId, story);
+        } else {
+          const { generateAndSaveScript } = await import('./script-generator.js');
+          await generateAndSaveScript(businessId, story);
+        }
       } catch (scriptErr) {
         console.error(`[Pipeline Scheduler] Script generation failed for story ${story.id}:`, scriptErr?.message);
       }
@@ -221,7 +294,11 @@ export async function runAutomatedPipeline(businessId) {
           .eq('business_id', businessId);
 
         try {
-          await generateAndSaveScript(businessId, newStory);
+          if (newStory.category === 'trivia' || newStory.category === 'facts') {
+            await ensureTriviaScript(businessId, { ...newStory, raw_item_id: fallbackRaw.id });
+          } else {
+            await generateAndSaveScript(businessId, newStory);
+          }
         } catch (scriptError) {
           console.error('[Pipeline Scheduler] Fallback: script generation error:', scriptError?.message);
         }
