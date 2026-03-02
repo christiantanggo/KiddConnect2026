@@ -580,14 +580,14 @@ router.post('/renders/:id/restart', async (req, res) => {
     console.log(`[POST /api/v2/orbix-network/renders/:id/restart] Render ${renderId} restarted to PENDING – triggering process now`);
     res.json({ render: updatedRender, render_id: renderId });
 
-    // Process this specific render immediately — stops at READY_FOR_UPLOAD, no auto YouTube upload
-    const { processRenderById } = await import('./orbix-network-jobs.js');
-    processRenderById(renderId)
+    // Process this render immediately then upload to YouTube in one shot
+    const { runRenderByIdThenUpload } = await import('./orbix-network-jobs.js');
+    runRenderByIdThenUpload(renderId)
       .then((result) => {
-        if (result.processed) {
-          console.log(`[restart] Render ${renderId} processed:`, result.status, '— waiting for manual YouTube upload via UI');
-        } else if (result.error) {
-          console.warn(`[restart] Could not process render ${renderId}:`, result.error);
+        if (result.render?.processed) {
+          console.log(`[restart] Render ${renderId} processed:`, result.render.status, result.upload ? 'upload: ' + result.upload.status : 'no upload');
+        } else if (result.render?.error) {
+          console.warn(`[restart] Could not process render ${renderId}:`, result.render.error);
         }
       })
       .catch((err) => console.error(`[restart] Process error for ${renderId}:`, err?.message));
