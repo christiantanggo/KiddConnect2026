@@ -420,6 +420,32 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   })()}
                 </div>
               )}
+              {item.story_category === 'mindteaser' && item.snippet && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Mind Teaser Content</h4>
+                  {(() => {
+                    try {
+                      const m = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      return (
+                        <div className="space-y-3 text-sm">
+                          {m.hook && <p className="text-gray-600 italic">&quot;{m.hook}&quot;</p>}
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Question</p>
+                            <p className="font-medium text-gray-900">{m.question}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Answer</p>
+                            <p className="text-green-700 font-semibold">{m.answer}</p>
+                          </div>
+                          {(m.type || m.family) && <p className="text-gray-400 text-xs">Type: {m.type}{m.family ? ` · ${m.family}` : ''}</p>}
+                        </div>
+                      );
+                    } catch {
+                      return <p className="text-gray-500 text-sm">Could not parse mind teaser content</p>;
+                    }
+                  })()}
+                </div>
+              )}
             </div>
           )}
           
@@ -672,6 +698,38 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                           </div>
                         )}
                         {cj.category && <p className="text-gray-400 text-xs">Category: {cj.category}</p>}
+                      </div>
+                    );
+                  }
+                  if (cat === 'mindteaser') {
+                    const cj = script.content_json
+                      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                      : {};
+                    return (
+                      <div className="space-y-3">
+                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
+                        {(script.hook || cj.hook) && (
+                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
+                            <p className="text-xs font-semibold text-blue-600 mb-1">1 · Hook <span className="font-normal">(optional)</span></p>
+                            <p className="text-base text-blue-900 font-medium">{script.hook || cj.hook}</p>
+                          </div>
+                        )}
+                        {cj.question && (
+                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">2 · Question <span className="font-normal">(on screen + TTS)</span></p>
+                            <p className="text-base text-gray-900 font-medium">{cj.question}</p>
+                          </div>
+                        )}
+                        <div className="rounded-md bg-yellow-50 border border-yellow-200 p-3 text-center">
+                          <p className="text-xs font-semibold text-yellow-700 mb-1">3 · 1s pause · 3-2-1 Countdown</p>
+                        </div>
+                        {cj.answer && (
+                          <div className="rounded-md bg-green-50 border border-green-300 p-3">
+                            <p className="text-xs font-semibold text-green-700 mb-1">4 · Answer Flash <span className="font-normal">(0.5s + TTS)</span></p>
+                            <p className="text-base text-green-900 font-bold">{cj.answer}</p>
+                          </div>
+                        )}
+                        {(cj.type || cj.family) && <p className="text-gray-400 text-xs">Type: {cj.type}{cj.family ? ` · ${cj.family}` : ''}</p>}
                       </div>
                     );
                   }

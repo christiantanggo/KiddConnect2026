@@ -412,14 +412,21 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
 
 function ChannelSettingsTab({ channel }) {
   const { success, error: showError } = useToast();
+  const { refetchChannels } = useOrbixChannel();
   const apiParams = useCallback(() => ({ channel_id: channel.id }), [channel.id]);
   const apiBody = useCallback(() => ({ channel_id: channel.id }), [channel.id]);
+  const channelEnabled = channel.enabled !== false;
+  const [togglingEnabled, setTogglingEnabled] = useState(false);
 
   // YouTube
   const [ytConnected, setYtConnected] = useState(false);
   const [ytChannel, setYtChannel] = useState(null);
   const [connectingYt, setConnectingYt] = useState(false);
   const [ytSetupMsg, setYtSetupMsg] = useState(null);
+  const [customOauth, setCustomOauth] = useState(false);
+  const [customOauthClientId, setCustomOauthClientId] = useState('');
+  const [customOauthClientSecret, setCustomOauthClientSecret] = useState('');
+  const [savingCustomOauth, setSavingCustomOauth] = useState(false);
 
   // Backgrounds
   const [backgrounds, setBackgrounds] = useState([]);
@@ -461,6 +468,7 @@ function ChannelSettingsTab({ channel }) {
         if (cancelled) return;
         setYtConnected(ytRes.data?.connected ?? false);
         setYtChannel(ytRes.data?.channel ?? null);
+        setCustomOauth(ytRes.data?.custom_oauth ?? false);
         setBackgrounds(bgRes.data?.backgrounds || []);
         setMusicTracks(musicRes.data?.music || []);
         setSources(srcRes.data?.sources || []);
@@ -564,10 +572,11 @@ function ChannelSettingsTab({ channel }) {
 
   // ── Source handlers ──
   const handleAddSource = async () => {
-    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR';
+    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR';
     if (needsUrl && !(sourceForm.url || '').trim()) { showError('Source URL is required'); return; }
     const defaultName = sourceForm.type === 'TRIVIA_GENERATOR' ? 'Trivia Generator'
       : sourceForm.type === 'RIDDLE_GENERATOR' ? 'Riddle Generator'
+      : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'Mind Teaser Generator'
       : sourceForm.type === 'WIKIDATA_FACTS' ? 'Wikidata Facts'
       : sourceForm.type === 'WIKIPEDIA' ? (sourceForm.category_hint === 'money' ? 'Money (Wikipedia)' : 'Psychology (Wikipedia)')
       : '';
@@ -615,6 +624,19 @@ function ChannelSettingsTab({ channel }) {
     );
   }
 
+  const handleToggleEnabled = async (checked) => {
+    try {
+      setTogglingEnabled(true);
+      await orbixNetworkAPI.updateChannel(channel.id, { enabled: checked });
+      await refetchChannels();
+      success(checked ? 'Channel enabled — pipeline and uploads will include it' : 'Channel disabled — no new uploads for this channel');
+    } catch (e) {
+      showError(handleAPIError(e).message || 'Failed to update channel');
+    } finally {
+      setTogglingEnabled(false);
+    }
+  };
+
   const subTabs = [
     { id: 'youtube', label: 'YouTube', icon: Youtube },
     { id: 'backgrounds', label: 'Backgrounds', icon: Image },
@@ -624,6 +646,24 @@ function ChannelSettingsTab({ channel }) {
 
   return (
     <div>
+      {/* Channel publishing on/off */}
+      <div className="mb-6 p-4 bg-gray-50 border border-gray-200 rounded-xl">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={channelEnabled}
+            disabled={togglingEnabled}
+            onChange={(e) => handleToggleEnabled(e.target.checked)}
+            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+          />
+          <span className="text-sm font-medium text-gray-900">Publishing enabled</span>
+          {togglingEnabled && <Loader2 className="w-4 h-4 animate-spin text-gray-500" />}
+        </label>
+        <p className="text-xs text-gray-500 mt-1 ml-7">
+          When off, this channel is skipped by the pipeline and YouTube uploads (saves quota and avoids posting to this channel).
+        </p>
+      </div>
+
       {/* Sub-tabs */}
       <div className="flex border-b border-gray-200 mb-6 gap-1">
         {subTabs.map(({ id, label, icon: Icon }) => (
@@ -651,6 +691,71 @@ function ChannelSettingsTab({ channel }) {
           <p className="text-sm text-gray-600">
             Connect a YouTube account to this channel. Completed renders will automatically upload to that YouTube account.
           </p>
+
+          {/* Per-channel OAuth app: separate Google Cloud project = separate 10k quota (~6 uploads/day per channel) */}
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+            <h3 className="text-sm font-semibold text-slate-800">Separate quota (optional)</h3>
+            <p className="text-xs text-slate-600">
+              Use a different Google Cloud project for this channel so it gets its own daily quota (~6 uploads/day). Create a project, enable YouTube Data API v3, add OAuth credentials, and set the redirect URI to your app&apos;s callback URL (same as global).
+            </p>
+            {customOauth && (
+              <p className="text-xs text-green-700 font-medium">Custom OAuth app is set for this channel — uploads use that project&apos;s quota.</p>
+            )}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">OAuth Client ID</label>
+                <input
+                  type="text"
+                  value={customOauthClientId}
+                  onChange={(e) => setCustomOauthClientId(e.target.value)}
+                  placeholder={customOauth ? 'Leave blank to keep current' : 'From Google Cloud Console'}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">OAuth Client Secret</label>
+                <input
+                  type="password"
+                  value={customOauthClientSecret}
+                  onChange={(e) => setCustomOauthClientSecret(e.target.value)}
+                  placeholder={customOauth ? 'Leave blank to keep current' : 'From Google Cloud Console'}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  setSavingCustomOauth(true);
+                  try {
+                    await orbixNetworkAPI.saveYoutubeCustomOauth({
+                      channel_id: channel.id,
+                      client_id: customOauthClientId.trim(),
+                      client_secret: customOauthClientSecret.trim()
+                    });
+                    success('Custom OAuth saved');
+                    const ytRes = await orbixNetworkAPI.getYoutubeChannel(apiParams());
+                    setCustomOauth(ytRes.data?.custom_oauth ?? false);
+                    if (!customOauthClientId.trim()) {
+                      setCustomOauthClientSecret('');
+                    }
+                  } catch (e) {
+                    showError(handleAPIError(e).message || 'Failed to save');
+                  } finally {
+                    setSavingCustomOauth(false);
+                  }
+                }}
+                disabled={savingCustomOauth}
+                className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-50"
+              >
+                {savingCustomOauth ? 'Saving…' : 'Save'}
+              </button>
+              {customOauth && (
+                <span className="text-xs text-slate-500 self-center">Clear both fields and Save to use global credentials.</span>
+              )}
+            </div>
+          </div>
 
           {ytSetupMsg && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
@@ -831,6 +936,7 @@ function ChannelSettingsTab({ channel }) {
                     if (v === 'WIKIPEDIA_MONEY') setSourceForm((f) => ({ ...f, type: 'WIKIPEDIA', category_hint: 'money' }));
                     else if (v === 'TRIVIA_GENERATOR') setSourceForm((f) => ({ ...f, type: 'TRIVIA_GENERATOR', url: 'trivia://generator', category_hint: null }));
                     else if (v === 'RIDDLE_GENERATOR') setSourceForm((f) => ({ ...f, type: 'RIDDLE_GENERATOR', url: 'riddle://generator', category_hint: null }));
+                    else if (v === 'MIND_TEASER_GENERATOR') setSourceForm((f) => ({ ...f, type: 'MIND_TEASER_GENERATOR', url: 'mindteaser://generator', category_hint: null }));
                     else setSourceForm((f) => ({ ...f, type: v, category_hint: v === 'WIKIPEDIA' ? null : undefined }));
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
@@ -841,6 +947,7 @@ function ChannelSettingsTab({ channel }) {
                   <option value="WIKIPEDIA_MONEY">Wikipedia (Money)</option>
                   <option value="TRIVIA_GENERATOR">Trivia Generator</option>
                   <option value="RIDDLE_GENERATOR">Riddle Generator</option>
+                  <option value="MIND_TEASER_GENERATOR">Mind Teaser Generator</option>
                   <option value="WIKIDATA_FACTS">Wikidata Facts</option>
                 </select>
               </div>
@@ -848,12 +955,13 @@ function ChannelSettingsTab({ channel }) {
                 <label className="block text-xs font-medium text-gray-600 mb-1">URL</label>
                 <input
                   type="text"
-                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.url}
-                  onChange={(e) => sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'RIDDLE_GENERATOR' && setSourceForm((f) => ({ ...f, url: e.target.value }))}
-                  readOnly={sourceForm.type === 'TRIVIA_GENERATOR' || sourceForm.type === 'RIDDLE_GENERATOR'}
+                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator' : sourceForm.url}
+                  onChange={(e) => sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && setSourceForm((f) => ({ ...f, url: e.target.value }))}
+                  readOnly={sourceForm.type === 'TRIVIA_GENERATOR' || sourceForm.type === 'RIDDLE_GENERATOR' || sourceForm.type === 'MIND_TEASER_GENERATOR'}
                   placeholder={
                     sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator (auto)' :
                     sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator (auto)' :
+                    sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator (auto)' :
                     sourceForm.type === 'WIKIPEDIA' ? 'Leave blank for default categories' :
                     'https://example.com/feed.xml'
                   }
@@ -905,7 +1013,7 @@ function ChannelSettingsTab({ channel }) {
                         {src.enabled ? 'Active' : 'Disabled'}
                       </span>
                     </div>
-                    {src.url && src.url !== 'trivia://generator' && src.url !== 'riddle://generator' && (
+                    {src.url && src.url !== 'trivia://generator' && src.url !== 'riddle://generator' && src.url !== 'mindteaser://generator' && (
                       <p className="text-xs text-gray-500 truncate mt-0.5">{src.url}</p>
                     )}
                   </div>

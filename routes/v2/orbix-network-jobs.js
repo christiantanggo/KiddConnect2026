@@ -19,6 +19,16 @@ import { runAutomatedPipeline } from '../../services/orbix-network/pipeline-sche
 
 const router = express.Router();
 
+/** Get enabled channel IDs for a business (used to skip disabled channels in pipeline/publish). */
+async function getEnabledChannelIds(businessId) {
+  const { data: rows } = await supabaseClient
+    .from('orbix_channels')
+    .select('id')
+    .eq('business_id', businessId)
+    .or('enabled.eq.true,enabled.is.null');
+  return new Set((rows || []).map(r => r.id));
+}
+
 // Require authentication for manual triggers
 router.use(authenticate);
 router.use(requireBusinessContext);
@@ -712,11 +722,18 @@ export async function processOneYouTubeUpload(options = {}) {
 
   if (!candidates || candidates.length === 0) return { processed: false };
 
-  // Find the first candidate whose channel hasn't hit today's cap
+  // Find the first candidate whose channel is enabled and hasn't hit today's cap
   let render = null;
   for (const candidate of candidates) {
     const businessId = candidate.business_id;
-    const channelId = candidate.orbix_stories?.channel_id || '__legacy__';
+    const channelId = candidate.orbix_stories?.channel_id ?? null;
+    const channelIdKey = channelId || '__legacy__';
+
+    const enabledIds = await getEnabledChannelIds(businessId);
+    if (channelId != null && !enabledIds.has(channelId)) {
+      console.log(`[Orbix YouTube] Channel ${channelId} is disabled, skipping render ${candidate.id}`);
+      continue;
+    }
 
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
     const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
@@ -732,11 +749,11 @@ export async function processOneYouTubeUpload(options = {}) {
       .gte('completed_at', todayISO);
 
     const countForChannel = (channelPublishes || []).filter(
-      r => (r.orbix_stories?.channel_id || '__legacy__') === channelId
+      r => (r.orbix_stories?.channel_id || '__legacy__') === channelIdKey
     ).length;
 
     if (countForChannel >= dailyVideoCap) {
-      console.log(`[Orbix YouTube] Channel ${channelId} cap reached (${countForChannel}/${dailyVideoCap}), skipping render ${candidate.id}`);
+      console.log(`[Orbix YouTube] Channel ${channelIdKey} cap reached (${countForChannel}/${dailyVideoCap}), skipping render ${candidate.id}`);
       continue;
     }
 
@@ -1217,18 +1234,21 @@ export async function runPublishJob() {
 
         if (rendersError) throw rendersError;
 
-        // Filter to one render per channel that hasn't hit its daily cap
+        // Only consider enabled channels; then one render per channel that hasn't hit its daily cap
+        const enabledChannelIds = await getEnabledChannelIds(businessId);
         const seen = new Set();
         const completedRenders = [];
         for (const r of (allRenders || []).filter(r => r.output_url)) {
-          const chId = r.orbix_stories?.channel_id || '__legacy__';
-          if (seen.has(chId)) continue; // already queuing one for this channel this run
-          const countForChannel = publishCountByChannel[chId] || 0;
+          const chId = r.orbix_stories?.channel_id ?? null;
+          const chIdKey = chId || '__legacy__';
+          if (chId != null && !enabledChannelIds.has(chId)) continue; // skip disabled channels
+          if (seen.has(chIdKey)) continue; // already queuing one for this channel this run
+          const countForChannel = publishCountByChannel[chIdKey] || 0;
           if (countForChannel >= dailyVideoCap) {
-            console.log(`[Orbix Publish] Business ${businessId}: channel ${chId} cap reached (${countForChannel}/${dailyVideoCap}), skipping`);
+            console.log(`[Orbix Publish] Business ${businessId}: channel ${chIdKey} cap reached (${countForChannel}/${dailyVideoCap}), skipping`);
             continue;
           }
-          seen.add(chId);
+          seen.add(chIdKey);
           completedRenders.push(r);
         }
 

@@ -49,18 +49,30 @@ router.get('/youtube/callback', async (req, res) => {
     if (!businessId) {
       return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=invalid_state`);
     }
-    
-    if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET || !process.env.YOUTUBE_REDIRECT_URI) {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_not_configured`);
-    }
 
     const raw = process.env.YOUTUBE_REDIRECT_URI || '';
     const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.YOUTUBE_CLIENT_ID,
-      process.env.YOUTUBE_CLIENT_SECRET,
-      redirectUri
-    );
+    if (!redirectUri || redirectUri === 'https://') {
+      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_not_configured`);
+    }
+
+    // Use per-channel OAuth client when this channel has custom credentials (same client that generated auth URL)
+    let clientId = process.env.YOUTUBE_CLIENT_ID;
+    let clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
+    if (orbixChannelId && !isKidquiz && !isMovieReview) {
+      const existing = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+      const byChannel = existing?.settings?.youtube_by_channel || {};
+      const channelEntry = byChannel[orbixChannelId];
+      if (channelEntry?.client_id && channelEntry?.client_secret) {
+        clientId = channelEntry.client_id;
+        clientSecret = channelEntry.client_secret;
+      }
+    }
+    if (!clientId || !clientSecret) {
+      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_not_configured`);
+    }
+
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
     // Exchange code for tokens (invalid_grant = redirect_uri mismatch, code already used, or code expired)
     let tokens;
@@ -124,7 +136,14 @@ router.get('/youtube/callback', async (req, res) => {
 
     if (orbixChannelId) {
       settings.youtube_by_channel = settings.youtube_by_channel || {};
-      settings.youtube_by_channel[orbixChannelId] = ytCreds;
+      const existingChannel = settings.youtube_by_channel[orbixChannelId] || {};
+      // Preserve per-channel OAuth app (client_id/client_secret) so refresh uses same project
+      settings.youtube_by_channel[orbixChannelId] = {
+        ...existingChannel,
+        ...ytCreds,
+        ...(existingChannel.client_id && { client_id: existingChannel.client_id }),
+        ...(existingChannel.client_secret && { client_secret: existingChannel.client_secret })
+      };
     } else {
       settings.youtube = ytCreds;
     }

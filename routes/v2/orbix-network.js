@@ -78,7 +78,7 @@ router.get('/channels', async (req, res) => {
     const businessId = req.active_business_id;
     const { data: channels, error } = await supabaseClient
       .from('orbix_channels')
-      .select('id, name, created_at')
+      .select('id, name, created_at, enabled')
       .eq('business_id', businessId)
       .order('created_at', { ascending: true });
     if (error) throw error;
@@ -101,7 +101,7 @@ router.post('/channels', async (req, res) => {
     const { data: channel, error } = await supabaseClient
       .from('orbix_channels')
       .insert({ business_id: businessId, name })
-      .select('id, name, created_at')
+      .select('id, name, created_at, enabled')
       .single();
     if (error) throw error;
     res.status(201).json({ channel });
@@ -113,20 +113,24 @@ router.post('/channels', async (req, res) => {
 
 /**
  * PATCH /api/v2/orbix-network/channels/:id
- * Update channel name.
+ * Update channel name and/or enabled (publish/scrape for this channel).
  */
 router.patch('/channels/:id', async (req, res) => {
   try {
     const businessId = req.active_business_id;
     const { id } = req.params;
     const name = req.body?.name?.trim();
-    if (!name) return res.status(400).json({ error: 'name is required' });
+    const enabled = req.body?.enabled;
+    const updates = { updated_at: new Date().toISOString() };
+    if (name !== undefined) updates.name = name;
+    if (typeof enabled === 'boolean') updates.enabled = enabled;
+    if (name === undefined && typeof enabled !== 'boolean') return res.status(400).json({ error: 'Provide name and/or enabled' });
     const { data: channel, error } = await supabaseClient
       .from('orbix_channels')
-      .update({ name, updated_at: new Date().toISOString() })
+      .update(updates)
       .eq('id', id)
       .eq('business_id', businessId)
-      .select('id, name, created_at')
+      .select('id, name, created_at, enabled')
       .single();
     if (error) throw error;
     if (!channel) return res.status(404).json({ error: 'Channel not found' });
@@ -1082,7 +1086,9 @@ router.post('/sources', async (req, res) => {
       ? 'trivia://generator'
       : (type.toUpperCase() === 'RIDDLE_GENERATOR')
         ? 'riddle://generator'
-        : (type.toUpperCase() === 'WIKIDATA_FACTS')
+        : (type.toUpperCase() === 'MIND_TEASER_GENERATOR')
+          ? 'mindteaser://generator'
+          : (type.toUpperCase() === 'WIKIDATA_FACTS')
           ? (url && url.trim()) || 'facts://'
           : (type.toUpperCase() === 'WIKIPEDIA' && !url)
             ? 'https://en.wikipedia.org/wiki/Psychology'
@@ -2329,6 +2335,7 @@ router.get('/analytics', async (req, res) => {
 /**
  * GET /api/v2/orbix-network/youtube/auth-url
  * Optional query: channel_id = Orbix channel (per-channel YouTube), from_setup = redirect back to setup wizard after OAuth.
+ * Uses per-channel OAuth client (client_id/client_secret) when set for that channel; else global env.
  */
 router.get('/youtube/auth-url', async (req, res) => {
   try {
@@ -2336,31 +2343,51 @@ router.get('/youtube/auth-url', async (req, res) => {
     const orbixChannelId = req.query.channel_id || null;
     const fromSetup = req.query.from_setup === 'true' || req.query.from_setup === true;
 
-    if (!isYouTubeOAuthConfigured()) {
+    const redirectUriRaw = process.env.YOUTUBE_REDIRECT_URI || '';
+    const redirectUri = redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`;
+    if (!redirectUri || redirectUri === 'https://') {
       const instructions = getYouTubeSetupInstructions(req);
       return res.status(200).json({
         configured: false,
         auth_url: null,
         error: 'YouTube OAuth not configured',
-        message: instructions.short,
+        message: 'YOUTUBE_REDIRECT_URI is required.',
         setup_instructions: instructions
       });
     }
 
-    const redirectUri = process.env.YOUTUBE_REDIRECT_URI?.startsWith('http') ? process.env.YOUTUBE_REDIRECT_URI : `https://${process.env.YOUTUBE_REDIRECT_URI || ''}`;
-    const oauth2Client = new google.auth.OAuth2(
+    let channelEntry = null;
+    if (orbixChannelId) {
+      const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+      const byChannel = moduleSettings?.settings?.youtube_by_channel || {};
+      channelEntry = byChannel[orbixChannelId] || null;
+    }
+    const { resolveOAuthCredentials } = await import('../services/orbix-network/youtube-publisher.js');
+    const { clientId, clientSecret } = resolveOAuthCredentials(
+      channelEntry,
       process.env.YOUTUBE_CLIENT_ID,
-      process.env.YOUTUBE_CLIENT_SECRET,
-      redirectUri
+      process.env.YOUTUBE_CLIENT_SECRET
     );
-    
+    if (!clientId || !clientSecret) {
+      const instructions = getYouTubeSetupInstructions(req);
+      return res.status(200).json({
+        configured: false,
+        auth_url: null,
+        error: 'YouTube OAuth not configured',
+        message: orbixChannelId
+          ? 'Set global YOUTUBE_CLIENT_ID/SECRET in env, or add a custom OAuth app for this channel in Settings (Client ID + Secret).'
+          : instructions.short,
+        setup_instructions: instructions
+      });
+    }
+
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     const scopes = [
       'https://www.googleapis.com/auth/youtube.upload',
       'https://www.googleapis.com/auth/youtube.readonly'
     ];
     let state = orbixChannelId ? `${businessId}:${orbixChannelId}` : businessId;
     if (fromSetup) state = `${state}:setup`;
-    
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: scopes,
@@ -2372,7 +2399,7 @@ router.get('/youtube/auth-url', async (req, res) => {
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/auth-url] Error:', error);
     console.error('[GET /api/v2/orbix-network/youtube/auth-url] Error stack:', error.stack);
-    res.status(500).json({ 
+    res.status(500).json({
       error: 'Failed to generate OAuth URL',
       message: error.message,
       details: process.env.NODE_ENV === 'development' ? error.stack : undefined
@@ -2396,16 +2423,72 @@ router.get('/youtube/channel', async (req, res) => {
       : settings.youtube;
 
     if (!yt?.channel_id) {
-      return res.json({ connected: false, channel: null });
+      return res.json({
+        connected: false,
+        channel: null,
+        custom_oauth: !!(yt?.client_id && orbixChannelId)
+      });
     }
 
     res.json({
       connected: true,
-      channel: { id: yt.channel_id, title: yt.channel_title || '' }
+      channel: { id: yt.channel_id, title: yt.channel_title || '' },
+      custom_oauth: !!(yt?.client_id && orbixChannelId)
     });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/channel] Error:', error);
     res.status(500).json({ error: 'Failed to fetch channel info' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/youtube/custom-oauth
+ * Set or clear per-channel OAuth app (separate Google Cloud project = separate quota).
+ * Body: { channel_id, client_id?, client_secret? }. If client_id is empty, clears custom OAuth for that channel.
+ */
+router.post('/youtube/custom-oauth', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const orbixChannelId = req.body?.channel_id || req.query?.channel_id;
+    if (!orbixChannelId) {
+      return res.status(400).json({ error: 'channel_id is required' });
+    }
+    const { data: channel } = await supabaseClient
+      .from('orbix_channels')
+      .select('id')
+      .eq('id', orbixChannelId)
+      .eq('business_id', businessId)
+      .single();
+    if (!channel) {
+      return res.status(404).json({ error: 'Channel not found' });
+    }
+
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    const settings = { ...(moduleSettings?.settings || {}) };
+    settings.youtube_by_channel = settings.youtube_by_channel || {};
+    const existing = settings.youtube_by_channel[orbixChannelId] || {};
+
+    const clientId = (req.body?.client_id ?? '').trim();
+    const clientSecret = (req.body?.client_secret ?? '').trim();
+
+    if (!clientId) {
+      delete existing.client_id;
+      delete existing.client_secret;
+    } else {
+      existing.client_id = clientId;
+      if (clientSecret) existing.client_secret = clientSecret;
+    }
+    settings.youtube_by_channel[orbixChannelId] = { ...existing };
+
+    await ModuleSettings.update(businessId, MODULE_KEY, settings);
+    res.json({
+      success: true,
+      custom_oauth: !!clientId,
+      message: clientId ? 'Custom OAuth app saved. Use Connect YouTube to authorize with this project.' : 'Custom OAuth cleared. Channel will use global credentials.'
+    });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/youtube/custom-oauth] Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to save custom OAuth' });
   }
 });
 
@@ -2426,7 +2509,13 @@ router.post('/youtube/disconnect', async (req, res) => {
     const settings = { ...(moduleSettings.settings || {}) };
     if (orbixChannelId) {
       settings.youtube_by_channel = settings.youtube_by_channel || {};
-      delete settings.youtube_by_channel[orbixChannelId];
+      const existing = settings.youtube_by_channel[orbixChannelId] || {};
+      const { client_id, client_secret } = existing;
+      // Clear tokens but keep per-channel OAuth app so they can reconnect with same project
+      settings.youtube_by_channel[orbixChannelId] = {
+        ...(client_id && { client_id }),
+        ...(client_secret && { client_secret })
+      };
     } else {
       settings.youtube = {
         channel_id: '',
@@ -2436,7 +2525,7 @@ router.post('/youtube/disconnect', async (req, res) => {
         token_expiry: null
       };
     }
-    
+
     await ModuleSettings.update(businessId, MODULE_KEY, settings);
     res.json({ success: true });
   } catch (error) {

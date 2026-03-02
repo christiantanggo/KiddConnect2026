@@ -12,7 +12,7 @@ import { processRawItem } from './classifier.js';
 import { supabaseClient } from '../../config/database.js';
 import { selectTemplate, selectBackground } from './video-renderer.js';
 
-const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'facts', 'riddle'];
+const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser'];
 
 /**
  * For trivia/facts stories the voice_script is embedded in the raw item's snippet JSON.
@@ -50,15 +50,20 @@ async function ensureTriviaScript(businessId, story) {
     } catch (_) { /* snippet not JSON — use as-is */ }
   }
 
-  // Riddles don't use voice_script — they use riddle_text + answer_text in content_json.
-  // Only bail out on missing voice_script for trivia/facts, not riddle.
+  // Riddles use riddle_text + answer_text; mindteasers use question + answer + voice_script.
+  // Only bail out on missing voice_script for trivia/facts, not riddle or mindteaser.
   const isRiddle = story.category === 'riddle';
-  if (!voiceScript && !isRiddle) {
+  const isMindTeaser = story.category === 'mindteaser';
+  if (!voiceScript && !isRiddle && !isMindTeaser) {
     console.warn(`[Pipeline Scheduler] No voice_script in snippet for story ${story.id} (${story.category}) — skipping script creation`);
     return null;
   }
   if (isRiddle && !contentJson?.riddle_text) {
     console.warn(`[Pipeline Scheduler] No riddle_text in snippet for riddle story ${story.id} — skipping script creation`);
+    return null;
+  }
+  if (isMindTeaser && !contentJson?.question) {
+    console.warn(`[Pipeline Scheduler] No question in snippet for mindteaser story ${story.id} — skipping script creation`);
     return null;
   }
 
@@ -178,7 +183,7 @@ export async function runAutomatedPipeline(businessId) {
       try {
         // Trivia/facts stories already have their script embedded in the raw item snippet —
         // extract it directly instead of calling the LLM script generator (which requires a raw_item_id).
-        if (story.category === 'trivia' || story.category === 'facts' || story.category === 'riddle') {
+        if (story.category === 'trivia' || story.category === 'facts' || story.category === 'riddle' || story.category === 'mindteaser') {
           await ensureTriviaScript(businessId, story);
         } else {
           const { generateAndSaveScript } = await import('./script-generator.js');
@@ -226,10 +231,21 @@ export async function runAutomatedPipeline(businessId) {
       .select('*')
       .eq('business_id', businessId)
       .eq('status', 'APPROVED')
-      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.money,category.eq.trivia,category.eq.facts,category.eq.riddle`)
+      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.money,category.eq.trivia,category.eq.facts,category.eq.riddle,category.eq.mindteaser`)
       .order('shock_score', { ascending: false });
     
     if (storiesError1) throw storiesError1;
+
+    // Only consider stories in enabled channels (skip disabled channels to save quota)
+    const { data: enabledChannels } = await supabaseClient
+      .from('orbix_channels')
+      .select('id')
+      .eq('business_id', businessId)
+      .or('enabled.eq.true,enabled.is.null');
+    const enabledChannelIds = new Set((enabledChannels || []).map(c => c.id));
+    const channelEligibleStories = (allEligibleStories || []).filter(
+      s => s.channel_id == null || enabledChannelIds.has(s.channel_id)
+    );
     
     // Get rendered story IDs
     const { data: renderedStories } = await supabaseClient
@@ -240,8 +256,8 @@ export async function runAutomatedPipeline(businessId) {
     
     const renderedStoryIds = new Set(renderedStories?.map(r => r.story_id) || []);
     
-    // Filter out already-rendered stories
-    const eligibleStories = (allEligibleStories || []).filter(story => !renderedStoryIds.has(story.id));
+    // Filter out already-rendered stories (use channel-filtered list)
+    const eligibleStories = channelEligibleStories.filter(story => !renderedStoryIds.has(story.id));
 
     // Select one top story per evergreen category (psychology, money), then one for other news
     const storiesToRender = [];
@@ -301,7 +317,7 @@ export async function runAutomatedPipeline(businessId) {
           .eq('business_id', businessId);
 
         try {
-          if (newStory.category === 'trivia' || newStory.category === 'facts' || newStory.category === 'riddle') {
+          if (newStory.category === 'trivia' || newStory.category === 'facts' || newStory.category === 'riddle' || newStory.category === 'mindteaser') {
             await ensureTriviaScript(businessId, { ...newStory, raw_item_id: fallbackRaw.id });
           } else {
             await generateAndSaveScript(businessId, newStory);

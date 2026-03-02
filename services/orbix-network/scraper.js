@@ -35,6 +35,8 @@ export async function scrapeSource(source) {
       return await scrapeFactsSource(source);
     } else if (source.type === 'RIDDLE_GENERATOR') {
       return await scrapeRiddleSource(source);
+    } else if (source.type === 'MIND_TEASER_GENERATOR') {
+      return await scrapeMindTeaserSource(source);
     } else {
       throw new Error(`Unsupported source type: ${source.type}`);
     }
@@ -400,6 +402,62 @@ async function scrapeRiddleSource(source) {
 }
 
 /**
+ * Generate one mind teaser via Mind Teaser Generator (MIND_TEASER_GENERATOR source type).
+ * Returns raw-item-shaped objects with content_fingerprint for dedup.
+ */
+async function scrapeMindTeaserSource(source) {
+  try {
+    const { generateAndValidateMindTeaser } = await import('./mindteaser-generator.js');
+    const businessId = source.business_id;
+    const channelId = source.channel_id;
+    if (!businessId || !channelId) {
+      console.warn('[Orbix Scraper] Mind teaser source missing business_id or channel_id');
+      return [];
+    }
+    const { count } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('category', 'mindteaser');
+    const episodeNumber = (count || 0) + 1;
+    const teaser = await generateAndValidateMindTeaser(businessId, channelId, { episodeNumber });
+    if (!teaser) {
+      console.log('[Orbix Scraper] Mind teaser generator produced no valid puzzle');
+      return [];
+    }
+    const title = `Mind Teaser #${String(episodeNumber).padStart(2, '0')} - ${teaser.type}`;
+    const url = `mindteaser://${teaser.content_fingerprint}`;
+    const snippet = JSON.stringify({
+      hook: teaser.hook,
+      type: teaser.type,
+      family: teaser.family,
+      question: teaser.question,
+      answer: teaser.answer,
+      difficulty: teaser.difficulty,
+      voice_script: teaser.voice_script,
+      episode_number: teaser.episode_number
+    });
+    return [{
+      source_id: source.id,
+      channel_id: channelId,
+      title,
+      snippet,
+      url,
+      published_at: new Date().toISOString(),
+      content_type: 'mindteaser',
+      category: 'mindteaser',
+      shock_score: 70,
+      content_fingerprint: teaser.content_fingerprint,
+      factors_json: { source: 'mindteaser_generator' }
+    }];
+  } catch (error) {
+    console.error('[Orbix Scraper] Mind teaser source error:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Extract first paragraph/snippet from text
  */
 function extractSnippet(text) {
@@ -498,7 +556,8 @@ export async function saveRawItem(businessId, item) {
       item.content_type === 'money' || item.category === 'money' ||
       item.content_type === 'trivia' || item.category === 'trivia' ||
       item.content_type === 'facts' || item.category === 'facts' ||
-      item.content_type === 'riddle' || item.category === 'riddle';
+      item.content_type === 'riddle' || item.category === 'riddle' ||
+      item.content_type === 'mindteaser' || item.category === 'mindteaser';
     const insertPayload = {
       business_id: businessId,
       channel_id: channelId,
@@ -520,6 +579,7 @@ export async function saveRawItem(businessId, item) {
         item.category === 'trivia' ? { source: 'trivia_generator' } :
         item.category === 'facts' ? { source: 'wikidata_facts' } :
         item.category === 'riddle' ? { source: 'riddle_generator' } :
+        item.category === 'mindteaser' ? { source: 'mindteaser_generator' } :
         item.category === 'money' ? { source: 'wikipedia_money' } : { source: 'wikipedia_psychology' }
       );
     }
@@ -599,9 +659,20 @@ export async function scrapeAllSources(businessId, channelId = null) {
     if (channelId) {
       query = query.eq('channel_id', channelId);
     }
-    const { data: sources, error } = await query;
+    const { data: rawSources, error } = await query;
 
     if (error) throw error;
+
+    // Skip sources in disabled channels (orbix_channels.enabled = false)
+    const { data: enabledChannels } = await supabaseClient
+      .from('orbix_channels')
+      .select('id')
+      .eq('business_id', businessId)
+      .or('enabled.eq.true,enabled.is.null');
+    const enabledChannelIds = new Set((enabledChannels || []).map(c => c.id));
+    const sources = (rawSources || []).filter(
+      s => s.channel_id == null || enabledChannelIds.has(s.channel_id)
+    );
     
     console.log(`[Orbix Scraper] ========== SCRAPING START ==========`);
     console.log(`[Orbix Scraper] Business ID: ${businessId}`);

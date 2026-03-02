@@ -1,0 +1,21 @@
+# Railway CLI has a ~45MB upload limit — exclude everything that can be recreated on build
+node_modules
+**/node_modules
+.git
+.next
+**/.next
+dist
+**/dist
+build
+**/build
+coverage
+*.log
+tmp
+temp
+uploads
+output
+rendered
+archive
+.vercel
+.env
+.env.*

@@ -1,5 +1,8 @@
 # Dependencies
 node_modules/
+**/node_modules/
+frontend/node_modules/
+frontend/.next/
 yarn.lock
 
 # Environment variables
@@ -26,6 +29,7 @@ Thumbs.db
 dist/
 build/
 .next/
+**/.next/
 .vercel/
 
 # Testing
@@ -36,6 +40,9 @@ coverage/
 tmp/
 temp/
 *.tmp
+
+# Large folders (keep deploy under Railway 45MB limit)
+archive/
 
 .vercel
 .env*.local

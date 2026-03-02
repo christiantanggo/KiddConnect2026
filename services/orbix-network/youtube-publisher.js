@@ -19,21 +19,26 @@ export const SKIP_YOUTUBE_UPLOAD_CODE = 'SKIP_YOUTUBE_UPLOAD';
  * @param {string} [orbixChannelId] - Orbix channel ID; when set, use that channel's YouTube connection
  * @returns {Promise<Object>} OAuth2 client
  */
+/**
+ * Resolve OAuth client ID and secret: per-channel (channelEntry.client_id/client_secret) or env.
+ * Used for getYouTubeClient, auth URL, and callback. Redirect URI is always from env.
+ */
+export function resolveOAuthCredentials(channelEntry, envClientId, envClientSecret) {
+  const clientId = (channelEntry?.client_id || envClientId || '').trim();
+  const clientSecret = (channelEntry?.client_secret || envClientSecret || '').trim();
+  return { clientId, clientSecret };
+}
+
 async function getYouTubeClient(businessId, orbixChannelId = null) {
   try {
     writeProgressLog('YT_GETCLIENT_START', { businessId, orbixChannelId: orbixChannelId || 'legacy' });
     console.log('[YouTube Publisher] getYouTubeClient businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
-    const hasClientId = !!process.env.YOUTUBE_CLIENT_ID;
-    const hasClientSecret = !!process.env.YOUTUBE_CLIENT_SECRET;
     const hasRedirectUri = !!process.env.YOUTUBE_REDIRECT_URI;
-    if (!hasClientId || !hasClientSecret || !hasRedirectUri) {
-      console.error('[YouTube Publisher] Missing env: YOUTUBE_CLIENT_ID=', hasClientId, 'YOUTUBE_CLIENT_SECRET=', hasClientSecret, 'YOUTUBE_REDIRECT_URI=', hasRedirectUri);
-      const where = process.env.RUN_ORBIX_WORKER === 'true' ? 'Add them to the render worker environment (same as web API).' : 'Add them to your .env file and restart the server. On Railway, set them in the service Environment. Go to Orbix Network → Settings and click Connect YouTube to see the exact .env lines.';
-      const err = new Error('YouTube OAuth not configured (missing YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, or YOUTUBE_REDIRECT_URI). ' + where);
+    if (!hasRedirectUri) {
+      const err = new Error('YouTube OAuth not configured (missing YOUTUBE_REDIRECT_URI). Set it in .env or Railway Environment.');
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;
     }
-    writeProgressLog('YT_GETCLIENT_ENV_OK', { businessId });
 
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
     writeProgressLog('YT_GETCLIENT_SETTINGS_DONE', { businessId, hasSettings: !!moduleSettings });
@@ -82,13 +87,15 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
       console.warn('[YouTube Publisher] No refresh_token for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'n/a');
     }
 
+    const { clientId, clientSecret } = resolveOAuthCredentials(yt, process.env.YOUTUBE_CLIENT_ID, process.env.YOUTUBE_CLIENT_SECRET);
+    if (!clientId || !clientSecret) {
+      const err = new Error('YouTube OAuth not configured. Use global env (YOUTUBE_CLIENT_ID/SECRET) or set a custom OAuth app for this channel in Settings.');
+      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+      throw err;
+    }
     const raw = process.env.YOUTUBE_REDIRECT_URI || '';
     const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.YOUTUBE_CLIENT_ID,
-      process.env.YOUTUBE_CLIENT_SECRET,
-      redirectUri
-    );
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
     const expiryDate = yt.token_expiry ? new Date(yt.token_expiry).getTime() : null;
     oauth2Client.setCredentials({
