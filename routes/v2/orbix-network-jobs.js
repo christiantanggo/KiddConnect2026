@@ -1024,12 +1024,13 @@ export async function runScheduledPipelineCheck() {
 
         // Calculate min interval between consecutive run times (in minutes)
         const sortedRunMinutes = [...pipelineRunMinutes].sort((a, b) => a - b);
-        let minIntervalMins = 180; // fallback 3 hours
+        let minIntervalMins = sortedRunMinutes.length > 1 ? 180 : 60; // single-slot: 60min fallback
         for (let i = 1; i < sortedRunMinutes.length; i++) {
           minIntervalMins = Math.min(minIntervalMins, sortedRunMinutes[i] - sortedRunMinutes[i - 1]);
         }
         // Allow re-run if (interval - 10 min) has elapsed since last run
-        const rerunThresholdMins = Math.max(30, minIntervalMins - 10);
+        // Minimum floor of 20min to prevent rapid double-runs during testing
+        const rerunThresholdMins = Math.max(20, minIntervalMins - 10);
 
         // Check when we last ran the pipeline for this business
         const lastRunISO = moduleSettings?.settings?.last_pipeline_run_at;
@@ -1189,17 +1190,20 @@ export async function runPublishJob() {
         }
 
         for (const render of completedRenders) {
-          // Skip if already published
+          // Skip if already published AND has a real YouTube URL (not a failed/empty publish)
           const { data: existingPublish } = await supabaseClient
             .from('orbix_publishes')
-            .select('id')
+            .select('id, youtube_url')
             .eq('render_id', render.id)
             .eq('publish_status', 'PUBLISHED')
             .maybeSingle();
 
-          if (existingPublish) {
-            console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already published, skipping`);
+          if (existingPublish?.youtube_url) {
+            console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already published at ${existingPublish.youtube_url}, skipping`);
             continue;
+          }
+          if (existingPublish && !existingPublish.youtube_url) {
+            console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} has PUBLISHED record but no youtube_url — retrying upload`);
           }
 
           try {
