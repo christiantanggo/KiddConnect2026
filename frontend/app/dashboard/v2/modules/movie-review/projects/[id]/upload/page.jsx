@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
-import { ChevronLeft, Loader2, CheckCircle, XCircle, Upload, ExternalLink } from 'lucide-react';
+import { ChevronLeft, Loader2, CheckCircle, XCircle, Upload, ExternalLink, Sparkles } from 'lucide-react';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
@@ -71,6 +71,8 @@ export default function MovieReviewUploadPage() {
   const [error, setError] = useState(null);
   const [ytConnected, setYtConnected] = useState(null);
   const [savingMeta, setSavingMeta] = useState(false);
+  const [polishing, setPolishing] = useState(false);
+  const [polishMsg, setPolishMsg] = useState(null);
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -127,6 +129,35 @@ export default function MovieReviewUploadPage() {
       });
     } catch (_) {}
     setSavingMeta(false);
+  }
+
+  async function polishText() {
+    setPolishing(true);
+    setPolishMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/ai/polish`, {
+        method: 'POST', headers: apiHeaders(),
+        body: JSON.stringify({
+          yt_title: project.yt_title,
+          yt_description: project.yt_description,
+          yt_hashtags: project.yt_hashtags,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Polish failed');
+      setProject(p => ({
+        ...p,
+        yt_title: data.yt_title ?? p.yt_title,
+        yt_description: data.yt_description ?? p.yt_description,
+        yt_hashtags: data.yt_hashtags ?? p.yt_hashtags,
+      }));
+      setPolishMsg('✅ Text polished!');
+      setTimeout(() => setPolishMsg(null), 3000);
+    } catch (err) {
+      setPolishMsg('❌ ' + err.message);
+    } finally {
+      setPolishing(false);
+    }
   }
 
   async function uploadToYouTube() {
@@ -212,7 +243,29 @@ export default function MovieReviewUploadPage() {
             <div className="space-y-4">
               {/* Metadata form */}
               <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-                <h2 className="font-bold text-base mb-4" style={{ color: 'var(--color-text-main)' }}>📝 YouTube Metadata</h2>
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="font-bold text-base" style={{ color: 'var(--color-text-main)' }}>📝 YouTube Metadata</h2>
+                  <button
+                    onClick={polishText}
+                    disabled={polishing}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all"
+                    style={{
+                      background: polishing ? '#9ca3af' : 'linear-gradient(135deg,#6366f1,#9333ea)',
+                      color: '#fff',
+                      cursor: polishing ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {polishing
+                      ? <><Loader2 className="w-3 h-3 animate-spin" /> Polishing…</>
+                      : <><Sparkles className="w-3 h-3" /> Auto-Fix Text</>}
+                  </button>
+                </div>
+                {polishMsg && (
+                  <div className="text-xs mb-3 px-3 py-2 rounded-lg"
+                    style={{ background: polishMsg.startsWith('✅') ? 'rgba(5,150,105,0.1)' : '#fee2e2', color: polishMsg.startsWith('✅') ? '#059669' : '#dc2626' }}>
+                    {polishMsg}
+                  </div>
+                )}
 
                 <div className="space-y-3">
                   <div>

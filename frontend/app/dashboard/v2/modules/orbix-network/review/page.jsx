@@ -9,7 +9,7 @@ import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
 import { useOrbixChannel } from '../OrbixChannelContext';
-import { ArrowLeft, Loader, CheckCircle, XCircle, Edit, X } from 'lucide-react';
+import { ArrowLeft, Loader, CheckCircle, XCircle, Edit, X, CheckCheck, RefreshCw } from 'lucide-react';
 
 export default function OrbixNetworkReviewPage() {
   const router = useRouter();
@@ -20,6 +20,8 @@ export default function OrbixNetworkReviewPage() {
   const [selectedItem, setSelectedItem] = useState(null);
   const [editingHook, setEditingHook] = useState(false);
   const [hookText, setHookText] = useState('');
+  const [approvingAll, setApprovingAll] = useState(false);
+  const [rewritingStoryId, setRewritingStoryId] = useState(null);
 
   useEffect(() => {
     if (!currentChannelId) {
@@ -85,6 +87,25 @@ export default function OrbixNetworkReviewPage() {
     }
   };
 
+  const handleRewriteScript = async (storyId) => {
+    try {
+      setRewritingStoryId(storyId);
+      await orbixNetworkAPI.generateScriptForStory(storyId, apiParams());
+      success('Script regenerated');
+      const response = await orbixNetworkAPI.getReviewQueue(apiParams());
+      const nextItems = response.data.items || [];
+      setItems(nextItems);
+      const updated = nextItems.find((i) => i.orbix_stories?.id === storyId);
+      if (updated) setSelectedItem(updated);
+    } catch (error) {
+      console.error('Failed to rewrite script:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to regenerate script');
+    } finally {
+      setRewritingStoryId(null);
+    }
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return 'N/A';
     // Parse date string (assume UTC if no timezone info)
@@ -135,6 +156,17 @@ export default function OrbixNetworkReviewPage() {
               <h1 className="text-3xl font-bold mb-2">Review Queue</h1>
               <p className="text-gray-600">Review and approve stories before rendering</p>
             </div>
+            {items.length > 0 && (
+              <button
+                type="button"
+                onClick={handleApproveAll}
+                disabled={approvingAll}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-60 disabled:cursor-not-allowed font-medium"
+              >
+                {approvingAll ? <Loader className="w-5 h-5 animate-spin" /> : <CheckCheck className="w-5 h-5" />}
+                {approvingAll ? 'Approving…' : 'Approve All'}
+              </button>
+            )}
           </div>
 
           {/* Review Queue List */}
@@ -253,16 +285,36 @@ export default function OrbixNetworkReviewPage() {
                             <div className="flex justify-between items-center mb-2">
                               <h3 className="font-semibold text-lg">Script</h3>
                               {!editingHook && (
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setEditingHook(true);
-                                  }}
-                                  className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
-                                >
-                                  <Edit className="w-4 h-4" />
-                                  Edit Hook
-                                </button>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRewriteScript(story.id);
+                                    }}
+                                    disabled={rewritingStoryId === story.id}
+                                    className="px-3 py-1.5 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                                    title="Regenerate the script (same as money/psychology/facts)"
+                                  >
+                                    {rewritingStoryId === story.id ? (
+                                      <Loader className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                      <>
+                                        <RefreshCw className="w-4 h-4" />
+                                        Rewrite
+                                      </>
+                                    )}
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setEditingHook(true);
+                                    }}
+                                    className="text-sm text-blue-600 hover:text-blue-800 flex items-center gap-1"
+                                  >
+                                    <Edit className="w-4 h-4" />
+                                    Edit Hook
+                                  </button>
+                                </div>
                               )}
                             </div>
                             
@@ -299,36 +351,47 @@ export default function OrbixNetworkReviewPage() {
                               </div>
                             ) : (
                               <div className="space-y-3 bg-gray-50 rounded-lg p-4">
-                                {script.hook && (
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-700 mb-1">Hook:</p>
-                                    <p className="text-gray-900">{script.hook}</p>
-                                  </div>
-                                )}
-                                {script.what_happened && (
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-700 mb-1">What Happened:</p>
-                                    <p className="text-gray-600">{script.what_happened}</p>
-                                  </div>
-                                )}
-                                {script.why_it_matters && (
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-700 mb-1">Why It Matters:</p>
-                                    <p className="text-gray-600">{script.why_it_matters}</p>
-                                  </div>
-                                )}
-                                {script.what_happens_next && (
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-700 mb-1">What Happens Next:</p>
-                                    <p className="text-gray-600">{script.what_happens_next}</p>
-                                  </div>
-                                )}
-                                {script.cta_line && (
-                                  <div>
-                                    <p className="text-sm font-medium text-gray-700 mb-1">Call to Action:</p>
-                                    <p className="text-gray-600">{script.cta_line}</p>
-                                  </div>
-                                )}
+                                {(() => {
+                                  const cat = (story?.category || '').toLowerCase();
+                                  const isShortsNative = cat === 'psychology' || cat === 'money' || cat === 'facts';
+                                  const labelTwist = isShortsNative ? 'Twist' : 'What Happened';
+                                  const labelPayoff = isShortsNative ? 'Payoff' : 'Why It Matters';
+                                  const labelLoop = isShortsNative ? 'Loop' : 'What Happens Next';
+                                  return (
+                                    <>
+                                      {script.hook && (
+                                        <div>
+                                          <p className="text-sm font-medium text-gray-700 mb-1">Hook:</p>
+                                          <p className="text-gray-900">{script.hook}</p>
+                                        </div>
+                                      )}
+                                      {script.what_happened && (
+                                        <div>
+                                          <p className="text-sm font-medium text-gray-700 mb-1">{labelTwist}:</p>
+                                          <p className="text-gray-600">{script.what_happened}</p>
+                                        </div>
+                                      )}
+                                      {script.why_it_matters && (
+                                        <div>
+                                          <p className="text-sm font-medium text-gray-700 mb-1">{labelPayoff}:</p>
+                                          <p className="text-gray-600">{script.why_it_matters}</p>
+                                        </div>
+                                      )}
+                                      {script.what_happens_next && (
+                                        <div>
+                                          <p className="text-sm font-medium text-gray-700 mb-1">{labelLoop}:</p>
+                                          <p className="text-gray-600">{script.what_happens_next}</p>
+                                        </div>
+                                      )}
+                                      {script.cta_line && (
+                                        <div>
+                                          <p className="text-sm font-medium text-gray-700 mb-1">Call to Action:</p>
+                                          <p className="text-gray-600">{script.cta_line}</p>
+                                        </div>
+                                      )}
+                                    </>
+                                  );
+                                })()}
                               </div>
                             )}
                           </div>

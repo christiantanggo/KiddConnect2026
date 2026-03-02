@@ -64,6 +64,8 @@ router.get('/setup/status', async (req, res) => {
       auto_upload_enabled: moduleSettings?.settings?.auto_upload_enabled !== false,
       enable_intro_hook: moduleSettings?.settings?.enable_intro_hook === true,
       slot_times: Array.isArray(moduleSettings?.settings?.posting_schedule?.slot_times) ? moduleSettings.settings.posting_schedule.slot_times : [],
+      pipeline_run_times: Array.isArray(moduleSettings?.settings?.posting_schedule?.pipeline_run_times) ? moduleSettings.settings.posting_schedule.pipeline_run_times : [],
+      last_pipeline_run_at: moduleSettings?.settings?.last_pipeline_run_at ?? null,
       current_step: setupState?.current_step || 1,
       completed_steps: setupState?.completed_steps || [],
       is_complete: isComplete,
@@ -224,7 +226,9 @@ router.post('/setup/save', async (req, res) => {
             end: stepData.posting_window_end ?? current.posting_schedule?.end ?? '20:00',
             timezone: stepData.posting_timezone ?? current.posting_schedule?.timezone ?? 'America/New_York',
             // slot_times: array of "HH:mm" strings — empty array = use defaults (8am,11am,2pm,5pm,8pm)
-            slot_times: Array.isArray(stepData.slot_times) ? stepData.slot_times : (current.posting_schedule?.slot_times ?? [])
+            slot_times: Array.isArray(stepData.slot_times) ? stepData.slot_times : (current.posting_schedule?.slot_times ?? []),
+            // pipeline_run_times: array of "HH:mm" strings — empty array = auto (1 hour before each post slot)
+            pipeline_run_times: Array.isArray(stepData.pipeline_run_times) ? stepData.pipeline_run_times : (current.posting_schedule?.pipeline_run_times ?? [])
           }
         };
         await ModuleSettings.update(businessId, MODULE_KEY, next);
@@ -297,7 +301,8 @@ router.post('/setup/complete', async (req, res) => {
         start: setupState?.setup_data?.step4?.posting_window_start ?? '07:00',
         end: setupState?.setup_data?.step4?.posting_window_end ?? '20:00',
         timezone: setupState?.setup_data?.step4?.posting_timezone ?? 'America/New_York',
-        slot_times: Array.isArray(setupState?.setup_data?.step4?.slot_times) ? setupState.setup_data.step4.slot_times : []
+        slot_times: Array.isArray(setupState?.setup_data?.step4?.slot_times) ? setupState.setup_data.step4.slot_times : [],
+        pipeline_run_times: Array.isArray(setupState?.setup_data?.step4?.pipeline_run_times) ? setupState.setup_data.step4.pipeline_run_times : []
       }
     };
     

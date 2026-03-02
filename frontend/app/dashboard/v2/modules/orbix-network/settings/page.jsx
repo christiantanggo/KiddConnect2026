@@ -31,7 +31,7 @@ const TIMEZONES = [
 
 // ─── Global settings (not per-channel) ───────────────────────────────────────
 
-function GlobalSettingsSection({ settings, setSettings, saving, onSave }) {
+function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTriggerPipeline, triggeringPipeline }) {
   return (
     <div className="space-y-6">
       {/* Review Preferences */}
@@ -168,11 +168,11 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave }) {
           </div>
           <p className="text-xs text-gray-400 -mt-3">Videos will only post within this window. Posts outside the window are skipped until the next day.</p>
 
-          {/* Custom slot times */}
+          {/* Post times */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Post times</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">📤 Post times</label>
             <p className="text-xs text-gray-400 mb-3">
-              Each time = one video posted. The pipeline runs 1 hour before each slot to scrape &amp; render.
+              Each time = one video posted to YouTube.
               {settings.slot_times.length === 0 && ' Using defaults: 8am, 11am, 2pm, 5pm, 8pm.'}
             </p>
             <div className="space-y-2">
@@ -200,7 +200,6 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave }) {
             </div>
             <button
               onClick={() => {
-                // Default new slot to 1 hour after the last slot, or 09:00
                 const last = settings.slot_times[settings.slot_times.length - 1];
                 let next = '09:00';
                 if (last) {
@@ -226,23 +225,126 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave }) {
             )}
           </div>
 
-          {/* Live preview */}
-          {settings.slot_times.length > 0 && (
+          {/* Pipeline run times */}
+          <div className="border-t border-gray-100 pt-5">
+            <label className="block text-sm font-medium text-gray-700 mb-2">⚙️ Pipeline run times (scrape &amp; render)</label>
+            <p className="text-xs text-gray-400 mb-3">
+              When the system scrapes content, generates scripts, and creates videos.
+              {settings.pipeline_run_times.length === 0
+                ? ' Defaults to 1 hour before each post time. Set custom times here to override (e.g. set earlier for more buffer time).'
+                : ''}
+            </p>
+            <div className="space-y-2">
+              {settings.pipeline_run_times.map((t, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <input
+                    type="time"
+                    value={t}
+                    onChange={(e) => {
+                      const updated = [...settings.pipeline_run_times];
+                      updated[i] = e.target.value;
+                      setSettings((s) => ({ ...s, pipeline_run_times: updated.sort() }));
+                    }}
+                    className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
+                  />
+                  <button
+                    onClick={() => setSettings((s) => ({ ...s, pipeline_run_times: s.pipeline_run_times.filter((_, idx) => idx !== i) }))}
+                    className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg border border-red-200"
+                    title="Remove"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={() => {
+                const last = settings.pipeline_run_times[settings.pipeline_run_times.length - 1];
+                let next = '07:00';
+                if (last) {
+                  const [h, m] = last.split(':').map(Number);
+                  const newH = (h + 1) % 24;
+                  next = `${String(newH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                }
+                setSettings((s) => ({ ...s, pipeline_run_times: [...s.pipeline_run_times, next].sort() }));
+              }}
+              className="mt-3 flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 font-medium"
+            >
+              <Plus className="w-4 h-4" />
+              Add pipeline time
+            </button>
+            {settings.pipeline_run_times.length > 0 && (
+              <button
+                onClick={() => setSettings((s) => ({ ...s, pipeline_run_times: [] }))}
+                className="mt-2 flex items-center gap-1.5 text-xs text-gray-400 hover:text-red-500"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Reset to auto (1 hour before each post)
+              </button>
+            )}
+          </div>
+
+          {/* Pipeline status + manual trigger */}
+          <div className="border-t border-gray-100 pt-5">
+            <p className="text-sm font-medium text-gray-700 mb-2">🔁 Pipeline status</p>
+            {settings.last_pipeline_run_at ? (
+              <div className="bg-green-50 rounded-lg p-3 border border-green-100 mb-3">
+                <p className="text-xs font-medium text-green-700">✅ Last ran successfully</p>
+                <p className="text-xs text-green-600 mt-0.5">
+                  {new Date(settings.last_pipeline_run_at).toLocaleString()}
+                </p>
+              </div>
+            ) : (
+              <div className="bg-yellow-50 rounded-lg p-3 border border-yellow-100 mb-3">
+                <p className="text-xs font-medium text-yellow-700">⚠️ Pipeline has not run yet</p>
+                <p className="text-xs text-yellow-600 mt-0.5">It will run automatically at the scheduled times above once you save settings.</p>
+              </div>
+            )}
+            <button
+              onClick={onTriggerPipeline}
+              disabled={!!triggeringPipeline}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 text-sm font-medium"
+            >
+              {triggeringPipeline ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rss className="w-4 h-4" />}
+              {triggeringPipeline ? 'Running pipeline…' : 'Run pipeline now (test)'}
+            </button>
+            {triggeringPipeline && (
+              <p className="text-xs text-gray-500 mt-2">Scraping, processing, and queueing a render… this may take up to 60 seconds.</p>
+            )}
+          </div>
+
+          {/* Live schedule preview */}
+          {(settings.slot_times.length > 0 || settings.pipeline_run_times.length > 0) && (
             <div className="bg-blue-50 rounded-lg p-3 border border-blue-100">
-              <p className="text-xs font-medium text-blue-700 mb-1">Schedule preview</p>
+              <p className="text-xs font-medium text-blue-700 mb-1">📅 Schedule preview</p>
               <div className="space-y-0.5">
                 {settings.slot_times.map((t, i) => {
                   const [h, m] = t.split(':').map(Number);
-                  const pipelineH = Math.max(0, h - 1);
-                  const pipelineTime = `${String(pipelineH).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+                  const fmt = (hh, mm) => {
+                    const ampm = hh < 12 ? 'am' : 'pm';
+                    const h12 = hh % 12 || 12;
+                    return `${h12}:${String(mm).padStart(2, '0')}${ampm}`;
+                  };
+                  // Find matching pipeline time (custom or derived)
+                  const pipelineTime = settings.pipeline_run_times[i]
+                    ? (() => { const [ph, pm] = settings.pipeline_run_times[i].split(':').map(Number); return fmt(ph, pm); })()
+                    : fmt(Math.max(0, h - 1), m);
+                  return (
+                    <p key={i} className="text-xs text-blue-600">
+                      {pipelineTime} scrape &amp; render &rarr; {fmt(h, m)} post to YouTube
+                    </p>
+                  );
+                })}
+                {settings.pipeline_run_times.filter((_, i) => i >= settings.slot_times.length).map((t, i) => {
+                  const [h, m] = t.split(':').map(Number);
                   const fmt = (hh, mm) => {
                     const ampm = hh < 12 ? 'am' : 'pm';
                     const h12 = hh % 12 || 12;
                     return `${h12}:${String(mm).padStart(2, '0')}${ampm}`;
                   };
                   return (
-                    <p key={i} className="text-xs text-blue-600">
-                      {fmt(pipelineH, m)} pipeline runs &rarr; {fmt(h, m)} video posts
+                    <p key={`extra-${i}`} className="text-xs text-blue-600">
+                      {fmt(h, m)} scrape &amp; render (no matching post slot)
                     </p>
                   );
                 })}
@@ -831,9 +933,12 @@ function OrbixNetworkSettingsInner() {
     posting_window_start: '07:00',
     posting_window_end: '20:00',
     slot_times: [],
+    pipeline_run_times: [],
+    last_pipeline_run_at: null,
   });
   const [loadingSettings, setLoadingSettings] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [triggeringPipeline, setTriggeringPipeline] = useState(false);
 
   // When channels load, default active tab to ?channel= param, then current channel, then first channel
   useEffect(() => {
@@ -871,6 +976,8 @@ function OrbixNetworkSettingsInner() {
           posting_window_start: data.posting_window_start || '07:00',
           posting_window_end: data.posting_window_end || '20:00',
           slot_times: Array.isArray(data.slot_times) ? data.slot_times : [],
+          pipeline_run_times: Array.isArray(data.pipeline_run_times) ? data.pipeline_run_times : [],
+          last_pipeline_run_at: data.last_pipeline_run_at || null,
         });
       } catch (e) {
         showError('Failed to load settings');
@@ -899,12 +1006,29 @@ function OrbixNetworkSettingsInner() {
         posting_window_end: settings.posting_window_end,
         posting_timezone: settings.posting_timezone,
         slot_times: settings.slot_times,
+        pipeline_run_times: settings.pipeline_run_times,
       });
       success('Settings saved');
     } catch (e) {
       showError(handleAPIError(e).message || 'Failed to save settings');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTriggerPipeline = async () => {
+    try {
+      setTriggeringPipeline(true);
+      await orbixNetworkAPI.triggerAutomatedPipeline();
+      success('Pipeline triggered! Check the Stories and Renders tabs in ~60 seconds.');
+      // Reload settings to get updated last_pipeline_run_at
+      const res = await orbixNetworkAPI.getSetupStatus().catch(() => ({ data: { existing_data: {} } }));
+      const data = res.data?.existing_data || {};
+      setSettings((s) => ({ ...s, last_pipeline_run_at: data.last_pipeline_run_at || null }));
+    } catch (e) {
+      showError(handleAPIError(e).message || 'Failed to trigger pipeline');
+    } finally {
+      setTriggeringPipeline(false);
     }
   };
 
@@ -984,6 +1108,8 @@ function OrbixNetworkSettingsInner() {
                 setSettings={setSettings}
                 saving={saving}
                 onSave={handleSaveGlobal}
+                onTriggerPipeline={handleTriggerPipeline}
+                triggeringPipeline={triggeringPipeline}
               />
             )}
 

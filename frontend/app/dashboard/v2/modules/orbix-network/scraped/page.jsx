@@ -127,6 +127,24 @@ export default function OrbixNetworkScrapedPage() {
     });
   };
 
+  /** Get displayable story/snippet for an item (parses facts/trivia JSON so you see the actual content). */
+  const getStoryPreview = (item) => {
+    const raw = item.snippet;
+    if (!raw) return null;
+    const cat = (item.category || '').toLowerCase();
+    if (cat === 'facts' || cat === 'trivia') {
+      try {
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (cat === 'facts' && parsed.fact_text) return parsed.fact_text;
+        if (cat === 'trivia' && parsed.question) return parsed.question;
+        if (parsed.snippet) return parsed.snippet;
+      } catch (_) {
+        /* fall through to raw */
+      }
+    }
+    return raw;
+  };
+
   if (loading) {
     return (
       <AuthGuard>
@@ -279,38 +297,50 @@ export default function OrbixNetworkScrapedPage() {
                     {/* Items List */}
                     <div className="p-6">
                       <div className="space-y-4">
-                        {items.slice(0, 20).map((item) => (
-                          <div key={item.id} className="border-b border-gray-100 pb-4 last:border-0 last:pb-0">
-                            <div className="flex flex-col">
-                              <div className="flex items-start justify-between gap-3 mb-2">
-                                <p className="font-medium text-sm flex-1 line-clamp-2">{item.title || 'Untitled'}</p>
-                                <div className="flex items-center gap-2 flex-shrink-0">
-                                  {formatItemDate(item) && (
-                                    <span className="text-xs text-gray-600 whitespace-nowrap" title={item.published_at ? 'Article publish date' : 'When we scraped this item'}>
-                                      {item.published_at ? 'Published' : 'Scraped'}: {formatItemDate(item)}
-                                    </span>
-                                  )}
-                                  {getStatusBadge(item.status)}
+                        {items.slice(0, 20).map((item) => {
+                          const storyPreview = getStoryPreview(item);
+                          return (
+                            <div key={item.id} className="border-b border-gray-100 pb-4 last:border-0 last:pb-0">
+                              <div className="flex flex-col">
+                                <div className="flex items-start justify-between gap-3 mb-2">
+                                  <p className="font-medium text-sm flex-1 line-clamp-2">{item.title || 'Untitled'}</p>
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    {item.category && (
+                                      <span className="px-2 py-0.5 text-xs bg-gray-100 text-gray-700 rounded">
+                                        {item.category}
+                                      </span>
+                                    )}
+                                    {formatItemDate(item) && (
+                                      <span className="text-xs text-gray-600 whitespace-nowrap" title={item.published_at ? 'Article publish date' : 'When we scraped this item'}>
+                                        {item.published_at ? 'Published' : 'Scraped'}: {formatItemDate(item)}
+                                      </span>
+                                    )}
+                                    {getStatusBadge(item.status)}
+                                  </div>
                                 </div>
+                                {storyPreview && (
+                                  <div className="mt-2 p-3 rounded-lg bg-gray-50 border border-gray-100">
+                                    <p className="text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Story / snippet</p>
+                                    <p className="text-sm text-gray-800 whitespace-pre-wrap break-words">{storyPreview}</p>
+                                  </div>
+                                )}
+                                {item.url && (
+                                  <a
+                                    href={item.url.startsWith('http') ? item.url : undefined}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-xs text-blue-600 hover:text-blue-700 break-all flex items-center gap-1 mt-2"
+                                    title={item.url}
+                                    onClick={(e) => { if (!item.url.startsWith('http')) e.preventDefault(); }}
+                                  >
+                                    {item.url}
+                                    {item.url.startsWith('http') && <ExternalLink className="w-3 h-3 flex-shrink-0" />}
+                                  </a>
+                                )}
                               </div>
-                              {item.url && (
-                                <a
-                                  href={item.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-xs text-blue-600 hover:text-blue-700 break-all flex items-center gap-1"
-                                  title={item.url}
-                                >
-                                  {item.url}
-                                  <ExternalLink className="w-3 h-3 flex-shrink-0" />
-                                </a>
-                              )}
-                              {item.snippet && (
-                                <p className="text-xs text-gray-600 mt-2 line-clamp-2">{item.snippet}</p>
-                              )}
                             </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                         {items.length > 20 && (
                           <p className="text-sm text-gray-500 text-center pt-4">
                             Showing 20 of {items.length} items

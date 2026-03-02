@@ -953,29 +953,40 @@ function getPostSlotMinutes(posting, dailyVideoCap) {
   return null; // fallback to spread-evenly
 }
 
-/** Get pipeline run times in minutes (1 hour before each post slot). */
+/**
+ * Get pipeline run times in minutes.
+ * Uses posting_schedule.pipeline_run_times if set (user-configured).
+ * Otherwise derives them as 1 hour before each post slot.
+ */
 function getPipelineRunMinutes(posting, dailyVideoCap) {
+  // User-configured pipeline run times take priority
+  const configured = posting?.pipeline_run_times;
+  if (Array.isArray(configured) && configured.length > 0) {
+    return configured.map(t => parseTimeToMinutes(typeof t === 'string' ? t : String(t)));
+  }
+  // Derive from post slots: 1 hour before each
   const postMinutes = getPostSlotMinutes(posting, dailyVideoCap);
   if (postMinutes && postMinutes.length > 0) {
-    return postMinutes.map(m => Math.max(0, m - 60)); // 1 hour earlier
+    return postMinutes.map(m => Math.max(0, m - 60));
   }
   if (dailyVideoCap === 5) return DEFAULT_PIPELINE_RUN_MINUTES;
   return null;
 }
 
-/** Check if current time (minutes since midnight in TZ) is within WINDOW_MINS of any of the target minutes. */
-function isWithinRunWindow(currentMinutes, targetMinutesArray, windowMins = 5) {
-  if (!targetMinutesArray || targetMinutesArray.length === 0) return false;
-  for (const target of targetMinutesArray) {
-    if (Math.abs(currentMinutes - target) <= windowMins) return true;
-  }
-  return false;
-}
-
 /**
- * Scheduled pipeline check: runs full pipeline (scrape→process→render) at fixed times in each business's timezone.
- * Pipeline run times: 7:00, 10:00, 13:00, 16:00, 19:00 (1 hour before posts at 8, 11, 14, 17, 20).
- * Uses posting_schedule.timezone from settings — NOT UTC.
+ * Scheduled pipeline check — catch-up version.
+ *
+ * Instead of a narrow ±5 min window that breaks on server restarts, this uses a
+ * "minimum interval" approach:
+ *   1. We know the configured pipeline run times (e.g. 7am, 10am, 1pm, 4pm, 7pm)
+ *   2. We calculate the minimum gap between any two consecutive run times
+ *   3. If the last pipeline run was more than (gap - 10 min) ago AND we are inside
+ *      the posting window AND there is a run time that has passed since last run,
+ *      we trigger the pipeline now (catch-up).
+ *   4. If the server was down all morning and restarts at 1:03pm, it will immediately
+ *      catch up and run — not wait until 4pm.
+ *
+ * last_pipeline_run_at is stored in module settings so it survives server restarts.
  */
 export async function runScheduledPipelineCheck() {
   try {
@@ -996,14 +1007,56 @@ export async function runScheduledPipelineCheck() {
         const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
         const posting = moduleSettings?.settings?.posting_schedule || {};
         const timezone = posting.timezone ?? 'America/New_York';
+        const startStr = posting.start ?? '07:00';
+        const endStr = posting.end ?? '20:00';
+        const startMinutes = parseTimeToMinutes(startStr);
+        const endMinutes = parseTimeToMinutes(endStr);
+
         const pipelineRunMinutes = getPipelineRunMinutes(posting, dailyVideoCap);
         if (!pipelineRunMinutes || pipelineRunMinutes.length === 0) continue;
 
         const currentMinutes = getMinutesSinceMidnightInZone(timezone);
-        if (!isWithinRunWindow(currentMinutes, pipelineRunMinutes, 5)) continue;
+        const nowISO = new Date().toISOString();
 
-        console.log(`[Orbix Jobs] Scheduled pipeline run for business ${businessId} at ${timezone} (current ${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')})`);
-        // Process review queue so items past auto-approve time become APPROVED before pipeline selects stories
+        // Outside posting window entirely — don't run overnight
+        if (currentMinutes < startMinutes || currentMinutes > endMinutes) continue;
+
+        // Calculate min interval between consecutive run times (in minutes)
+        const sortedRunMinutes = [...pipelineRunMinutes].sort((a, b) => a - b);
+        let minIntervalMins = 180; // fallback 3 hours
+        for (let i = 1; i < sortedRunMinutes.length; i++) {
+          minIntervalMins = Math.min(minIntervalMins, sortedRunMinutes[i] - sortedRunMinutes[i - 1]);
+        }
+        // Allow re-run if (interval - 10 min) has elapsed since last run
+        const rerunThresholdMins = Math.max(30, minIntervalMins - 10);
+
+        // Check when we last ran the pipeline for this business
+        const lastRunISO = moduleSettings?.settings?.last_pipeline_run_at;
+        const lastRunMinsAgo = lastRunISO
+          ? (Date.now() - new Date(lastRunISO).getTime()) / 60000
+          : Infinity;
+
+        // Has a scheduled run time passed that we haven't covered yet?
+        const missedRunTime = sortedRunMinutes.some(t => t <= currentMinutes);
+
+        if (!missedRunTime) {
+          console.log(`[Orbix Pipeline] Business ${businessId}: no run time has passed yet today (current ${Math.floor(currentMinutes / 60)}:${String(currentMinutes % 60).padStart(2, '0')})`);
+          continue;
+        }
+
+        if (lastRunMinsAgo < rerunThresholdMins) {
+          console.log(`[Orbix Pipeline] Business ${businessId}: ran ${Math.round(lastRunMinsAgo)}min ago, threshold=${rerunThresholdMins}min — skipping`);
+          continue;
+        }
+
+        console.log(`[Orbix Pipeline] Business ${businessId}: running pipeline (last ran ${lastRunMinsAgo === Infinity ? 'never' : Math.round(lastRunMinsAgo) + 'min ago'}, threshold=${rerunThresholdMins}min, tz=${timezone})`);
+
+        // Save last_pipeline_run_at BEFORE running to prevent double-runs if two instances start simultaneously
+        await ModuleSettings.update(businessId, 'orbix-network', {
+          ...(moduleSettings?.settings || {}),
+          last_pipeline_run_at: nowISO,
+        });
+
         await runReviewQueueJob();
         await runAutomatedPipeline(businessId);
         pipelinesRun++;

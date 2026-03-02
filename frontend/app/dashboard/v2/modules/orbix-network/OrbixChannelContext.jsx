@@ -11,6 +11,7 @@ export function OrbixChannelProvider({ children }) {
   const [channels, setChannels] = useState([]);
   const [currentChannelId, setCurrentChannelIdState] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [channelsError, setChannelsError] = useState(null);
 
   const setCurrentChannelId = useCallback((id) => {
     setCurrentChannelIdState(id);
@@ -21,6 +22,7 @@ export function OrbixChannelProvider({ children }) {
   }, []);
 
   const refetchChannels = useCallback(async () => {
+    setChannelsError(null);
     try {
       const res = await orbixNetworkAPI.getChannels();
       const list = res.data?.channels ?? [];
@@ -35,6 +37,7 @@ export function OrbixChannelProvider({ children }) {
       }
     } catch (e) {
       console.error('[OrbixChannel] Failed to fetch channels:', e);
+      setChannelsError(e?.response?.data?.error || e?.message || 'Failed to load channels');
       setChannels([]);
       setCurrentChannelIdState(null);
     } finally {
@@ -52,6 +55,7 @@ export function OrbixChannelProvider({ children }) {
     setCurrentChannelId,
     refetchChannels,
     loading,
+    channelsError,
     apiParams: () => (currentChannelId ? { channel_id: currentChannelId } : {}),
     apiBody: () => (currentChannelId ? { channel_id: currentChannelId } : {}),
   };

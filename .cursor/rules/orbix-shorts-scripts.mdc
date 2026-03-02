@@ -1,0 +1,48 @@
+---
+description: Orbix Psychology & Money Shorts script format — tension, speed, loop cut; no educational tone
+globs: services/orbix-network/script-generator.js,**/orbix-network/**/*.js
+alwaysApply: false
+---
+
+# Orbix Psychology & Money Shorts Scripts
+
+When writing or rewriting Shorts scripts for **Orbix Psychology** and **Orbix Money**, use a **Shorts-native** style: tension, speed, discomfort, curiosity, and a **punchy ending** that drives rewatch. The story must feel complete; the last line must be a full sentence, not a literal cut-off. Avoid "educational" tone; previous rewrites that were too educational failed retention.
+
+## Non-negotiable format
+
+- **Total length:** 12–16 seconds spoken (~32–45 words).
+- **Exact structure:**
+  1. **HOOK** (max 7 words, 0–1.0s) — identity threat / contradiction / "you" statement.
+  2. **TWIST** (1–2 short lines, 1.0–6.0s) — escalates tension; no definitions.
+  3. **PAYOFF** (1 line, 6.0–10.0s) — the insight, stated sharply.
+  4. **LOOP CUT** (1 line, 10.0–16.0s) — **complete sentence** with a punch or open-ended implication that drives rewatch (no literal "..." cut-off).
+
+## Hard rules (fail if violated)
+
+- **NO** section headers: "What happened", "Why it matters", "What happens next".
+- **NO** openers: "Did you know…", "In this video…", "Let's talk about…", "Here are 3 tips…".
+- **NO** soft CTA: "Comment below", "Follow for more", "Like and subscribe".
+- **NO** long explanations, definitions, or moralizing.
+- **NO** lists in this phase (e.g. "3 signs", "5 ways").
+- **Every sentence** ≤ 9 words on average (short, punchy).
+- **Must include at least ONE of:** threat, ego trigger, regret, secret, conflict.
+
+## Output requirements (when generating scripts)
+
+For each idea, produce:
+
+- **A)** 3 script variants (A/B/C) following the structure above.
+- **B)** On-screen caption lines (max 6 words per line).
+- **C)** A "Hard Cut" ending phrase — full sentence with punch (e.g. "And that's why you still lose.") that makes viewers rewatch; no literally incomplete endings.
+
+## Acceptance check (self-verify)
+
+- Word count 32–45 words.
+- Hook ≤ 7 words.
+- No banned phrases (see Hard rules).
+- Loop cut is a complete sentence that creates rewatch (no trailing "...").
+- Reads fast; no "teaching" tone.
+
+## Implementation note
+
+When updating `script-generator.js` prompts or rewrite logic for psychology/money, align the LLM system/user prompts and any validation (e.g. hook word count, banned starts) with this structure. Map fields as needed (e.g. hook → hook; twist → body line 1–2; payoff → insight line; loop cut → final line / what_happens_next as cliffhanger only).

@@ -24,6 +24,7 @@ export default function OrbixNetworkStoriesPage() {
     days: 'all' // 'all' | '30' | '7' - see past scraped stories
   });
   const [cleaningUp, setCleaningUp] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     if (!currentChannelId) {
@@ -127,6 +128,23 @@ export default function OrbixNetworkStoriesPage() {
       console.error('Failed to force render:', error);
       const errorInfo = handleAPIError(error);
       showErrorToast(errorInfo.message || 'Failed to force render');
+    }
+  };
+
+  const handleDeleteStory = async (storyId, deleteRawItem = false) => {
+    if (!confirm('Delete this story? It will be removed from the pipeline.' + (deleteRawItem ? ' The underlying scraped item will also be deleted.' : ''))) return;
+    setDeletingId(storyId);
+    try {
+      await orbixNetworkAPI.deleteStory(storyId, apiParams(), { delete_raw_item: deleteRawItem });
+      success('Story deleted');
+      loadStories();
+      setSelectedStory(null);
+    } catch (error) {
+      console.error('Failed to delete story:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to delete story');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -327,7 +345,33 @@ export default function OrbixNetworkStoriesPage() {
                   </div>
 
                   {/* Action buttons */}
-                  <div className="flex gap-4 pt-4 border-t border-gray-200">
+                  <div className="flex flex-wrap gap-4 pt-4 border-t border-gray-200">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDeleteStory(selectedStory.id, false);
+                      }}
+                      disabled={deletingId === selectedStory.id}
+                      className="px-4 py-2 text-red-600 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2 disabled:opacity-50"
+                      title="Delete story so it doesn't hang in the pipeline"
+                    >
+                      {deletingId === selectedStory.id ? <Loader className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      Delete story
+                    </button>
+                    {selectedStory.raw_item_id && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteStory(selectedStory.id, true);
+                        }}
+                        disabled={deletingId === selectedStory.id}
+                        className="px-4 py-2 text-red-700 bg-red-100 hover:bg-red-200 rounded-lg flex items-center gap-2 disabled:opacity-50"
+                        title="Delete story and the scraped item"
+                      >
+                        {deletingId === selectedStory.id ? <Loader className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                        Delete story + scraped item
+                      </button>
+                    )}
                     {selectedStory.status === 'REJECTED' && (
                       <button
                         onClick={(e) => {

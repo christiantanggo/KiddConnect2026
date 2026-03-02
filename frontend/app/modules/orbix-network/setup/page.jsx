@@ -226,8 +226,17 @@ function OrbixNetworkSetupWizardContent() {
     try {
       setConnectingYouTube(true);
       const response = await orbixNetworkAPI.getYoutubeAuthUrl(youtubeParams());
-      // Redirect to YouTube OAuth
-      window.location.href = response.data.auth_url;
+      if (response.data?.configured === false) {
+        const msg = response.data?.setup_instructions?.short || response.data?.message || 'YouTube OAuth not configured. Add YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REDIRECT_URI to backend .env and restart. See Orbix Network → Settings for full instructions.';
+        showErrorToast(msg);
+        setConnectingYouTube(false);
+        return;
+      }
+      if (response.data?.auth_url) {
+        window.location.href = response.data.auth_url;
+      } else {
+        setConnectingYouTube(false);
+      }
     } catch (error) {
       console.error('Failed to get YouTube auth URL:', error);
       const errorInfo = handleAPIError(error);
@@ -654,14 +663,15 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
   const handleSubmit = async (e) => {
     e.preventDefault();
     const isWikipedia = formData.type === 'WIKIPEDIA';
-    const defaultName = isWikipedia ? (formData.category_hint === 'money' ? 'Money (Wikipedia)' : 'Psychology (Wikipedia)') : '';
+    const isFacts = formData.type === 'WIKIDATA_FACTS';
+    const defaultName = isWikipedia ? (formData.category_hint === 'money' ? 'Money (Wikipedia)' : 'Psychology (Wikipedia)') : isFacts ? 'Wikidata Facts' : '';
     const name = (formData.name || '').trim() || defaultName;
     const url = (formData.url || '').trim();
     if (!name) {
       showErrorToast('Source name is required');
       return;
     }
-    if (!isWikipedia && !url) {
+    if (!isWikipedia && !isFacts && !url) {
       showErrorToast('URL is required for this source type');
       return;
     }
@@ -733,6 +743,8 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
                   const v = e.target.value;
                   if (v === 'WIKIPEDIA_MONEY') {
                     setFormData({ ...formData, type: 'WIKIPEDIA', category_hint: 'money' });
+                  } else if (v === 'WIKIDATA_FACTS') {
+                    setFormData({ ...formData, type: 'WIKIDATA_FACTS', url: formData.type === 'WIKIDATA_FACTS' ? formData.url : 'facts://', category_hint: '' });
                   } else {
                     setFormData({ ...formData, type: v, category_hint: v === 'WIKIPEDIA' ? null : '' });
                   }
@@ -743,20 +755,21 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
                 <option value="HTML">HTML Page</option>
                 <option value="WIKIPEDIA">Wikipedia (Psychology)</option>
                 <option value="WIKIPEDIA_MONEY">Wikipedia (Money)</option>
+                <option value="WIKIDATA_FACTS">Wikidata Facts</option>
               </select>
             </div>
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                URL {formData.type !== 'WIKIPEDIA' ? '*' : '(optional for Wikipedia)'}
+                URL {formData.type !== 'WIKIPEDIA' && formData.type !== 'WIKIDATA_FACTS' ? '*' : (formData.type === 'WIKIDATA_FACTS' ? '(optional: e.g. Q30 or Q30,P1082)' : '(optional for Wikipedia)')}
               </label>
               <input
                 type="url"
                 value={formData.url}
                 onChange={(e) => setFormData({ ...formData, url: e.target.value })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-                placeholder={formData.type === 'WIKIPEDIA' ? (formData.category_hint === 'money' ? 'Uses default money categories' : 'Uses default psychology categories') : 'https://example.com/feed.xml'}
-                required={formData.type !== 'WIKIPEDIA'}
+                placeholder={formData.type === 'WIKIPEDIA' ? (formData.category_hint === 'money' ? 'Uses default money categories' : 'Uses default psychology categories') : formData.type === 'WIKIDATA_FACTS' ? 'Leave blank for random facts, or e.g. Q30' : 'https://example.com/feed.xml'}
+                required={formData.type !== 'WIKIPEDIA' && formData.type !== 'WIKIDATA_FACTS'}
               />
             </div>
 

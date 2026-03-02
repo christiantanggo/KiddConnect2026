@@ -70,7 +70,7 @@ function StepBar({ step, steps, onStep }) {
 // ─── Fact Check + Script Panel (Step 0) ───────────────────────────────────────
 function FactCheckPanel({ projectId, project, onProjectUpdate }) {
   const [chatMessages, setChatMessages] = useState([
-    { role: 'assistant', content: `Hey! I'm your movie research assistant. Ask me anything about "${project?.movie_title || 'your movie'}" — plot, cast, trivia, facts — and I'll help you build a great script!` }
+    { role: 'assistant', content: `Hey! I'm your movie research assistant. Ask me anything — plot, cast, trivia, fun facts, quotes — and I'll help you build a great script to record!` }
   ]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -144,7 +144,7 @@ function FactCheckPanel({ projectId, project, onProjectUpdate }) {
         <div className="px-4 pt-4 pb-2">
           <h2 className="font-bold text-base mb-0.5" style={{ color: 'var(--color-text-main)' }}>🔍 Research & Fact Check</h2>
           <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-            Ask the AI about {project?.movie_title || 'your movie'} to gather facts, quotes, and talking points before you record.
+            Ask the AI anything about your movie to gather facts, quotes, and talking points before you record.
           </p>
         </div>
         <div className="px-4 py-3 space-y-3 overflow-y-auto" style={{ maxHeight: 300 }}>
@@ -174,7 +174,7 @@ function FactCheckPanel({ projectId, project, onProjectUpdate }) {
             value={chatInput}
             onChange={e => setChatInput(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChat()}
-            placeholder={`Ask about ${project?.movie_title || 'this movie'}…`}
+            placeholder="Ask anything about the movie…"
             className="flex-1 px-3 py-2 rounded-xl text-sm"
             style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
           />
@@ -274,7 +274,17 @@ const VOICE_EFFECTS = [
   { id: 'echo',     label: 'Echo',     emoji: '🏔️', desc: 'Adds reverb echo' },
 ];
 
+const TTS_VOICE_OPTIONS = [
+  { id: 'nova',    label: 'Nova',    emoji: '⭐', desc: 'Warm & friendly (girl)' },
+  { id: 'shimmer', label: 'Shimmer', emoji: '✨', desc: 'Soft & clear (girl)' },
+  { id: 'alloy',   label: 'Alloy',   emoji: '🔷', desc: 'Neutral & balanced' },
+  { id: 'echo',    label: 'Echo',    emoji: '🔵', desc: 'Smooth & confident (boy)' },
+  { id: 'fable',   label: 'Fable',   emoji: '📖', desc: 'Expressive storyteller' },
+  { id: 'onyx',    label: 'Onyx',    emoji: '🖤', desc: 'Deep & powerful (boy)' },
+];
+
 function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
+  const [voiceMode, setVoiceMode] = useState('record'); // 'record' | 'ai'
   const [recording, setRecording] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
@@ -294,6 +304,8 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
   const [activeEffect, setActiveEffect] = useState('normal');
   const [applyingEffect, setApplyingEffect] = useState(false);
   const [showScript, setShowScript] = useState(true);
+  const [ttsVoice, setTtsVoice] = useState('nova');
+  const [ttsLoading, setTtsLoading] = useState(false);
 
   // Load available microphones on mount
   useEffect(() => {
@@ -430,6 +442,27 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
     }
   }
 
+  async function generateAIVoice() {
+    if (!scriptText?.trim()) {
+      setError('Generate a script first on the Research screen — the AI voice needs text to read!');
+      return;
+    }
+    setTtsLoading(true);
+    setError(null);
+    try {
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/voice/tts`, {
+        script_text: scriptText,
+        voice: ttsVoice,
+      });
+      setLocalUrl(null);
+      onVoiceChange(data.asset);
+    } catch (err) {
+      setError('AI Voice failed: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setTtsLoading(false);
+    }
+  }
+
   const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   const hasVoice = !!voiceAsset?.public_url;
@@ -439,8 +472,8 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
 
   return (
     <div className="space-y-4">
-      {/* Teleprompter */}
-      {scriptText && (
+      {/* Teleprompter — only show in record mode */}
+      {scriptText && voiceMode === 'record' && (
         <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f1a', border: '1px solid #9333ea' }}>
           <button
             onClick={() => setShowScript(s => !s)}
@@ -462,12 +495,87 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
       )}
 
       <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-        <h2 className="font-bold text-base mb-1" style={{ color: 'var(--color-text-main)' }}>🎙️ Voice Recording</h2>
-        <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
-          {scriptText ? 'Read your script above while recording.' : 'Record yourself talking about the movie. This will be the audio track of your Short.'}
-        </p>
+        <h2 className="font-bold text-base mb-3" style={{ color: 'var(--color-text-main)' }}>🎙️ Voice</h2>
+
+        {/* Mode tabs */}
+        <div className="flex rounded-xl overflow-hidden mb-4" style={{ border: '1px solid var(--color-border)' }}>
+          {[
+            { id: 'record', label: '🎙️ Record Yourself' },
+            { id: 'ai',     label: '🤖 AI Voice' },
+          ].map(tab => (
+            <button key={tab.id} onClick={() => { setVoiceMode(tab.id); setError(null); }}
+              className="flex-1 py-2 text-sm font-semibold transition-all"
+              style={{
+                background: voiceMode === tab.id ? 'linear-gradient(135deg,#e11d48,#9333ea)' : 'var(--color-bg)',
+                color: voiceMode === tab.id ? '#fff' : 'var(--color-text-muted)',
+              }}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
         {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
+
+        {/* AI Voice mode */}
+        {voiceMode === 'ai' && (
+          <div className="space-y-4">
+            {!scriptText?.trim() && (
+              <div className="p-3 rounded-xl text-xs" style={{ background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e' }}>
+                ⚠️ Go to the <strong>Research</strong> step and generate a script first — the AI voice needs words to read!
+              </div>
+            )}
+            {scriptText?.trim() && (
+              <div className="p-3 rounded-xl text-xs" style={{ background: 'rgba(147,51,234,0.08)', border: '1px solid rgba(147,51,234,0.2)', color: 'var(--color-text-main)' }}>
+                <p className="font-semibold mb-1" style={{ color: '#9333ea' }}>📝 Script to be read:</p>
+                <p className="whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>{scriptText}</p>
+              </div>
+            )}
+
+            <div>
+              <p className="text-xs font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>Choose a voice:</p>
+              <div className="grid grid-cols-2 gap-2">
+                {TTS_VOICE_OPTIONS.map(v => (
+                  <button key={v.id} onClick={() => setTtsVoice(v.id)}
+                    className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-left transition-all"
+                    style={{
+                      background: ttsVoice === v.id ? 'linear-gradient(135deg,rgba(225,29,72,0.12),rgba(147,51,234,0.12))' : 'var(--color-bg)',
+                      border: `1px solid ${ttsVoice === v.id ? '#9333ea' : 'var(--color-border)'}`,
+                    }}>
+                    <span className="text-lg leading-none">{v.emoji}</span>
+                    <div>
+                      <p className="text-xs font-bold leading-tight" style={{ color: ttsVoice === v.id ? '#9333ea' : 'var(--color-text-main)' }}>{v.label}</p>
+                      <p className="text-xs leading-tight" style={{ color: 'var(--color-text-muted)' }}>{v.desc}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={generateAIVoice} disabled={ttsLoading || !scriptText?.trim()}
+              className="w-full py-3 rounded-xl font-bold text-white flex items-center justify-center gap-2"
+              style={{ background: ttsLoading || !scriptText?.trim() ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)', cursor: ttsLoading ? 'wait' : 'pointer' }}>
+              {ttsLoading
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating AI voice…</>
+                : <><Sparkles className="w-4 h-4" /> {hasVoice ? 'Regenerate AI Voice' : 'Generate AI Voice'}</>}
+            </button>
+
+            {hasVoice && (
+              <div className="rounded-xl p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-xs font-medium" style={{ color: 'var(--color-text-main)' }}>
+                    AI voice ready{voiceAsset?.duration_seconds ? ` · ${Math.round(voiceAsset.duration_seconds)}s` : ''}
+                  </span>
+                </div>
+                <audio key={voiceAsset?.public_url} src={voiceAsset?.public_url} controls preload="auto" className="w-full" style={{ minHeight: 44 }} />
+                <button onClick={deleteVoice} className="mt-2 text-xs underline" style={{ color: '#dc2626' }}>🗑 Remove and start over</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Record mode */}
+        {voiceMode === 'record' && (<>
 
         {/* Microphone selector */}
         {!recording && !hasVoice && !localUrl && devices.length > 1 && (
@@ -609,6 +717,7 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
             )}
           </div>
         )}
+        </>)}
       </div>
 
       <div className="rounded-2xl p-4" style={{ background: '#fef3c7', border: '1px solid #fde68a' }}>
@@ -627,6 +736,7 @@ function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
 // ─── Images panel ─────────────────────────────────────────────────────────────
 function ImagesPanel({ projectId, images, onImagesChange }) {
   const [uploading, setUploading] = useState(false);
+  const [pastingImage, setPastingImage] = useState(false);
   const [error, setError] = useState(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef(null);
@@ -654,6 +764,35 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
     uploadFiles(files);
   }
 
+  async function pasteImage() {
+    setPastingImage(true);
+    setError(null);
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      let imageBlob = null;
+      for (const item of clipboardItems) {
+        const imageType = item.types.find(t => t.startsWith('image/'));
+        if (imageType) { imageBlob = await item.getType(imageType); break; }
+      }
+      if (!imageBlob) {
+        setError('No image found in clipboard. Copy an image first (right-click → Copy Image), then tap Paste Image.');
+        return;
+      }
+      const fd = new FormData();
+      fd.append('images', imageBlob, 'pasted-image.png');
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/images`, fd);
+      onImagesChange([...images, ...data.assets]);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setError('Clipboard access denied. Allow clipboard access in your browser settings and try again.');
+      } else {
+        setError('Paste failed: ' + err.message);
+      }
+    } finally {
+      setPastingImage(false);
+    }
+  }
+
   async function deleteImage(asset) {
     if (!confirm('Remove this image?')) return;
     await api.delete(`/api/v2/movie-review/assets/${asset.id}`);
@@ -677,7 +816,7 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
       <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
         <h2 className="font-bold text-base mb-1" style={{ color: 'var(--color-text-main)' }}>🖼️ Images</h2>
         <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
-          These images will appear behind your voice on screen. Drag to reorder.
+          Upload, paste from clipboard, or drag to add images. Drag thumbnails to reorder.
         </p>
 
         {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
@@ -693,7 +832,7 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
             border: `2px dashed ${dragOver ? '#e11d48' : 'var(--color-border)'}`,
             background: dragOver ? 'rgba(225,29,72,0.05)' : 'var(--color-background)',
             padding: '24px',
-            marginBottom: images.length ? 16 : 0,
+            marginBottom: 12,
           }}
         >
           {uploading ? (
@@ -704,6 +843,24 @@ function ImagesPanel({ projectId, images, onImagesChange }) {
           <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden"
             onChange={e => uploadFiles(Array.from(e.target.files || []))} />
         </div>
+
+        {/* Paste from clipboard */}
+        <button
+          onClick={pasteImage}
+          disabled={pastingImage || uploading}
+          className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all mb-4"
+          style={{
+            border: '1px solid #6366f1',
+            color: '#6366f1',
+            background: 'var(--color-background)',
+            opacity: (pastingImage || uploading) ? 0.6 : 1,
+            cursor: (pastingImage || uploading) ? 'wait' : 'pointer',
+          }}
+        >
+          {pastingImage
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Pasting…</>
+            : <>📋 Paste Image from Clipboard</>}
+        </button>
 
         {/* Image grid */}
         {images.length > 0 && (
