@@ -763,11 +763,11 @@ try {
   }
   console.log('✅ Orbix Network scheduled pipeline (7am, 10am, 1pm, 4pm, 7pm in business timezone)');
 
-  // When no separate worker is running, the web server picks up PENDING renders every 30s,
-  // then immediately attempts YouTube upload for any newly completed render.
-  if (process.env.RUN_ORBIX_WORKER !== 'true' && typeof runOneRenderThenUpload === 'function') {
-    orbixNetworkIntervals.processPending = setInterval(runSafe(runOneRenderThenUpload, 'ProcessOne'), 30 * 1000);
-    console.log('✅ Orbix Network: web server will process PENDING renders every 30s (auto-upload to YouTube after render)');
+  // When no separate worker is running, the web server picks up PENDING renders every 30s.
+  // Renders stop at READY_FOR_UPLOAD — the scheduled publish job handles YouTube upload within the posting window.
+  if (process.env.RUN_ORBIX_WORKER !== 'true' && typeof processOnePendingRender === 'function') {
+    orbixNetworkIntervals.processPending = setInterval(runSafe(processOnePendingRender, 'ProcessOne'), 30 * 1000);
+    console.log('✅ Orbix Network: web server will process PENDING renders every 30s (upload handled by publish job within posting window)');
   }
 
   // 5. Publish Videos (every 5 minutes) — fixed post times 8am, 11am, 2pm, 5pm, 8pm in business timezone
