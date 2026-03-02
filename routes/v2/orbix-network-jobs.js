@@ -862,7 +862,8 @@ export async function runRenderByIdThenUpload(renderId) {
     if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
       await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
     }
-    uploadResult = await processOneYouTubeUpload();
+    // Upload this specific render immediately with force=true (bypasses any toggles)
+    uploadResult = await processOneYouTubeUpload({ force: true, renderId });
     console.log('[Orbix Jobs] runRenderByIdThenUpload: upload result =', uploadResult?.status || 'no-op');
   }
   return { render: result, upload: uploadResult };
@@ -1466,7 +1467,16 @@ router.post('/automated-pipeline', async (req, res) => {
     
     console.log(`[Orbix Jobs] Running automated pipeline for business ${businessId}`);
     const result = await runAutomatedPipeline(businessId);
-    res.json(result);
+
+    // Immediately upload any READY_FOR_UPLOAD renders — don't wait for the next poll
+    let uploadResults = [];
+    let uploadResult = await processOneYouTubeUpload({ force: true });
+    while (uploadResult?.processed) {
+      uploadResults.push(uploadResult);
+      uploadResult = await processOneYouTubeUpload({ force: true });
+    }
+
+    res.json({ ...result, uploads: uploadResults.length });
   } catch (error) {
     console.error('[Orbix Jobs] Automated pipeline error:', error);
     res.status(500).json({ error: 'Automated pipeline failed', message: error.message });
