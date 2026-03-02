@@ -213,8 +213,8 @@ export async function processRawItem(businessId, rawItem) {
         })
         .eq('id', rawItem.id);
       
-      // Check threshold (evergreen categories psychology/money/trivia/facts always pass)
-      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'money' || classifiedCategory === 'trivia' || classifiedCategory === 'facts';
+      // Check threshold (evergreen categories psychology/money/trivia/facts/riddle always pass)
+      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'money' || classifiedCategory === 'trivia' || classifiedCategory === 'facts' || classifiedCategory === 'riddle';
       if (!isEvergreen && !shouldProcess(scoreResult, threshold)) {
         // Mark raw item as discarded
         await supabaseClient
@@ -233,8 +233,8 @@ export async function processRawItem(businessId, rawItem) {
       const finalFactors = scoreResult.factors;
       
       // Create story (channel_id from raw item for multi-channel support)
-      // Trivia and facts are auto-approved; others start as PENDING
-      const storyStatus = (finalCategory === 'trivia' || finalCategory === 'facts') ? 'APPROVED' : 'PENDING';
+      // Trivia, facts and riddle are auto-approved; others start as PENDING
+      const storyStatus = (finalCategory === 'trivia' || finalCategory === 'facts' || finalCategory === 'riddle') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({
@@ -261,8 +261,8 @@ export async function processRawItem(businessId, rawItem) {
       return story;
     } else {
       // Use pre-calculated values
-      // Check threshold (skip for evergreen categories: psychology, money, trivia, facts — they always pass)
-      const isEvergreen = category === 'psychology' || category === 'money' || category === 'trivia' || category === 'facts';
+      // Check threshold (skip for evergreen categories: psychology, money, trivia, facts, riddle — they always pass)
+      const isEvergreen = category === 'psychology' || category === 'money' || category === 'trivia' || category === 'facts' || category === 'riddle';
       if (!isEvergreen && shockScore < threshold) {
         // Mark raw item as discarded
         await supabaseClient
@@ -276,8 +276,8 @@ export async function processRawItem(businessId, rawItem) {
       }
 
       // Create story using pre-calculated values (channel_id from raw item)
-      // Trivia and facts are auto-approved; others start as PENDING
-      const storyStatus = (category === 'trivia' || category === 'facts') ? 'APPROVED' : 'PENDING';
+      // Trivia, facts and riddle are auto-approved; others start as PENDING
+      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({
