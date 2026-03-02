@@ -44,7 +44,7 @@ async function ensureTriviaScript(businessId, story) {
   if (rawItem?.snippet) {
     try {
       const parsed = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
-      voiceScript = parsed.voice_script || null;
+      voiceScript = parsed.voice_script || parsed.tts_script || null;
       hook = parsed.hook || null;
       contentJson = parsed;
     } catch (_) { /* snippet not JSON — use as-is */ }
