@@ -582,10 +582,14 @@ async function runPipelineOnClaimedRender(render) {
  * (when no worker is running). Uses atomic claim: only the first caller to set PENDING→PROCESSING wins.
  */
 export async function processOnePendingRender() {
+  // Only process renders created in the last 2 hours — prevents a backlog building up overnight
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+
   const { data: pending } = await supabaseClient
     .from('orbix_renders')
     .select('*')
     .eq('render_status', 'PENDING')
+    .gte('created_at', twoHoursAgo)
     .order('created_at', { ascending: true })
     .limit(1)
     .maybeSingle();
