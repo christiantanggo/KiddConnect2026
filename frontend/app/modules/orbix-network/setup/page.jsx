@@ -209,7 +209,11 @@ function OrbixNetworkSetupWizardContent() {
     }
   };
 
-  const youtubeParams = () => (setupChannelId ? { channel_id: setupChannelId, from_setup: true } : { from_setup: true });
+  const youtubeParams = () => ({
+    ...(setupChannelId ? { channel_id: setupChannelId } : {}),
+    from_setup: true,
+    frontend_origin: typeof window !== 'undefined' ? window.location.origin : ''
+  });
 
   const checkYoutubeConnection = async () => {
     try {

@@ -412,8 +412,12 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
 
 function ChannelSettingsTab({ channel }) {
   const { success, error: showError } = useToast();
+  const searchParams = useSearchParams();
   const { refetchChannels } = useOrbixChannel();
-  const apiParams = useCallback(() => ({ channel_id: channel.id }), [channel.id]);
+  const apiParams = useCallback(() => ({
+    channel_id: channel.id,
+    frontend_origin: typeof window !== 'undefined' ? window.location.origin : ''
+  }), [channel.id]);
   const apiBody = useCallback(() => ({ channel_id: channel.id }), [channel.id]);
   const channelEnabled = channel.enabled !== false;
   const [togglingEnabled, setTogglingEnabled] = useState(false);
@@ -427,6 +431,9 @@ function ChannelSettingsTab({ channel }) {
   const [customOauthClientId, setCustomOauthClientId] = useState('');
   const [customOauthClientSecret, setCustomOauthClientSecret] = useState('');
   const [savingCustomOauth, setSavingCustomOauth] = useState(false);
+  const [clearingYt, setClearingYt] = useState(false);
+  const [ytRedirectUri, setYtRedirectUri] = useState(null);
+  const [loadingRedirectUri, setLoadingRedirectUri] = useState(false);
 
   // Backgrounds
   const [backgrounds, setBackgrounds] = useState([]);
@@ -482,16 +489,70 @@ function ChannelSettingsTab({ channel }) {
     return () => { cancelled = true; };
   }, [channel.id]);
 
+  // Handle OAuth callback result: show error or success and refetch
+  useEffect(() => {
+    const err = searchParams.get('error');
+    const connected = searchParams.get('youtube_connected') === 'true';
+    if (connected) {
+      success('YouTube connected successfully.');
+      orbixNetworkAPI.getYoutubeChannel(apiParams()).then((r) => {
+        setYtConnected(r.data?.connected ?? false);
+        setYtChannel(r.data?.channel ?? null);
+      }).catch(() => {});
+      return;
+    }
+    if (!err) return;
+    if (err === 'invalid_grant') {
+      showError('Google said the code was invalid or already used. Usually the redirect URI in Google Cloud does not match. Use "Show redirect URI" below, add that exact URI in Google Cloud → Credentials → your OAuth client → Authorized redirect URIs, then revoke at myaccount.google.com/permissions and try "Clear YouTube and reconnect".');
+    } else if (err === 'youtube_oauth_denied') {
+      showError('You denied access. Try connecting again when ready.');
+    } else if (err === 'youtube_oauth_failed' || err === 'youtube_oauth_error') {
+      showError('YouTube connection failed. Use "Show redirect URI" below and add that exact URI in Google Cloud → Credentials → your OAuth client, then try again.');
+    } else if (err === 'invalid_state') {
+      showError('Invalid state returned from Google. Try "Clear YouTube and reconnect".');
+    } else if (err === 'youtube_not_configured') {
+      showError('This channel has no OAuth client set. Add Client ID and Secret in the Custom OAuth section above, then try Connect again.');
+    } else if (err === 'no_channel_found') {
+      showError('Google did not return a YouTube channel. Make sure you selected a channel with YouTube access.');
+    }
+  }, [searchParams, showError, success, apiParams]);
+
   // ── YouTube handlers ──
+  const handleClearYtAndReconnect = async () => {
+    setClearingYt(true);
+    try {
+      await orbixNetworkAPI.disconnectYoutube(apiBody());
+      setYtConnected(false);
+      setYtChannel(null);
+      const res = await orbixNetworkAPI.getYoutubeAuthUrl(apiParams());
+      if (res.data?.auth_url) {
+        window.location.href = res.data.auth_url;
+        return;
+      }
+      success('YouTube cleared. Click Connect to try again.');
+    } catch (e) {
+      showError(handleAPIError(e).message || 'Failed to clear YouTube');
+    } finally {
+      setClearingYt(false);
+    }
+  };
+
   const handleConnectYt = async () => {
+    setYtSetupMsg(null);
     setConnectingYt(true);
     try {
       const res = await orbixNetworkAPI.getYoutubeAuthUrl(apiParams());
       if (res.data?.configured === false) {
-        setYtSetupMsg(res.data?.setup_instructions || res.data?.message || 'YouTube OAuth not configured. Add YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REDIRECT_URI to .env.');
+        const msg = res.data?.message || res.data?.setup_instructions?.short || 'YouTube OAuth not configured. For this channel: add Client ID and Secret in Custom OAuth below, then try again.';
+        setYtSetupMsg(msg);
+        showError(msg);
         return;
       }
-      if (res.data?.auth_url) window.location.href = res.data.auth_url;
+      if (res.data?.auth_url) {
+        window.location.href = res.data.auth_url;
+        return;
+      }
+      showError('No auth URL returned. Check backend logs.');
     } catch (e) {
       showError(handleAPIError(e).message || 'Failed to connect YouTube');
     } finally {
@@ -507,6 +568,27 @@ function ChannelSettingsTab({ channel }) {
       success('YouTube disconnected');
     } catch (e) {
       showError(handleAPIError(e).message || 'Failed to disconnect YouTube');
+    }
+  };
+
+  const handleShowRedirectUri = async () => {
+    setLoadingRedirectUri(true);
+    setYtRedirectUri(null);
+    try {
+      const res = await orbixNetworkAPI.getYoutubeAuthUrl(apiParams());
+      const uri = res.data?.redirect_uri;
+      if (uri) {
+        setYtRedirectUri(uri);
+        success('Copy the URI below into Google Cloud → Credentials → your OAuth client → Authorized redirect URIs.');
+      } else if (res.data?.configured === false) {
+        showError(res.data?.message || 'YouTube OAuth not configured for this channel.');
+      } else {
+        showError('Could not get redirect URI.');
+      }
+    } catch (e) {
+      showError(handleAPIError(e).message || 'Failed to get redirect URI');
+    } finally {
+      setLoadingRedirectUri(false);
     }
   };
 
@@ -786,22 +868,54 @@ function ChannelSettingsTab({ channel }) {
           ) : (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
               <p className="text-sm text-amber-800 mb-3">No YouTube account connected for this channel.</p>
-              <button
-                onClick={handleConnectYt}
-                disabled={connectingYt}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
-              >
-                {connectingYt ? (
-                  <><Loader className="w-4 h-4 animate-spin" /> Connecting…</>
-                ) : (
-                  <>
-                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-                      <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
-                    </svg>
-                    Connect YouTube account
-                  </>
-                )}
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  onClick={handleConnectYt}
+                  disabled={connectingYt || clearingYt}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+                >
+                  {connectingYt ? (
+                    <><Loader className="w-4 h-4 animate-spin" /> Connecting…</>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                        <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                      </svg>
+                      Connect YouTube account
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearYtAndReconnect}
+                  disabled={connectingYt || clearingYt}
+                  className="text-sm text-gray-600 hover:text-gray-900 underline disabled:opacity-50"
+                >
+                  {clearingYt ? 'Redirecting…' : 'Clear YouTube and reconnect'}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShowRedirectUri}
+                  disabled={loadingRedirectUri || connectingYt || clearingYt}
+                  className="text-sm text-gray-600 hover:text-gray-900 underline disabled:opacity-50"
+                >
+                  {loadingRedirectUri ? 'Loading…' : 'Show redirect URI (for Google Cloud)'}
+                </button>
+              </div>
+              {ytRedirectUri && (
+                <div className="mt-3 p-3 bg-slate-100 rounded-lg">
+                  <p className="text-xs font-medium text-slate-700 mb-1">Add this exact URI in Google Cloud → APIs &amp; Services → Credentials → [your OAuth 2.0 Client] → Authorized redirect URIs:</p>
+                  <code className="block text-xs text-slate-900 break-all select-all p-2 bg-white border border-slate-200 rounded">{ytRedirectUri}</code>
+                  <button
+                    type="button"
+                    onClick={() => { navigator.clipboard?.writeText(ytRedirectUri); success('Copied to clipboard'); }}
+                    className="mt-2 text-xs text-blue-600 hover:underline"
+                  >
+                    Copy
+                  </button>
+                </div>
+              )}
+              <p className="text-xs text-amber-700 mt-2">If Google says you already authorized: revoke the app at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer" className="underline">Google account → Third-party apps</a>, then use &quot;Clear YouTube and reconnect&quot;.</p>
             </div>
           )}
         </div>

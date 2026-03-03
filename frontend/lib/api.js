@@ -11,6 +11,7 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: 30000, // 30 second timeout
+  withCredentials: true, // send cookies cross-origin (e.g. tavarios.com -> api.tavarios.com)
 });
 
 // Add auth token to requests

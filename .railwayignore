@@ -19,3 +19,15 @@ archive
 .vercel
 .env
 .env.*
+# Shrink upload (backend doesn't need these at build/start)
+frontend
+docs
+.cursor
+agent-transcripts
+# More exclusions so upload finishes before CLI timeout (~30s)
+*.md
+!README.md
+**/__tests__
+**/*.test.js
+**/*.spec.js
+.storybook

@@ -894,6 +894,7 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath, st
     });
     if (isNotConnected) {
       console.log(`[Orbix Step 8] SKIP (YouTube not configured/connected) render_id=${renderId} reason="${error.message}"`);
+      console.log(`[Orbix Step 8] SKIP_REASON: ${error.message} — check .env (YOUTUBE_REDIRECT_URI, YOUTUBE_CLIENT_ID/SECRET) and Orbix Settings → channel YouTube connection.`);
       await logStepEvent(renderId, step, 'PROGRESS', 'YouTube upload skipped', { message: error.message });
       await updateStepStatus(renderId, step, 100);
       // Set READY_FOR_UPLOAD so user can view video and Force upload when YouTube is configured

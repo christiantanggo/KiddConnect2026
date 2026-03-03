@@ -2363,6 +2363,7 @@ router.get('/youtube/auth-url', async (req, res) => {
     );
     if (!clientId || !clientSecret) {
       const instructions = getYouTubeSetupInstructions(req);
+      console.log('[Orbix auth-url] configured=false: no clientId/clientSecret for channel', orbixChannelId || 'global');
       return res.status(200).json({
         configured: false,
         auth_url: null,
@@ -2408,6 +2409,10 @@ router.get('/youtube/auth-url', async (req, res) => {
     ];
     let state = orbixChannelId ? `${businessId}:${orbixChannelId}` : businessId;
     if (fromSetup) state = `${state}:setup`;
+    const frontendOrigin = (req.query.frontend_origin || '').toString().trim();
+    if (frontendOrigin && (frontendOrigin.startsWith('https://') || frontendOrigin.startsWith('http://'))) {
+      state = `${state}|${frontendOrigin}`;
+    }
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: scopes,
@@ -2415,7 +2420,8 @@ router.get('/youtube/auth-url', async (req, res) => {
       state
     });
 
-    res.json({ configured: true, auth_url: authUrl });
+    console.log('[Orbix auth-url] redirect_uri=', redirectUri, 'orbixChannelId=', orbixChannelId || 'none', 'customOAuth=', !!channelEntry?.client_id);
+    res.json({ configured: true, auth_url: authUrl, redirect_uri: redirectUri });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/auth-url] Error:', error);
     console.error('[GET /api/v2/orbix-network/youtube/auth-url] Error stack:', error.stack);

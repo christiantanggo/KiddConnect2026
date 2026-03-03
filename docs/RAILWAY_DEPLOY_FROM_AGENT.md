@@ -1,5 +1,17 @@
 # Deploying to Railway from a Cursor Agent (When `railway up` Times Out)
 
+## Direct answers
+
+| Question | Answer |
+|----------|--------|
+| **Why does it keep timing out?** | The **upload** of the full tarball from this environment to Railway’s API is too slow; the HTTP request hits the CLI’s timeout (~30s). It’s the **network**, not your code. |
+| **Is the project too large?** | The tarball is under Railway’s 45 MB limit. It’s “too large to upload in time from *this* network,” not “too large for Railway.” |
+| **Can we deploy in sections?** | **No.** The Railway CLI does **not** support chunked or delta uploads. It’s one full tarball per `railway up`. |
+| **Are we uploading the whole project?** | **Yes.** Every `railway up` uploads the **entire** (ignore-filtered) project. There is no “only changed files” option. |
+| **How do we stop it?** | **Don’t run `railway up` from the agent.** Deploy from the **Railway dashboard** (GitHub/redeploy) or run `railway up` from **your own machine**. |
+
+---
+
 ## What’s Going On
 
 When you run `railway up --service "Tavari-Communications-Agent" -d`, the Railway CLI:

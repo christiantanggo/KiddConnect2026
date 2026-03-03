@@ -5,6 +5,14 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 const router = express.Router();
 
 const MODULE_KEY = 'orbix-network';
+const DEFAULT_FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000';
+
+function getRedirectBase(stateStr) {
+  if (!stateStr || !stateStr.includes('|')) return DEFAULT_FRONTEND;
+  const idx = stateStr.lastIndexOf('|');
+  const base = stateStr.slice(idx + 1).trim();
+  return (base.startsWith('https://') || base.startsWith('http://')) ? base.replace(/\/$/, '') : DEFAULT_FRONTEND;
+}
 
 /**
  * GET /api/v2/orbix-network/youtube/callback
@@ -14,22 +22,26 @@ const MODULE_KEY = 'orbix-network';
 router.get('/youtube/callback', async (req, res) => {
   try {
     const { code, state, error } = req.query;
-    
+    const redirectBase = getRedirectBase(state || '');
+    let rest = state;
+    if (state && state.includes('|')) rest = state.slice(0, state.lastIndexOf('|'));
+    const fromSettings = !!(rest && rest.includes(':'));
+    const errPath = fromSettings ? '/dashboard/v2/modules/orbix-network/settings' : '/modules/orbix-network/setup';
+
     if (error) {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_oauth_denied`);
+      return res.redirect(`${redirectBase}${errPath}?error=youtube_oauth_denied`);
     }
-    
+
     if (!code) {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_oauth_failed`);
+      return res.redirect(`${redirectBase}${errPath}?error=youtube_oauth_failed`);
     }
-    
-    let businessId = state;
+    let businessId = rest;
     let orbixChannelId = null;
     let redirectToSetup = false;
     let isKidquiz = false;
     let isMovieReview = false;
-    if (state && state.includes(':')) {
-      const parts = state.split(':');
+    if (rest && rest.includes(':')) {
+      const parts = rest.split(':');
       if (parts[parts.length - 1] === 'setup') {
         redirectToSetup = true;
         parts.pop();
@@ -45,15 +57,15 @@ router.get('/youtube/callback', async (req, res) => {
       businessId = parts[0];
       orbixChannelId = parts.length > 1 ? parts.slice(1).join(':') : null;
     }
-    
+
     if (!businessId) {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=invalid_state`);
+      return res.redirect(`${redirectBase}/modules/orbix-network/setup?error=invalid_state`);
     }
 
     const raw = process.env.YOUTUBE_REDIRECT_URI || '';
     const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
     if (!redirectUri || redirectUri === 'https://') {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_not_configured`);
+      return res.redirect(`${redirectBase}/modules/orbix-network/setup?error=youtube_not_configured`);
     }
 
     // Use per-channel OAuth client when this channel has custom credentials (same client that generated auth URL)
@@ -69,7 +81,7 @@ router.get('/youtube/callback', async (req, res) => {
       }
     }
     if (!clientId || !clientSecret) {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_not_configured`);
+      return res.redirect(`${redirectBase}${errPath}?error=youtube_not_configured`);
     }
 
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
@@ -85,7 +97,7 @@ router.get('/youtube/callback', async (req, res) => {
       console.error('[YouTube Callback] getToken failed:', data?.error, data?.error_description, 'redirect_uri=', redirectUri);
       const isInvalidGrant = data?.error === 'invalid_grant' || tokenError?.message?.includes('invalid_grant');
       if (isInvalidGrant) {
-        return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=invalid_grant`);
+        return res.redirect(`${redirectBase}${errPath}?error=invalid_grant`);
       }
       throw tokenError;
     }
@@ -100,9 +112,9 @@ router.get('/youtube/callback', async (req, res) => {
     
     const channel = channelResponse.data.items?.[0];
     if (!channel) {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=no_channel_found`);
+      return res.redirect(`${redirectBase}${errPath}?error=no_channel_found`);
     }
-    
+
     const ytCreds = {
       channel_id: channel.id,
       channel_title: channel.snippet?.title || '',
@@ -111,15 +123,13 @@ router.get('/youtube/callback', async (req, res) => {
       token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null
     };
 
-    const base = process.env.FRONTEND_URL || 'http://localhost:3000';
-
     if (isKidquiz) {
       const kqExisting = await ModuleSettings.findByBusinessAndModule(businessId, 'kidquiz');
       const kqSettings = kqExisting?.settings ? { ...kqExisting.settings } : {};
       kqSettings.youtube = ytCreds;
       await ModuleSettings.update(businessId, 'kidquiz', kqSettings);
       console.log('[YouTube Callback] Saved YouTube credentials for KidQuiz businessId=', businessId, 'youtube_channel_id=', channel.id);
-      return res.redirect(`${base}/dashboard/v2/modules/kidquiz/settings?youtube_connected=true`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/kidquiz/settings?youtube_connected=true`);
     }
 
     if (isMovieReview) {
@@ -128,7 +138,7 @@ router.get('/youtube/callback', async (req, res) => {
       mrSettings.youtube = ytCreds;
       await ModuleSettings.update(businessId, 'movie-review', mrSettings);
       console.log('[YouTube Callback] Saved YouTube credentials for Movie Review Studio businessId=', businessId, 'youtube_channel_id=', channel.id);
-      return res.redirect(`${base}/dashboard/v2/modules/movie-review/settings?youtube_connected=true`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/movie-review/settings?youtube_connected=true`);
     }
 
     const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
@@ -152,18 +162,23 @@ router.get('/youtube/callback', async (req, res) => {
     console.log('[YouTube Callback] Saved YouTube credentials for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy', 'youtube_channel_id=', channel.id);
 
     const redirect = redirectToSetup
-      ? `${base}/modules/orbix-network/setup?youtube_connected=true`
+      ? `${redirectBase}/modules/orbix-network/setup?youtube_connected=true`
       : (orbixChannelId
-          ? `${base}/dashboard/v2/modules/orbix-network/settings?youtube_connected=true`
-          : `${base}/modules/orbix-network/setup?youtube_connected=true`);
+          ? `${redirectBase}/dashboard/v2/modules/orbix-network/settings?youtube_connected=true`
+          : `${redirectBase}/modules/orbix-network/setup?youtube_connected=true`);
     res.redirect(redirect);
   } catch (error) {
+    const redirectBase = getRedirectBase(req.query.state || '');
+    let rest = req.query.state;
+    if (rest && rest.includes('|')) rest = rest.slice(0, rest.lastIndexOf('|'));
+    const fromSettings = !!(rest && rest.includes(':'));
+    const errPath = fromSettings ? '/dashboard/v2/modules/orbix-network/settings' : '/modules/orbix-network/setup';
     const isInvalidGrant = error?.response?.data?.error === 'invalid_grant' || error?.message?.includes('invalid_grant');
     console.error('[GET /api/v2/orbix-network/youtube/callback] Error:', error?.message || error);
     if (isInvalidGrant) {
-      return res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=invalid_grant`);
+      return res.redirect(`${redirectBase}${errPath}?error=invalid_grant`);
     }
-    res.redirect(`${process.env.FRONTEND_URL || 'http://localhost:3000'}/modules/orbix-network/setup?error=youtube_oauth_error`);
+    res.redirect(`${redirectBase}${errPath}?error=youtube_oauth_error`);
   }
 });
 

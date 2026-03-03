@@ -35,6 +35,7 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
     console.log('[YouTube Publisher] getYouTubeClient businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
     const hasRedirectUri = !!process.env.YOUTUBE_REDIRECT_URI;
     if (!hasRedirectUri) {
+      console.error('[YouTube Publisher] SKIP_REASON: Missing YOUTUBE_REDIRECT_URI in .env');
       const err = new Error('YouTube OAuth not configured (missing YOUTUBE_REDIRECT_URI). Set it in .env or Railway Environment.');
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;
@@ -89,6 +90,7 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
 
     const { clientId, clientSecret } = resolveOAuthCredentials(yt, process.env.YOUTUBE_CLIENT_ID, process.env.YOUTUBE_CLIENT_SECRET);
     if (!clientId || !clientSecret) {
+      console.error('[YouTube Publisher] SKIP_REASON: No OAuth client_id/secret (env YOUTUBE_CLIENT_ID/SECRET or channel custom OAuth in Settings)');
       const err = new Error('YouTube OAuth not configured. Use global env (YOUTUBE_CLIENT_ID/SECRET) or set a custom OAuth app for this channel in Settings.');
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;

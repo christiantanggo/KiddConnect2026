@@ -22,32 +22,49 @@ function getRedirectUri() {
   return `${base}/api/v2/riddle/youtube/callback`;
 }
 
+function getRedirectBase(stateStr) {
+  if (!stateStr || !stateStr.includes('|')) return FRONTEND;
+  const idx = stateStr.lastIndexOf('|');
+  const base = stateStr.slice(idx + 1).trim();
+  return (base.startsWith('https://') || base.startsWith('http://')) ? base.replace(/\/$/, '') : FRONTEND;
+}
+
+function parseState(stateStr) {
+  const base = getRedirectBase(stateStr);
+  let rest = stateStr;
+  if (stateStr && stateStr.includes('|')) rest = stateStr.slice(0, stateStr.lastIndexOf('|'));
+  let businessId = rest;
+  let orbixChannelId = null;
+  let redirectToSetup = false;
+  if (rest && rest.includes(':')) {
+    const parts = rest.split(':');
+    if (parts[parts.length - 1] === 'setup') {
+      redirectToSetup = true;
+      parts.pop();
+    }
+    businessId = parts[0];
+    orbixChannelId = parts.length > 1 ? parts.slice(1).join(':') : null;
+  }
+  return { businessId, orbixChannelId, redirectToSetup, redirectBase: base };
+}
+
 router.get('/youtube/callback', async (req, res) => {
   try {
     const { code, state, error } = req.query;
 
+    const { redirectBase } = parseState(state || '');
+
     if (error) {
-      return res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_denied`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_denied`);
     }
     if (!code) {
-      return res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_failed`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_failed`);
     }
 
-    let businessId = state;
-    let orbixChannelId = null;
-    let redirectToSetup = false;
-    if (state && state.includes(':')) {
-      const parts = state.split(':');
-      if (parts[parts.length - 1] === 'setup') {
-        redirectToSetup = true;
-        parts.pop();
-      }
-      businessId = parts[0];
-      orbixChannelId = parts.length > 1 ? parts.slice(1).join(':') : null;
-    }
+    const { businessId, orbixChannelId, redirectToSetup } = parseState(state || '');
 
     if (!businessId || !orbixChannelId) {
-      return res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=invalid_state`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=invalid_state`);
     }
 
     const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
@@ -57,7 +74,7 @@ router.get('/youtube/callback', async (req, res) => {
     const clientSecret = (channelEntry.client_secret || '').trim();
 
     if (!clientId || !clientSecret) {
-      return res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=youtube_not_configured`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=youtube_not_configured`);
     }
 
     const redirectUri = getRedirectUri();
@@ -71,7 +88,7 @@ router.get('/youtube/callback', async (req, res) => {
       const data = tokenError?.response?.data;
       console.error('[Riddle YouTube Callback] getToken failed:', data?.error, data?.error_description);
       if (data?.error === 'invalid_grant' || tokenError?.message?.includes('invalid_grant')) {
-        return res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=invalid_grant`);
+        return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=invalid_grant`);
       }
       throw tokenError;
     }
@@ -84,7 +101,7 @@ router.get('/youtube/callback', async (req, res) => {
     });
     const channel = channelResponse.data.items?.[0];
     if (!channel) {
-      return res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=no_channel_found`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=no_channel_found`);
     }
 
     const ytCreds = {
@@ -109,16 +126,17 @@ router.get('/youtube/callback', async (req, res) => {
     console.log('[Riddle YouTube Callback] Saved credentials businessId=', businessId, 'orbixChannelId=', orbixChannelId, 'youtube_channel_id=', channel.id);
 
     const redirect = redirectToSetup
-      ? `${FRONTEND}/modules/orbix-network/setup?youtube_connected=true`
-      : `${FRONTEND}/dashboard/v2/modules/orbix-network/settings?youtube_connected=true`;
+      ? `${redirectBase}/modules/orbix-network/setup?youtube_connected=true`
+      : `${redirectBase}/dashboard/v2/modules/orbix-network/settings?youtube_connected=true`;
     res.redirect(redirect);
   } catch (err) {
+    const { redirectBase } = parseState(req.query.state || '');
     const isInvalidGrant = err?.response?.data?.error === 'invalid_grant' || err?.message?.includes('invalid_grant');
     console.error('[Riddle YouTube Callback] Error:', err?.message);
     if (isInvalidGrant) {
-      return res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=invalid_grant`);
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=invalid_grant`);
     }
-    res.redirect(`${FRONTEND}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_error`);
+    res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_error`);
   }
 });
 
