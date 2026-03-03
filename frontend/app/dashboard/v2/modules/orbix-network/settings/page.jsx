@@ -482,6 +482,13 @@ function ChannelSettingsTab({ channel }) {
         setBackgrounds(bgRes.data?.backgrounds || []);
         setMusicTracks(musicRes.data?.music || []);
         setSources(srcRes.data?.sources || []);
+        if (ytRes.data?.custom_oauth) {
+          orbixNetworkAPI.getYoutubeAuthUrl(apiParams()).then((authRes) => {
+            if (!cancelled && authRes.data?.redirect_uri) setYtRedirectUri(authRes.data.redirect_uri);
+          }).catch(() => {});
+        } else {
+          setYtRedirectUri(null);
+        }
       } catch (e) {
         if (!cancelled) showError('Failed to load channel settings');
       } finally {
@@ -787,6 +794,16 @@ function ChannelSettingsTab({ channel }) {
             {customOauth && (
               <>
                 <p className="text-xs text-green-700 font-medium">Custom OAuth app is set for this channel — uploads use that project&apos;s quota.</p>
+                <p className="text-xs text-amber-700">If you see <strong>Error 400: redirect_uri_mismatch</strong> when connecting, add the URI below in Google Cloud Console → APIs &amp; Services → Credentials → [this OAuth client] → Authorized redirect URIs.</p>
+                {ytRedirectUri ? (
+                  <div className="p-3 bg-white border border-amber-300 rounded-lg">
+                    <p className="text-xs font-medium text-slate-700 mb-1">Redirect URI — add this exact value in Google Cloud:</p>
+                    <code className="block text-xs text-slate-900 break-all select-all p-2 bg-slate-50 border border-slate-200 rounded">{ytRedirectUri}</code>
+                    <button type="button" onClick={() => { navigator.clipboard?.writeText(ytRedirectUri); success('Copied'); }} className="mt-2 text-xs text-blue-600 hover:underline font-medium">Copy</button>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">Loading redirect URI… <button type="button" onClick={handleShowRedirectUri} disabled={loadingRedirectUri} className="text-blue-600 hover:underline disabled:opacity-50">Refresh</button></p>
+                )}
                 <p className="text-xs text-amber-700">If you still see &quot;exceeded the number of videos&quot;, the limit is from YouTube (~6/day per project or your channel&apos;s limit). Set <strong>Global settings → Daily video cap</strong> to <strong>5</strong> or <strong>6</strong> so the pipeline doesn&apos;t try more than YouTube allows.</p>
               </>
             )}
@@ -828,6 +845,9 @@ function ChannelSettingsTab({ channel }) {
                     setCustomOauth(ytRes.data?.custom_oauth ?? false);
                     if (!customOauthClientId.trim()) {
                       setCustomOauthClientSecret('');
+                      setYtRedirectUri(null);
+                    } else {
+                      orbixNetworkAPI.getYoutubeAuthUrl(apiParams()).then((r) => r.data?.redirect_uri && setYtRedirectUri(r.data.redirect_uri)).catch(() => {});
                     }
                   } catch (e) {
                     showError(handleAPIError(e).message || 'Failed to save');
@@ -875,6 +895,13 @@ function ChannelSettingsTab({ channel }) {
           ) : (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
               <p className="text-sm text-amber-800 mb-3">No YouTube account connected for this channel.</p>
+              {customOauth && ytRedirectUri && (
+                <div className="mb-3 p-3 bg-white border border-amber-300 rounded-lg">
+                  <p className="text-xs font-semibold text-amber-900 mb-1">Add this in Google Cloud first (Credentials → your OAuth client → Authorized redirect URIs):</p>
+                  <code className="block text-xs text-slate-900 break-all select-all p-2 bg-slate-50 rounded mb-2">{ytRedirectUri}</code>
+                  <button type="button" onClick={() => { navigator.clipboard?.writeText(ytRedirectUri); success('Copied'); }} className="text-xs text-blue-600 hover:underline font-medium">Copy</button>
+                </div>
+              )}
               <p className="text-xs text-amber-700 mb-3">
                 First time? In Google Cloud for this OAuth client: enable <strong>YouTube Data API v3</strong> (Library), set OAuth consent to Production, and add the exact redirect URI in Credentials. Full steps: <a href="https://github.com/christiantanggo/Tavari-Communications-Agent/blob/main/docs/YOUTUBE_OAUTH_SETUP_CHECKLIST.md" target="_blank" rel="noopener noreferrer" className="underline font-medium">YOUTUBE_OAUTH_SETUP_CHECKLIST.md</a>
               </p>

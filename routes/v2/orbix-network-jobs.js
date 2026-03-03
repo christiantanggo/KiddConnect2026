@@ -767,6 +767,9 @@ export async function processOneYouTubeUpload(options = {}) {
 
   if (!candidates || candidates.length === 0) return { processed: false };
 
+  /** Minimum seconds between auto-uploads per business so we don't spam one channel (30s job + publish job both running). */
+  const UPLOAD_COOLDOWN_SECONDS = 5 * 60; // 5 minutes
+
   // Find the first candidate whose channel is enabled and hasn't hit today's cap
   let render = null;
   for (const candidate of candidates) {
@@ -778,6 +781,29 @@ export async function processOneYouTubeUpload(options = {}) {
     if (channelId != null && !enabledIds.has(channelId)) {
       console.log(`[Orbix YouTube] Channel ${channelId} is disabled, skipping render ${candidate.id}`);
       continue;
+    }
+
+    // Avoid spamming: skip if this business had any upload in the last 5 min (from 30s job or publish job)
+    const since = new Date(Date.now() - UPLOAD_COOLDOWN_SECONDS * 1000).toISOString();
+    const { data: businessRenders } = await supabaseClient
+      .from('orbix_renders')
+      .select('id')
+      .eq('business_id', businessId)
+      .order('updated_at', { ascending: false })
+      .limit(100);
+    const renderIds = (businessRenders || []).map(r => r.id);
+    if (renderIds.length > 0) {
+      const { data: recentPublish } = await supabaseClient
+        .from('orbix_publishes')
+        .select('id')
+        .eq('publish_status', 'PUBLISHED')
+        .gte('posted_at', since)
+        .in('render_id', renderIds)
+        .limit(1)
+        .maybeSingle();
+      if (recentPublish) {
+        continue; // this business had an upload in last 5 min, skip
+      }
     }
 
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
@@ -1345,6 +1371,36 @@ export async function runPublishJob() {
 
         // No slot-time gate — upload immediately whenever a render is ready.
 
+        // Channels that hit YouTube upload quota in the last 24h — skip them to avoid 20+ repeated failures
+        const quotaFailedSince = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const { data: quotaFailedPublishes } = await supabaseClient
+          .from('orbix_publishes')
+          .select('render_id')
+          .eq('business_id', businessId)
+          .eq('publish_status', 'FAILED')
+          .gte('created_at', quotaFailedSince)
+          .ilike('error_message', '%exceeded%');
+        const quotaFailedRenderIds = [...new Set((quotaFailedPublishes || []).map(p => p.render_id).filter(Boolean))];
+        let channelIdsQuotaExceeded = new Set();
+        if (quotaFailedRenderIds.length > 0) {
+          const { data: rendersWithStory } = await supabaseClient
+            .from('orbix_renders')
+            .select('story_id')
+            .in('id', quotaFailedRenderIds)
+            .eq('business_id', businessId);
+          const storyIds = (rendersWithStory || []).map(r => r.story_id).filter(Boolean);
+          if (storyIds.length > 0) {
+            const { data: stories } = await supabaseClient
+              .from('orbix_stories')
+              .select('channel_id')
+              .in('id', storyIds);
+            channelIdsQuotaExceeded = new Set((stories || []).map(s => s.channel_id).filter(Boolean));
+            if (channelIdsQuotaExceeded.size > 0) {
+              console.log(`[Orbix Publish] Business ${businessId}: skipping ${channelIdsQuotaExceeded.size} channel(s) that hit YouTube upload quota in last 24h`);
+            }
+          }
+        }
+
         // Get renders ready for upload or already completed that haven't been published yet
         const { data: allRenders, error: rendersError } = await supabaseClient
           .from('orbix_renders')
@@ -1362,6 +1418,7 @@ export async function runPublishJob() {
         for (const r of (allRenders || []).filter(r => r.output_url)) {
           const chId = r.orbix_stories?.channel_id ?? null;
           const chIdKey = chId || '__legacy__';
+          if (chId != null && channelIdsQuotaExceeded.has(chId)) continue; // quota hit recently, skip until tomorrow
           if (chId != null && !enabledChannelIds.has(chId)) continue; // skip disabled channels
           if (seen.has(chIdKey)) continue; // already queuing one for this channel this run
           const countForChannel = publishCountByChannel[chIdKey] || 0;
@@ -1470,6 +1527,22 @@ export async function runPublishJob() {
                 .maybeSingle();
             } else {
               console.error(`[Orbix Publish] Business ${businessId}: error publishing render ${render.id}:`, publishErr.message);
+              const msg = publishErr?.message || '';
+              const isQuotaLimit = msg.includes('exceeded the number of videos') || (publishErr?.responseData && String(publishErr.responseData).includes('uploadLimitExceeded'));
+              await supabaseClient
+                .from('orbix_publishes')
+                .insert({
+                  business_id: businessId,
+                  render_id: render.id,
+                  platform: 'YOUTUBE',
+                  title: render.youtube_title || 'Upload failed',
+                  publish_status: 'FAILED',
+                  error_message: msg.slice(0, 500)
+                })
+                .then(() => {});
+              if (isQuotaLimit) {
+                console.warn(`[Orbix Publish] Business ${businessId}: YouTube daily upload limit hit for this channel — will skip this channel for 24h to avoid repeated failures`);
+              }
             }
           }
         }

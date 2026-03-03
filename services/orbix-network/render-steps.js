@@ -775,10 +775,12 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath, st
       const { data: story } = await supabaseClient.from('orbix_stories').select('channel_id').eq('id', render.story_id).single();
       orbixChannelId = story?.channel_id ?? null;
     }
-    // Legacy renders (story has no channel_id): use preferred channel from request so Force Upload uses the current channel's YouTube
-    if (orbixChannelId == null && step8Options.preferredChannelId) {
+    // When user explicitly chose a channel (Force Upload from that channel's page), use that channel's YouTube/OAuth so Custom OAuth is actually used
+    if (step8Options.preferredChannelId) {
       orbixChannelId = step8Options.preferredChannelId;
-      console.log(`[Step 8 YouTube] Using preferredChannelId (legacy render) ${orbixChannelId}`);
+      console.log(`[Step 8 YouTube] Using preferredChannelId (Force Upload from channel) so this channel's OAuth is used:`, orbixChannelId);
+    } else if (orbixChannelId == null) {
+      console.log(`[Step 8 YouTube] No story channel_id and no preferredChannelId — using legacy (env) credentials`);
     }
     if (!businessId) {
       console.log('[Step 8 YouTube] SKIP: no business_id on render job');

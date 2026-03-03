@@ -765,6 +765,10 @@ router.post('/renders/:id/upload-youtube', async (req, res) => {
       const { data: storyRow } = await supabaseClient.from('orbix_stories').select('channel_id').eq('id', render.story_id).single();
       orbixChannelId = storyRow?.channel_id || null;
     }
+    if (orbixChannelId == null && channelId) {
+      orbixChannelId = channelId;
+      console.log('[POST /renders/:id/upload-youtube] Story has no channel_id; using request channel (so your Custom OAuth is used):', channelId);
+    }
     const publishOptions = orbixChannelId ? { orbixChannelId } : {};
     console.log('[POST /renders/:id/upload-youtube] Calling publishVideo title=', metadata.title?.slice(0, 40), 'orbixChannelId=', orbixChannelId || 'legacy');
     const { publishVideo, uploadCaptions } = await import('../../services/orbix-network/youtube-publisher.js');

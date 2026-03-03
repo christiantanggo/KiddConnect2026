@@ -309,10 +309,23 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
     const responseData = error.response?.data;
     const status = error.response?.status;
     const apiError = responseData?.error;
-    const isAuthError = status === 401 || status === 403
+    const firstReason = apiError?.errors?.[0]?.reason || apiError?.errors?.[0]?.domain || '';
+    console.error('[YouTube Publisher] upload failed status=', status, 'reason=', firstReason, 'message=', (responseData?.error?.message || error.message || '').slice(0, 120));
+    const googleMsg = (responseData?.error?.message || error.message || '').toLowerCase();
+    const isQuotaExceeded = apiError?.errors?.some(e => e.reason === 'quotaExceeded' || e.domain === 'youtube.quota');
+    // 403 or 400 "API not enabled" = YouTube Data API v3 not enabled in this Google Cloud project (not auth, not quota)
+    const isApiNotEnabled = (status === 403 || status === 400) && (
+      apiError?.errors?.some(e => e.reason === 'accessNotConfigured')
+      || googleMsg.includes('has not been used') || googleMsg.includes('is disabled')
+      || googleMsg.includes('not been used in project') || googleMsg.includes('access not configured')
+    );
+    // Do not treat 403 quotaExceeded or API-not-enabled as auth
+    const isAuthError = !isQuotaExceeded && !isApiNotEnabled && (
+      status === 401 || status === 403
       || apiError?.code === 401 || apiError?.code === 403
       || error.message?.includes('invalid_grant')
-      || (apiError?.errors && apiError.errors.some(e => e.reason === 'authError' || e.reason === 'forbidden'));
+      || (apiError?.errors && apiError.errors.some(e => e.reason === 'authError' || e.reason === 'forbidden'))
+    );
 
     console.error('[YouTube Publisher] publishVideo failed', {
       renderId,
@@ -331,12 +344,21 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
       }
     }
 
+    if (isQuotaExceeded) {
+      console.error('[YouTube Publisher] YouTube quota exceeded — upload blocked until quota resets (not a credentials issue). User can use Force upload later.');
+    }
+
+    if (isApiNotEnabled) {
+      console.error('[YouTube Publisher] API NOT ENABLED — YouTube Data API v3 is not enabled for this OAuth project.');
+      const err = new Error('YouTube Data API v3 is not enabled for this Google Cloud project. In Google Cloud Console → APIs & Services → Enable APIs, enable "YouTube Data API v3" for the project that owns this OAuth client.');
+      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+      throw err;
+    }
+
     if (isAuthError) {
-      // Include the actual Google error message to make it easier to diagnose
-      const googleMsg = responseData?.error?.message || error.message || '';
       const googleReasons = responseData?.error?.errors?.map(e => e.reason).join(', ') || '';
-      console.error('[YouTube Publisher] AUTH ERROR details — googleMsg:', googleMsg, 'reasons:', googleReasons || 'none');
-      const err = new Error(`YouTube credentials invalid or expired (${googleMsg || 'auth error'}). Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.`);
+      console.error('[YouTube Publisher] AUTH ERROR details — googleMsg:', responseData?.error?.message || error.message, 'reasons:', googleReasons || 'none');
+      const err = new Error(`YouTube credentials invalid or expired (${responseData?.error?.message || error.message || 'auth error'}). Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.`);
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;
     }

@@ -19,12 +19,11 @@ Use this **every time** you add a new YouTube-connected channel (main app or per
 - Open it → click **Enable**.
 - Wait until it shows “API enabled”.
 
-### 1.3 OAuth consent screen
+### 1.3 OAuth consent screen and publishing status
 
-- Left sidebar: **APIs & Services** → **OAuth consent screen**.
-- If not set up: choose **External** (or Internal for Workspace), fill App name and support email, save.
-- Set **Publishing status** to **Production** (so you don’t need test users).
-- If you leave it in **Testing**, add your Google account(s) as **Test users**.
+- **OAuth consent screen:** Left sidebar: **APIs & Services** → **OAuth consent screen**. If not set up: choose **External** (or Internal for Workspace), fill App name and support email, save.
+- **Make the app live (so any Google user can sign in):** Go to **Audience** — [Google Auth Platform → Audience](https://console.developers.google.com/auth/audience) (or in Cloud Console: **APIs & Services** → **OAuth consent screen**, then open the **Audience** tab/section). Set **Publishing status** to **In production** and click **Publish app**. Until you do this, only **Test users** (added on the same Audience page) can sign in; everyone else sees “Access blocked… has not completed the Google verification process”.
+- If you leave it in **Testing**, add your Google account(s) as **Test users** on the **Audience** page.
 
 ### 1.4 Create OAuth 2.0 Client ID
 
@@ -77,7 +76,7 @@ Use this **every time** you add a new YouTube-connected channel (main app or per
 ## If it still fails
 
 - **redirect_uri_mismatch / invalid_grant:** The redirect URI in Google (Credentials → that OAuth client) must match **character-for-character** what the app uses. Use “Show redirect URI” and copy that exact value into Google.
-- **access_denied / app not verified:** OAuth consent screen must be **Production** or your user must be a **Test user**.
+- **access_denied / “Access blocked… has not completed the Google verification process”:** In Google Cloud, go to **Audience** ([Auth Platform → Audience](https://console.developers.google.com/auth/audience)). Either set **Publishing status** to **In production** and click **Publish app**, or add your Google account as a **Test user**.
 - **Nothing happens / 401:** You must be logged in; session cookie is sent to the API. Try in an incognito window logged into the app.
 - **Backend logs:** In Railway, search for `[Orbix auth-url]` and `[YouTube Callback]` or `[Riddle YouTube Callback]` to see which redirect_uri is used and any token error.
 
