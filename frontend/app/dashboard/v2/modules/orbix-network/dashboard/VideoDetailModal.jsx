@@ -300,6 +300,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
   const stepProgress = details?.step_progress !== undefined ? details.step_progress : item.step_progress;
   const renderStatus = details?.render_status || item.render_status;
   const isFailed = renderStatus === 'FAILED' || renderStatus === 'STEP_FAILED';
+  // Video exists and user can Force upload / Re-Render: completed, ready-for-upload, or failed at Step 8 (upload limit) or upload_failed
+  const canForceUploadOrRerender = renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD' || renderStatus === 'UPLOAD_FAILED' || (renderStatus === 'STEP_FAILED' && currentStep === 'STEP_8_YOUTUBE_UPLOAD');
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
@@ -442,6 +444,31 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                       );
                     } catch {
                       return <p className="text-gray-500 text-sm">Could not parse mind teaser content</p>;
+                    }
+                  })()}
+                </div>
+              )}
+              {item.story_category === 'dadjoke' && item.snippet && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Dad Joke Content</h4>
+                  {(() => {
+                    try {
+                      const d = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      return (
+                        <div className="space-y-3 text-sm">
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Setup</p>
+                            <p className="font-medium text-gray-900">{d.setup}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Punchline</p>
+                            <p className="text-amber-700 font-semibold">{d.punchline}</p>
+                          </div>
+                          {d.hook && <p className="text-gray-500 text-xs">{d.hook}</p>}
+                        </div>
+                      );
+                    } catch {
+                      return <p className="text-gray-500 text-sm">Could not parse dad joke content</p>;
                     }
                   })()}
                 </div>
@@ -873,8 +900,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
             {/* Render Actions - only show if render exists */}
             {item.render_id && (
               <>
-                {/* View Render - COMPLETED or READY_FOR_UPLOAD (video in storage; READY_FOR_UPLOAD = upload failed, video viewable) */}
-                {(renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD') && (
+                {/* View Render - when video exists (completed, ready-for-upload, or failed at step 8 / upload_failed) */}
+                {canForceUploadOrRerender && (
                   (details?.output_url || item?.output_url) ? (
                     <a
                       href={`${details?.output_url || item?.output_url}${(details?.output_url || item?.output_url).includes('?') ? '&' : '?'}v=${encodeURIComponent(details?.updated_at || item?.updated_at || '')}`}
@@ -885,7 +912,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                       <Play className="w-4 h-4" />
                       View Render
                     </a>
-                  ) : renderStatus === 'COMPLETED' ? (
+                  ) : renderStatus === 'COMPLETED' && canForceUploadOrRerender ? (
                     <button
                       onClick={handleRestart}
                       disabled={loading}
@@ -897,8 +924,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   ) : null
                 )}
                 
-                {/* Re-Render - for completed/ready videos, re-run pipeline to apply code/setting changes */}
-                {(renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD') && (
+                {/* Re-Render - when video exists (completed, ready-for-upload, failed at step 8, or upload_failed) */}
+                {canForceUploadOrRerender && (
                   <button
                     onClick={handleRestart}
                     disabled={loading}
@@ -917,8 +944,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                     )}
                   </button>
                 )}
-                {/* Force upload to YouTube - for completed or READY_FOR_UPLOAD (retry when step 8 failed) */}
-                {(renderStatus === 'COMPLETED' || renderStatus === 'READY_FOR_UPLOAD') && (
+                {/* Force upload to YouTube - when video exists (retry after upload limit / quota or any step 8 failure) */}
+                {canForceUploadOrRerender && (
                   <button
                     onClick={handleForceUploadYouTube}
                     disabled={uploadingYouTube || loading}

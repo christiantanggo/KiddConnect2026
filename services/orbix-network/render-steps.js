@@ -913,6 +913,28 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath, st
       } catch (e) { /* non-fatal */ }
       return { success: true, skipped: true, message: error.message };
     }
+    // Retryable YouTube errors (quota/limit): video is ready, set READY_FOR_UPLOAD so user can "Force upload" later
+    const responseData = error?.response?.data;
+    const reason = responseData?.error?.errors?.[0]?.reason || responseData?.errors?.[0]?.reason || '';
+    const isUploadLimitOrQuota = reason === 'uploadLimitExceeded' || reason === 'quotaExceeded' || msg.includes('exceeded the number of videos') || msg.includes('quota');
+    if (isUploadLimitOrQuota) {
+      console.log(`[Orbix Step 8] Upload limit/quota hit — setting READY_FOR_UPLOAD so user can Force upload later render_id=${renderId}`);
+      await logStepEvent(renderId, step, 'PROGRESS', 'YouTube upload failed (limit/quota); video ready — use Force upload when quota allows', { message: error.message });
+      try {
+        await supabaseClient
+          .from('orbix_renders')
+          .update({
+            render_status: 'READY_FOR_UPLOAD',
+            render_step: 'STEP_8_YOUTUBE_UPLOAD',
+            step_progress: 100,
+            step_completed_at: new Date().toISOString(),
+            step_error: error.message,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', renderId);
+      } catch (e) { /* non-fatal */ }
+      return { success: false, readyForUpload: true, message: error.message };
+    }
     await logStepEvent(renderId, step, 'ERROR', 'Step 8 failed', {
       error: error.message,
       code: error.code,

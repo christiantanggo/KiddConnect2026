@@ -61,7 +61,7 @@ router.get('/setup/status', async (req, res) => {
       posting_window_start: moduleSettings?.settings?.posting_schedule?.start ?? '07:00',
       posting_window_end: moduleSettings?.settings?.posting_schedule?.end ?? '20:00',
       posting_timezone: moduleSettings?.settings?.posting_schedule?.timezone ?? 'America/New_York',
-      auto_upload_enabled: moduleSettings?.settings?.auto_upload_enabled !== false,
+      auto_upload_enabled: moduleSettings?.settings?.auto_upload_enabled === true,
       enable_intro_hook: moduleSettings?.settings?.enable_intro_hook === true,
       slot_times: Array.isArray(moduleSettings?.settings?.posting_schedule?.slot_times) ? moduleSettings.settings.posting_schedule.slot_times : [],
       pipeline_run_times: Array.isArray(moduleSettings?.settings?.posting_schedule?.pipeline_run_times) ? moduleSettings.settings.posting_schedule.pipeline_run_times : [],

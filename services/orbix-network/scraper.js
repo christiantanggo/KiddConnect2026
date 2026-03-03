@@ -37,6 +37,8 @@ export async function scrapeSource(source) {
       return await scrapeRiddleSource(source);
     } else if (source.type === 'MIND_TEASER_GENERATOR') {
       return await scrapeMindTeaserSource(source);
+    } else if (source.type === 'DAD_JOKE_GENERATOR') {
+      return await scrapeDadJokeSource(source);
     } else {
       throw new Error(`Unsupported source type: ${source.type}`);
     }
@@ -453,6 +455,59 @@ async function scrapeMindTeaserSource(source) {
     }];
   } catch (error) {
     console.error('[Orbix Scraper] Mind teaser source error:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * Generate one dad joke via Dad Joke Generator (DAD_JOKE_GENERATOR source type).
+ * Returns raw-item-shaped objects with content_fingerprint for dedup.
+ */
+async function scrapeDadJokeSource(source) {
+  try {
+    const { generateAndValidateDadJoke } = await import('./dad-joke-generator.js');
+    const businessId = source.business_id;
+    const channelId = source.channel_id;
+    if (!businessId || !channelId) {
+      console.warn('[Orbix Scraper] Dad joke source missing business_id or channel_id');
+      return [];
+    }
+    const { count } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('category', 'dadjoke');
+    const episodeNumber = (count || 0) + 1;
+    const joke = await generateAndValidateDadJoke(businessId, channelId, { episodeNumber });
+    if (!joke) {
+      console.log('[Orbix Scraper] Dad joke generator produced no valid joke');
+      return [];
+    }
+    const title = `Dad Joke #${String(episodeNumber).padStart(2, '0')}`;
+    const url = `dadjoke://${joke.content_fingerprint}`;
+    const snippet = JSON.stringify({
+      hook: joke.hook,
+      setup: joke.setup,
+      punchline: joke.punchline,
+      voice_script: joke.voice_script,
+      episode_number: joke.episode_number
+    });
+    return [{
+      source_id: source.id,
+      channel_id: channelId,
+      title,
+      snippet,
+      url,
+      published_at: new Date().toISOString(),
+      content_type: 'dadjoke',
+      category: 'dadjoke',
+      shock_score: 70,
+      content_fingerprint: joke.content_fingerprint,
+      factors_json: { source: 'dad_joke_generator' }
+    }];
+  } catch (error) {
+    console.error('[Orbix Scraper] Dad joke source error:', error.message);
     throw error;
   }
 }

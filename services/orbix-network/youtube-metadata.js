@@ -57,6 +57,15 @@ const MINDTEASER_HASHTAGS = [
   '#orbix'
 ];
 
+const DAD_JOKE_HASHTAGS = [
+  '#dadjokes',
+  '#shorts',
+  '#funny',
+  '#cleanhumor',
+  '#dadjoke',
+  '#comedy'
+];
+
 const CATEGORY_HASHTAGS = {
   'ai-automation': ['#AI', '#Automation', '#TechNews', '#ArtificialIntelligence'],
   'corporate-collapses': ['#Business', '#Corporate', '#Finance', '#News'],
@@ -67,7 +76,8 @@ const CATEGORY_HASHTAGS = {
   'trivia': TRIVIA_HASHTAGS,
   'facts': FACTS_HASHTAGS,
   'riddle': RIDDLE_HASHTAGS,
-  'mindteaser': MINDTEASER_HASHTAGS
+  'mindteaser': MINDTEASER_HASHTAGS,
+  'dadjoke': DAD_JOKE_HASHTAGS
 };
 
 /** Remove emojis and common Unicode symbols from a string. */
@@ -197,12 +207,19 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
   const isFacts = (story?.category || '').toLowerCase() === 'facts';
   const isRiddle = (story?.category || '').toLowerCase() === 'riddle';
   const isMindTeaser = (story?.category || '').toLowerCase() === 'mindteaser';
+  const isDadJoke = (story?.category || '').toLowerCase() === 'dadjoke';
 
   let title;
   let description;
   let hashtags;
 
-  if (isMindTeaser) {
+  if (isDadJoke) {
+    title = sanitizeTitleForYouTube(story?.title || 'Dad Joke');
+    const setup = (content?.setup || '').trim();
+    const punchline = (content?.punchline || '').trim();
+    description = (setup ? `${setup}\n\n${punchline}\n\n` : '') + 'Clean humor. Family friendly. Comment your worst dad joke 👇';
+    hashtags = DAD_JOKE_HASHTAGS.slice(0, 6).join(' ');
+  } else if (isMindTeaser) {
     const questionText = (content?.question || '').trim();
     const answerText = (content?.answer || '').trim();
     title = sanitizeTitleForYouTube(hookText || questionText?.slice(0, 60) || story?.title?.slice(0, 60) || 'Can you get it?');

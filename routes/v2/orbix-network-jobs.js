@@ -29,6 +29,40 @@ async function getEnabledChannelIds(businessId) {
   return new Set((rows || []).map(r => r.id));
 }
 
+/** Source type -> story categories that source can produce. Used to validate upload channel matches content. */
+const SOURCE_TYPE_TO_CATEGORIES = {
+  TRIVIA_GENERATOR: ['trivia'],
+  WIKIDATA_FACTS: ['facts'],
+  WIKIPEDIA: ['psychology', 'money'],
+  RIDDLE_GENERATOR: ['riddle'],
+  MIND_TEASER_GENERATOR: ['mindteaser'],
+  DAD_JOKE_GENERATOR: ['dadjoke'],
+  RSS: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology', 'money'],
+  HTML: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology', 'money'],
+};
+
+/**
+ * Get the set of story categories that are allowed for a channel (based on its sources).
+ * Prevents uploading e.g. a psychology-format video to the Trivia channel.
+ * @param {string} channelId - Orbix channel UUID
+ * @returns {Promise<Set<string> | null>} Allowed category codes, or null if channel has no sources (skip check)
+ */
+export async function getChannelAllowedCategories(channelId) {
+  if (!channelId) return null;
+  const { data: sources, error } = await supabaseClient
+    .from('orbix_sources')
+    .select('type')
+    .eq('channel_id', channelId);
+  if (error || !sources?.length) return null;
+  const allowed = new Set();
+  for (const s of sources) {
+    const type = (s.type || '').toUpperCase();
+    const cats = SOURCE_TYPE_TO_CATEGORIES[type];
+    if (cats) cats.forEach(c => allowed.add(c));
+  }
+  return allowed.size ? allowed : null;
+}
+
 /** First channel ID that has YouTube connected for this business (for legacy renders in auto-upload). */
 async function getFirstChannelIdWithYouTube(businessId) {
   const settings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
@@ -752,6 +786,11 @@ export async function processOneYouTubeUpload(options = {}) {
     const timezone = posting.timezone ?? 'America/New_York';
     const todayISO = getStartOfTodayISOInZone(timezone);
 
+    // Auto-upload only: must be inside posting window AND within a configured post slot (e.g. 8:00–8:30)
+    if (!isWithinUploadSlot(posting, dailyVideoCap, timezone)) {
+      continue;
+    }
+
     const { data: channelPublishes } = await supabaseClient
       .from('orbix_renders')
       .select('id, orbix_stories(channel_id)')
@@ -783,18 +822,42 @@ export async function processOneYouTubeUpload(options = {}) {
     console.log(`[Orbix YouTube] Legacy render ${render.id} — using first channel with YouTube: ${fallbackChannelId}`);
   }
 
-  return _uploadRender(render, force, fallbackChannelId);
+  try {
+    return await _uploadRender(render, force, fallbackChannelId);
+  } catch (err) {
+    if (err?.code === SKIP_YOUTUBE_UPLOAD_CODE) {
+      console.warn(`[Orbix YouTube] Upload skipped for render ${render.id}: ${err.message}`);
+      return { processed: true, renderId: render.id, status: 'SKIPPED', message: err.message };
+    }
+    throw err;
+  }
 }
 
 async function _uploadRender(render, force, legacyChannelId = null) {
   const videoUrl = render.output_url;
+
+  // ── Channel vs story category: prevent wrong-format uploads (e.g. 30s psychology to Trivia channel) ──
+  const { data: storyRow } = await supabaseClient
+    .from('orbix_stories')
+    .select('id, channel_id, category')
+    .eq('id', render.story_id)
+    .maybeSingle();
+  const uploadChannelId = storyRow?.channel_id ?? legacyChannelId;
+  if (uploadChannelId && storyRow?.category) {
+    const allowed = await getChannelAllowedCategories(uploadChannelId);
+    if (allowed && !allowed.has((storyRow.category || '').toLowerCase())) {
+      const msg = `Upload blocked: this video is "${storyRow.category}" content but the channel only has sources for: ${[...allowed].join(', ')}. Wrong-format uploads are not allowed.`;
+      console.warn(`[Orbix YouTube] ${msg} render id=${render.id}`);
+      throw Object.assign(new Error(msg), { code: SKIP_YOUTUBE_UPLOAD_CODE });
+    }
+  }
 
   // ── Auto-upload toggle ────────────────────────────────────────────────────
   // Only check when NOT a forced manual upload. Automatic scheduled uploads
   // respect the toggle; manual "Force Upload" from the dashboard bypasses it.
   if (!force) {
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(render.business_id, 'orbix-network');
-    const autoUploadEnabled = moduleSettings?.settings?.auto_upload_enabled !== false; // default: enabled
+    const autoUploadEnabled = moduleSettings?.settings?.auto_upload_enabled === true; // default: OFF — must be explicitly enabled
     if (!autoUploadEnabled) {
       console.log(`[Orbix YouTube] Auto-upload DISABLED for business ${render.business_id} — render id=${render.id} left in READY_FOR_UPLOAD for manual review`);
       return { processed: false, skippedAutoUploadDisabled: true, renderId: render.id };
@@ -835,6 +898,10 @@ async function _uploadRender(render, force, legacyChannelId = null) {
       if (step8Result?.skipped) {
         console.log(`[Orbix YouTube] Upload skipped for render id=${claimedRender.id} — reason: ${step8Result?.message || 'unknown'}`);
         return { processed: true, renderId: claimedRender.id, status: 'SKIPPED' };
+      }
+      if (step8Result?.readyForUpload) {
+        console.log(`[Orbix YouTube] Upload limit/quota — render id=${claimedRender.id} left as READY_FOR_UPLOAD for manual Force upload`);
+        return { processed: true, renderId: claimedRender.id, status: 'READY_FOR_UPLOAD', message: step8Result?.message };
       }
       const youtubeUrl = step8Result?.url ?? null;
       if (!youtubeUrl) {
@@ -1076,6 +1143,33 @@ function getPipelineRunMinutes(posting, dailyVideoCap) {
 }
 
 /**
+ * True only when (1) current time is inside the posting window (from UI: start–end + grace)
+ * and (2) current time is within one of the upload intervals defined by the UI slot times.
+ * Each slot extends from its time until the next slot (or window end). No hardcoded durations.
+ */
+function isWithinUploadSlot(posting, dailyVideoCap, timezone) {
+  const startStr = posting?.start ?? '07:00';
+  const endStr = posting?.end ?? '20:00';
+  const startMinutes = parseTimeToMinutes(startStr);
+  const endMinutes = parseTimeToMinutes(endStr);
+  const gracePastEnd = endMinutes + 90;
+  const nowInZone = getNowInZone(timezone);
+  const currentMinutes = nowInZone.minutesSinceMidnight;
+  if (currentMinutes < startMinutes || currentMinutes > gracePastEnd) return false;
+  const slotMinutes = getPostSlotMinutes(posting, dailyVideoCap);
+  if (slotMinutes.length === 0) return false;
+  // Slot intervals: from each slot time until the next slot (or window end). All from UI.
+  for (let i = 0; i < slotMinutes.length; i++) {
+    const slotStart = Math.max(slotMinutes[i], startMinutes);
+    const slotEnd = i < slotMinutes.length - 1
+      ? slotMinutes[i + 1]
+      : Math.min(gracePastEnd, 24 * 60);
+    if (currentMinutes >= slotStart && currentMinutes < slotEnd) return true;
+  }
+  return false;
+}
+
+/**
  * Scheduled pipeline check — catch-up version.
  *
  * Instead of a narrow ±5 min window that breaks on server restarts, this uses a
@@ -1221,6 +1315,12 @@ export async function runPublishJob() {
           continue;
         }
 
+        // Only upload during configured post slot times (e.g. 8:00–8:30, 11:00–11:30, …)
+        if (!isWithinUploadSlot(posting, dailyVideoCap, timezone)) {
+          console.log(`[Orbix Publish] Business ${businessId}: skip - outside upload slot (now ${currentTimeStr}, upload only at slot times)`);
+          continue;
+        }
+
         // Count today's publishes PER CHANNEL — join through renders to get channel_id reliably
         const { data: todayPublishedRenders, error: publishesCountError } = await supabaseClient
           .from('orbix_renders')
@@ -1299,6 +1399,14 @@ export async function runPublishJob() {
             const story = render.orbix_stories;
             const script = render.orbix_scripts;
             const orbixChannelId = story?.channel_id || null;
+            const storyCategory = (story?.category || '').toLowerCase();
+            if (orbixChannelId && storyCategory) {
+              const allowed = await getChannelAllowedCategories(orbixChannelId);
+              if (allowed && !allowed.has(storyCategory)) {
+                console.log(`[Orbix Publish] Business ${businessId}: skipping render ${render.id} — story category "${story.category}" not allowed for channel (allowed: ${[...allowed].join(', ')})`);
+                continue;
+              }
+            }
             const channelSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
             const byChannel = channelSettings?.settings?.youtube_by_channel || {};
             const legacyYt = channelSettings?.settings?.youtube;

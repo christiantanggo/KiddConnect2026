@@ -551,6 +551,10 @@ router.post('/renders/:id/restart', async (req, res) => {
       .limit(1)
       .maybeSingle();
 
+    // Re-select background from the story's current channel so we never keep a stale/wrong channel background (e.g. after story move or past bug)
+    const { selectBackground } = await import('../../services/orbix-network/video-renderer.js');
+    const background = await selectBackground(businessId, channelId);
+
     // Reset render and clear ALL step paths so the worker runs from step 3 with no stale paths
     const updateData = {
       render_status: 'PENDING',
@@ -567,6 +571,9 @@ router.post('/renders/:id/restart', async (req, res) => {
       video_step4_voice_path: null,
       video_step4_path: null,
       video_step5_path: null,
+      background_type: background.type,
+      background_id: background.id,
+      background_storage_path: background.storagePath ?? null,
       updated_at: new Date().toISOString()
     };
     if (latestScript) updateData.script_id = latestScript.id;
@@ -619,7 +626,7 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
     // Verify render exists and belongs to this business; allow current channel or legacy (story.channel_id null)
     const { data: render, error: getError } = await supabaseClient
       .from('orbix_renders')
-      .select('*, orbix_stories!left(id, channel_id)')
+      .select('*, orbix_stories!left(id, channel_id, category)')
       .eq('id', id)
       .eq('business_id', businessId)
       .maybeSingle();
@@ -631,6 +638,17 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
     const storyChannelId = storyRow?.channel_id ?? null;
     if (storyChannelId != null && storyChannelId !== channelId) {
       return res.status(404).json({ error: 'Render not found for this channel' });
+    }
+
+    // Block wrong-format uploads (e.g. psychology 30s video to Trivia channel)
+    const { getChannelAllowedCategories } = await import('./orbix-network-jobs.js');
+    const allowedCategories = await getChannelAllowedCategories(channelId);
+    const storyCategory = (storyRow?.category || '').toLowerCase();
+    if (allowedCategories?.size && storyCategory && !allowedCategories.has(storyCategory)) {
+      return res.status(400).json({
+        error: 'Wrong content type for this channel',
+        message: `This video is "${storyRow?.category || storyCategory}" content but this channel only has sources for: ${[...allowedCategories].join(', ')}. Upload blocked to prevent wrong-format videos.`
+      });
     }
 
     const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED'];
@@ -803,7 +821,7 @@ router.post('/renders/:id/upload-youtube', async (req, res) => {
     }
     if (status === 400 || reason === 'uploadLimitExceeded') {
       const msg = reason === 'uploadLimitExceeded'
-        ? "YouTube's daily upload limit reached. Try again tomorrow or verify your channel to increase the limit."
+        ? "YouTube's daily upload limit reached (per project or per channel). Set Settings → Daily video cap to 5 or 6, or try again tomorrow."
         : (ytMessage || 'YouTube rejected the upload.');
       return res.status(400).json({ error: msg });
     }
@@ -1094,6 +1112,8 @@ router.post('/sources', async (req, res) => {
         ? 'riddle://generator'
         : (type.toUpperCase() === 'MIND_TEASER_GENERATOR')
           ? 'mindteaser://generator'
+          : (type.toUpperCase() === 'DAD_JOKE_GENERATOR')
+            ? 'dadjoke://generator'
           : (type.toUpperCase() === 'WIKIDATA_FACTS')
           ? (url && url.trim()) || 'facts://'
           : (type.toUpperCase() === 'WIKIPEDIA' && !url)

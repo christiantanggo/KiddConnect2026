@@ -1326,6 +1326,12 @@ export async function processRenderJob(render) {
       return await processMindTeaserRenderJob(render, story, script);
     }
 
+    // Dad joke uses separate pipeline
+    if ((story?.category || '').toLowerCase() === 'dadjoke') {
+      const { processDadJokeRenderJob } = await import('./dadjoke-renderer.js');
+      return await processDadJokeRenderJob(render, story, script);
+    }
+
     // Psychology + Money: TTS speaks question first then body. Add a short breath pause (0.3s) before voice starts.
     const cat2 = (story?.category || '').toLowerCase();
     const isPsychology = cat2 === 'psychology';

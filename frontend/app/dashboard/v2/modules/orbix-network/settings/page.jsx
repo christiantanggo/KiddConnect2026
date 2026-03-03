@@ -106,6 +106,9 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
               min="1"
               max="50"
             />
+            <p className="text-xs text-amber-700 mt-1">
+              YouTube limits uploads: ~6/day per Google Cloud project (per OAuth app). Your channel may also have a daily limit. If you see &quot;exceeded the number of videos&quot;, set this to <strong>5</strong> or <strong>6</strong> and save — the pipeline will stop trying after that many per channel per day.
+            </p>
           </div>
 
           <label className="flex items-center gap-3 cursor-pointer">
@@ -654,11 +657,12 @@ function ChannelSettingsTab({ channel }) {
 
   // ── Source handlers ──
   const handleAddSource = async () => {
-    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR';
+    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && sourceForm.type !== 'DAD_JOKE_GENERATOR';
     if (needsUrl && !(sourceForm.url || '').trim()) { showError('Source URL is required'); return; }
     const defaultName = sourceForm.type === 'TRIVIA_GENERATOR' ? 'Trivia Generator'
       : sourceForm.type === 'RIDDLE_GENERATOR' ? 'Riddle Generator'
       : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'Mind Teaser Generator'
+      : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'Dad Joke Generator'
       : sourceForm.type === 'WIKIDATA_FACTS' ? 'Wikidata Facts'
       : sourceForm.type === 'WIKIPEDIA' ? (sourceForm.category_hint === 'money' ? 'Money (Wikipedia)' : 'Psychology (Wikipedia)')
       : '';
@@ -781,7 +785,10 @@ function ChannelSettingsTab({ channel }) {
               Use a different Google Cloud project for this channel so it gets its own daily quota (~6 uploads/day). Create a project, enable YouTube Data API v3, add OAuth credentials, and set the redirect URI to your app&apos;s callback URL (same as global).
             </p>
             {customOauth && (
-              <p className="text-xs text-green-700 font-medium">Custom OAuth app is set for this channel — uploads use that project&apos;s quota.</p>
+              <>
+                <p className="text-xs text-green-700 font-medium">Custom OAuth app is set for this channel — uploads use that project&apos;s quota.</p>
+                <p className="text-xs text-amber-700">If you still see &quot;exceeded the number of videos&quot;, the limit is from YouTube (~6/day per project or your channel&apos;s limit). Set <strong>Global settings → Daily video cap</strong> to <strong>5</strong> or <strong>6</strong> so the pipeline doesn&apos;t try more than YouTube allows.</p>
+              </>
             )}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
@@ -868,6 +875,9 @@ function ChannelSettingsTab({ channel }) {
           ) : (
             <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
               <p className="text-sm text-amber-800 mb-3">No YouTube account connected for this channel.</p>
+              <p className="text-xs text-amber-700 mb-3">
+                First time? In Google Cloud for this OAuth client: enable <strong>YouTube Data API v3</strong> (Library), set OAuth consent to Production, and add the exact redirect URI in Credentials. Full steps: <a href="https://github.com/christiantanggo/Tavari-Communications-Agent/blob/main/docs/YOUTUBE_OAUTH_SETUP_CHECKLIST.md" target="_blank" rel="noopener noreferrer" className="underline font-medium">YOUTUBE_OAUTH_SETUP_CHECKLIST.md</a>
+              </p>
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={handleConnectYt}
@@ -1062,6 +1072,7 @@ function ChannelSettingsTab({ channel }) {
                   <option value="TRIVIA_GENERATOR">Trivia Generator</option>
                   <option value="RIDDLE_GENERATOR">Riddle Generator</option>
                   <option value="MIND_TEASER_GENERATOR">Mind Teaser Generator</option>
+                  <option value="DAD_JOKE_GENERATOR">Dad Joke Generator</option>
                   <option value="WIKIDATA_FACTS">Wikidata Facts</option>
                 </select>
               </div>
@@ -1069,13 +1080,14 @@ function ChannelSettingsTab({ channel }) {
                 <label className="block text-xs font-medium text-gray-600 mb-1">URL</label>
                 <input
                   type="text"
-                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator' : sourceForm.url}
-                  onChange={(e) => sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && setSourceForm((f) => ({ ...f, url: e.target.value }))}
-                  readOnly={sourceForm.type === 'TRIVIA_GENERATOR' || sourceForm.type === 'RIDDLE_GENERATOR' || sourceForm.type === 'MIND_TEASER_GENERATOR'}
+                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator' : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator' : sourceForm.url}
+                  onChange={(e) => sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && sourceForm.type !== 'DAD_JOKE_GENERATOR' && setSourceForm((f) => ({ ...f, url: e.target.value }))}
+                  readOnly={sourceForm.type === 'TRIVIA_GENERATOR' || sourceForm.type === 'RIDDLE_GENERATOR' || sourceForm.type === 'MIND_TEASER_GENERATOR' || sourceForm.type === 'DAD_JOKE_GENERATOR'}
                   placeholder={
                     sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator (auto)' :
                     sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator (auto)' :
                     sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator (auto)' :
+                    sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator (auto)' :
                     sourceForm.type === 'WIKIPEDIA' ? 'Leave blank for default categories' :
                     'https://example.com/feed.xml'
                   }
@@ -1173,7 +1185,7 @@ function OrbixNetworkSettingsInner() {
     enable_rumble: false,
     daily_video_cap: 5,
     shock_score_threshold: 45,
-    auto_upload_enabled: true,
+    auto_upload_enabled: false,
     enable_intro_hook: false,
     posting_timezone: 'America/New_York',
     posting_window_start: '07:00',
@@ -1216,7 +1228,7 @@ function OrbixNetworkSettingsInner() {
           enable_rumble: data.enable_rumble || false,
           daily_video_cap: data.daily_video_cap || 5,
           shock_score_threshold: data.shock_score_threshold ?? 45,
-          auto_upload_enabled: data.auto_upload_enabled !== false,
+          auto_upload_enabled: data.auto_upload_enabled === true,
           enable_intro_hook: data.enable_intro_hook === true,
           posting_timezone: data.posting_timezone || 'America/New_York',
           posting_window_start: data.posting_window_start || '07:00',

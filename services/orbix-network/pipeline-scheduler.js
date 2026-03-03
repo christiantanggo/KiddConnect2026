@@ -12,7 +12,7 @@ import { processRawItem } from './classifier.js';
 import { supabaseClient } from '../../config/database.js';
 import { selectTemplate, selectBackground } from './video-renderer.js';
 
-const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser'];
+const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
 
 /**
  * For trivia/facts stories the voice_script is embedded in the raw item's snippet JSON.
@@ -50,11 +50,11 @@ async function ensureTriviaScript(businessId, story) {
     } catch (_) { /* snippet not JSON — use as-is */ }
   }
 
-  // Riddles use riddle_text + answer_text; mindteasers use question + answer + voice_script.
-  // Only bail out on missing voice_script for trivia/facts, not riddle or mindteaser.
+  // Riddles use riddle_text + answer_text; mindteasers use question + answer; dadjoke uses setup + punchline + voice_script.
   const isRiddle = story.category === 'riddle';
   const isMindTeaser = story.category === 'mindteaser';
-  if (!voiceScript && !isRiddle && !isMindTeaser) {
+  const isDadJoke = story.category === 'dadjoke';
+  if (!voiceScript && !isRiddle && !isMindTeaser && !isDadJoke) {
     console.warn(`[Pipeline Scheduler] No voice_script in snippet for story ${story.id} (${story.category}) — skipping script creation`);
     return null;
   }
@@ -64,6 +64,10 @@ async function ensureTriviaScript(businessId, story) {
   }
   if (isMindTeaser && !contentJson?.question) {
     console.warn(`[Pipeline Scheduler] No question in snippet for mindteaser story ${story.id} — skipping script creation`);
+    return null;
+  }
+  if (isDadJoke && (!contentJson?.setup || !contentJson?.punchline)) {
+    console.warn(`[Pipeline Scheduler] No setup/punchline in snippet for dadjoke story ${story.id} — skipping script creation`);
     return null;
   }
 
