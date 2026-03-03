@@ -616,17 +616,22 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
     const businessId = req.active_business_id;
     const { id } = req.params;
 
-    // Verify render exists and belongs to this business/channel
+    // Verify render exists and belongs to this business; allow current channel or legacy (story.channel_id null)
     const { data: render, error: getError } = await supabaseClient
       .from('orbix_renders')
-      .select('*, orbix_stories!inner(id, channel_id)')
+      .select('*, orbix_stories!left(id, channel_id)')
       .eq('id', id)
       .eq('business_id', businessId)
-      .eq('orbix_stories.channel_id', channelId)
       .maybeSingle();
 
     if (getError && getError.code !== 'PGRST116') throw getError;
     if (!render) return res.status(404).json({ error: 'Render not found' });
+    // Supabase many-to-one embed is single object; guard array from some clients
+    const storyRow = Array.isArray(render.orbix_stories) ? render.orbix_stories[0] : render.orbix_stories;
+    const storyChannelId = storyRow?.channel_id ?? null;
+    if (storyChannelId != null && storyChannelId !== channelId) {
+      return res.status(404).json({ error: 'Render not found for this channel' });
+    }
 
     const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED'];
     if (!allowedStatuses.includes(render.render_status)) {
@@ -2344,26 +2349,13 @@ router.get('/youtube/auth-url', async (req, res) => {
     const orbixChannelId = req.query.channel_id || null;
     const fromSetup = req.query.from_setup === 'true' || req.query.from_setup === true;
 
-    const redirectUriRaw = process.env.YOUTUBE_REDIRECT_URI || '';
-    const redirectUri = redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`;
-    if (!redirectUri || redirectUri === 'https://') {
-      const instructions = getYouTubeSetupInstructions(req);
-      return res.status(200).json({
-        configured: false,
-        auth_url: null,
-        error: 'YouTube OAuth not configured',
-        message: 'YOUTUBE_REDIRECT_URI is required.',
-        setup_instructions: instructions
-      });
-    }
-
     let channelEntry = null;
     if (orbixChannelId) {
       const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
       const byChannel = moduleSettings?.settings?.youtube_by_channel || {};
       channelEntry = byChannel[orbixChannelId] || null;
     }
-    const { resolveOAuthCredentials } = await import('../services/orbix-network/youtube-publisher.js');
+    const { resolveOAuthCredentials } = await import('../../services/orbix-network/youtube-publisher.js');
     const { clientId, clientSecret } = resolveOAuthCredentials(
       channelEntry,
       process.env.YOUTUBE_CLIENT_ID,
@@ -2378,6 +2370,33 @@ router.get('/youtube/auth-url', async (req, res) => {
         message: orbixChannelId
           ? 'Set global YOUTUBE_CLIENT_ID/SECRET in env, or add a custom OAuth app for this channel in Settings (Client ID + Secret).'
           : instructions.short,
+        setup_instructions: instructions
+      });
+    }
+
+    // Per-channel OAuth (custom client_id) uses riddle callback URL for separate quota
+    // MUST match exactly what is in Google Cloud "Authorized redirect URIs" for the riddle OAuth client
+    let redirectUri;
+    if (orbixChannelId && channelEntry?.client_id) {
+      if (process.env.NODE_ENV === 'production' && (process.env.YOUTUBE_REDIRECT_URI || '').includes('api.tavarios.com')) {
+        redirectUri = 'https://api.tavarios.com/api/v2/riddle/youtube/callback';
+      } else {
+        const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
+        let base = raw.replace(/\/api\/v2\/.*$/, '').replace(/\/$/, '');
+        if (!base.startsWith('http')) base = (base.startsWith('localhost') ? 'http://' : 'https://') + base;
+        redirectUri = `${base}/api/v2/riddle/youtube/callback`;
+      }
+    } else {
+      const redirectUriRaw = process.env.YOUTUBE_REDIRECT_URI || '';
+      redirectUri = redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`;
+    }
+    if (!redirectUri || redirectUri === 'https://') {
+      const instructions = getYouTubeSetupInstructions(req);
+      return res.status(200).json({
+        configured: false,
+        auth_url: null,
+        error: 'YouTube OAuth not configured',
+        message: 'YOUTUBE_REDIRECT_URI is required.',
         setup_instructions: instructions
       });
     }

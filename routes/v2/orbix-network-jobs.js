@@ -29,6 +29,16 @@ async function getEnabledChannelIds(businessId) {
   return new Set((rows || []).map(r => r.id));
 }
 
+/** First channel ID that has YouTube connected for this business (for legacy renders in auto-upload). */
+async function getFirstChannelIdWithYouTube(businessId) {
+  const settings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+  const byChannel = settings?.settings?.youtube_by_channel || {};
+  for (const [channelId, yt] of Object.entries(byChannel)) {
+    if (yt?.access_token) return channelId;
+  }
+  return null;
+}
+
 // Require authentication for manual triggers
 router.use(authenticate);
 router.use(requireBusinessContext);
@@ -764,10 +774,19 @@ export async function processOneYouTubeUpload(options = {}) {
 
   if (!render) return { processed: false };
 
-  return _uploadRender(render, force, null);
+  // Legacy renders (story has no channel_id): use first channel with YouTube so auto-upload can still run
+  const storyChannelId = render.orbix_stories?.channel_id ?? null;
+  const fallbackChannelId = storyChannelId == null
+    ? await getFirstChannelIdWithYouTube(render.business_id)
+    : null;
+  if (storyChannelId == null && fallbackChannelId) {
+    console.log(`[Orbix YouTube] Legacy render ${render.id} — using first channel with YouTube: ${fallbackChannelId}`);
+  }
+
+  return _uploadRender(render, force, fallbackChannelId);
 }
 
-async function _uploadRender(render, force, preferredChannelId = null) {
+async function _uploadRender(render, force, legacyChannelId = null) {
   const videoUrl = render.output_url;
 
   // ── Auto-upload toggle ────────────────────────────────────────────────────
@@ -807,14 +826,14 @@ async function _uploadRender(render, force, preferredChannelId = null) {
   console.log(`[Orbix YouTube] Claimed READY_FOR_UPLOAD render id=${claimedRender.id} videoUrl=${videoUrl ? 'set' : 'MISSING'} (max ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts)`);
 
   const { step8YouTubeUpload } = await import('../../services/orbix-network/render-steps.js');
-  const step8Options = preferredChannelId ? { preferredChannelId } : {};
+  const step8Options = legacyChannelId ? { preferredChannelId: legacyChannelId } : {};
 
   let lastError = null;
   for (let attempt = 1; attempt <= YOUTUBE_UPLOAD_MAX_ATTEMPTS; attempt++) {
     try {
       const step8Result = await step8YouTubeUpload(claimedRender.id, claimedRender, videoUrl, step8Options);
       if (step8Result?.skipped) {
-        console.log(`[Orbix YouTube] Upload skipped for render id=${claimedRender.id}`);
+        console.log(`[Orbix YouTube] Upload skipped for render id=${claimedRender.id} — reason: ${step8Result?.message || 'unknown'}`);
         return { processed: true, renderId: claimedRender.id, status: 'SKIPPED' };
       }
       const youtubeUrl = step8Result?.url ?? null;

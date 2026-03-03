@@ -434,6 +434,15 @@ try {
     console.warn('⚠️  Orbix Network YouTube OAuth callback route not loaded:', youtubeCallbackError.message);
   }
 
+  // Riddle (per-channel) YouTube OAuth callback — for channels with custom OAuth app (separate quota)
+  try {
+    const riddleYouTubeCallback = (await import("./routes/v2/riddle-youtube-callback.js")).default;
+    app.use("/api/v2/riddle", riddleYouTubeCallback);
+    console.log('✅ Riddle YouTube OAuth callback route loaded (public)');
+  } catch (riddleCbErr) {
+    console.warn('⚠️  Riddle YouTube OAuth callback not loaded:', riddleCbErr.message);
+  }
+
   // Load Orbix Network setup routes
   try {
     const v2OrbixNetworkSetupRoutes = (await import("./routes/v2/orbix-network-setup.js")).default;
