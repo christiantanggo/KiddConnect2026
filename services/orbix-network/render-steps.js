@@ -741,9 +741,10 @@ export async function step7Metadata(renderId, renderJob, script, story) {
 
 /**
  * STEP 8: YouTube upload
- * Uploads final video to YouTube when a channel is connected
+ * Uploads final video to YouTube when a channel is connected.
+ * @param {string} [step8Options.preferredChannelId] - When the story has no channel_id (legacy), use this channel's YouTube (e.g. from Force Upload request).
  */
-export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
+export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath, step8Options = {}) {
   const step = 'STEP_8_YOUTUBE_UPLOAD';
   writeProgressLog('STEP_ENTER', { renderId, step });
   setCurrentRender(renderId, step);
@@ -772,7 +773,12 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath) {
     let orbixChannelId = null;
     if (render.story_id) {
       const { data: story } = await supabaseClient.from('orbix_stories').select('channel_id').eq('id', render.story_id).single();
-      orbixChannelId = story?.channel_id || null;
+      orbixChannelId = story?.channel_id ?? null;
+    }
+    // Legacy renders (story has no channel_id): use preferred channel from request so Force Upload uses the current channel's YouTube
+    if (orbixChannelId == null && step8Options.preferredChannelId) {
+      orbixChannelId = step8Options.preferredChannelId;
+      console.log(`[Step 8 YouTube] Using preferredChannelId (legacy render) ${orbixChannelId}`);
     }
     if (!businessId) {
       console.log('[Step 8 YouTube] SKIP: no business_id on render job');

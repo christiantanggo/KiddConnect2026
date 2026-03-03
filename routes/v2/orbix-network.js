@@ -653,8 +653,9 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
         .eq('id', id);
     }
 
-    // force: true bypasses the auto_upload_enabled toggle — this is an explicit manual upload
-    processOneYouTubeUpload({ force: true, renderId: id })
+    // force: true bypasses the auto_upload_enabled toggle — this is an explicit manual upload.
+    // preferredChannelId: when the render's story has no channel_id (legacy), use this channel's YouTube.
+    processOneYouTubeUpload({ force: true, renderId: id, preferredChannelId: channelId })
       .then((result) => {
         console.log(`[upload-to-youtube] Upload result for ${id}:`, result.status, result.error || '');
       })

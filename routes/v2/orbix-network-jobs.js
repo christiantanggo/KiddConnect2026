@@ -693,9 +693,10 @@ const YOUTUBE_UPLOAD_RETRY_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_RE
  * @param {Object} [options]
  * @param {boolean} [options.force] - When true, bypasses the auto_upload_enabled toggle (used for manual uploads).
  * @param {string}  [options.renderId] - When provided, only upload this specific render (used for manual uploads).
+ * @param {string}  [options.preferredChannelId] - When the render's story has no channel_id (legacy), use this channel's YouTube (e.g. from Force Upload).
  */
 export async function processOneYouTubeUpload(options = {}) {
-  const { force = false, renderId: targetRenderId = null } = options;
+  const { force = false, renderId: targetRenderId = null, preferredChannelId = null } = options;
 
   // When targeting a specific render (forced/manual), fetch only that one
   if (targetRenderId) {
@@ -707,8 +708,8 @@ export async function processOneYouTubeUpload(options = {}) {
       .eq('id', targetRenderId)
       .maybeSingle();
     if (!ready) return { processed: false };
-    // Fall through with this render selected
-    return _uploadRender(ready, force);
+    // Fall through with this render selected (pass preferredChannelId for legacy renders)
+    return _uploadRender(ready, force, preferredChannelId);
   }
 
   // For automatic 30s loop: fetch candidates and pick one that hasn't hit its per-channel cap
@@ -763,10 +764,10 @@ export async function processOneYouTubeUpload(options = {}) {
 
   if (!render) return { processed: false };
 
-  return _uploadRender(render, force);
+  return _uploadRender(render, force, null);
 }
 
-async function _uploadRender(render, force) {
+async function _uploadRender(render, force, preferredChannelId = null) {
   const videoUrl = render.output_url;
 
   // ── Auto-upload toggle ────────────────────────────────────────────────────
@@ -806,11 +807,12 @@ async function _uploadRender(render, force) {
   console.log(`[Orbix YouTube] Claimed READY_FOR_UPLOAD render id=${claimedRender.id} videoUrl=${videoUrl ? 'set' : 'MISSING'} (max ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts)`);
 
   const { step8YouTubeUpload } = await import('../../services/orbix-network/render-steps.js');
+  const step8Options = preferredChannelId ? { preferredChannelId } : {};
 
   let lastError = null;
   for (let attempt = 1; attempt <= YOUTUBE_UPLOAD_MAX_ATTEMPTS; attempt++) {
     try {
-      const step8Result = await step8YouTubeUpload(claimedRender.id, claimedRender, videoUrl);
+      const step8Result = await step8YouTubeUpload(claimedRender.id, claimedRender, videoUrl, step8Options);
       if (step8Result?.skipped) {
         console.log(`[Orbix YouTube] Upload skipped for render id=${claimedRender.id}`);
         return { processed: true, renderId: claimedRender.id, status: 'SKIPPED' };
