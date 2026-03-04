@@ -1545,8 +1545,8 @@ export async function runPublishJob() {
             const publishOptions = orbixChannelId ? { orbixChannelId } : {};
 
             console.log(`[Orbix Publish] Business ${businessId}: uploading render ${render.id} to YouTube (channel ${orbixChannelId || 'legacy'})`);
-            // Record attempt immediately so we never auto-retry this render (prevents 72x duplicate uploads on timeout/crash)
-            await supabaseClient
+            // Claim this render with a PENDING row. Unique (render_id, platform) ensures only one replica uploads; others skip.
+            const { error: insertErr } = await supabaseClient
               .from('orbix_publishes')
               .insert({
                 business_id: businessId,
@@ -1554,9 +1554,16 @@ export async function runPublishJob() {
                 platform: 'YOUTUBE',
                 title: title?.slice(0, 255) || 'Uploading',
                 publish_status: 'PENDING'
-              })
-              .then(() => {})
-              .catch(() => {});
+              });
+
+            if (insertErr) {
+              if (insertErr.code === '23505') {
+                console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already claimed by another replica, skipping`);
+              } else {
+                console.warn(`[Orbix Publish] Business ${businessId}: failed to claim render ${render.id}:`, insertErr.message);
+              }
+              continue;
+            }
 
             let publishResult = null;
             let lastPublishErr = null;

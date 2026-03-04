@@ -2464,18 +2464,13 @@ router.get('/youtube/auth-url', async (req, res) => {
       });
     }
 
-    // Per-channel OAuth (custom client_id for auto, or manual_client_id for manual) uses riddle callback URL for separate quota
+    // Per-channel OAuth (custom client_id for auto, or manual_client_id for manual) uses riddle callback URL for separate quota.
+    // Use the same getRiddleYoutubeRedirectUri() the callback uses so redirect_uri is identical (avoids mismatch errors).
     const hasCustomClient = orbixChannelId && (usage === 'manual' ? channelEntry?.manual_client_id : channelEntry?.client_id);
     let redirectUri;
     if (hasCustomClient) {
-      if (process.env.NODE_ENV === 'production' && (process.env.YOUTUBE_REDIRECT_URI || '').includes('api.tavarios.com')) {
-        redirectUri = 'https://api.tavarios.com/api/v2/riddle/youtube/callback';
-      } else {
-        const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
-        let base = raw.replace(/\/api\/v2\/.*$/, '').replace(/\/$/, '');
-        if (!base.startsWith('http')) base = (base.startsWith('localhost') ? 'http://' : 'https://') + base;
-        redirectUri = `${base}/api/v2/riddle/youtube/callback`;
-      }
+      const { getRiddleYoutubeRedirectUri } = await import('./riddle-youtube-callback.js');
+      redirectUri = getRiddleYoutubeRedirectUri();
     } else {
       const redirectUriRaw = process.env.YOUTUBE_REDIRECT_URI || '';
       redirectUri = redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`;

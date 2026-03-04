@@ -12,14 +12,19 @@ const router = express.Router();
 const MODULE_KEY = 'orbix-network';
 const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-function getRedirectUri() {
+/** Single source of truth for per-channel (custom) OAuth redirect URI. Used by auth-url and by this callback so they always match. */
+export function getRiddleYoutubeRedirectUri() {
   if (process.env.NODE_ENV === 'production' && (process.env.YOUTUBE_REDIRECT_URI || '').includes('api.tavarios.com')) {
     return 'https://api.tavarios.com/api/v2/riddle/youtube/callback';
   }
-  const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
-  let base = raw.replace(/\/api\/v2\/.+$/, '').replace(/\/$/, '');
+  const raw = (process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback').trim();
+  let base = raw.replace(/\/api\/v2\/.*$/, '').replace(/\/$/, '');
   if (!base.startsWith('http')) base = (base.startsWith('localhost') ? 'http://' : 'https://') + base;
   return `${base}/api/v2/riddle/youtube/callback`;
+}
+
+function getRedirectUri() {
+  return getRiddleYoutubeRedirectUri();
 }
 
 function getRedirectBase(stateStr) {
@@ -91,7 +96,7 @@ router.get('/youtube/callback', async (req, res) => {
       tokens = result.tokens;
     } catch (tokenError) {
       const data = tokenError?.response?.data;
-      console.error('[Riddle YouTube Callback] getToken failed:', data?.error, data?.error_description);
+      console.error('[Riddle YouTube Callback] getToken failed:', data?.error, data?.error_description, 'redirect_uri=', redirectUri);
       if (data?.error === 'invalid_grant' || tokenError?.message?.includes('invalid_grant')) {
         return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=invalid_grant`);
       }
