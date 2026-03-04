@@ -95,7 +95,7 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
     let slotManual = false; // true if we're using the manual_* slot (for token refresh persistence)
     if (orbixChannelId) {
       const entry = byChannel[orbixChannelId];
-      // Prefer manual slot when useManual and manual has tokens; else fall back to auto
+      // Prefer manual slot when useManual and manual has tokens; else fall back to auto for this channel only
       if (useManual && entry?.manual_access_token) {
         yt = getYtFromChannelEntry(entry, true);
         usePerChannel = true;
@@ -107,15 +107,22 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
         usePerChannel = true;
         console.log('[YouTube Publisher] Using per-channel YouTube (auto) for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
       }
+      // When a channel was explicitly requested (e.g. Force Upload), never use legacy — wrong account would be used and can cause "upload limit exceeded" for the other account
+      if (!yt) {
+        console.error('[YouTube Publisher] Channel requested but no credentials — refusing to fall back to legacy (would use wrong account) orbixChannelId=', orbixChannelId, 'useManual=', useManual, 'hasEntry=', !!entry, 'entryHasManual=', !!entry?.manual_access_token, 'entryHasAuto=', !!entry?.access_token);
+      }
     }
-    if (!yt && settings.youtube?.access_token) {
+    if (!yt && !orbixChannelId && settings.youtube?.access_token) {
       yt = settings.youtube;
       console.log('[YouTube Publisher] Using legacy settings.youtube youtube_channel_id=', yt?.channel_id || 'n/a');
     }
     if (!yt || !yt.access_token) {
-      const msg = usePerChannel
-        ? 'YouTube not connected for this channel. Connect in Orbix Network → Settings for this channel.'
-        : 'YouTube not connected. Please connect your YouTube account in settings.';
+      const requestedChannelButNoCreds = !!orbixChannelId && !yt;
+      const msg = requestedChannelButNoCreds
+        ? 'YouTube not connected for this channel. Connect in Orbix Network → Settings for this channel. (The global/legacy YouTube account is never used for this channel.)'
+        : usePerChannel
+          ? 'YouTube not connected for this channel. Connect in Orbix Network → Settings for this channel.'
+          : 'YouTube not connected. Please connect your YouTube account in settings.';
       if (yt?.channel_id) {
         console.error('[YouTube Publisher] Credentials missing or expired businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
         const err = new Error('YouTube was connected but credentials are missing or expired. Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.');
@@ -412,6 +419,20 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;
     }
+
+    // uploadLimitExceeded: YouTube says this account/channel has hit daily upload limit — surface a clear, actionable message
+    const isUploadLimitExceeded = firstReason === 'uploadLimitExceeded' || googleMsg.includes('exceeded the number of videos');
+    if (isUploadLimitExceeded) {
+      console.error('[YouTube Publisher] uploadLimitExceeded — orbixChannelId=', orbixChannelId || 'legacy', '(limit is from YouTube, not our app)');
+      const err = new Error(
+        'YouTube says this channel/account has reached its daily upload limit. ' +
+        'If this channel has not uploaded in over 24 hours, the limit may be on the whole Google account (e.g. same account connected to another Orbix channel, or used in YouTube Studio). ' +
+        'Limits often reset at midnight Pacific Time. Try again later or check YouTube Studio for recent uploads.'
+      );
+      err.response = error.response;
+      throw err;
+    }
+
     throw error;
   }
 }
