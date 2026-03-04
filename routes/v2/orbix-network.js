@@ -2549,7 +2549,13 @@ router.get('/youtube/channel', async (req, res) => {
     let clientIdPreview = null;
     if (yt.client_id && typeof yt.client_id === 'string') {
       const id = yt.client_id.trim();
-      clientIdPreview = id.length > 8 ? `…${id.slice(-8)}` : (id ? '…' : null);
+      const suffix = '.apps.googleusercontent.com';
+      if (id.endsWith(suffix)) {
+        const prefix = id.slice(0, -suffix.length);
+        clientIdPreview = prefix.length > 20 ? `${prefix.slice(0, 20)}…` : prefix;
+      } else {
+        clientIdPreview = id.length > 12 ? `…${id.slice(-12)}` : (id ? '…' : null);
+      }
     }
 
     res.json({

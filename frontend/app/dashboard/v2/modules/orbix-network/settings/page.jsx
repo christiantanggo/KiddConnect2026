@@ -892,11 +892,14 @@ function ChannelSettingsTab({ channel }) {
                 <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0" />
                 <div>
                   <p className="text-sm font-semibold text-green-800">Connected</p>
-                  <p className="text-sm text-green-700">{ytChannel.title || ytChannel.id}</p>
+                  <p className="text-sm text-green-700">
+                    <span className="font-medium">YouTube channel:</span> {ytChannel.title || ytChannel.id}
+                  </p>
                   {(ytCredentialsSource || ytClientIdPreview) && (
-                    <p className="text-xs text-green-600 mt-1" title="Helps match to the right OAuth client in Google Cloud Console">
-                      OAuth: {ytCredentialsSource === 'custom_oauth'
-                        ? `Custom (this channel)${ytClientIdPreview ? ` — Client ID ${ytClientIdPreview}` : ''}`
+                    <p className="text-xs text-green-600 mt-1" title="The OAuth app used to upload to this YouTube channel. Match the Client ID in Google Cloud → Credentials.">
+                      <span className="font-medium">OAuth app:</span>{' '}
+                      {ytCredentialsSource === 'custom_oauth'
+                        ? `This channel’s app${ytClientIdPreview ? ` (Client ID: ${ytClientIdPreview})` : ''}`
                         : 'Global (server env)'}
                     </p>
                   )}
