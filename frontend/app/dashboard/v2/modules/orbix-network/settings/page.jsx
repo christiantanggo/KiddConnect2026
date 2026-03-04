@@ -449,6 +449,8 @@ function ChannelSettingsTab({ channel }) {
   const [savingManualOauth, setSavingManualOauth] = useState(false);
   const [ytRedirectUriManual, setYtRedirectUriManual] = useState(null);
   const [manualClientIdPreview, setManualClientIdPreview] = useState(null);
+  const [autoUploadEnabled, setAutoUploadEnabled] = useState(false);
+  const [savingAutoUpload, setSavingAutoUpload] = useState(false);
 
   // Backgrounds
   const [backgrounds, setBackgrounds] = useState([]);
@@ -502,6 +504,7 @@ function ChannelSettingsTab({ channel }) {
         setYtChannelManual(ytRes.data?.channel_manual ?? null);
         setCustomOauthManual(ytRes.data?.manual_custom_oauth ?? false);
         setManualClientIdPreview(ytRes.data?.manual_client_id_preview ?? null);
+        setAutoUploadEnabled(ytRes.data?.auto_upload_enabled ?? false);
         setBackgrounds(bgRes.data?.backgrounds || []);
         setMusicTracks(musicRes.data?.music || []);
         setSources(srcRes.data?.sources || []);
@@ -832,6 +835,37 @@ function ChannelSettingsTab({ channel }) {
         </label>
         <p className="text-xs text-gray-500 mt-1 ml-7">
           When off, this channel is skipped by the pipeline and YouTube uploads (saves quota and avoids posting to this channel).
+        </p>
+      </div>
+
+      {/* Per-channel auto-upload to YouTube: OFF by default so only test channels auto-upload */}
+      <div className="mb-6 p-4 bg-amber-50 border border-amber-200 rounded-xl">
+        <label className="flex items-center gap-3 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={autoUploadEnabled}
+            disabled={savingAutoUpload}
+            onChange={async (e) => {
+              const v = e.target.checked;
+              setAutoUploadEnabled(v);
+              setSavingAutoUpload(true);
+              try {
+                await orbixNetworkAPI.saveChannelAutoUpload({ channel_id: channel.id, auto_upload_enabled: v });
+                success(v ? 'Auto-upload ON for this channel' : 'Auto-upload OFF for this channel');
+              } catch (err) {
+                setAutoUploadEnabled(!v);
+                showError(err?.response?.data?.error || 'Failed to save');
+              } finally {
+                setSavingAutoUpload(false);
+              }
+            }}
+            className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+          />
+          <span className="text-sm font-medium text-gray-900">Auto-upload to YouTube for this channel</span>
+          {savingAutoUpload && <Loader2 className="w-4 h-4 animate-spin text-gray-500" />}
+        </label>
+        <p className="text-xs text-gray-600 mt-1 ml-7">
+          When <strong>off</strong> (recommended for real channels), only manual &quot;Force upload&quot; will post to YouTube. When <strong>on</strong>, the pipeline will auto-upload after render. Use a separate test channel with this ON to test without affecting operating channels.
         </p>
       </div>
 

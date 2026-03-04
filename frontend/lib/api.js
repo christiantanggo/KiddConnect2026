@@ -432,6 +432,7 @@ export const orbixNetworkAPI = {
   getYoutubeChannel: (params) => api.get('/v2/orbix-network/youtube/channel', { params }),
   saveYoutubeCustomOauth: (data) => api.post('/v2/orbix-network/youtube/custom-oauth', data),
   disconnectYoutube: (data) => api.post('/v2/orbix-network/youtube/disconnect', data || {}),
+  saveChannelAutoUpload: (data) => api.post('/v2/orbix-network/settings/channel-auto-upload', data),
   getBackgrounds: (params) => api.get('/v2/orbix-network/backgrounds', { params }),
   uploadBackground: (formData) => api.post('/v2/orbix-network/backgrounds', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },

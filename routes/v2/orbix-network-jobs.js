@@ -29,6 +29,15 @@ async function getEnabledChannelIds(businessId) {
   return new Set((rows || []).map(r => r.id));
 }
 
+/** Per-channel auto-upload: only true if this channel is explicitly enabled. Default OFF so real channels are safe; enable only for test channels. */
+function getChannelAutoUploadEnabledFromSettings(settings, channelId) {
+  const s = settings || {};
+  if (s.channel_auto_upload && s.channel_auto_upload[channelId] !== undefined) {
+    return s.channel_auto_upload[channelId] === true;
+  }
+  return false; // no per-channel setting = OFF (do not use global; avoid accidental uploads)
+}
+
 /** Channel IDs for a business in creation order (matches dropdown). Legacy/null is not in the list; treat as last. */
 export async function getChannelOrderForBusiness(businessId) {
   const { data: rows } = await supabaseClient
@@ -877,6 +886,12 @@ export async function processOneYouTubeUpload(options = {}) {
       continue;
     }
 
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
+    if (!getChannelAutoUploadEnabledFromSettings(moduleSettings?.settings, channelId)) {
+      console.log(`[Orbix YouTube] Channel ${channelId} has auto-upload OFF (per-channel), skipping render ${candidate.id}`);
+      continue;
+    }
+
     // Avoid spamming: skip if this business had any upload in the last 5 min (from 30s job or publish job)
     const since = new Date(Date.now() - UPLOAD_COOLDOWN_SECONDS * 1000).toISOString();
     const { data: businessRenders } = await supabaseClient
@@ -900,7 +915,6 @@ export async function processOneYouTubeUpload(options = {}) {
       }
     }
 
-    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
     const dailyVideoCap = moduleSettings?.settings?.limits?.daily_video_cap ?? 5;
     const posting = moduleSettings?.settings?.posting_schedule || {};
     const timezone = posting.timezone ?? 'America/New_York';
@@ -965,14 +979,13 @@ async function _uploadRender(render, force, legacyChannelId = null, useManual = 
     }
   }
 
-  // ── Auto-upload toggle ────────────────────────────────────────────────────
-  // Only check when NOT a forced manual upload. Automatic scheduled uploads
-  // respect the toggle; manual "Force Upload" from the dashboard bypasses it.
+  // ── Per-channel auto-upload toggle ────────────────────────────────────────
+  // Only check when NOT a forced manual upload. Manual "Force Upload" bypasses this.
   if (!force) {
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(render.business_id, 'orbix-network');
-    const autoUploadEnabled = moduleSettings?.settings?.auto_upload_enabled === true; // default: OFF — must be explicitly enabled
+    const autoUploadEnabled = getChannelAutoUploadEnabledFromSettings(moduleSettings?.settings, uploadChannelId);
     if (!autoUploadEnabled) {
-      console.log(`[Orbix YouTube] Auto-upload DISABLED for business ${render.business_id} — render id=${render.id} left in READY_FOR_UPLOAD for manual review`);
+      console.log(`[Orbix YouTube] Auto-upload OFF for channel ${uploadChannelId || 'legacy'} — render id=${render.id} left in READY_FOR_UPLOAD (use Force Upload or enable per-channel in Settings)`);
       return { processed: false, skippedAutoUploadDisabled: true, renderId: render.id };
     }
   }
@@ -1001,6 +1014,23 @@ async function _uploadRender(render, force, legacyChannelId = null, useManual = 
   const claimedRender = claimed;
   console.log(`[Orbix YouTube] Claimed READY_FOR_UPLOAD render id=${claimedRender.id} videoUrl=${videoUrl ? 'set' : 'MISSING'} (max ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts)`);
 
+  /** Record a failed attempt so we stop re-picking this render and runPublishJob skips this channel for 24h. Avoids spamming the channel. */
+  async function recordLimitOrQuotaFailure(message) {
+    const errMsg = (message || 'Upload limit or quota exceeded').slice(0, 500);
+    const row = {
+      business_id: claimedRender.business_id,
+      render_id: claimedRender.id,
+      platform: 'YOUTUBE',
+      title: (claimedRender.youtube_title || 'Orbix Video').toString().slice(0, 255),
+      publish_status: 'FAILED',
+      error_message: errMsg,
+      updated_at: new Date().toISOString()
+    };
+    const { error } = await supabaseClient.from('orbix_publishes').upsert(row, { onConflict: 'render_id,platform' });
+    if (error) console.warn(`[Orbix YouTube] Could not record FAILED publish: ${error.message}`);
+    else console.log(`[Orbix YouTube] Recorded FAILED publish for render ${claimedRender.id} — channel skipped 24h, no more auto-attempts for this render`);
+  }
+
   const { step8YouTubeUpload } = await import('../../services/orbix-network/render-steps.js');
   const step8Options = { ...(legacyChannelId ? { preferredChannelId: legacyChannelId } : {}), ...(useManual ? { useManual: true } : {}) };
 
@@ -1013,7 +1043,8 @@ async function _uploadRender(render, force, legacyChannelId = null, useManual = 
         return { processed: true, renderId: claimedRender.id, status: 'SKIPPED' };
       }
       if (step8Result?.readyForUpload) {
-        console.log(`[Orbix YouTube] Upload limit/quota — render id=${claimedRender.id} left as READY_FOR_UPLOAD for manual Force upload`);
+        console.log(`[Orbix YouTube] Upload limit/quota — recording failure and stopping so we do not spam the channel`);
+        await recordLimitOrQuotaFailure(step8Result?.message);
         return { processed: true, renderId: claimedRender.id, status: 'READY_FOR_UPLOAD', message: step8Result?.message };
       }
       const youtubeUrl = step8Result?.url ?? null;
@@ -1058,7 +1089,20 @@ async function _uploadRender(render, force, legacyChannelId = null, useManual = 
       return { processed: true, renderId: claimedRender.id, status: 'COMPLETED', url: youtubeUrl };
     } catch (err) {
       lastError = err;
+      const msg = (err?.message || '').toLowerCase();
+      const isLimitOrQuota = msg.includes('upload limit') || msg.includes('exceeded') || msg.includes('quota') || (err?.response?.data?.error?.errors?.some?.(e => e.reason === 'uploadLimitExceeded' || e.reason === 'quotaExceeded'));
       console.error(`[Orbix YouTube] Upload attempt ${attempt}/${YOUTUBE_UPLOAD_MAX_ATTEMPTS} FAILED render id=${claimedRender.id} error="${err.message}" code=${err?.code || 'n/a'}`);
+      if (isLimitOrQuota) {
+        console.log(`[Orbix YouTube] Limit/quota error — NOT retrying (would spam channel). Recording failure and stopping.`);
+        await recordLimitOrQuotaFailure(err.message);
+        await supabaseClient.from('orbix_renders').update({
+          render_status: 'READY_FOR_UPLOAD',
+          render_step: 'STEP_8_YOUTUBE_UPLOAD',
+          step_error: err.message?.slice(0, 500),
+          updated_at: new Date().toISOString()
+        }).eq('id', claimedRender.id);
+        return { processed: true, renderId: claimedRender.id, status: 'READY_FOR_UPLOAD', message: err.message };
+      }
       if (attempt < YOUTUBE_UPLOAD_MAX_ATTEMPTS) {
         console.log(`[Orbix YouTube] Retrying in ${YOUTUBE_UPLOAD_RETRY_DELAY_MS / 1000}s...`);
         await new Promise((r) => setTimeout(r, YOUTUBE_UPLOAD_RETRY_DELAY_MS));
@@ -1474,6 +1518,7 @@ export async function runPublishJob() {
           const chIdKey = chId || '__legacy__';
           if (chId != null && channelIdsQuotaExceeded.has(chId)) continue; // quota hit recently, skip until tomorrow
           if (chId != null && !enabledChannelIds.has(chId)) continue; // skip disabled channels
+          if (!getChannelAutoUploadEnabledFromSettings(moduleSettings?.settings, chId)) continue; // per-channel auto-upload OFF
           if (seen.has(chIdKey)) continue; // already queuing one for this channel this run
           const countForChannel = publishCountByChannel[chIdKey] || 0;
           if (countForChannel >= dailyVideoCap) {

@@ -724,7 +724,7 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
       return res.status(400).json({ error: 'No video file available to upload. Re-render first.' });
     }
 
-    console.log(`[POST renders/:id/upload-to-youtube] Triggering manual YouTube upload for render ${id}`);
+    console.log(`[POST renders/:id/upload-to-youtube] Triggering MANUAL YouTube upload for render ${id} channel_id=${channelId} (will use Manual-tab OAuth for this channel)`);
     res.json({ message: 'YouTube upload started', render_id: id });
 
     // Run upload in background after response
@@ -739,8 +739,8 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
     }
 
     // force: true bypasses the auto_upload_enabled toggle — this is an explicit manual upload.
-    // useManual: true so we use the channel's manual OAuth (separate quota from auto).
-    // preferredChannelId: when the render's story has no channel_id (legacy), use this channel's YouTube.
+    // useManual: true so we use the channel's Manual-tab OAuth only (no fallback to Auto).
+    // preferredChannelId: channel from request so we use that channel's YouTube (Manual tab).
     processOneYouTubeUpload({ force: true, renderId: id, preferredChannelId: channelId, useManual: true })
       .then((result) => {
         console.log(`[upload-to-youtube] Upload result for ${id}:`, result.status, result.error || '');
@@ -2586,6 +2586,9 @@ router.get('/youtube/channel', async (req, res) => {
       : settings.youtube;
 
     const connected = !!(yt?.channel_id && yt?.access_token);
+    const channelAutoUploadEarly = (settings.channel_auto_upload && orbixChannelId && settings.channel_auto_upload[orbixChannelId] !== undefined)
+      ? settings.channel_auto_upload[orbixChannelId] === true
+      : false;
     if (!connected && !(orbixChannelId && yt?.manual_channel_id && yt?.manual_access_token)) {
       return res.json({
         connected: false,
@@ -2596,7 +2599,8 @@ router.get('/youtube/channel', async (req, res) => {
         connected_manual: false,
         channel_manual: null,
         manual_custom_oauth: !!(orbixChannelId && yt?.manual_client_id),
-        manual_client_id_preview: orbixChannelId ? clientIdPreview(yt?.manual_client_id) : null
+        manual_client_id_preview: orbixChannelId ? clientIdPreview(yt?.manual_client_id) : null,
+        auto_upload_enabled: orbixChannelId ? channelAutoUploadEarly : false
       });
     }
 
@@ -2607,6 +2611,10 @@ router.get('/youtube/channel', async (req, res) => {
       ? { id: yt.manual_channel_id, title: yt.manual_channel_title || '' }
       : null;
 
+    const channelAutoUpload = (settings.channel_auto_upload && orbixChannelId && settings.channel_auto_upload[orbixChannelId] !== undefined)
+      ? settings.channel_auto_upload[orbixChannelId] === true
+      : false;
+
     res.json({
       connected,
       channel: yt?.channel_id ? { id: yt.channel_id, title: yt.channel_title || '' } : null,
@@ -2616,11 +2624,35 @@ router.get('/youtube/channel', async (req, res) => {
       connected_manual,
       channel_manual,
       manual_custom_oauth: !!(orbixChannelId && yt?.manual_client_id),
-      manual_client_id_preview: orbixChannelId ? clientIdPreview(yt?.manual_client_id) : null
+      manual_client_id_preview: orbixChannelId ? clientIdPreview(yt?.manual_client_id) : null,
+        auto_upload_enabled: orbixChannelId ? channelAutoUpload : false
     });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/channel] Error:', error);
     res.status(500).json({ error: 'Failed to fetch channel info' });
+  }
+});
+
+/**
+ * POST /api/v2/orbix-network/settings/channel-auto-upload
+ * Body: { channel_id, auto_upload_enabled: boolean }. Sets per-channel auto-upload for YouTube (default OFF so only test channels need enabling).
+ */
+router.post('/settings/channel-auto-upload', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const channelId = req.body?.channel_id;
+    const enabled = req.body?.auto_upload_enabled === true;
+    if (!channelId) {
+      return res.status(400).json({ error: 'channel_id required' });
+    }
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    const settings = { ...(moduleSettings?.settings || {}) };
+    settings.channel_auto_upload = { ...(settings.channel_auto_upload || {}), [channelId]: enabled };
+    await ModuleSettings.update(businessId, MODULE_KEY, settings);
+    res.json({ ok: true, channel_id: channelId, auto_upload_enabled: enabled });
+  } catch (error) {
+    console.error('[POST /settings/channel-auto-upload] Error:', error);
+    res.status(500).json({ error: error.message || 'Failed to save' });
   }
 });
 

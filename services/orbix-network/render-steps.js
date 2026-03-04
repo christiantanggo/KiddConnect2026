@@ -832,8 +832,8 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath, st
     // Durable log before upload so if the server dies during upload we still have a trail in step_logs (DB)
     await logStepEvent(renderId, step, 'PROGRESS', 'Calling YouTube API to upload video (streaming file; may take 1–2 min). If server restarts with no logs after this, crash was likely during upload — check memory or timeout.', { title: metadata?.title?.substring(0, 60) });
     await updateStepStatus(renderId, step, 40);
-    writeProgressLog('STEP_8_CALLING_PUBLISH', { renderId, title: metadata?.title?.slice(0, 40), useManual: !!step8Options.useManual });
-    console.log(`[Step 8 YouTube] Calling publishVideo businessId=${businessId} renderId=${renderId} orbixChannelId=${orbixChannelId || 'legacy'} useManual=${!!step8Options.useManual} title="${metadata.title}" timeoutMs=${uploadTimeoutMs}`);
+    writeProgressLog('STEP_8_CALLING_PUBLISH', { renderId, title: metadata?.title?.slice(0, 40), useManual: !!step8Options.useManual, orbixChannelId: orbixChannelId || null });
+    console.log(`[Step 8 YouTube] Calling publishVideo businessId=${businessId} renderId=${renderId} orbixChannelId=${orbixChannelId || 'legacy'} useManual=${!!step8Options.useManual} (useManual=true => Manual-tab OAuth only) title="${metadata.title}" timeoutMs=${uploadTimeoutMs}`);
     let result;
     let timeoutId;
     try {

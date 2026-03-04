@@ -105,7 +105,8 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
           yt = getYtFromChannelEntry(entry, true);
           usePerChannel = true;
           slotManual = true;
-          console.log('[YouTube Publisher] Using manual OAuth for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
+          writeProgressLog('YT_OAUTH_SLOT', { slot: 'MANUAL', orbixChannelId, youtube_channel_id: yt?.channel_id || null });
+          console.log('[YouTube Publisher] Using MANUAL OAuth for orbixChannelId=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a', '(Force Upload path)');
         } else {
           console.error('[YouTube Publisher] Manual upload requested but channel has no manual OAuth. Connect YouTube in the Manual tab for this channel. orbixChannelId=', orbixChannelId);
         }
@@ -113,7 +114,8 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
         if (entry?.access_token) {
           yt = getYtFromChannelEntry(entry, false);
           usePerChannel = true;
-          console.log('[YouTube Publisher] Using auto OAuth for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
+          writeProgressLog('YT_OAUTH_SLOT', { slot: 'AUTO', orbixChannelId, youtube_channel_id: yt?.channel_id || null });
+          console.log('[YouTube Publisher] Using AUTO OAuth for orbixChannelId=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a', '(scheduled/pipeline path)');
         } else {
           console.error('[YouTube Publisher] Auto upload requested but channel has no auto OAuth. Connect YouTube in the Auto tab for this channel. orbixChannelId=', orbixChannelId);
         }
@@ -424,14 +426,15 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
       throw err;
     }
 
-    // uploadLimitExceeded: YouTube says this account/channel has hit daily upload limit — surface a clear, actionable message
+    // uploadLimitExceeded: YouTube's per-CHANNEL (per Google/YouTube account) daily limit — NOT API quota. Same channel in Auto + Manual = one shared limit.
     const isUploadLimitExceeded = firstReason === 'uploadLimitExceeded' || googleMsg.includes('exceeded the number of videos');
     if (isUploadLimitExceeded) {
-      console.error('[YouTube Publisher] uploadLimitExceeded — orbixChannelId=', orbixChannelId || 'legacy', '(limit is from YouTube, not our app)');
+      console.error('[YouTube Publisher] uploadLimitExceeded — orbixChannelId=', orbixChannelId || 'legacy', 'reason=', firstReason, '(YouTube channel/account limit, not API project quota)');
       const err = new Error(
         'YouTube says this channel/account has reached its daily upload limit. ' +
-        'If this channel has not uploaded in over 24 hours, the limit may be on the whole Google account (e.g. same account connected to another Orbix channel, or used in YouTube Studio). ' +
-        'Limits often reset at midnight Pacific Time. Try again later or check YouTube Studio for recent uploads.'
+        'This limit is per YouTube channel (the Google account you connected), not per API project. ' +
+        'If the same Google account is connected in both the Auto and Manual tabs, it is the same channel — one shared limit. ' +
+        'Limits often reset at midnight Pacific Time. Try again later or connect a different YouTube channel (different Google account) in the Manual tab for a separate limit.'
       );
       err.response = error.response;
       throw err;
