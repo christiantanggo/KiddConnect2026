@@ -73,6 +73,37 @@ export async function getChannelAllowedCategories(channelId) {
   return allowed.size ? allowed : null;
 }
 
+/**
+ * Get today's YouTube upload count per channel (from orbix_publishes, not completed renders).
+ * Used to enforce daily cap so we never exceed N uploads per channel per day.
+ * @param {string} businessId
+ * @param {string} timezone - e.g. 'America/New_York'
+ * @returns {Promise<Record<string, number>>} { [channelIdKey]: count } where channelIdKey is channel UUID or '__legacy__'
+ */
+async function getPublishCountByChannelToday(businessId, timezone) {
+  const todayISO = getStartOfTodayISOInZone(timezone);
+  const { data: rows, error } = await supabaseClient
+    .from('orbix_publishes')
+    .select('render_id')
+    .eq('business_id', businessId)
+    .eq('publish_status', 'PUBLISHED')
+    .gte('posted_at', todayISO);
+  if (error || !rows?.length) return {};
+  const renderIds = rows.map(r => r.render_id).filter(Boolean);
+  if (renderIds.length === 0) return {};
+  const { data: renders } = await supabaseClient
+    .from('orbix_renders')
+    .select('id, orbix_stories(channel_id)')
+    .eq('business_id', businessId)
+    .in('id', renderIds);
+  const countByChannel = {};
+  for (const r of (renders || [])) {
+    const chKey = r.orbix_stories?.channel_id ?? '__legacy__';
+    countByChannel[chKey] = (countByChannel[chKey] || 0) + 1;
+  }
+  return countByChannel;
+}
+
 /** First channel ID that has YouTube connected for this business (for legacy renders in auto-upload). */
 async function getFirstChannelIdWithYouTube(businessId) {
   const settings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
@@ -793,16 +824,24 @@ export async function processOneYouTubeUpload(options = {}) {
     return _uploadRender(ready, force, preferredChannelId);
   }
 
-  // For automatic 30s loop: fetch candidates and pick one that hasn't hit its per-channel cap
+  // Fetch candidates. Exclude any render that has EVER been sent to YouTube (any orbix_publishes row) so we never double-upload the same video.
   let { data: candidates } = await supabaseClient
     .from('orbix_renders')
     .select('*, orbix_stories(channel_id)')
     .eq('render_status', 'READY_FOR_UPLOAD')
     .not('output_url', 'is', null)
     .order('updated_at', { ascending: true })
-    .limit(20);
+    .limit(50);
 
   if (!candidates || candidates.length === 0) return { processed: false };
+
+  const { data: alreadyAttempted } = await supabaseClient
+    .from('orbix_publishes')
+    .select('render_id')
+    .in('render_id', candidates.map(c => c.id));
+  const attemptedRenderIds = new Set((alreadyAttempted || []).map(p => p.render_id));
+  candidates = candidates.filter(c => !attemptedRenderIds.has(c.id));
+  if (candidates.length === 0) return { processed: false };
 
   // Sort by channel creation order (same as dropdown), then oldest first
   const businessIds = [...new Set(candidates.map(c => c.business_id))];
@@ -871,19 +910,12 @@ export async function processOneYouTubeUpload(options = {}) {
       continue;
     }
 
-    const { data: channelPublishes } = await supabaseClient
-      .from('orbix_renders')
-      .select('id, orbix_stories(channel_id)')
-      .eq('business_id', businessId)
-      .eq('render_status', 'COMPLETED')
-      .gte('completed_at', todayISO);
-
-    const countForChannel = (channelPublishes || []).filter(
-      r => (r.orbix_stories?.channel_id || '__legacy__') === channelIdKey
-    ).length;
+    // Cap = actual YouTube uploads today per channel (orbix_publishes), NOT completed renders
+    const publishCountByChannel = await getPublishCountByChannelToday(businessId, timezone);
+    const countForChannel = publishCountByChannel[channelIdKey] || 0;
 
     if (countForChannel >= dailyVideoCap) {
-      console.log(`[Orbix YouTube] Channel ${channelIdKey} cap reached (${countForChannel}/${dailyVideoCap}), skipping render ${candidate.id}`);
+      console.log(`[Orbix YouTube] Channel ${channelIdKey} upload cap reached (${countForChannel}/${dailyVideoCap} uploads today), skipping render ${candidate.id}`);
       continue;
     }
 
@@ -1066,36 +1098,19 @@ export async function runYouTubeUploadJob() {
 const YOUTUBE_UPLOAD_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0; // 0 = start upload immediately after render
 
 /**
- * Process one PENDING render, then immediately attempt YouTube upload if render succeeded.
+ * Process one PENDING render. Renders are left READY_FOR_UPLOAD; only the publish job (at post times) uploads to YouTube.
  */
 export async function runOneRenderThenUpload() {
   const result = await processOnePendingRender();
-  let uploadResult = null;
-  if (result.processed && (result.status === 'RENDER_COMPLETE' || result.status === 'COMPLETED')) {
-    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
-      await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
-    }
-    uploadResult = await processOneYouTubeUpload();
-    console.log('[Orbix Jobs] runOneRenderThenUpload: upload result =', uploadResult?.status || 'no-op');
-  }
-  return { render: result, upload: uploadResult };
+  return { render: result, upload: null };
 }
 
 /**
- * Process a specific render by ID, then immediately attempt YouTube upload if render succeeded.
+ * Process a specific render by ID. Leaves render READY_FOR_UPLOAD; use Force Upload in UI or wait for publish job at post times.
  */
 export async function runRenderByIdThenUpload(renderId) {
   const result = await processRenderById(renderId);
-  let uploadResult = null;
-  if (result.processed && (result.status === 'RENDER_COMPLETE' || result.status === 'COMPLETED')) {
-    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
-      await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
-    }
-    // Upload this specific render immediately with force=true (bypasses any toggles)
-    uploadResult = await processOneYouTubeUpload({ force: true, renderId });
-    console.log('[Orbix Jobs] runRenderByIdThenUpload: upload result =', uploadResult?.status || 'no-op');
-  }
-  return { render: result, upload: uploadResult };
+  return { render: result, upload: null };
 }
 
 /**
@@ -1114,21 +1129,14 @@ router.post('/youtube-upload', async (req, res) => {
 
 /**
  * POST /api/v2/orbix-network/jobs/pipeline
- * Run render job (steps 3–7, stop before YouTube), wait 30s, then run YouTube upload job.
- * Single endpoint for cron; avoids upload hanging the render process.
+ * Run render job (steps 3–7). Uploads happen only at post times via publish job (and manual Force Upload).
  */
 router.post('/pipeline', async (req, res) => {
   try {
     const renderResult = await runRenderJob();
-    if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
-      console.log('[Orbix Jobs] Pipeline: render phase done, pausing', YOUTUBE_UPLOAD_DELAY_MS / 1000, 's before YouTube upload...');
-      await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_DELAY_MS));
-    }
-    const uploadResult = await runYouTubeUploadJob();
     res.json({
       success: true,
-      render: renderResult,
-      upload: uploadResult
+      render: renderResult
     });
   } catch (error) {
     console.error('[Orbix Jobs] Pipeline error:', error);
@@ -1402,27 +1410,10 @@ export async function runPublishJob() {
           continue;
         }
 
-        // Count today's publishes PER CHANNEL — join through renders to get channel_id reliably
-        const { data: todayPublishedRenders, error: publishesCountError } = await supabaseClient
-          .from('orbix_renders')
-          .select('id, orbix_stories(channel_id)')
-          .eq('business_id', businessId)
-          .eq('render_status', 'COMPLETED')
-          .gte('completed_at', todayISO);
-        if (publishesCountError) {
-          console.error(`[Orbix Jobs] Error counting today's publishes for business ${businessId}:`, publishesCountError);
-          continue;
-        }
-
-        // Build a map of { channelId -> countToday }
-        const publishCountByChannel = {};
-        for (const r of (todayPublishedRenders || [])) {
-          const chId = r.orbix_stories?.channel_id || '__legacy__';
-          publishCountByChannel[chId] = (publishCountByChannel[chId] || 0) + 1;
-        }
-
-        const totalPublishesToday = (todayPublishedRenders || []).length;
-        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} (local) window=${startStr}-${endStr} publishesToday=${totalPublishesToday} cap=${dailyVideoCap}/channel perChannel=${JSON.stringify(publishCountByChannel)}`);
+        // Count actual YouTube uploads today PER CHANNEL (orbix_publishes), NOT completed renders — prevents burning quota
+        const publishCountByChannel = await getPublishCountByChannelToday(businessId, timezone);
+        const totalPublishesToday = Object.values(publishCountByChannel).reduce((a, b) => a + b, 0);
+        console.log(`[Orbix Publish] Business ${businessId}: tz=${timezone} now=${currentTimeStr} (local) window=${startStr}-${endStr} uploadsToday=${totalPublishesToday} cap=${dailyVideoCap}/channel perChannel=${JSON.stringify(publishCountByChannel)}`);
 
         // No slot-time gate — upload immediately whenever a render is ready.
 
@@ -1501,20 +1492,20 @@ export async function runPublishJob() {
         });
 
         for (const render of completedRenders) {
-          // Skip if already published AND has a real YouTube URL (not a failed/empty publish)
+          // Never auto-upload a render we already attempted (any status). Prevents 72x duplicate uploads; only manual Force Upload can retry.
           const { data: existingPublish } = await supabaseClient
             .from('orbix_publishes')
-            .select('id, youtube_url')
+            .select('id, publish_status, youtube_url')
             .eq('render_id', render.id)
-            .eq('publish_status', 'PUBLISHED')
             .maybeSingle();
 
-          if (existingPublish?.youtube_url) {
-            console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already published at ${existingPublish.youtube_url}, skipping`);
+          if (existingPublish) {
+            if (existingPublish.youtube_url) {
+              console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already published at ${existingPublish.youtube_url}, skipping`);
+            } else {
+              console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already has a publish attempt (status=${existingPublish.publish_status}), skipping — use Force Upload in UI to retry`);
+            }
             continue;
-          }
-          if (existingPublish && !existingPublish.youtube_url) {
-            console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} has PUBLISHED record but no youtube_url — retrying upload`);
           }
 
           try {
@@ -1545,6 +1536,19 @@ export async function runPublishJob() {
             const publishOptions = orbixChannelId ? { orbixChannelId } : {};
 
             console.log(`[Orbix Publish] Business ${businessId}: uploading render ${render.id} to YouTube (channel ${orbixChannelId || 'legacy'})`);
+            // Record attempt immediately so we never auto-retry this render (prevents 72x duplicate uploads on timeout/crash)
+            await supabaseClient
+              .from('orbix_publishes')
+              .insert({
+                business_id: businessId,
+                render_id: render.id,
+                platform: 'YOUTUBE',
+                title: title?.slice(0, 255) || 'Uploading',
+                publish_status: 'PENDING'
+              })
+              .then(() => {})
+              .catch(() => {});
+
             let publishResult = null;
             let lastPublishErr = null;
             for (let attempt = 1; attempt <= 2; attempt++) {
@@ -1569,16 +1573,14 @@ export async function runPublishJob() {
             if (publishResult) {
               await supabaseClient
                 .from('orbix_publishes')
-                .insert({
-                  business_id: businessId,
-                  render_id: render.id,
-                  platform: 'YOUTUBE',
+                .update({
                   platform_video_id: publishResult.videoId,
-                  title,
                   description,
                   publish_status: 'PUBLISHED',
                   posted_at: new Date().toISOString()
-                });
+                })
+                .eq('render_id', render.id)
+                .eq('publish_status', 'PENDING');
 
               if (story?.id) {
                 await supabaseClient
@@ -1593,47 +1595,36 @@ export async function runPublishJob() {
               await sendOrbixUploadFailureEmail(businessId, orbixChannelId || null, lastPublishErr.message);
               await supabaseClient
                 .from('orbix_publishes')
-                .insert({
-                  business_id: businessId,
-                  render_id: render.id,
-                  platform: 'YOUTUBE',
-                  title: 'Failed',
+                .update({
                   publish_status: 'FAILED',
-                  error_message: lastPublishErr.message
+                  error_message: lastPublishErr.message?.slice(0, 500)
                 })
-                .select()
-                .maybeSingle();
+                .eq('render_id', render.id)
+                .eq('publish_status', 'PENDING');
             }
           } catch (publishErr) {
             if (publishErr?.code === SKIP_YOUTUBE_UPLOAD_CODE) {
               console.warn(`[Orbix Publish] Business ${businessId}: skipping render ${render.id} — ${publishErr.message}`);
               await supabaseClient
                 .from('orbix_publishes')
-                .insert({
-                  business_id: businessId,
-                  render_id: render.id,
-                  platform: 'YOUTUBE',
-                  title: 'Skipped',
+                .update({
                   publish_status: 'FAILED',
-                  error_message: publishErr.message
+                  error_message: (publishErr?.message || 'Skipped')?.slice(0, 500)
                 })
-                .select()
-                .maybeSingle();
+                .eq('render_id', render.id)
+                .eq('publish_status', 'PENDING');
             } else {
               console.error(`[Orbix Publish] Business ${businessId}: error publishing render ${render.id}:`, publishErr.message);
               const msg = publishErr?.message || '';
-              const isQuotaLimit = msg.includes('exceeded the number of videos') || (publishErr?.responseData && String(publishErr.responseData).includes('uploadLimitExceeded'));
               await supabaseClient
                 .from('orbix_publishes')
-                .insert({
-                  business_id: businessId,
-                  render_id: render.id,
-                  platform: 'YOUTUBE',
-                  title: render.youtube_title || 'Upload failed',
+                .update({
                   publish_status: 'FAILED',
                   error_message: msg.slice(0, 500)
                 })
-                .then(() => {});
+                .eq('render_id', render.id)
+                .eq('publish_status', 'PENDING');
+              const isQuotaLimit = msg.includes('exceeded the number of videos') || (publishErr?.responseData && String(publishErr.responseData).includes('uploadLimitExceeded'));
               if (isQuotaLimit) {
                 console.warn(`[Orbix Publish] Business ${businessId}: YouTube daily upload limit hit for this channel — will skip this channel for 24h to avoid repeated failures`);
               }
@@ -1852,16 +1843,8 @@ router.post('/automated-pipeline', async (req, res) => {
     
     console.log(`[Orbix Jobs] Running automated pipeline for business ${businessId}`);
     const result = await runAutomatedPipeline(businessId);
-
-    // Immediately upload any READY_FOR_UPLOAD renders — don't wait for the next poll
-    let uploadResults = [];
-    let uploadResult = await processOneYouTubeUpload({ force: true });
-    while (uploadResult?.processed) {
-      uploadResults.push(uploadResult);
-      uploadResult = await processOneYouTubeUpload({ force: true });
-    }
-
-    res.json({ ...result, uploads: uploadResults.length });
+    // Uploads happen only via publish job at post times (and manual Force Upload in UI). No upload here.
+    res.json({ ...result, uploads: 0 });
   } catch (error) {
     console.error('[Orbix Jobs] Automated pipeline error:', error);
     res.status(500).json({ error: 'Automated pipeline failed', message: error.message });

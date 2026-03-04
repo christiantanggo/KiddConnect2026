@@ -30,11 +30,10 @@ import {
 
 installCrashHandlers(WORKER_CRASH_LOG_PATH, true);
 
-import { processOnePendingRender, processOneYouTubeUpload } from '../routes/v2/orbix-network-jobs.js';
+import { processOnePendingRender } from '../routes/v2/orbix-network-jobs.js';
 
 const POLL_MS = Number(process.env.ORBIX_WORKER_POLL_MS) || 15_000; // 15s between polls when idle
 const POLL_AFTER_JOB_MS = 5_000; // 5s before next poll after processing one
-const YOUTUBE_UPLOAD_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_DELAY_MS) || 0; // 0 = start upload immediately
 
 async function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -57,16 +56,7 @@ async function run() {
         });
         setCurrentRender(result.renderId ?? null, `DONE_${result.status}`);
         console.log('[Orbix Worker] Job done', result.renderId, result.status);
-        if (result.status === 'RENDER_COMPLETE') {
-          if (YOUTUBE_UPLOAD_DELAY_MS > 0) {
-            console.log('[Orbix Worker] Pausing', YOUTUBE_UPLOAD_DELAY_MS / 1000, 's before YouTube upload...');
-            await sleep(YOUTUBE_UPLOAD_DELAY_MS);
-          }
-          const uploadResult = await processOneYouTubeUpload();
-          if (uploadResult.processed) {
-            console.log('[Orbix Worker] YouTube upload', uploadResult.status, uploadResult.renderId);
-          }
-        }
+        // Uploads only at post times via publish job (and manual Force Upload). Worker does not upload.
         await sleep(POLL_AFTER_JOB_MS);
       } else {
         await sleep(POLL_MS);

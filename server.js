@@ -755,7 +755,7 @@ try {
   };
 
   // 1. Scheduled Pipeline: scrape → process → review → render at fixed times in each business's timezone.
-  // Pipeline runs 1 hour before each post: 7am, 10am, 1pm, 4pm, 7pm. Posts at 8am, 11am, 2pm, 5pm, 8pm.
+  // Pipeline runs at post times: 8am, 11am, 2pm, 5pm, 8pm (scrape, render, upload in that slot).
   // Uses posting_schedule.timezone from settings (NOT UTC). Check every 5 minutes.
   if (typeof runScheduledPipelineCheck === 'function') {
     const scheduledPipelineJob = async () => {
@@ -778,13 +778,10 @@ try {
     console.log('✅ Orbix Network: web server will process PENDING renders every 30s');
   }
 
-  // Upload READY_FOR_UPLOAD renders to YouTube every 30s — immediately after render completes.
-  if (typeof processOneYouTubeUpload === 'function') {
-    orbixNetworkIntervals.youtubeUpload = setInterval(runSafe(() => processOneYouTubeUpload(), 'YouTubeUpload'), 30 * 1000);
-    console.log('✅ Orbix Network: YouTube upload job runs every 30s (uploads as soon as render is ready)');
-  }
+  // ORBIX YOUTUBE: Do NOT add setInterval for processOneYouTubeUpload or runYouTubeUploadJob.
+  // Only runPublishJob (below) may upload on a schedule, at post times. See docs/ORBIX_YOUTUBE_UPLOAD_SOURCES_OF_TRUTH.md
 
-  // 5. Publish Videos (every 5 minutes) — fixed post times 8am, 11am, 2pm, 5pm, 8pm in business timezone
+  // 5. Publish Videos (every 5 minutes) — ONLY scheduled upload path; only uploads when in post slot + under daily cap
   if (typeof runPublishJob === 'function') {
     orbixNetworkIntervals.publish = setInterval(runSafe(() => runPublishJob(), 'Publish'), 5 * 60 * 1000);
   }
