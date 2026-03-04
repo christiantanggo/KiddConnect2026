@@ -702,15 +702,20 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
       return res.status(404).json({ error: 'Render not found for this channel' });
     }
 
+    // Log so we can see why 400 happens if it does
+    console.log(`[POST renders/:id/upload-to-youtube] render ${id} channel=${channelId} status=${render.render_status} hasOutputUrl=${!!render.output_url}`);
+
     // No category check for manual upload — user chose the channel and render; trust their choice.
 
-    const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED', 'STEP_FAILED'];
+    const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED', 'STEP_FAILED', 'FAILED'];
     if (!allowedStatuses.includes(render.render_status)) {
-      const msg = `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD, UPLOAD_FAILED, COMPLETED, or STEP_FAILED (with video) renders can be uploaded.`;
+      const msg = `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD, COMPLETED, UPLOAD_FAILED, STEP_FAILED, or FAILED (with video) can be uploaded.`;
+      console.warn(`[upload-to-youtube] 400 render ${id}: status=${render.render_status} not in allowed list`);
       return res.status(400).json({ error: msg, message: msg });
     }
 
     if (!render.output_url) {
+      console.warn(`[upload-to-youtube] 400 render ${id}: no output_url`);
       return res.status(400).json({ error: 'No video file available to upload. Re-render first.', message: 'No video file available to upload. Re-render first.' });
     }
 
