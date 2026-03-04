@@ -61,13 +61,18 @@ function parseState(stateStr) {
 router.get('/youtube/callback', async (req, res) => {
   try {
     const { code, state, error } = req.query;
+    // Log exactly what we received so we can see why code might be missing (proxy stripping params? Google sent error? wrong URL?)
+    console.log('[Riddle YouTube Callback] received query:', JSON.stringify({ hasCode: !!code, hasState: !!state, error: error || null, queryKeys: Object.keys(req.query || {}) }));
 
     const { redirectBase } = parseState(state || '');
 
     if (error) {
-      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_denied`);
+      console.log('[Riddle YouTube Callback] Google returned error param:', error, 'description:', req.query.error_description || '');
+      const errParam = error === 'redirect_uri_mismatch' ? 'redirect_uri_mismatch' : 'youtube_oauth_denied';
+      return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=${errParam}`);
     }
     if (!code) {
+      console.warn('[Riddle YouTube Callback] No code in request — cannot exchange for tokens. Full URL path+query:', req.url);
       return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=youtube_oauth_failed`);
     }
 

@@ -552,8 +552,10 @@ function ChannelSettingsTab({ channel }) {
       showError('Google said the code was invalid or already used. Usually the redirect URI in Google Cloud does not match. Use "Show redirect URI" below, add that exact URI in Google Cloud → Credentials → your OAuth client → Authorized redirect URIs, then revoke at myaccount.google.com/permissions and try "Clear YouTube and reconnect".');
     } else if (err === 'youtube_oauth_denied') {
       showError('You denied access. Try connecting again when ready.');
+    } else if (err === 'redirect_uri_mismatch') {
+      showError('Google says redirect URI does not match. Add the exact URI from "Show redirect URI" to Google Cloud → Credentials → your OAuth client → Authorized redirect URIs (no trailing slash).');
     } else if (err === 'youtube_oauth_failed' || err === 'youtube_oauth_error') {
-      showError('YouTube connection failed. Use "Show redirect URI" below and add that exact URI in Google Cloud → Credentials → your OAuth client, then try again.');
+      showError('YouTube connection failed: callback received no authorization code. Check backend logs for "[Riddle YouTube Callback] received query" to see what the server got — the code may be stripped by a proxy or Google may be redirecting to a different URL.');
     } else if (err === 'invalid_state') {
       showError('Invalid state returned from Google. Try "Clear YouTube and reconnect".');
     } else if (err === 'youtube_not_configured') {
