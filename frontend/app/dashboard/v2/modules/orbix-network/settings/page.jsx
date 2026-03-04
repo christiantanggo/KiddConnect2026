@@ -554,6 +554,9 @@ function ChannelSettingsTab({ channel }) {
       showError('You denied access. Try connecting again when ready.');
     } else if (err === 'redirect_uri_mismatch') {
       showError('Google says redirect URI does not match. Add the exact URI from "Show redirect URI" to Google Cloud → Credentials → your OAuth client → Authorized redirect URIs (no trailing slash).');
+    } else if (err === 'youtube_api_not_enabled') {
+      const enableUrl = searchParams.get('enable_url') || 'https://console.developers.google.com/apis/library/youtube.googleapis.com';
+      showError('YouTube Data API v3 is not enabled for this Google Cloud project. Open: ' + enableUrl + ' → Enable, then try Connect again.');
     } else if (err === 'youtube_oauth_failed' || err === 'youtube_oauth_error') {
       showError('YouTube connection failed: callback received no authorization code. Check backend logs for "[Riddle YouTube Callback] received query" to see what the server got — the code may be stripped by a proxy or Google may be redirecting to a different URL.');
     } else if (err === 'invalid_state') {

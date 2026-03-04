@@ -109,12 +109,26 @@ router.get('/youtube/callback', async (req, res) => {
     }
 
     oauth2Client.setCredentials(tokens);
-    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
-    const channelResponse = await youtube.channels.list({
-      part: ['snippet', 'contentDetails', 'statistics'],
-      mine: true
-    });
-    const channel = channelResponse.data.items?.[0];
+    let channel;
+    try {
+      const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+      const channelResponse = await youtube.channels.list({
+        part: ['snippet', 'contentDetails', 'statistics'],
+        mine: true
+      });
+      channel = channelResponse.data.items?.[0];
+    } catch (apiErr) {
+      const msg = apiErr?.message || '';
+      if (msg.includes('has not been used') || msg.includes('is disabled') || msg.includes('Enable it by visiting')) {
+        const projectMatch = msg.match(/project (\d+)/);
+        const project = projectMatch ? projectMatch[1] : '';
+        const enableUrl = project
+          ? `https://console.developers.google.com/apis/api/youtube.googleapis.com/overview?project=${project}`
+          : 'https://console.developers.google.com/apis/library/youtube.googleapis.com';
+        return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=youtube_api_not_enabled&enable_url=${encodeURIComponent(enableUrl)}`);
+      }
+      throw apiErr;
+    }
     if (!channel) {
       return res.redirect(`${redirectBase}/dashboard/v2/modules/orbix-network/settings?error=no_channel_found`);
     }
