@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { X, RefreshCw, Loader, CheckCircle2, XCircle, Clock, AlertCircle, AlertTriangle, Play, Youtube } from 'lucide-react';
+import { X, RefreshCw, Loader, CheckCircle2, XCircle, Clock, AlertCircle, AlertTriangle, Play, Youtube, Download } from 'lucide-react';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { useOrbixChannel } from '../OrbixChannelContext';
@@ -11,6 +11,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
   const { apiParams } = useOrbixChannel();
   const [loading, setLoading] = useState(false);
   const [uploadingYouTube, setUploadingYouTube] = useState(false);
+  const [downloadingVideo, setDownloadingVideo] = useState(false);
   const [details, setDetails] = useState(null);
   const [logs, setLogs] = useState([]);
   
@@ -265,6 +266,29 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
       showErrorToast(error?.response?.data?.error || 'Failed to upload to YouTube');
     } finally {
       setUploadingYouTube(false);
+    }
+  };
+
+  const handleDownloadVideo = async () => {
+    if (!item.render_id) return;
+    try {
+      setDownloadingVideo(true);
+      const res = await orbixNetworkAPI.downloadVideo(item.render_id, apiParams());
+      const blob = res.data;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orbix-video-${item.render_id}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      success('Video downloaded.');
+    } catch (error) {
+      console.error('Error downloading video:', error);
+      showErrorToast(error?.response?.data?.error || 'Failed to download video');
+    } finally {
+      setDownloadingVideo(false);
     }
   };
 
@@ -940,6 +964,26 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                       <>
                         <RefreshCw className="w-4 h-4" />
                         Re-Render
+                      </>
+                    )}
+                  </button>
+                )}
+                {/* Download video to computer - when video exists */}
+                {canForceUploadOrRerender && (details?.output_url || item?.output_url) && (
+                  <button
+                    onClick={handleDownloadVideo}
+                    disabled={downloadingVideo || loading}
+                    className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50 flex items-center gap-2 transition-colors"
+                  >
+                    {downloadingVideo ? (
+                      <>
+                        <Loader className="w-4 h-4 animate-spin" />
+                        Downloading...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4" />
+                        Download video
                       </>
                     )}
                   </button>

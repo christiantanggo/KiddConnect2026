@@ -19,6 +19,7 @@ export default function OrbixNetworkRendersPage() {
   const [renders, setRenders] = useState([]);
   const [statusFilter, setStatusFilter] = useState('');
   const [uploadingId, setUploadingId] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
 
   useEffect(() => {
     if (!currentChannelId) {
@@ -119,6 +120,29 @@ export default function OrbixNetworkRendersPage() {
     }
   };
 
+  const handleDownloadVideo = async (renderId) => {
+    try {
+      setDownloadingId(renderId);
+      const res = await orbixNetworkAPI.downloadVideo(renderId, apiParams());
+      const blob = res.data;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `orbix-video-${renderId}.mp4`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      success('Video downloaded.');
+    } catch (error) {
+      console.error('Failed to download video:', error);
+      const errorInfo = handleAPIError(error);
+      showErrorToast(errorInfo.message || 'Failed to download video');
+    } finally {
+      setDownloadingId(null);
+    }
+  };
+
   if (loading) {
     return (
       <AuthGuard>
@@ -215,15 +239,30 @@ export default function OrbixNetworkRendersPage() {
                         {render.render_status === 'READY_FOR_UPLOAD' && (
                           <>
                             {render.output_url && (
-                              <a
-                                href={`${render.output_url}${render.output_url.includes('?') ? '&' : '?'}v=${encodeURIComponent(render.updated_at || '')}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="w-full px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-center text-sm flex items-center justify-center gap-2"
-                              >
-                                <ExternalLink className="w-4 h-4" />
-                                Watch Video
-                              </a>
+                              <>
+                                <a
+                                  href={`${render.output_url}${render.output_url.includes('?') ? '&' : '?'}v=${encodeURIComponent(render.updated_at || '')}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="w-full px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-center text-sm flex items-center justify-center gap-2"
+                                >
+                                  <ExternalLink className="w-4 h-4" />
+                                  Watch Video
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDownloadVideo(render.id)}
+                                  disabled={downloadingId === render.id}
+                                  className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 text-center text-sm flex items-center justify-center gap-2 disabled:opacity-60"
+                                >
+                                  {downloadingId === render.id ? (
+                                    <Loader className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Download className="w-4 h-4" />
+                                  )}
+                                  Download video to computer
+                                </button>
+                              </>
                             )}
                             <div className="flex gap-2">
                               <button
@@ -300,6 +339,17 @@ export default function OrbixNetworkRendersPage() {
                               <div className="bg-orange-50 border border-orange-200 rounded p-2 mb-2">
                                 <p className="text-xs text-orange-800">{render.step_error}</p>
                               </div>
+                            )}
+                            {render.output_url && (
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadVideo(render.id)}
+                                disabled={downloadingId === render.id}
+                                className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800 text-center text-sm flex items-center justify-center gap-2 disabled:opacity-60 mb-2"
+                              >
+                                {downloadingId === render.id ? <Loader className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                                Download video to computer
+                              </button>
                             )}
                             <div className="flex gap-2">
                               <button

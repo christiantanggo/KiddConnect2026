@@ -757,6 +757,46 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
 });
 
 /**
+ * GET /api/v2/orbix-network/renders/:id/download-video
+ * Download the render's video file to the user's computer. Requires query.channel_id.
+ */
+router.get('/renders/:id/download-video', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { id } = req.params;
+
+    const { data: render, error: getError } = await supabaseClient
+      .from('orbix_renders')
+      .select('id, output_url, orbix_stories!left(id, channel_id)')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .maybeSingle();
+
+    if (getError && getError.code !== 'PGRST116') throw getError;
+    if (!render) return res.status(404).json({ error: 'Render not found' });
+    const storyRow = Array.isArray(render.orbix_stories) ? render.orbix_stories[0] : render.orbix_stories;
+    const storyChannelId = storyRow?.channel_id ?? null;
+    if (storyChannelId != null && storyChannelId !== channelId) return res.status(404).json({ error: 'Render not found for this channel' });
+    if (!render.output_url) return res.status(404).json({ error: 'No video file available for this render.' });
+
+    const axios = (await import('axios')).default;
+    const filename = `orbix-video-${id}.mp4`;
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'video/mp4');
+    const streamRes = await axios.get(render.output_url, { responseType: 'stream', timeout: 120000, maxRedirects: 5, validateStatus: () => true });
+    if (streamRes.status !== 200) {
+      return res.status(502).json({ error: 'Video file could not be fetched from storage.' });
+    }
+    streamRes.data.pipe(res);
+  } catch (error) {
+    if (error.status === 400 || error.status === 404) return res.status(error.status).json({ error: error.message });
+    console.error('[GET /renders/:id/download-video] Error:', error?.message);
+    res.status(500).json({ error: error?.message || 'Failed to download video' });
+  }
+});
+
+/**
  * Build YouTube title, description, hashtags from story + script (same logic as step7Metadata; psychology uses dedicated rules).
  */
 async function buildMetadataFromRender(renderId, story, script) {

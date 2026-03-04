@@ -409,6 +409,8 @@ export const orbixNetworkAPI = {
   restartRender: (id, params, storyId) => api.post(`/v2/orbix-network/renders/${id}/restart`, {}, { params: { ...params, ...(storyId ? { story_id: storyId } : {}) } }),
   uploadToYouTube: (id, params) => api.post(`/v2/orbix-network/renders/${id}/upload-to-youtube`, {}, { params }),
   uploadRenderToYoutube: (id, params) => api.post(`/v2/orbix-network/renders/${id}/upload-to-youtube`, {}, { params }),
+  /** Download video file (blob). Use response.data and trigger browser download with a filename. */
+  downloadVideo: (id, params) => api.get(`/v2/orbix-network/renders/${id}/download-video`, { params, responseType: 'blob', timeout: 120000 }),
   resetUploadState: (id, params) => api.post(`/v2/orbix-network/renders/${id}/reset-upload`, {}, { params }),
   getPublishes: (params) => api.get('/v2/orbix-network/publishes', { params }),
   getRawItems: (params) => api.get('/v2/orbix-network/raw-items', { params }),
