@@ -968,8 +968,8 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                     )}
                   </button>
                 )}
-                {/* Download video to computer - when video exists */}
-                {canForceUploadOrRerender && (details?.output_url || item?.output_url) && (
+                {/* Download video to computer - when video has rendered (same visibility as Re-Render / Force YouTube) */}
+                {canForceUploadOrRerender && (
                   <button
                     onClick={handleDownloadVideo}
                     disabled={downloadingVideo || loading}
@@ -983,7 +983,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                     ) : (
                       <>
                         <Download className="w-4 h-4" />
-                        Download video
+                        Download
                       </>
                     )}
                   </button>
