@@ -282,7 +282,7 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
                 className="mt-2 flex items-center gap-1.5 text-xs text-gray-400 hover:text-red-500"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                Reset to auto (1 hour before each post)
+                Reset to auto (same time as each post)
               </button>
             )}
           </div>
@@ -437,6 +437,8 @@ function ChannelSettingsTab({ channel }) {
   const [clearingYt, setClearingYt] = useState(false);
   const [ytRedirectUri, setYtRedirectUri] = useState(null);
   const [loadingRedirectUri, setLoadingRedirectUri] = useState(false);
+  const [ytCredentialsSource, setYtCredentialsSource] = useState(null); // 'custom_oauth' | 'global'
+  const [ytClientIdPreview, setYtClientIdPreview] = useState(null);      // e.g. '…abc12345' for debugging
 
   // Backgrounds
   const [backgrounds, setBackgrounds] = useState([]);
@@ -479,6 +481,8 @@ function ChannelSettingsTab({ channel }) {
         setYtConnected(ytRes.data?.connected ?? false);
         setYtChannel(ytRes.data?.channel ?? null);
         setCustomOauth(ytRes.data?.custom_oauth ?? false);
+        setYtCredentialsSource(ytRes.data?.credentials_source ?? null);
+        setYtClientIdPreview(ytRes.data?.client_id_preview ?? null);
         setBackgrounds(bgRes.data?.backgrounds || []);
         setMusicTracks(musicRes.data?.music || []);
         setSources(srcRes.data?.sources || []);
@@ -508,6 +512,8 @@ function ChannelSettingsTab({ channel }) {
       orbixNetworkAPI.getYoutubeChannel(apiParams()).then((r) => {
         setYtConnected(r.data?.connected ?? false);
         setYtChannel(r.data?.channel ?? null);
+        setYtCredentialsSource(r.data?.credentials_source ?? null);
+        setYtClientIdPreview(r.data?.client_id_preview ?? null);
       }).catch(() => {});
       return;
     }
@@ -534,6 +540,8 @@ function ChannelSettingsTab({ channel }) {
       await orbixNetworkAPI.disconnectYoutube(apiBody());
       setYtConnected(false);
       setYtChannel(null);
+      setYtCredentialsSource(null);
+      setYtClientIdPreview(null);
       const res = await orbixNetworkAPI.getYoutubeAuthUrl(apiParams());
       if (res.data?.auth_url) {
         window.location.href = res.data.auth_url;
@@ -575,6 +583,8 @@ function ChannelSettingsTab({ channel }) {
       await orbixNetworkAPI.disconnectYoutube(apiBody());
       setYtConnected(false);
       setYtChannel(null);
+      setYtCredentialsSource(null);
+      setYtClientIdPreview(null);
       success('YouTube disconnected');
     } catch (e) {
       showError(handleAPIError(e).message || 'Failed to disconnect YouTube');
@@ -883,6 +893,13 @@ function ChannelSettingsTab({ channel }) {
                 <div>
                   <p className="text-sm font-semibold text-green-800">Connected</p>
                   <p className="text-sm text-green-700">{ytChannel.title || ytChannel.id}</p>
+                  {(ytCredentialsSource || ytClientIdPreview) && (
+                    <p className="text-xs text-green-600 mt-1" title="Helps match to the right OAuth client in Google Cloud Console">
+                      OAuth: {ytCredentialsSource === 'custom_oauth'
+                        ? `Custom (this channel)${ytClientIdPreview ? ` — Client ID ${ytClientIdPreview}` : ''}`
+                        : 'Global (server env)'}
+                    </p>
+                  )}
                 </div>
               </div>
               <button

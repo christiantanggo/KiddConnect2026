@@ -2538,18 +2538,126 @@ router.get('/youtube/channel', async (req, res) => {
       return res.json({
         connected: false,
         channel: null,
-        custom_oauth: !!(yt?.client_id && orbixChannelId)
+        custom_oauth: !!(yt?.client_id && orbixChannelId),
+        credentials_source: null,
+        client_id_preview: null
       });
+    }
+
+    const customOAuth = !!(yt?.client_id && orbixChannelId);
+    let credentialsSource = customOAuth ? 'custom_oauth' : 'global';
+    let clientIdPreview = null;
+    if (yt.client_id && typeof yt.client_id === 'string') {
+      const id = yt.client_id.trim();
+      clientIdPreview = id.length > 8 ? `…${id.slice(-8)}` : (id ? '…' : null);
     }
 
     res.json({
       connected: true,
       channel: { id: yt.channel_id, title: yt.channel_title || '' },
-      custom_oauth: !!(yt?.client_id && orbixChannelId)
+      custom_oauth: customOAuth,
+      credentials_source: credentialsSource,
+      client_id_preview: clientIdPreview
     });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/channel] Error:', error);
     res.status(500).json({ error: 'Failed to fetch channel info' });
+  }
+});
+
+/**
+ * GET /api/v2/orbix-network/youtube/diagnostic
+ * End-to-end check for YouTube upload: credentials, tokens, redirect URI. No secrets in response.
+ * Query: channel_id = Orbix channel to check (required for per-channel upload).
+ */
+router.get('/youtube/diagnostic', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const orbixChannelId = channelId;
+
+    const { resolveOAuthCredentials } = await import('../../services/orbix-network/youtube-publisher.js');
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    const settings = moduleSettings?.settings || {};
+    const byChannel = settings.youtube_by_channel || {};
+    const channelEntry = byChannel[orbixChannelId] || null;
+
+    const result = {
+      channel_id: orbixChannelId,
+      module_settings_exists: !!moduleSettings,
+      youtube_entry_exists: !!channelEntry,
+      has_access_token: !!(channelEntry?.access_token),
+      has_refresh_token: !!(channelEntry?.refresh_token),
+      client_credentials_source: 'none',
+      redirect_uri_configured: false,
+      redirect_uri_value: null,
+      token_test: null,
+      token_test_message: null,
+      ready_for_upload: false,
+      errors: []
+    };
+
+    const rawRedirect = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
+    result.redirect_uri_configured = !!rawRedirect;
+    if (rawRedirect) {
+      result.redirect_uri_value = rawRedirect.startsWith('http') ? rawRedirect : `https://${rawRedirect}`;
+      if (channelEntry?.client_id) {
+        result.redirect_uri_value = result.redirect_uri_value.replace(/\/api\/v2\/.*$/, '') + '/api/v2/riddle/youtube/callback';
+      }
+    }
+
+    const { clientId, clientSecret } = resolveOAuthCredentials(channelEntry, process.env.YOUTUBE_CLIENT_ID, process.env.YOUTUBE_CLIENT_SECRET);
+    if (channelEntry?.client_id && clientId) result.client_credentials_source = 'channel';
+    else if (process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET) result.client_credentials_source = 'env';
+    else result.client_credentials_source = 'none';
+
+    if (!result.module_settings_exists) result.errors.push('No Orbix module settings for this business.');
+    if (!result.youtube_entry_exists) result.errors.push('No YouTube entry for this channel. Connect YouTube in Orbix Network → Settings (select this channel first).');
+    if (!result.has_access_token) result.errors.push('Channel has no access_token. Connect YouTube in Settings, or disconnect and connect again to re-authorize.');
+    if (!result.has_refresh_token) result.errors.push('No refresh_token — long-lived uploads may fail. Disconnect YouTube and connect again, and approve all permissions.');
+    if (result.client_credentials_source === 'none') result.errors.push('No OAuth client: set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in env, or add a custom OAuth app for this channel in Settings.');
+    if (!result.redirect_uri_configured) result.errors.push('YOUTUBE_REDIRECT_URI is not set in server env (e.g. https://api.tavarios.com or full callback URL).');
+
+    result.ready_for_upload =
+      result.module_settings_exists &&
+      result.youtube_entry_exists &&
+      result.has_access_token &&
+      result.client_credentials_source !== 'none' &&
+      result.redirect_uri_configured;
+
+    if (result.ready_for_upload && channelEntry?.access_token && channelEntry?.refresh_token && clientId && clientSecret) {
+      try {
+        const { google } = await import('googleapis');
+        const redirectUri = result.redirect_uri_value || process.env.YOUTUBE_REDIRECT_URI;
+        const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
+        oauth2Client.setCredentials({
+          access_token: channelEntry.access_token,
+          refresh_token: channelEntry.refresh_token,
+          ...(channelEntry.token_expiry ? { expiry_date: new Date(channelEntry.token_expiry).getTime() } : {})
+        });
+        const { credentials } = await oauth2Client.refreshAccessToken();
+        result.token_test = credentials?.access_token ? 'ok' : 'error';
+        result.token_test_message = result.token_test === 'ok' ? 'Token refresh succeeded.' : 'Token refresh returned no access token.';
+      } catch (tokenErr) {
+        result.token_test = 'error';
+        const msg = tokenErr?.message || '';
+        result.token_test_message = msg.includes('invalid_grant') || msg.includes('Token has been expired or revoked')
+          ? 'Token revoked or expired. Disconnect YouTube for this channel in Settings, then connect again.'
+          : msg.substring(0, 200);
+        if (result.ready_for_upload) result.errors.push(result.token_test_message);
+      }
+    } else if (result.ready_for_upload && !result.has_refresh_token) {
+      result.token_test = 'error';
+      result.token_test_message = 'No refresh_token — cannot test. Reconnect YouTube and approve all permissions.';
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[GET /api/v2/orbix-network/youtube/diagnostic] Error:', error);
+    res.status(500).json({
+      error: error.message || 'Diagnostic failed',
+      channel_id: req.query?.channel_id || null
+    });
   }
 });
 
