@@ -409,6 +409,7 @@ export const orbixNetworkAPI = {
   restartRender: (id, params, storyId) => api.post(`/v2/orbix-network/renders/${id}/restart`, {}, { params: { ...params, ...(storyId ? { story_id: storyId } : {}) } }),
   uploadToYouTube: (id, params) => api.post(`/v2/orbix-network/renders/${id}/upload-to-youtube`, {}, { params }),
   uploadRenderToYoutube: (id, params) => api.post(`/v2/orbix-network/renders/${id}/upload-to-youtube`, {}, { params }),
+  resetUploadState: (id, params) => api.post(`/v2/orbix-network/renders/${id}/reset-upload`, {}, { params }),
   getPublishes: (params) => api.get('/v2/orbix-network/publishes', { params }),
   getRawItems: (params) => api.get('/v2/orbix-network/raw-items', { params }),
   deleteRawItem: (id, params) => api.delete(`/v2/orbix-network/raw-items/${id}`, { params }),

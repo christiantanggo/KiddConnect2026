@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckCircle2, XCircle, Loader, Clock, Zap, ThumbsUp, RefreshCw, CheckCheck, Trash2 } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader, Clock, Zap, ThumbsUp, RefreshCw, CheckCheck, Trash2, Upload, Square } from 'lucide-react';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
@@ -18,6 +18,8 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
   const [forceRenderStoryId, setForceRenderStoryId] = useState(null);
   const [approvingAllStep2, setApprovingAllStep2] = useState(false);
   const [deletingId, setDeletingId] = useState(null); // raw_item_id or story_id
+  const [forceUploadId, setForceUploadId] = useState(null);
+  const [cancelUploadId, setCancelUploadId] = useState(null);
   const steps = [
     { key: 'step1', name: 'News Scraping', shortName: 'Step 1' },
     { key: 'step2', name: 'Story Creation', shortName: 'Step 2' },
@@ -415,6 +417,69 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
                                 {rerenderId === item.render_id ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
                                 {rerenderId === item.render_id ? 'Starting…' : 'Re-Render'}
                               </button>
+                            </div>
+                          )}
+
+                          {/* Step 8: YouTube Upload - Force upload (retry) and Cancel upload */}
+                          {step.key === 'step8' && item.render_id && (
+                            <div className="mt-2 space-y-2" onClick={(e) => e.stopPropagation()}>
+                              {(() => {
+                                const atStep8 = item.render_step === 'STEP_8_YOUTUBE_UPLOAD';
+                                const canForceUpload = ['READY_FOR_UPLOAD', 'STEP_FAILED', 'UPLOAD_FAILED', 'COMPLETED'].includes(item.render_status) || (item.render_status === 'PROCESSING' && atStep8);
+                                const canCancelUpload = item.render_status === 'PROCESSING' && atStep8;
+                                return (
+                                  <>
+                                    {canCancelUpload && (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          if (!item.render_id) return;
+                                          setCancelUploadId(item.render_id);
+                                          try {
+                                            await orbixNetworkAPI.resetUploadState(item.render_id, apiParams());
+                                            success('Upload cancelled. You can retry when ready.');
+                                            if (typeof onRefresh === 'function') onRefresh();
+                                          } catch (err) {
+                                            const info = handleAPIError(err);
+                                            showErrorToast(info.message || 'Cancel upload failed');
+                                          } finally {
+                                            setCancelUploadId(null);
+                                          }
+                                        }}
+                                        disabled={cancelUploadId === item.render_id}
+                                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium bg-amber-100 text-amber-800 rounded-lg hover:bg-amber-200 disabled:opacity-50"
+                                      >
+                                        {cancelUploadId === item.render_id ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Square className="w-3.5 h-3.5" />}
+                                        {cancelUploadId === item.render_id ? 'Cancelling…' : 'Cancel upload'}
+                                      </button>
+                                    )}
+                                    {canForceUpload && (
+                                      <button
+                                        type="button"
+                                        onClick={async () => {
+                                          if (!item.render_id) return;
+                                          setForceUploadId(item.render_id);
+                                          try {
+                                            await orbixNetworkAPI.uploadRenderToYoutube(item.render_id, apiParams());
+                                            success('YouTube upload started');
+                                            if (typeof onRefresh === 'function') onRefresh();
+                                          } catch (err) {
+                                            const info = handleAPIError(err);
+                                            showErrorToast(info.message || 'Upload failed');
+                                          } finally {
+                                            setForceUploadId(null);
+                                          }
+                                        }}
+                                        disabled={forceUploadId === item.render_id}
+                                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium bg-blue-100 text-blue-800 rounded-lg hover:bg-blue-200 disabled:opacity-50"
+                                      >
+                                        {forceUploadId === item.render_id ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
+                                        {forceUploadId === item.render_id ? 'Uploading…' : 'Force upload'}
+                                      </button>
+                                    )}
+                                  </>
+                                );
+                              })()}
                             </div>
                           )}
                         </div>

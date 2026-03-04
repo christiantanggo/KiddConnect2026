@@ -436,6 +436,68 @@ router.delete('/renders/:id', async (req, res) => {
 });
 
 /**
+ * POST /api/v2/orbix-network/renders/:id/reset-upload
+ * Reset YouTube upload state so the user can retry. Requires query.channel_id.
+ * Allowed when render is stuck in upload (PROCESSING at STEP_8) or failed at STEP_8: sets status to READY_FOR_UPLOAD and clears step_error.
+ */
+router.post('/renders/:id/reset-upload', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { id } = req.params;
+
+    const { data: render, error: getError } = await supabaseClient
+      .from('orbix_renders')
+      .select('id, business_id, story_id, render_status, render_step')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .single();
+
+    if (getError) throw getError;
+    if (!render) {
+      return res.status(404).json({ error: 'Render not found' });
+    }
+
+    const { data: story } = await supabaseClient
+      .from('orbix_stories')
+      .select('id')
+      .eq('id', render.story_id)
+      .eq('channel_id', channelId)
+      .single();
+    if (!story) {
+      return res.status(404).json({ error: 'Render not found' });
+    }
+
+    const atStep8 = render.render_step === 'STEP_8_YOUTUBE_UPLOAD';
+    const canReset = atStep8 && (
+      render.render_status === 'PROCESSING' ||
+      render.render_status === 'STEP_FAILED' ||
+      render.render_status === 'READY_FOR_UPLOAD' ||
+      render.render_status === 'UPLOAD_FAILED'
+    );
+    if (!canReset) {
+      return res.status(400).json({ error: 'Upload can only be reset when the render is at YouTube upload step (processing, failed, or ready to retry).' });
+    }
+
+    const { error: updateError } = await supabaseClient
+      .from('orbix_renders')
+      .update({
+        render_status: 'READY_FOR_UPLOAD',
+        step_error: null,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .eq('business_id', businessId);
+
+    if (updateError) throw updateError;
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/renders/:id/reset-upload] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to reset upload state' });
+  }
+});
+
+/**
  * POST /api/v2/orbix-network/renders/:id/restart
  * Restart a render. Requires query.channel_id. Works for COMPLETED, FAILED, or PROCESSING (stuck).
  */
