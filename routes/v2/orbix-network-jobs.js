@@ -806,9 +806,10 @@ async function sendOrbixUploadFailureEmail(businessId, channelId, errorMessage) 
  * @param {boolean} [options.force] - When true, bypasses the auto_upload_enabled toggle (used for manual uploads).
  * @param {string}  [options.renderId] - When provided, only upload this specific render (used for manual uploads).
  * @param {string}  [options.preferredChannelId] - When the render's story has no channel_id (legacy), use this channel's YouTube (e.g. from Force Upload).
+ * @param {boolean} [options.useManual] - When true, use manual OAuth slot for upload (Force Upload = separate quota from auto).
  */
 export async function processOneYouTubeUpload(options = {}) {
-  const { force = false, renderId: targetRenderId = null, preferredChannelId = null } = options;
+  const { force = false, renderId: targetRenderId = null, preferredChannelId = null, useManual = false } = options;
 
   // When targeting a specific render (forced/manual), fetch only that one
   if (targetRenderId) {
@@ -820,8 +821,8 @@ export async function processOneYouTubeUpload(options = {}) {
       .eq('id', targetRenderId)
       .maybeSingle();
     if (!ready) return { processed: false };
-    // Fall through with this render selected (pass preferredChannelId for legacy renders)
-    return _uploadRender(ready, force, preferredChannelId);
+    // Fall through with this render selected (pass preferredChannelId for legacy renders, useManual for Force Upload)
+    return _uploadRender(ready, force, preferredChannelId, useManual);
   }
 
   // Fetch candidates. Exclude any render that has EVER been sent to YouTube (any orbix_publishes row) so we never double-upload the same video.
@@ -935,7 +936,7 @@ export async function processOneYouTubeUpload(options = {}) {
   }
 
   try {
-    return await _uploadRender(render, force, fallbackChannelId);
+    return await _uploadRender(render, force, fallbackChannelId, false);
   } catch (err) {
     if (err?.code === SKIP_YOUTUBE_UPLOAD_CODE) {
       console.warn(`[Orbix YouTube] Upload skipped for render ${render.id}: ${err.message}`);
@@ -945,7 +946,7 @@ export async function processOneYouTubeUpload(options = {}) {
   }
 }
 
-async function _uploadRender(render, force, legacyChannelId = null) {
+async function _uploadRender(render, force, legacyChannelId = null, useManual = false) {
   const videoUrl = render.output_url;
 
   // ── Channel vs story category: prevent wrong-format uploads (e.g. 30s psychology to Trivia channel) ──
@@ -1001,7 +1002,7 @@ async function _uploadRender(render, force, legacyChannelId = null) {
   console.log(`[Orbix YouTube] Claimed READY_FOR_UPLOAD render id=${claimedRender.id} videoUrl=${videoUrl ? 'set' : 'MISSING'} (max ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts)`);
 
   const { step8YouTubeUpload } = await import('../../services/orbix-network/render-steps.js');
-  const step8Options = legacyChannelId ? { preferredChannelId: legacyChannelId } : {};
+  const step8Options = { ...(legacyChannelId ? { preferredChannelId: legacyChannelId } : {}), ...(useManual ? { useManual: true } : {}) };
 
   let lastError = null;
   for (let attempt = 1; attempt <= YOUTUBE_UPLOAD_MAX_ATTEMPTS; attempt++) {
