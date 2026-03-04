@@ -40,10 +40,15 @@ router.get('/youtube/callback', async (req, res) => {
     let redirectToSetup = false;
     let isKidquiz = false;
     let isMovieReview = false;
+    let usageManual = false;
     if (rest && rest.includes(':')) {
       const parts = rest.split(':');
       if (parts[parts.length - 1] === 'setup') {
         redirectToSetup = true;
+        parts.pop();
+      }
+      if (parts[parts.length - 1] === 'manual') {
+        usageManual = true;
         parts.pop();
       }
       if (parts[parts.length - 1] === 'kidquiz') {
@@ -68,14 +73,17 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${redirectBase}/modules/orbix-network/setup?error=youtube_not_configured`);
     }
 
-    // Use per-channel OAuth client when this channel has custom credentials (same client that generated auth URL)
+    // Use per-channel OAuth client (auto or manual slot) when this channel has custom credentials
     let clientId = process.env.YOUTUBE_CLIENT_ID;
     let clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
     if (orbixChannelId && !isKidquiz && !isMovieReview) {
       const existing = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
       const byChannel = existing?.settings?.youtube_by_channel || {};
       const channelEntry = byChannel[orbixChannelId];
-      if (channelEntry?.client_id && channelEntry?.client_secret) {
+      if (usageManual && channelEntry?.manual_client_id && channelEntry?.manual_client_secret) {
+        clientId = channelEntry.manual_client_id;
+        clientSecret = channelEntry.manual_client_secret;
+      } else if (channelEntry?.client_id && channelEntry?.client_secret) {
         clientId = channelEntry.client_id;
         clientSecret = channelEntry.client_secret;
       }
@@ -147,13 +155,25 @@ router.get('/youtube/callback', async (req, res) => {
     if (orbixChannelId) {
       settings.youtube_by_channel = settings.youtube_by_channel || {};
       const existingChannel = settings.youtube_by_channel[orbixChannelId] || {};
-      // Preserve per-channel OAuth app (client_id/client_secret) so refresh uses same project
-      settings.youtube_by_channel[orbixChannelId] = {
-        ...existingChannel,
-        ...ytCreds,
-        ...(existingChannel.client_id && { client_id: existingChannel.client_id }),
-        ...(existingChannel.client_secret && { client_secret: existingChannel.client_secret })
-      };
+      if (usageManual) {
+        settings.youtube_by_channel[orbixChannelId] = {
+          ...existingChannel,
+          manual_channel_id: ytCreds.channel_id,
+          manual_channel_title: ytCreds.channel_title,
+          manual_access_token: ytCreds.access_token,
+          manual_refresh_token: ytCreds.refresh_token,
+          manual_token_expiry: ytCreds.token_expiry,
+          ...(existingChannel.manual_client_id && { manual_client_id: existingChannel.manual_client_id }),
+          ...(existingChannel.manual_client_secret && { manual_client_secret: existingChannel.manual_client_secret })
+        };
+      } else {
+        settings.youtube_by_channel[orbixChannelId] = {
+          ...existingChannel,
+          ...ytCreds,
+          ...(existingChannel.client_id && { client_id: existingChannel.client_id }),
+          ...(existingChannel.client_secret && { client_secret: existingChannel.client_secret })
+        };
+      }
     } else {
       settings.youtube = ytCreds;
     }

@@ -831,8 +831,8 @@ router.post('/renders/:id/upload-youtube', async (req, res) => {
       orbixChannelId = channelId;
       console.log('[POST /renders/:id/upload-youtube] Story has no channel_id; using request channel (so your Custom OAuth is used):', channelId);
     }
-    const publishOptions = orbixChannelId ? { orbixChannelId } : {};
-    console.log('[POST /renders/:id/upload-youtube] Calling publishVideo title=', metadata.title?.slice(0, 40), 'orbixChannelId=', orbixChannelId || 'legacy');
+    const publishOptions = orbixChannelId ? { orbixChannelId, useManual: true } : {};
+    console.log('[POST /renders/:id/upload-youtube] Calling publishVideo (manual OAuth) title=', metadata.title?.slice(0, 40), 'orbixChannelId=', orbixChannelId || 'legacy');
     const { publishVideo, uploadCaptions } = await import('../../services/orbix-network/youtube-publisher.js');
     const result = await publishVideo(businessId, id, videoUrlOrPath, metadata, publishOptions);
     console.log('[POST /renders/:id/upload-youtube] SUCCESS videoId=', result.videoId);
@@ -845,7 +845,7 @@ router.post('/renders/:id/upload-youtube', async (req, res) => {
         const segments = generateCaptionSegments(script, estimatedDuration);
         if (segments.length > 0) {
           const srt = captionSegmentsToSrt(segments);
-          await uploadCaptions(businessId, result.videoId, srt, 'en', 'English', publishOptions);
+          await uploadCaptions(businessId, result.videoId, srt, 'en', 'English', { ...publishOptions, useManual: true });
           console.log('[POST /renders/:id/upload-youtube] Captions uploaded segments=', segments.length);
         } else {
           console.log('[POST /renders/:id/upload-youtube] No caption segments generated, skipping captions');
@@ -2426,14 +2426,15 @@ router.get('/analytics', async (req, res) => {
 
 /**
  * GET /api/v2/orbix-network/youtube/auth-url
- * Optional query: channel_id = Orbix channel (per-channel YouTube), from_setup = redirect back to setup wizard after OAuth.
- * Uses per-channel OAuth client (client_id/client_secret) when set for that channel; else global env.
+ * Optional query: channel_id, from_setup, usage=auto|manual (manual = second OAuth for Force Upload).
+ * Uses per-channel OAuth client (auto or manual slot) when set; else global env.
  */
 router.get('/youtube/auth-url', async (req, res) => {
   try {
     const businessId = req.active_business_id;
     const orbixChannelId = req.query.channel_id || null;
     const fromSetup = req.query.from_setup === 'true' || req.query.from_setup === true;
+    const usage = (req.query.usage || 'auto').toLowerCase() === 'manual' ? 'manual' : 'auto';
 
     let channelEntry = null;
     if (orbixChannelId) {
@@ -2445,7 +2446,8 @@ router.get('/youtube/auth-url', async (req, res) => {
     const { clientId, clientSecret } = resolveOAuthCredentials(
       channelEntry,
       process.env.YOUTUBE_CLIENT_ID,
-      process.env.YOUTUBE_CLIENT_SECRET
+      process.env.YOUTUBE_CLIENT_SECRET,
+      usage
     );
     if (!clientId || !clientSecret) {
       const instructions = getYouTubeSetupInstructions(req);
@@ -2461,10 +2463,10 @@ router.get('/youtube/auth-url', async (req, res) => {
       });
     }
 
-    // Per-channel OAuth (custom client_id) uses riddle callback URL for separate quota
-    // MUST match exactly what is in Google Cloud "Authorized redirect URIs" for the riddle OAuth client
+    // Per-channel OAuth (custom client_id for auto, or manual_client_id for manual) uses riddle callback URL for separate quota
+    const hasCustomClient = orbixChannelId && (usage === 'manual' ? channelEntry?.manual_client_id : channelEntry?.client_id);
     let redirectUri;
-    if (orbixChannelId && channelEntry?.client_id) {
+    if (hasCustomClient) {
       if (process.env.NODE_ENV === 'production' && (process.env.YOUTUBE_REDIRECT_URI || '').includes('api.tavarios.com')) {
         redirectUri = 'https://api.tavarios.com/api/v2/riddle/youtube/callback';
       } else {
@@ -2494,6 +2496,7 @@ router.get('/youtube/auth-url', async (req, res) => {
       'https://www.googleapis.com/auth/youtube.readonly'
     ];
     let state = orbixChannelId ? `${businessId}:${orbixChannelId}` : businessId;
+    if (usage === 'manual') state = `${state}:manual`;
     if (fromSetup) state = `${state}:setup`;
     const frontendOrigin = (req.query.frontend_origin || '').toString().trim();
     if (frontendOrigin && (frontendOrigin.startsWith('https://') || frontendOrigin.startsWith('http://'))) {
@@ -2506,7 +2509,7 @@ router.get('/youtube/auth-url', async (req, res) => {
       state
     });
 
-    console.log('[Orbix auth-url] redirect_uri=', redirectUri, 'orbixChannelId=', orbixChannelId || 'none', 'customOAuth=', !!channelEntry?.client_id);
+    console.log('[Orbix auth-url] redirect_uri=', redirectUri, 'orbixChannelId=', orbixChannelId || 'none', 'usage=', usage, 'customOAuth=', !!hasCustomClient);
     res.json({ configured: true, auth_url: authUrl, redirect_uri: redirectUri });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/auth-url] Error:', error);
@@ -2519,9 +2522,21 @@ router.get('/youtube/auth-url', async (req, res) => {
   }
 });
 
+function clientIdPreview(idStr) {
+  if (!idStr || typeof idStr !== 'string') return null;
+  const id = idStr.trim();
+  const suffix = '.apps.googleusercontent.com';
+  if (id.endsWith(suffix)) {
+    const prefix = id.slice(0, -suffix.length);
+    return prefix.length > 20 ? `${prefix.slice(0, 20)}…` : prefix;
+  }
+  return id.length > 12 ? `…${id.slice(-12)}` : (id ? '…' : null);
+}
+
 /**
  * GET /api/v2/orbix-network/youtube/channel
  * Get connected YouTube channel. Optional query channel_id = Orbix channel (per-channel); omit for legacy.
+ * Per-channel: returns both auto (pipeline) and manual (Force Upload) connection status.
  */
 router.get('/youtube/channel', async (req, res) => {
   try {
@@ -2534,36 +2549,38 @@ router.get('/youtube/channel', async (req, res) => {
       ? settings.youtube_by_channel[orbixChannelId]
       : settings.youtube;
 
-    if (!yt?.channel_id) {
+    const connected = !!(yt?.channel_id && yt?.access_token);
+    if (!connected && !(orbixChannelId && yt?.manual_channel_id && yt?.manual_access_token)) {
       return res.json({
         connected: false,
         channel: null,
         custom_oauth: !!(yt?.client_id && orbixChannelId),
         credentials_source: null,
-        client_id_preview: null
+        client_id_preview: null,
+        connected_manual: false,
+        channel_manual: null,
+        manual_custom_oauth: !!(orbixChannelId && yt?.manual_client_id),
+        manual_client_id_preview: orbixChannelId ? clientIdPreview(yt?.manual_client_id) : null
       });
     }
 
     const customOAuth = !!(yt?.client_id && orbixChannelId);
-    let credentialsSource = customOAuth ? 'custom_oauth' : 'global';
-    let clientIdPreview = null;
-    if (yt.client_id && typeof yt.client_id === 'string') {
-      const id = yt.client_id.trim();
-      const suffix = '.apps.googleusercontent.com';
-      if (id.endsWith(suffix)) {
-        const prefix = id.slice(0, -suffix.length);
-        clientIdPreview = prefix.length > 20 ? `${prefix.slice(0, 20)}…` : prefix;
-      } else {
-        clientIdPreview = id.length > 12 ? `…${id.slice(-12)}` : (id ? '…' : null);
-      }
-    }
+    const credentialsSource = customOAuth ? 'custom_oauth' : 'global';
+    const connected_manual = !!(orbixChannelId && yt?.manual_access_token);
+    const channel_manual = connected_manual && yt.manual_channel_id
+      ? { id: yt.manual_channel_id, title: yt.manual_channel_title || '' }
+      : null;
 
     res.json({
-      connected: true,
-      channel: { id: yt.channel_id, title: yt.channel_title || '' },
+      connected,
+      channel: yt?.channel_id ? { id: yt.channel_id, title: yt.channel_title || '' } : null,
       custom_oauth: customOAuth,
       credentials_source: credentialsSource,
-      client_id_preview: clientIdPreview
+      client_id_preview: clientIdPreview(yt?.client_id),
+      connected_manual,
+      channel_manual,
+      manual_custom_oauth: !!(orbixChannelId && yt?.manual_client_id),
+      manual_client_id_preview: orbixChannelId ? clientIdPreview(yt?.manual_client_id) : null
     });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/youtube/channel] Error:', error);
@@ -2670,7 +2687,8 @@ router.get('/youtube/diagnostic', async (req, res) => {
 /**
  * POST /api/v2/orbix-network/youtube/custom-oauth
  * Set or clear per-channel OAuth app (separate Google Cloud project = separate quota).
- * Body: { channel_id, client_id?, client_secret? }. If client_id is empty, clears custom OAuth for that channel.
+ * Body: { channel_id, client_id?, client_secret?, usage?: 'auto'|'manual' }. usage=manual = second OAuth for Force Upload.
+ * If client_id is empty for that usage, clears that slot.
  */
 router.post('/youtube/custom-oauth', async (req, res) => {
   try {
@@ -2679,6 +2697,7 @@ router.post('/youtube/custom-oauth', async (req, res) => {
     if (!orbixChannelId) {
       return res.status(400).json({ error: 'channel_id is required' });
     }
+    const usage = (req.body?.usage || req.query?.usage || 'auto').toLowerCase() === 'manual' ? 'manual' : 'auto';
     const { data: channel } = await supabaseClient
       .from('orbix_channels')
       .select('id')
@@ -2697,20 +2716,32 @@ router.post('/youtube/custom-oauth', async (req, res) => {
     const clientId = (req.body?.client_id ?? '').trim();
     const clientSecret = (req.body?.client_secret ?? '').trim();
 
-    if (!clientId) {
-      delete existing.client_id;
-      delete existing.client_secret;
+    if (usage === 'manual') {
+      if (!clientId) {
+        delete existing.manual_client_id;
+        delete existing.manual_client_secret;
+      } else {
+        existing.manual_client_id = clientId;
+        if (clientSecret) existing.manual_client_secret = clientSecret;
+      }
     } else {
-      existing.client_id = clientId;
-      if (clientSecret) existing.client_secret = clientSecret;
+      if (!clientId) {
+        delete existing.client_id;
+        delete existing.client_secret;
+      } else {
+        existing.client_id = clientId;
+        if (clientSecret) existing.client_secret = clientSecret;
+      }
     }
     settings.youtube_by_channel[orbixChannelId] = { ...existing };
 
     await ModuleSettings.update(businessId, MODULE_KEY, settings);
+    const slotLabel = usage === 'manual' ? 'Manual upload' : 'Auto upload';
     res.json({
       success: true,
       custom_oauth: !!clientId,
-      message: clientId ? 'Custom OAuth app saved. Use Connect YouTube to authorize with this project.' : 'Custom OAuth cleared. Channel will use global credentials.'
+      usage,
+      message: clientId ? `${slotLabel} OAuth app saved. Use "Connect YouTube (${usage})" to authorize.` : `${slotLabel} OAuth cleared.`
     });
   } catch (error) {
     console.error('[POST /api/v2/orbix-network/youtube/custom-oauth] Error:', error);
@@ -2720,12 +2751,14 @@ router.post('/youtube/custom-oauth', async (req, res) => {
 
 /**
  * POST /api/v2/orbix-network/youtube/disconnect
- * Disconnect YouTube. Body or query channel_id = Orbix channel (disconnect that channel only); omit for legacy single disconnect.
+ * Disconnect YouTube. Body or query: channel_id, usage=auto|manual (manual = disconnect only manual OAuth slot).
+ * Omit channel_id for legacy single disconnect. Omit usage to disconnect auto (or legacy).
  */
 router.post('/youtube/disconnect', async (req, res) => {
   try {
     const businessId = req.active_business_id;
     const orbixChannelId = req.body?.channel_id || req.query?.channel_id || null;
+    const usage = (req.body?.usage || req.query?.usage || 'auto').toLowerCase() === 'manual' ? 'manual' : 'auto';
     
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
     if (!moduleSettings) {
@@ -2736,12 +2769,26 @@ router.post('/youtube/disconnect', async (req, res) => {
     if (orbixChannelId) {
       settings.youtube_by_channel = settings.youtube_by_channel || {};
       const existing = settings.youtube_by_channel[orbixChannelId] || {};
-      const { client_id, client_secret } = existing;
-      // Clear tokens but keep per-channel OAuth app so they can reconnect with same project
-      settings.youtube_by_channel[orbixChannelId] = {
-        ...(client_id && { client_id }),
-        ...(client_secret && { client_secret })
-      };
+      if (usage === 'manual') {
+        // Clear only manual tokens; keep manual_client_id/secret and auto slot
+        settings.youtube_by_channel[orbixChannelId] = {
+          ...existing,
+          manual_access_token: '',
+          manual_refresh_token: '',
+          manual_channel_id: '',
+          manual_channel_title: '',
+          manual_token_expiry: null
+        };
+      } else {
+        const { client_id, client_secret } = existing;
+        settings.youtube_by_channel[orbixChannelId] = {
+          ...(client_id && { client_id }),
+          ...(client_secret && { client_secret }),
+          ...(existing.manual_client_id && { manual_client_id: existing.manual_client_id }),
+          ...(existing.manual_client_secret && { manual_client_secret: existing.manual_client_secret }),
+          ...(existing.manual_access_token && { manual_access_token: existing.manual_access_token, manual_refresh_token: existing.manual_refresh_token, manual_channel_id: existing.manual_channel_id, manual_channel_title: existing.manual_channel_title, manual_token_expiry: existing.manual_token_expiry })
+        };
+      }
     } else {
       settings.youtube = {
         channel_id: '',

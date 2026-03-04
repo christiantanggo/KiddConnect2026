@@ -20,19 +20,55 @@ export const SKIP_YOUTUBE_UPLOAD_CODE = 'SKIP_YOUTUBE_UPLOAD';
  * @returns {Promise<Object>} OAuth2 client
  */
 /**
- * Resolve OAuth client ID and secret: per-channel (channelEntry.client_id/client_secret) or env.
- * Used for getYouTubeClient, auth URL, and callback. Redirect URI is always from env.
+ * Resolve OAuth client ID and secret: per-channel (auto or manual slot) or env.
+ * usage: 'auto' = pipeline uploads, 'manual' = Force Upload / manual publish (separate OAuth so manual still works if auto is rate-limited).
  */
-export function resolveOAuthCredentials(channelEntry, envClientId, envClientSecret) {
+export function resolveOAuthCredentials(channelEntry, envClientId, envClientSecret, usage = 'auto') {
+  if (usage === 'manual' && channelEntry) {
+    const clientId = (channelEntry.manual_client_id || envClientId || '').trim();
+    const clientSecret = (channelEntry.manual_client_secret || envClientSecret || '').trim();
+    return { clientId, clientSecret };
+  }
   const clientId = (channelEntry?.client_id || envClientId || '').trim();
   const clientSecret = (channelEntry?.client_secret || envClientSecret || '').trim();
   return { clientId, clientSecret };
 }
 
-async function getYouTubeClient(businessId, orbixChannelId = null) {
+/**
+ * Build a single yt-like object from channel entry for either auto or manual slot.
+ */
+function getYtFromChannelEntry(entry, useManual) {
+  if (!entry) return null;
+  if (useManual && entry.manual_access_token) {
+    return {
+      access_token: entry.manual_access_token,
+      refresh_token: entry.manual_refresh_token,
+      channel_id: entry.manual_channel_id,
+      channel_title: entry.manual_channel_title,
+      token_expiry: entry.manual_token_expiry,
+      client_id: entry.manual_client_id,
+      client_secret: entry.manual_client_secret
+    };
+  }
+  if (entry.access_token) {
+    return {
+      access_token: entry.access_token,
+      refresh_token: entry.refresh_token,
+      channel_id: entry.channel_id,
+      channel_title: entry.channel_title,
+      token_expiry: entry.token_expiry,
+      client_id: entry.client_id,
+      client_secret: entry.client_secret
+    };
+  }
+  return null;
+}
+
+async function getYouTubeClient(businessId, orbixChannelId = null, options = {}) {
+  const useManual = !!options.useManual;
   try {
-    writeProgressLog('YT_GETCLIENT_START', { businessId, orbixChannelId: orbixChannelId || 'legacy' });
-    console.log('[YouTube Publisher] getYouTubeClient businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
+    writeProgressLog('YT_GETCLIENT_START', { businessId, orbixChannelId: orbixChannelId || 'legacy', useManual });
+    console.log('[YouTube Publisher] getYouTubeClient businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy', 'useManual=', useManual);
     const hasRedirectUri = !!process.env.YOUTUBE_REDIRECT_URI;
     if (!hasRedirectUri) {
       console.error('[YouTube Publisher] SKIP_REASON: Missing YOUTUBE_REDIRECT_URI in .env');
@@ -56,10 +92,21 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
 
     let yt = null;
     let usePerChannel = false;
-    if (orbixChannelId && byChannel[orbixChannelId]?.access_token) {
-      yt = byChannel[orbixChannelId];
-      usePerChannel = true;
-      console.log('[YouTube Publisher] Using per-channel YouTube for channel=', orbixChannelId, 'youtube_channel_id=', yt.channel_id || 'n/a');
+    let slotManual = false; // true if we're using the manual_* slot (for token refresh persistence)
+    if (orbixChannelId) {
+      const entry = byChannel[orbixChannelId];
+      // Prefer manual slot when useManual and manual has tokens; else fall back to auto
+      if (useManual && entry?.manual_access_token) {
+        yt = getYtFromChannelEntry(entry, true);
+        usePerChannel = true;
+        slotManual = true;
+        console.log('[YouTube Publisher] Using per-channel manual OAuth for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
+      }
+      if (!yt && entry?.access_token) {
+        yt = getYtFromChannelEntry(entry, false);
+        usePerChannel = true;
+        console.log('[YouTube Publisher] Using per-channel YouTube (auto) for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
+      }
     }
     if (!yt && settings.youtube?.access_token) {
       yt = settings.youtube;
@@ -88,7 +135,12 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
       console.warn('[YouTube Publisher] No refresh_token for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'n/a');
     }
 
-    const { clientId, clientSecret } = resolveOAuthCredentials(yt, process.env.YOUTUBE_CLIENT_ID, process.env.YOUTUBE_CLIENT_SECRET);
+    const { clientId, clientSecret } = resolveOAuthCredentials(
+      orbixChannelId ? byChannel[orbixChannelId] : null,
+      process.env.YOUTUBE_CLIENT_ID,
+      process.env.YOUTUBE_CLIENT_SECRET,
+      slotManual ? 'manual' : 'auto'
+    );
     if (!clientId || !clientSecret) {
       console.error('[YouTube Publisher] SKIP_REASON: No OAuth client_id/secret (env YOUTUBE_CLIENT_ID/SECRET or channel custom OAuth in Settings)');
       const err = new Error('YouTube OAuth not configured. Use global env (YOUTUBE_CLIENT_ID/SECRET) or set a custom OAuth app for this channel in Settings.');
@@ -117,11 +169,10 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
         oauth2Client.setCredentials(credentials);
         // Persist the new access token immediately so it is available for future calls
         const updatedSettings2 = { ...moduleSettings.settings };
-        const updatedYt2 = {
-          ...(usePerChannel ? byChannel[orbixChannelId] : updatedSettings2.youtube),
-          access_token: credentials.access_token,
-          ...(credentials.expiry_date ? { token_expiry: new Date(credentials.expiry_date).toISOString() } : {})
-        };
+        const existingEntry = usePerChannel ? byChannel[orbixChannelId] : updatedSettings2.youtube;
+        const updatedYt2 = slotManual
+          ? { ...existingEntry, manual_access_token: credentials.access_token, ...(credentials.expiry_date ? { manual_token_expiry: new Date(credentials.expiry_date).toISOString() } : {}) }
+          : { ...existingEntry, access_token: credentials.access_token, ...(credentials.expiry_date ? { token_expiry: new Date(credentials.expiry_date).toISOString() } : {}) };
         if (usePerChannel) {
           updatedSettings2.youtube_by_channel = { ...byChannel, [orbixChannelId]: updatedYt2 };
         } else {
@@ -146,13 +197,12 @@ async function getYouTubeClient(businessId, orbixChannelId = null) {
 
     oauth2Client.on('tokens', async (tokens) => {
       if (tokens.access_token) {
-        console.log('[YouTube Publisher] Token refreshed for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
+        console.log('[YouTube Publisher] Token refreshed for businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy', 'slotManual=', slotManual);
         const updatedSettings = { ...moduleSettings.settings };
-        const updatedYt = {
-          ...(usePerChannel ? byChannel[orbixChannelId] : updatedSettings.youtube),
-          access_token: tokens.access_token,
-          ...(tokens.expiry_date ? { token_expiry: new Date(tokens.expiry_date).toISOString() } : {})
-        };
+        const existingEntry = usePerChannel ? byChannel[orbixChannelId] : updatedSettings.youtube;
+        const updatedYt = slotManual
+          ? { ...existingEntry, manual_access_token: tokens.access_token, ...(tokens.expiry_date ? { manual_token_expiry: new Date(tokens.expiry_date).toISOString() } : {}) }
+          : { ...existingEntry, access_token: tokens.access_token, ...(tokens.expiry_date ? { token_expiry: new Date(tokens.expiry_date).toISOString() } : {}) };
         if (usePerChannel) {
           updatedSettings.youtube_by_channel = { ...byChannel, [orbixChannelId]: updatedYt };
         } else {
@@ -216,7 +266,7 @@ function isVideoUrl(videoUrlOrPath) {
  * @param {string} renderId - Render ID
  * @param {string} videoUrlOrPath - URL to video file (Supabase Storage) or local file path (e.g. from render pipeline)
  * @param {Object} metadata - Video metadata (title, description, tags array)
- * @param {{ orbixChannelId?: string }} [options] - Optional; orbixChannelId = Orbix channel to use for upload (per-channel YouTube)
+ * @param {{ orbixChannelId?: string, useManual?: boolean }} [options] - orbixChannelId = channel for upload; useManual = use manual OAuth (Force Upload) so auto and manual can be separate
  * @returns {Promise<Object>} YouTube video information { videoId, url, title }
  */
 export async function publishVideo(businessId, renderId, videoUrlOrPath, metadata, options = {}) {
@@ -227,10 +277,10 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
 
   try {
     const isUrl = isVideoUrl(videoUrlOrPath);
-    writeProgressLog('YT_PUBLISH_START', { renderId, businessId, inputType: isUrl ? 'url' : 'path' });
-    console.log('[YouTube Publisher] publishVideo start', { businessId, renderId, orbixChannelId, title: metadata?.title, inputType: isUrl ? 'url' : 'path' });
+    writeProgressLog('YT_PUBLISH_START', { renderId, businessId, inputType: isUrl ? 'url' : 'path', useManual: options.useManual });
+    console.log('[YouTube Publisher] publishVideo start', { businessId, renderId, orbixChannelId, useManual: options.useManual, title: metadata?.title, inputType: isUrl ? 'url' : 'path' });
 
-    const auth = await getYouTubeClient(businessId, orbixChannelId);
+    const auth = await getYouTubeClient(businessId, orbixChannelId, { useManual: options.useManual });
     writeProgressLog('YT_PUBLISH_AUTH_DONE', { renderId });
     const youtube = google.youtube({ version: 'v3', auth });
 
@@ -373,7 +423,7 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
  * @param {string} srtContent - SRT format caption content
  * @param {string} [language='en'] - Language code
  * @param {string} [name='English'] - Track name
- * @param {{ orbixChannelId?: string }} [options] - Optional; orbixChannelId for per-channel YouTube
+ * @param {{ orbixChannelId?: string, useManual?: boolean }} [options] - orbixChannelId for per-channel YouTube; useManual = same as upload (manual OAuth)
  * @returns {Promise<Object>} Caption resource
  */
 export async function uploadCaptions(businessId, videoId, srtContent, language = 'en', name = 'English', options = {}) {
@@ -383,7 +433,7 @@ export async function uploadCaptions(businessId, videoId, srtContent, language =
   let tmpPath = null;
   const orbixChannelId = options.orbixChannelId || null;
   try {
-    const auth = await getYouTubeClient(businessId, orbixChannelId);
+    const auth = await getYouTubeClient(businessId, orbixChannelId, { useManual: options.useManual });
     const youtube = google.youtube({ version: 'v3', auth });
     tmpPath = join(tmpdir(), `orbix-captions-${Date.now()}.srt`);
     await fs.promises.writeFile(tmpPath, srtContent, 'utf8');

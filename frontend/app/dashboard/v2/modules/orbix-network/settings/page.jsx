@@ -439,6 +439,16 @@ function ChannelSettingsTab({ channel }) {
   const [loadingRedirectUri, setLoadingRedirectUri] = useState(false);
   const [ytCredentialsSource, setYtCredentialsSource] = useState(null); // 'custom_oauth' | 'global'
   const [ytClientIdPreview, setYtClientIdPreview] = useState(null);      // e.g. '…abc12345' for debugging
+  // Manual upload OAuth (second OAuth so Force Upload still works if auto is rate-limited)
+  const [ytConnectedManual, setYtConnectedManual] = useState(false);
+  const [ytChannelManual, setYtChannelManual] = useState(null);
+  const [connectingYtManual, setConnectingYtManual] = useState(false);
+  const [customOauthManual, setCustomOauthManual] = useState(false);
+  const [manualOauthClientId, setManualOauthClientId] = useState('');
+  const [manualOauthClientSecret, setManualOauthClientSecret] = useState('');
+  const [savingManualOauth, setSavingManualOauth] = useState(false);
+  const [ytRedirectUriManual, setYtRedirectUriManual] = useState(null);
+  const [manualClientIdPreview, setManualClientIdPreview] = useState(null);
 
   // Backgrounds
   const [backgrounds, setBackgrounds] = useState([]);
@@ -483,6 +493,10 @@ function ChannelSettingsTab({ channel }) {
         setCustomOauth(ytRes.data?.custom_oauth ?? false);
         setYtCredentialsSource(ytRes.data?.credentials_source ?? null);
         setYtClientIdPreview(ytRes.data?.client_id_preview ?? null);
+        setYtConnectedManual(ytRes.data?.connected_manual ?? false);
+        setYtChannelManual(ytRes.data?.channel_manual ?? null);
+        setCustomOauthManual(ytRes.data?.manual_custom_oauth ?? false);
+        setManualClientIdPreview(ytRes.data?.manual_client_id_preview ?? null);
         setBackgrounds(bgRes.data?.backgrounds || []);
         setMusicTracks(musicRes.data?.music || []);
         setSources(srcRes.data?.sources || []);
@@ -492,6 +506,13 @@ function ChannelSettingsTab({ channel }) {
           }).catch(() => {});
         } else {
           setYtRedirectUri(null);
+        }
+        if (ytRes.data?.manual_custom_oauth) {
+          orbixNetworkAPI.getYoutubeAuthUrl({ ...apiParams(), usage: 'manual' }).then((authRes) => {
+            if (!cancelled && authRes.data?.redirect_uri) setYtRedirectUriManual(authRes.data.redirect_uri);
+          }).catch(() => {});
+        } else {
+          setYtRedirectUriManual(null);
         }
       } catch (e) {
         if (!cancelled) showError('Failed to load channel settings');
@@ -514,6 +535,10 @@ function ChannelSettingsTab({ channel }) {
         setYtChannel(r.data?.channel ?? null);
         setYtCredentialsSource(r.data?.credentials_source ?? null);
         setYtClientIdPreview(r.data?.client_id_preview ?? null);
+        setYtConnectedManual(r.data?.connected_manual ?? false);
+        setYtChannelManual(r.data?.channel_manual ?? null);
+        setCustomOauthManual(r.data?.manual_custom_oauth ?? false);
+        setManualClientIdPreview(r.data?.manual_client_id_preview ?? null);
       }).catch(() => {});
       return;
     }
@@ -588,6 +613,38 @@ function ChannelSettingsTab({ channel }) {
       success('YouTube disconnected');
     } catch (e) {
       showError(handleAPIError(e).message || 'Failed to disconnect YouTube');
+    }
+  };
+
+  const handleConnectYtManual = async () => {
+    setConnectingYtManual(true);
+    try {
+      const res = await orbixNetworkAPI.getYoutubeAuthUrl({ ...apiParams(), usage: 'manual' });
+      if (res.data?.configured === false) {
+        showError(res.data?.message || 'Add Manual upload OAuth Client ID and Secret below, then try again.');
+        return;
+      }
+      if (res.data?.auth_url) {
+        window.location.href = res.data.auth_url;
+        return;
+      }
+      showError('No auth URL returned.');
+    } catch (e) {
+      showError(handleAPIError(e).message || 'Failed to connect YouTube (manual)');
+    } finally {
+      setConnectingYtManual(false);
+    }
+  };
+
+  const handleDisconnectYtManual = async () => {
+    try {
+      await orbixNetworkAPI.disconnectYoutube({ ...apiBody(), usage: 'manual' });
+      setYtConnectedManual(false);
+      setYtChannelManual(null);
+      setManualClientIdPreview(null);
+      success('Manual YouTube disconnected');
+    } catch (e) {
+      showError(handleAPIError(e).message || 'Failed to disconnect manual YouTube');
     }
   };
 
@@ -975,6 +1032,97 @@ function ChannelSettingsTab({ channel }) {
               <p className="text-xs text-amber-700 mt-2">If Google says you already authorized: revoke the app at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer" className="underline">Google account → Third-party apps</a>, then use &quot;Clear YouTube and reconnect&quot;.</p>
             </div>
           )}
+
+          {/* Manual upload OAuth: second Google project so Force Upload still works if auto is rate-limited */}
+          <div className="mt-8 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+            <h3 className="text-sm font-semibold text-slate-800">Manual upload OAuth (optional)</h3>
+            <p className="text-xs text-slate-600">
+              Use a <strong>second</strong> Google Cloud OAuth app for &quot;Force Upload&quot; / manual publishes. If the auto-upload OAuth hits limits or gets blocked, you can still publish manually with this one.
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Manual OAuth Client ID</label>
+                <input
+                  type="text"
+                  value={manualOauthClientId}
+                  onChange={(e) => setManualOauthClientId(e.target.value)}
+                  placeholder={customOauthManual ? 'Leave blank to keep current' : 'Different Google Cloud project'}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Manual OAuth Client Secret</label>
+                <input
+                  type="password"
+                  value={manualOauthClientSecret}
+                  onChange={(e) => setManualOauthClientSecret(e.target.value)}
+                  placeholder={customOauthManual ? 'Leave blank to keep current' : 'From second OAuth client'}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white"
+                />
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap items-center">
+              <button
+                type="button"
+                onClick={async () => {
+                  setSavingManualOauth(true);
+                  try {
+                    await orbixNetworkAPI.saveYoutubeCustomOauth({
+                      channel_id: channel.id,
+                      client_id: manualOauthClientId.trim(),
+                      client_secret: manualOauthClientSecret.trim(),
+                      usage: 'manual'
+                    });
+                    success('Manual OAuth saved');
+                    const ytRes = await orbixNetworkAPI.getYoutubeChannel(apiParams());
+                    setCustomOauthManual(ytRes.data?.manual_custom_oauth ?? false);
+                    setManualClientIdPreview(ytRes.data?.manual_client_id_preview ?? null);
+                    if (manualOauthClientId.trim()) {
+                      orbixNetworkAPI.getYoutubeAuthUrl({ ...apiParams(), usage: 'manual' }).then((r) => r.data?.redirect_uri && setYtRedirectUriManual(r.data.redirect_uri)).catch(() => {});
+                    } else {
+                      setYtRedirectUriManual(null);
+                    }
+                  } catch (e) {
+                    showError(handleAPIError(e).message || 'Failed to save');
+                  } finally {
+                    setSavingManualOauth(false);
+                  }
+                }}
+                disabled={savingManualOauth}
+                className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-50"
+              >
+                {savingManualOauth ? 'Saving…' : 'Save manual OAuth'}
+              </button>
+            </div>
+            {ytConnectedManual && ytChannelManual ? (
+              <div className="flex items-center justify-between flex-wrap gap-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center gap-3">
+                  <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-green-800">Manual: Connected</p>
+                    <p className="text-xs text-green-700">{ytChannelManual.title || ytChannelManual.id}</p>
+                    {manualClientIdPreview && <p className="text-xs text-green-600">OAuth: {manualClientIdPreview}</p>}
+                  </div>
+                </div>
+                <button type="button" onClick={handleDisconnectYtManual} className="px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">Disconnect manual</button>
+              </div>
+            ) : (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-xs text-amber-800 mb-2">No manual OAuth connected. Force Upload will use the auto OAuth above if manual is not set.</p>
+                {customOauthManual && ytRedirectUriManual && (
+                  <p className="text-xs text-amber-700 mb-2">Add this redirect URI in Google Cloud for your <strong>manual</strong> OAuth client: <code className="block mt-1 break-all text-slate-800">{ytRedirectUriManual}</code></p>
+                )}
+                <button
+                  onClick={handleConnectYtManual}
+                  disabled={connectingYtManual || !customOauthManual}
+                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+                >
+                  {connectingYtManual ? <><Loader className="w-4 h-4 animate-spin" /> Connecting…</> : <>Connect YouTube (manual)</>}
+                </button>
+                {!customOauthManual && <p className="text-xs text-slate-500 mt-2">Save Manual OAuth Client ID and Secret above first.</p>}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
