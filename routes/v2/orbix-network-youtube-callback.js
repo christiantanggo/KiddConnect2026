@@ -73,7 +73,7 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${redirectBase}/modules/orbix-network/setup?error=youtube_not_configured`);
     }
 
-    // Use per-channel OAuth client (auto or manual slot) when this channel has custom credentials
+    // Use per-channel OAuth client (auto or manual slot) or env. Manual slot can use second project via YOUTUBE_MANUAL_CLIENT_*.
     let clientId = process.env.YOUTUBE_CLIENT_ID;
     let clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
     if (orbixChannelId && !isKidquiz && !isMovieReview) {
@@ -83,7 +83,7 @@ router.get('/youtube/callback', async (req, res) => {
       if (usageManual && channelEntry?.manual_client_id && channelEntry?.manual_client_secret) {
         clientId = channelEntry.manual_client_id;
         clientSecret = channelEntry.manual_client_secret;
-      } else if (channelEntry?.client_id && channelEntry?.client_secret) {
+      } else if (!usageManual && channelEntry?.client_id && channelEntry?.client_secret) {
         clientId = channelEntry.client_id;
         clientSecret = channelEntry.client_secret;
       }

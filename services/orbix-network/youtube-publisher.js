@@ -20,17 +20,25 @@ export const SKIP_YOUTUBE_UPLOAD_CODE = 'SKIP_YOUTUBE_UPLOAD';
  * @returns {Promise<Object>} OAuth2 client
  */
 /**
- * Resolve OAuth client ID and secret: per-channel (auto or manual slot) or env.
- * usage: 'auto' = pipeline uploads, 'manual' = Force Upload / manual publish (separate OAuth so manual still works if auto is rate-limited).
+ * Resolve OAuth client ID and secret for the requested slot only. No fallbacks.
+ * - For a channel: manual = only manual_client_id/secret; auto = only client_id/secret. Never use the other slot or env.
+ * - Legacy (no channel): use env only.
  */
 export function resolveOAuthCredentials(channelEntry, envClientId, envClientSecret, usage = 'auto') {
-  if (usage === 'manual' && channelEntry) {
-    const clientId = (channelEntry.manual_client_id || envClientId || '').trim();
-    const clientSecret = (channelEntry.manual_client_secret || envClientSecret || '').trim();
-    return { clientId, clientSecret };
+  if (channelEntry) {
+    if (usage === 'manual') {
+      return {
+        clientId: (channelEntry.manual_client_id || '').trim(),
+        clientSecret: (channelEntry.manual_client_secret || '').trim()
+      };
+    }
+    return {
+      clientId: (channelEntry.client_id || '').trim(),
+      clientSecret: (channelEntry.client_secret || '').trim()
+    };
   }
-  const clientId = (channelEntry?.client_id || envClientId || '').trim();
-  const clientSecret = (channelEntry?.client_secret || envClientSecret || '').trim();
+  const clientId = (envClientId || '').trim();
+  const clientSecret = (envClientSecret || '').trim();
   return { clientId, clientSecret };
 }
 
@@ -64,18 +72,14 @@ function getYtFromChannelEntry(entry, useManual) {
   return null;
 }
 
+/** Redirect URI used when per-channel OAuth is set and env YOUTUBE_REDIRECT_URI is not (token refresh does not send redirect_uri to Google). */
+const DEFAULT_REDIRECT_URI = 'https://api.tavarios.com/api/v2/orbix-network/youtube/callback';
+
 async function getYouTubeClient(businessId, orbixChannelId = null, options = {}) {
   const useManual = !!options.useManual;
   try {
     writeProgressLog('YT_GETCLIENT_START', { businessId, orbixChannelId: orbixChannelId || 'legacy', useManual });
     console.log('[YouTube Publisher] getYouTubeClient businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy', 'useManual=', useManual);
-    const hasRedirectUri = !!process.env.YOUTUBE_REDIRECT_URI;
-    if (!hasRedirectUri) {
-      console.error('[YouTube Publisher] SKIP_REASON: Missing YOUTUBE_REDIRECT_URI in .env');
-      const err = new Error('YouTube OAuth not configured (missing YOUTUBE_REDIRECT_URI). Set it in .env or Railway Environment.');
-      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
-      throw err;
-    }
 
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
     writeProgressLog('YT_GETCLIENT_SETTINGS_DONE', { businessId, hasSettings: !!moduleSettings });
@@ -92,24 +96,27 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
 
     let yt = null;
     let usePerChannel = false;
-    let slotManual = false; // true if we're using the manual_* slot (for token refresh persistence)
+    let slotManual = false;
     if (orbixChannelId) {
       const entry = byChannel[orbixChannelId];
-      // Prefer manual slot when useManual and manual has tokens; else fall back to auto for this channel only
-      if (useManual && entry?.manual_access_token) {
-        yt = getYtFromChannelEntry(entry, true);
-        usePerChannel = true;
-        slotManual = true;
-        console.log('[YouTube Publisher] Using per-channel manual OAuth for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
-      }
-      if (!yt && entry?.access_token) {
-        yt = getYtFromChannelEntry(entry, false);
-        usePerChannel = true;
-        console.log('[YouTube Publisher] Using per-channel YouTube (auto) for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
-      }
-      // When a channel was explicitly requested (e.g. Force Upload), never use legacy — wrong account would be used and can cause "upload limit exceeded" for the other account
-      if (!yt) {
-        console.error('[YouTube Publisher] Channel requested but no credentials — refusing to fall back to legacy (would use wrong account) orbixChannelId=', orbixChannelId, 'useManual=', useManual, 'hasEntry=', !!entry, 'entryHasManual=', !!entry?.manual_access_token, 'entryHasAuto=', !!entry?.access_token);
+      // Use only the requested slot: manual upload = manual tab credentials only; auto = auto tab only. No cross-fallback.
+      if (useManual) {
+        if (entry?.manual_access_token) {
+          yt = getYtFromChannelEntry(entry, true);
+          usePerChannel = true;
+          slotManual = true;
+          console.log('[YouTube Publisher] Using manual OAuth for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
+        } else {
+          console.error('[YouTube Publisher] Manual upload requested but channel has no manual OAuth. Connect YouTube in the Manual tab for this channel. orbixChannelId=', orbixChannelId);
+        }
+      } else {
+        if (entry?.access_token) {
+          yt = getYtFromChannelEntry(entry, false);
+          usePerChannel = true;
+          console.log('[YouTube Publisher] Using auto OAuth for channel=', orbixChannelId, 'youtube_channel_id=', yt?.channel_id || 'n/a');
+        } else {
+          console.error('[YouTube Publisher] Auto upload requested but channel has no auto OAuth. Connect YouTube in the Auto tab for this channel. orbixChannelId=', orbixChannelId);
+        }
       }
     }
     if (!yt && !orbixChannelId && settings.youtube?.access_token) {
@@ -117,22 +124,14 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
       console.log('[YouTube Publisher] Using legacy settings.youtube youtube_channel_id=', yt?.channel_id || 'n/a');
     }
     if (!yt || !yt.access_token) {
-      const requestedChannelButNoCreds = !!orbixChannelId && !yt;
-      const msg = requestedChannelButNoCreds
-        ? 'YouTube not connected for this channel. Connect in Orbix Network → Settings for this channel. (The global/legacy YouTube account is never used for this channel.)'
-        : usePerChannel
-          ? 'YouTube not connected for this channel. Connect in Orbix Network → Settings for this channel.'
-          : 'YouTube not connected. Please connect your YouTube account in settings.';
+      const slotName = useManual ? 'Manual' : 'Auto';
+      const msg = orbixChannelId
+        ? `YouTube not connected for this channel's ${slotName} upload. In Orbix Network → Settings, connect YouTube in the ${slotName} tab for this channel.`
+        : 'YouTube not connected. Please connect your YouTube account in settings.';
       if (yt?.channel_id) {
-        console.error('[YouTube Publisher] Credentials missing or expired businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
         const err = new Error('YouTube was connected but credentials are missing or expired. Go to Orbix Network → Settings, disconnect YouTube for this channel, then connect again.');
         err.code = SKIP_YOUTUBE_UPLOAD_CODE;
         throw err;
-      }
-      if (orbixChannelId && channelIds.length > 0) {
-        console.error('[YouTube Publisher] Channel not in youtube_by_channel businessId=', businessId, 'orbixChannelId=', orbixChannelId, 'availableKeys=', channelIds.join(', '));
-      } else {
-        console.error('[YouTube Publisher] No YouTube connection businessId=', businessId, 'orbixChannelId=', orbixChannelId || 'legacy');
       }
       const err = new Error(msg);
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
@@ -149,13 +148,18 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
       slotManual ? 'manual' : 'auto'
     );
     if (!clientId || !clientSecret) {
-      console.error('[YouTube Publisher] SKIP_REASON: No OAuth client_id/secret (env YOUTUBE_CLIENT_ID/SECRET or channel custom OAuth in Settings)');
-      const err = new Error('YouTube OAuth not configured. Use global env (YOUTUBE_CLIENT_ID/SECRET) or set a custom OAuth app for this channel in Settings.');
+      const slotName = useManual ? 'Manual' : 'Auto';
+      const err = new Error(`OAuth not configured for this channel's ${slotName} upload. In Settings, add the Client ID and Secret in the ${slotName} tab for this channel.`);
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;
     }
-    const raw = process.env.YOUTUBE_REDIRECT_URI || '';
-    const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
+    const raw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
+    const redirectUri = raw.startsWith('http') ? raw : (raw ? `https://${raw}` : (usePerChannel ? DEFAULT_REDIRECT_URI : ''));
+    if (!redirectUri) {
+      const err = new Error('YouTube OAuth not configured (missing YOUTUBE_REDIRECT_URI). Set it in .env or Railway Environment.');
+      err.code = SKIP_YOUTUBE_UPLOAD_CODE;
+      throw err;
+    }
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
     const expiryDate = yt.token_expiry ? new Date(yt.token_expiry).getTime() : null;
