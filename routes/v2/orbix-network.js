@@ -702,15 +702,18 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
       return res.status(404).json({ error: 'Render not found for this channel' });
     }
 
-    // Block wrong-format uploads (e.g. psychology 30s video to Trivia channel)
-    const { getChannelAllowedCategories } = await import('./orbix-network-jobs.js');
-    const allowedCategories = await getChannelAllowedCategories(channelId);
-    const storyCategory = (storyRow?.category || '').toLowerCase();
-    if (allowedCategories?.size && storyCategory && !allowedCategories.has(storyCategory)) {
-      return res.status(400).json({
-        error: 'Wrong content type for this channel',
-        message: `This video is "${storyRow?.category || storyCategory}" content but this channel only has sources for: ${[...allowedCategories].join(', ')}. Upload blocked to prevent wrong-format videos.`
-      });
+    // Block wrong-format uploads only for legacy renders (no channel): e.g. psychology video to Trivia channel.
+    // If the story already belongs to this channel (storyChannelId === channelId), it's this channel's content — skip check.
+    if (storyChannelId == null) {
+      const { getChannelAllowedCategories } = await import('./orbix-network-jobs.js');
+      const allowedCategories = await getChannelAllowedCategories(channelId);
+      const storyCategory = (storyRow?.category || '').toLowerCase().trim();
+      if (allowedCategories?.size && storyCategory && !allowedCategories.has(storyCategory)) {
+        return res.status(400).json({
+          error: 'Wrong content type for this channel',
+          message: `This video is "${storyRow?.category || storyCategory}" content but this channel only has sources for: ${[...allowedCategories].join(', ')}. Upload blocked to prevent wrong-format videos.`
+        });
+      }
     }
 
     const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED', 'STEP_FAILED'];

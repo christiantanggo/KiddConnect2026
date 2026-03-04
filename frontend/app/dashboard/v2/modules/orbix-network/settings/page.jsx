@@ -368,21 +368,6 @@ function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTrigge
           <label className="flex items-start gap-3 cursor-pointer">
             <input
               type="checkbox"
-              checked={settings.auto_upload_enabled}
-              onChange={(e) => setSettings((s) => ({ ...s, auto_upload_enabled: e.target.checked }))}
-              className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
-            />
-            <span className="text-sm text-gray-700">
-              <span className="font-medium">Auto-upload to YouTube after render</span>
-              <span className="block text-xs text-gray-500 mt-0.5">
-                When off, rendered videos stay in &quot;Ready for Upload&quot; for manual review before going live.
-              </span>
-            </span>
-          </label>
-
-          <label className="flex items-start gap-3 cursor-pointer">
-            <input
-              type="checkbox"
               checked={settings.enable_intro_hook}
               onChange={(e) => setSettings((s) => ({ ...s, enable_intro_hook: e.target.checked }))}
               className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500 mt-0.5"
@@ -1455,7 +1440,6 @@ function OrbixNetworkSettingsInner() {
     enable_rumble: false,
     daily_video_cap: 5,
     shock_score_threshold: 45,
-    auto_upload_enabled: false,
     enable_intro_hook: false,
     posting_timezone: 'America/New_York',
     posting_window_start: '07:00',
@@ -1498,7 +1482,6 @@ function OrbixNetworkSettingsInner() {
           enable_rumble: data.enable_rumble || false,
           daily_video_cap: data.daily_video_cap || 5,
           shock_score_threshold: data.shock_score_threshold ?? 45,
-          auto_upload_enabled: data.auto_upload_enabled === true,
           enable_intro_hook: data.enable_intro_hook === true,
           posting_timezone: data.posting_timezone || 'America/New_York',
           posting_window_start: data.posting_window_start || '07:00',
@@ -1523,7 +1506,6 @@ function OrbixNetworkSettingsInner() {
         review_mode_enabled: settings.review_mode_enabled,
         auto_approve_minutes: settings.auto_approve_minutes,
         shock_score_threshold: settings.shock_score_threshold,
-        auto_upload_enabled: settings.auto_upload_enabled,
         enable_intro_hook: settings.enable_intro_hook,
       });
       await orbixNetworkAPI.saveSetup(4, {

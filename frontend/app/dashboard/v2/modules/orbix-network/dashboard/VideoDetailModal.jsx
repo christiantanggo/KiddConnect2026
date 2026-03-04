@@ -263,7 +263,9 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
     } catch (error) {
       console.error('[Modal] ========== handleForceUploadYouTube ERROR ==========');
       console.error('[Modal] Error:', error?.message, error?.response?.data);
-      showErrorToast(error?.response?.data?.error || 'Failed to upload to YouTube');
+      const data = error?.response?.data || {};
+      const msg = data.message || data.error || 'Failed to upload to YouTube';
+      showErrorToast(msg);
     } finally {
       setUploadingYouTube(false);
     }

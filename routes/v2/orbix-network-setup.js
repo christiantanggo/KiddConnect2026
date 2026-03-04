@@ -61,7 +61,6 @@ router.get('/setup/status', async (req, res) => {
       posting_window_start: moduleSettings?.settings?.posting_schedule?.start ?? '07:00',
       posting_window_end: moduleSettings?.settings?.posting_schedule?.end ?? '20:00',
       posting_timezone: moduleSettings?.settings?.posting_schedule?.timezone ?? 'America/New_York',
-      auto_upload_enabled: moduleSettings?.settings?.auto_upload_enabled === true,
       enable_intro_hook: moduleSettings?.settings?.enable_intro_hook === true,
       slot_times: Array.isArray(moduleSettings?.settings?.posting_schedule?.slot_times) ? moduleSettings.settings.posting_schedule.slot_times : [],
       pipeline_run_times: Array.isArray(moduleSettings?.settings?.posting_schedule?.pipeline_run_times) ? moduleSettings.settings.posting_schedule.pipeline_run_times : [],
@@ -193,8 +192,7 @@ router.post('/setup/save', async (req, res) => {
             ...(current.scoring || {}),
             shock_score_threshold: stepData.shock_score_threshold ?? current.scoring?.shock_score_threshold ?? 45
           },
-          // Feature toggles — read directly by the render pipeline and upload job
-          auto_upload_enabled: stepData.auto_upload_enabled !== false,
+          // Feature toggles — read by the render pipeline (auto-upload is per-channel in Settings, not global)
           enable_intro_hook: stepData.enable_intro_hook === true
         };
         await ModuleSettings.update(businessId, MODULE_KEY, next);
@@ -227,7 +225,7 @@ router.post('/setup/save', async (req, res) => {
             timezone: stepData.posting_timezone ?? current.posting_schedule?.timezone ?? 'America/New_York',
             // slot_times: array of "HH:mm" strings — empty array = use defaults (8am,11am,2pm,5pm,8pm)
             slot_times: Array.isArray(stepData.slot_times) ? stepData.slot_times : (current.posting_schedule?.slot_times ?? []),
-            // pipeline_run_times: array of "HH:mm" strings — empty array = auto (1 hour before each post slot)
+            // pipeline_run_times: array of "HH:mm" strings — empty array = auto (same time as each post slot)
             pipeline_run_times: Array.isArray(stepData.pipeline_run_times) ? stepData.pipeline_run_times : (current.posting_schedule?.pipeline_run_times ?? [])
           }
         };
@@ -289,7 +287,6 @@ router.post('/setup/complete', async (req, res) => {
       scoring: {
         shock_score_threshold: setupState?.setup_data?.step3?.shock_score_threshold ?? 45
       },
-      auto_upload_enabled: setupState?.setup_data?.step3?.auto_upload_enabled !== false,
       enable_intro_hook: setupState?.setup_data?.step3?.enable_intro_hook === true,
       backgrounds: {
         random_mode: setupState?.setup_data?.step5?.background_random_mode || 'uniform'
