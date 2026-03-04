@@ -29,6 +29,16 @@ async function getEnabledChannelIds(businessId) {
   return new Set((rows || []).map(r => r.id));
 }
 
+/** Channel IDs for a business in creation order (matches dropdown). Legacy/null is not in the list; treat as last. */
+export async function getChannelOrderForBusiness(businessId) {
+  const { data: rows } = await supabaseClient
+    .from('orbix_channels')
+    .select('id')
+    .eq('business_id', businessId)
+    .order('created_at', { ascending: true });
+  return (rows || []).map(r => r.id);
+}
+
 /** Source type -> story categories that source can produce. Used to validate upload channel matches content. */
 const SOURCE_TYPE_TO_CATEGORIES = {
   TRIVIA_GENERATOR: ['trivia'],
@@ -726,8 +736,35 @@ router.post('/render', async (req, res) => {
   }
 });
 
-const YOUTUBE_UPLOAD_MAX_ATTEMPTS = 3;
+const YOUTUBE_UPLOAD_MAX_ATTEMPTS = 2; // First try + one backup; then send failure email
 const YOUTUBE_UPLOAD_RETRY_DELAY_MS = Number(process.env.ORBIX_YOUTUBE_UPLOAD_RETRY_DELAY_MS) || 5_000;
+
+/** Send failure email to business (display name ORBIX-NETWORK FAILURE, includes channel and reason). */
+async function sendOrbixUploadFailureEmail(businessId, channelId, errorMessage) {
+  try {
+    const { default: Business } = await import('../../models/Business.js');
+    const business = await Business.findById(businessId);
+    if (!business?.email) {
+      console.warn('[Orbix] No business email, cannot send upload failure email');
+      return;
+    }
+    let channelName = channelId ? null : 'Legacy';
+    if (channelId) {
+      const { data: ch } = await supabaseClient.from('orbix_channels').select('name').eq('id', channelId).single();
+      channelName = ch?.name || channelId;
+    } else {
+      channelName = 'Legacy';
+    }
+    const subject = `Orbix Network: YouTube upload failed — ${channelName}`;
+    const bodyText = `Channel: ${channelName}\nReason: ${errorMessage}\n\nPlease check Orbix Network settings and YouTube connection for this channel.`;
+    const bodyHtml = `<p><strong>Channel:</strong> ${channelName}</p><p><strong>Reason:</strong> ${errorMessage}</p><p>Please check Orbix Network settings and YouTube connection for this channel.</p>`;
+    const { sendEmail } = await import('../../services/notifications.js');
+    await sendEmail(business.email, subject, bodyText, bodyHtml, 'ORBIX-NETWORK FAILURE', businessId);
+    console.log(`[Orbix] Upload failure email sent to ${business.email} for channel ${channelName}`);
+  } catch (err) {
+    console.error('[Orbix] Failed to send upload failure email:', err.message);
+  }
+}
 
 /**
  * Process one READY_FOR_UPLOAD render: upload video (from output_url storage) to YouTube.
@@ -757,7 +794,7 @@ export async function processOneYouTubeUpload(options = {}) {
   }
 
   // For automatic 30s loop: fetch candidates and pick one that hasn't hit its per-channel cap
-  const { data: candidates } = await supabaseClient
+  let { data: candidates } = await supabaseClient
     .from('orbix_renders')
     .select('*, orbix_stories(channel_id)')
     .eq('render_status', 'READY_FOR_UPLOAD')
@@ -766,6 +803,23 @@ export async function processOneYouTubeUpload(options = {}) {
     .limit(20);
 
   if (!candidates || candidates.length === 0) return { processed: false };
+
+  // Sort by channel creation order (same as dropdown), then oldest first
+  const businessIds = [...new Set(candidates.map(c => c.business_id))];
+  const channelOrders = {};
+  for (const bid of businessIds) {
+    channelOrders[bid] = await getChannelOrderForBusiness(bid);
+  }
+  candidates = [...candidates].sort((a, b) => {
+    if (a.business_id !== b.business_id) return a.business_id.localeCompare(b.business_id);
+    const order = channelOrders[a.business_id] || [];
+    const chA = a.orbix_stories?.channel_id ?? null;
+    const chB = b.orbix_stories?.channel_id ?? null;
+    const iA = chA == null ? 1e9 : order.indexOf(chA);
+    const iB = chB == null ? 1e9 : order.indexOf(chB);
+    if (iA !== iB) return iA - iB;
+    return new Date(a.updated_at).getTime() - new Date(b.updated_at).getTime();
+  });
 
   /** Minimum seconds between auto-uploads per business so we don't spam one channel (30s job + publish job both running). */
   const UPLOAD_COOLDOWN_SECONDS = 5 * 60; // 5 minutes
@@ -812,7 +866,7 @@ export async function processOneYouTubeUpload(options = {}) {
     const timezone = posting.timezone ?? 'America/New_York';
     const todayISO = getStartOfTodayISOInZone(timezone);
 
-    // Auto-upload only: must be inside posting window AND within a configured post slot (e.g. 8:00–8:30)
+    // Auto-upload only: must be inside posting window AND within a post slot (slot runs from that time until the next post time, e.g. 8am–11am)
     if (!isWithinUploadSlot(posting, dailyVideoCap, timezone)) {
       continue;
     }
@@ -975,6 +1029,7 @@ async function _uploadRender(render, force, legacyChannelId = null) {
   const errorMessage = lastError?.message || 'Unknown error';
   const fullMessage = `Failed after ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts: ${errorMessage}`;
   console.error(`[Orbix YouTube] Upload FAILED after ${YOUTUBE_UPLOAD_MAX_ATTEMPTS} attempts render id=${claimedRender.id} lastError="${errorMessage}"`);
+  await sendOrbixUploadFailureEmail(claimedRender.business_id, legacyChannelId || null, errorMessage);
   // Set to UPLOAD_FAILED (not READY_FOR_UPLOAD) so it stops retrying automatically — manual retry available in UI
   await supabaseClient
     .from('orbix_renders')
@@ -1124,8 +1179,8 @@ function parseTimeToMinutes(timeStr) {
 /** Default fixed post times (5/day): 8am, 11am, 2pm, 5pm, 8pm. Times in minutes since midnight in user's timezone. */
 const DEFAULT_POST_SLOT_MINUTES = [8 * 60, 11 * 60, 14 * 60, 17 * 60, 20 * 60]; // 480, 660, 840, 1020, 1200
 
-/** Default pipeline run times: 1hr before each post (7am, 10am, 1pm, 4pm, 7pm in user's timezone). */
-const DEFAULT_PIPELINE_RUN_MINUTES = [7 * 60, 10 * 60, 13 * 60, 16 * 60, 19 * 60]; // 420, 600, 780, 960, 1140
+/** Default pipeline run times: same as post times (8am, 11am, 2pm, 5pm, 8pm). Scrape, render, and upload all happen at that time. */
+const DEFAULT_PIPELINE_RUN_MINUTES = [8 * 60, 11 * 60, 14 * 60, 17 * 60, 20 * 60]; // same as DEFAULT_POST_SLOT_MINUTES
 
 /**
  * Build evenly-spaced slot times for a given daily cap within the posting window.
@@ -1158,7 +1213,7 @@ function getPostSlotMinutes(posting, dailyVideoCap) {
 /**
  * Get pipeline run times in minutes (in user's timezone).
  * Uses posting_schedule.pipeline_run_times if set (user-configured, e.g. ["07:00","10:00","13:00","16:00","19:00"]).
- * Otherwise uses DEFAULT_PIPELINE_RUN_MINUTES (7am, 10am, 1pm, 4pm, 7pm in user's timezone).
+ * Otherwise uses DEFAULT_PIPELINE_RUN_MINUTES (same as post times: 8am, 11am, 2pm, 5pm, 8pm in user's timezone).
  */
 function getPipelineRunMinutes(posting, dailyVideoCap) {
   const configured = posting?.pipeline_run_times;
@@ -1341,7 +1396,7 @@ export async function runPublishJob() {
           continue;
         }
 
-        // Only upload during configured post slot times (e.g. 8:00–8:30, 11:00–11:30, …)
+        // Only upload during a post slot (each slot runs until the next post time, e.g. 8am–11am, 11am–2pm — no narrow window)
         if (!isWithinUploadSlot(posting, dailyVideoCap, timezone)) {
           console.log(`[Orbix Publish] Business ${businessId}: skip - outside upload slot (now ${currentTimeStr}, upload only at slot times)`);
           continue;
@@ -1435,6 +1490,16 @@ export async function runPublishJob() {
           continue;
         }
 
+        // Process in channel creation order (same as dropdown)
+        const channelOrder = await getChannelOrderForBusiness(businessId);
+        completedRenders.sort((a, b) => {
+          const chA = a.orbix_stories?.channel_id ?? null;
+          const chB = b.orbix_stories?.channel_id ?? null;
+          const iA = chA == null ? 1e9 : channelOrder.indexOf(chA);
+          const iB = chB == null ? 1e9 : channelOrder.indexOf(chB);
+          return iA - iB;
+        });
+
         for (const render of completedRenders) {
           // Skip if already published AND has a real YouTube URL (not a failed/empty publish)
           const { data: existingPublish } = await supabaseClient
@@ -1480,36 +1545,65 @@ export async function runPublishJob() {
             const publishOptions = orbixChannelId ? { orbixChannelId } : {};
 
             console.log(`[Orbix Publish] Business ${businessId}: uploading render ${render.id} to YouTube (channel ${orbixChannelId || 'legacy'})`);
-            const publishResult = await publishVideo(
-              businessId,
-              render.id,
-              render.output_url,
-              { title, description, tags },
-              publishOptions
-            );
-
-            await supabaseClient
-              .from('orbix_publishes')
-              .insert({
-                business_id: businessId,
-                render_id: render.id,
-                platform: 'YOUTUBE',
-                platform_video_id: publishResult.videoId,
-                title,
-                description,
-                publish_status: 'PUBLISHED',
-                posted_at: new Date().toISOString()
-              });
-
-            if (story?.id) {
-              await supabaseClient
-                .from('orbix_stories')
-                .update({ status: 'PUBLISHED' })
-                .eq('id', story.id);
+            let publishResult = null;
+            let lastPublishErr = null;
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              try {
+                publishResult = await publishVideo(
+                  businessId,
+                  render.id,
+                  render.output_url,
+                  { title, description, tags },
+                  publishOptions
+                );
+                break;
+              } catch (e) {
+                lastPublishErr = e;
+                console.warn(`[Orbix Publish] Business ${businessId} attempt ${attempt}/2 failed:`, e.message);
+                if (attempt < 2) {
+                  await new Promise(r => setTimeout(r, YOUTUBE_UPLOAD_RETRY_DELAY_MS));
+                }
+              }
             }
 
-            console.log(`[Orbix Publish] Business ${businessId}: published render ${render.id} → videoId=${publishResult.videoId}`);
-            totalPublished++;
+            if (publishResult) {
+              await supabaseClient
+                .from('orbix_publishes')
+                .insert({
+                  business_id: businessId,
+                  render_id: render.id,
+                  platform: 'YOUTUBE',
+                  platform_video_id: publishResult.videoId,
+                  title,
+                  description,
+                  publish_status: 'PUBLISHED',
+                  posted_at: new Date().toISOString()
+                });
+
+              if (story?.id) {
+                await supabaseClient
+                  .from('orbix_stories')
+                  .update({ status: 'PUBLISHED' })
+                  .eq('id', story.id);
+              }
+
+              console.log(`[Orbix Publish] Business ${businessId}: published render ${render.id} → videoId=${publishResult.videoId}`);
+              totalPublished++;
+            } else if (lastPublishErr) {
+              await sendOrbixUploadFailureEmail(businessId, orbixChannelId || null, lastPublishErr.message);
+              await supabaseClient
+                .from('orbix_publishes')
+                .insert({
+                  business_id: businessId,
+                  render_id: render.id,
+                  platform: 'YOUTUBE',
+                  title: 'Failed',
+                  publish_status: 'FAILED',
+                  error_message: lastPublishErr.message
+                })
+                .select()
+                .maybeSingle();
+            }
           } catch (publishErr) {
             if (publishErr?.code === SKIP_YOUTUBE_UPLOAD_CODE) {
               console.warn(`[Orbix Publish] Business ${businessId}: skipping render ${render.id} — ${publishErr.message}`);
