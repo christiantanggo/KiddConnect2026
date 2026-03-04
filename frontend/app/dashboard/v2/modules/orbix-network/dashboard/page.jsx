@@ -13,6 +13,7 @@ import { Loader, TrendingUp, Video, FileText, Eye, Play, RefreshCw, X, XCircle, 
 import PipelineView from './PipelineView';
 import VideoDetailModal from './VideoDetailModal';
 import OrbixChannelSelector from '../OrbixChannelSelector';
+import UploadLimitStatusCard from '../UploadLimitStatusCard';
 
 // Renders in PROCESSING/PENDING longer than this are treated as "stuck" - we stop polling and show a cancel option
 const STUCK_RENDER_MINUTES = 60;
@@ -681,8 +682,17 @@ export default function OrbixNetworkDashboard() {
               >
                 View All Stories
               </Link>
+              <Link
+                href="/dashboard/v2/modules/orbix-network/renders"
+                className="px-4 py-2 bg-slate-700 text-white rounded-lg hover:bg-slate-800"
+              >
+                Video Renders (Download)
+              </Link>
             </div>
           </div>
+
+          {/* When can I upload again? */}
+          <UploadLimitStatusCard />
 
           {/* Manual Job Triggers */}
           <div className="bg-white rounded-lg shadow p-6">
@@ -871,15 +881,19 @@ export default function OrbixNetworkDashboard() {
               </div>
             </div>
             
-            <div className="bg-white rounded-lg shadow p-6">
+            <Link
+              href="/dashboard/v2/modules/orbix-network/renders"
+              className="bg-white rounded-lg shadow p-6 block hover:ring-2 hover:ring-green-500 transition"
+            >
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-sm text-gray-600 mb-1">Videos Rendered</p>
                   <p className="text-2xl font-bold">{stats.totalRenders}</p>
+                  <p className="text-xs text-green-600 mt-1">Click to view & download →</p>
                 </div>
                 <Video className="w-8 h-8 text-green-600" />
               </div>
-            </div>
+            </Link>
             
             <div className="bg-white rounded-lg shadow p-6">
               <div className="flex items-center justify-between">
