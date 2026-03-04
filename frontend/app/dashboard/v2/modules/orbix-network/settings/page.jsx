@@ -11,7 +11,7 @@ import { handleAPIError } from '@/lib/errorHandler';
 import { useOrbixChannel } from '../OrbixChannelContext';
 import {
   ArrowLeft, Loader, Save, Plus, Trash2, CheckCircle2, Upload,
-  Youtube, Image, Music, Rss, Settings2, Loader2, X, Clock
+  Youtube, Image, Music, Rss, Settings2, Loader2, X, Clock, AlertTriangle
 } from 'lucide-react';
 import UploadLimitStatusCard from '../UploadLimitStatusCard';
 
@@ -35,8 +35,6 @@ const TIMEZONES = [
 function GlobalSettingsSection({ settings, setSettings, saving, onSave, onTriggerPipeline, triggeringPipeline }) {
   return (
     <div className="space-y-6">
-      <UploadLimitStatusCard />
-
       {/* Review Preferences */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h2 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
@@ -819,6 +817,7 @@ function ChannelSettingsTab({ channel }) {
     { id: 'backgrounds', label: 'Backgrounds', icon: Image },
     { id: 'music', label: 'Music', icon: Music },
     { id: 'sources', label: 'Sources', icon: Rss },
+    { id: 'upload-limit', label: 'Upload limit', icon: AlertTriangle },
   ];
 
   return (
@@ -1425,6 +1424,13 @@ function ChannelSettingsTab({ channel }) {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Upload limit sub-tab ── */}
+      {subTab === 'upload-limit' && (
+        <div className="space-y-4">
+          <UploadLimitStatusCard />
         </div>
       )}
     </div>
