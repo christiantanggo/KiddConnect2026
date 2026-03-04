@@ -713,10 +713,10 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
       });
     }
 
-    const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED'];
+    const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED', 'STEP_FAILED'];
     if (!allowedStatuses.includes(render.render_status)) {
       return res.status(400).json({
-        error: `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD, UPLOAD_FAILED, or COMPLETED renders can be uploaded.`
+        error: `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD, UPLOAD_FAILED, COMPLETED, or STEP_FAILED (with video) renders can be uploaded.`
       });
     }
 
