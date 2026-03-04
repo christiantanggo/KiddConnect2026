@@ -1035,13 +1035,20 @@ async function _uploadRender(render, force, legacyChannelId = null, useManual = 
         .eq('id', claimedRender.id);
 
       // Write an orbix_publishes record so publishesToday counts this upload correctly
+      const videoIdFromUrl = (url) => {
+        if (!url || typeof url !== 'string') return null;
+        try { return new URL(url).searchParams.get('v') || url.match(/[?&]v=([^&]+)/)?.[1] || null; } catch { return null; }
+      };
+      const platformVideoId = videoIdFromUrl(youtubeUrl);
+      const publishTitle = (claimedRender.youtube_title || '').trim() || 'Orbix Video';
       await supabaseClient.from('orbix_publishes').insert({
         business_id: claimedRender.business_id,
         render_id: claimedRender.id,
+        platform: 'YOUTUBE',
+        platform_video_id: platformVideoId,
+        title: publishTitle.slice(0, 255),
         publish_status: 'PUBLISHED',
-        youtube_url: youtubeUrl,
         posted_at: new Date().toISOString(),
-        created_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       }).then(({ error }) => {
         if (error) console.warn(`[Orbix YouTube] Could not write orbix_publishes record: ${error.message}`);
@@ -1496,13 +1503,14 @@ export async function runPublishJob() {
           // Never auto-upload a render we already attempted (any status). Prevents 72x duplicate uploads; only manual Force Upload can retry.
           const { data: existingPublish } = await supabaseClient
             .from('orbix_publishes')
-            .select('id, publish_status, youtube_url')
+            .select('id, publish_status, platform_video_id')
             .eq('render_id', render.id)
             .maybeSingle();
 
           if (existingPublish) {
-            if (existingPublish.youtube_url) {
-              console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already published at ${existingPublish.youtube_url}, skipping`);
+            if (existingPublish.platform_video_id) {
+              const url = `https://www.youtube.com/watch?v=${existingPublish.platform_video_id}`;
+              console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already published at ${url}, skipping`);
             } else {
               console.log(`[Orbix Publish] Business ${businessId}: render ${render.id} already has a publish attempt (status=${existingPublish.publish_status}), skipping — use Force Upload in UI to retry`);
             }
