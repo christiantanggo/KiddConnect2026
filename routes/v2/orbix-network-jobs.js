@@ -1707,6 +1707,70 @@ export async function runPublishJob() {
   }
 }
 
+/** 24h window in ms — channels that hit limit are skipped until this long after last failure. */
+const CHANNEL_QUOTA_SKIP_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Get per-channel "last upload limit hit" for this business. Used so user can see when each channel can upload again.
+ * Returns { channel_id, channel_name, last_limit_hit_at_iso, can_upload_after_iso, skipped }.
+ */
+async function getChannelQuotaSkipStatus(businessId) {
+  const since = new Date(Date.now() - CHANNEL_QUOTA_SKIP_MS).toISOString();
+  const { data: failedPublishes } = await supabaseClient
+    .from('orbix_publishes')
+    .select('render_id, created_at')
+    .eq('business_id', businessId)
+    .eq('publish_status', 'FAILED')
+    .gte('created_at', since)
+    .ilike('error_message', '%exceeded%')
+    .order('created_at', { ascending: false });
+  if (!failedPublishes?.length) return [];
+  const renderIds = [...new Set(failedPublishes.map(p => p.render_id).filter(Boolean))];
+  const { data: renders } = await supabaseClient
+    .from('orbix_renders')
+    .select('id, story_id')
+    .in('id', renderIds)
+    .eq('business_id', businessId);
+  const storyIds = [...new Set((renders || []).map(r => r.story_id).filter(Boolean))];
+  if (storyIds.length === 0) return [];
+  const { data: stories } = await supabaseClient
+    .from('orbix_stories')
+    .select('id, channel_id')
+    .in('id', storyIds);
+  const renderToChannel = {};
+  for (const r of renders || []) {
+    const s = (stories || []).find(st => st.id === r.story_id);
+    if (s?.channel_id) renderToChannel[r.id] = s.channel_id;
+  }
+  const channelToLatestHit = {};
+  for (const p of failedPublishes) {
+    const chId = renderToChannel[p.render_id];
+    if (!chId) continue;
+    const at = p.created_at;
+    if (!channelToLatestHit[chId] || at > channelToLatestHit[chId]) channelToLatestHit[chId] = at;
+  }
+  const channelIds = Object.keys(channelToLatestHit);
+  if (channelIds.length === 0) return [];
+  const { data: channels } = await supabaseClient
+    .from('orbix_channels')
+    .select('id, name')
+    .in('id', channelIds);
+  const nameById = Object.fromEntries((channels || []).map(c => [c.id, c.name || c.id]));
+  const now = Date.now();
+  return channelIds.map(chId => {
+    const lastHit = channelToLatestHit[chId];
+    const canUploadAfter = new Date(new Date(lastHit).getTime() + CHANNEL_QUOTA_SKIP_MS).toISOString();
+    const skipped = now < new Date(canUploadAfter).getTime();
+    return {
+      channel_id: chId,
+      channel_name: nameById[chId] || chId,
+      last_limit_hit_at_iso: lastHit,
+      can_upload_after_iso: canUploadAfter,
+      skipped
+    };
+  });
+}
+
 /**
  * GET /api/v2/orbix-network/jobs/publish-diagnostics
  * Returns why publish might be skipping (for current business). Use to debug "nothing posted".
@@ -1766,6 +1830,7 @@ router.get('/publish-diagnostics', async (req, res) => {
       const hasYt = chId && byChannel[chId]?.access_token;
       if (!hasYt) skipReason = `YouTube not connected for channel ${chId || 'null'}`;
     }
+    const channelQuotaSkipStatus = await getChannelQuotaSkipStatus(businessId);
     res.json({
       business_id: businessId,
       timezone,
@@ -1781,10 +1846,27 @@ router.get('/publish-diagnostics', async (req, res) => {
       publishable_count: publishable.length,
       youtube_connected_channel_ids: channelsWithYoutube,
       skip_reason: skipReason,
-      would_post_now: !skipReason && publishable.length > 0
+      would_post_now: !skipReason && publishable.length > 0,
+      channel_quota_skip_status: channelQuotaSkipStatus
     });
   } catch (error) {
     console.error('[Orbix Jobs] Publish diagnostics error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/v2/orbix-network/jobs/upload-limit-status
+ * Per-channel "when did we hit the upload limit" so user can see when they can upload again (24h skip).
+ */
+router.get('/upload-limit-status', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    const channelQuotaSkipStatus = await getChannelQuotaSkipStatus(businessId);
+    res.json({ channel_quota_skip_status: channelQuotaSkipStatus });
+  } catch (error) {
+    console.error('[Orbix Jobs] Upload limit status error:', error);
     res.status(500).json({ error: error.message });
   }
 });
