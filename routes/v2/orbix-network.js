@@ -702,29 +702,16 @@ router.post('/renders/:id/upload-to-youtube', async (req, res) => {
       return res.status(404).json({ error: 'Render not found for this channel' });
     }
 
-    // Block wrong-format uploads only for legacy renders (no channel): e.g. psychology video to Trivia channel.
-    // If the story already belongs to this channel (storyChannelId === channelId), it's this channel's content — skip check.
-    if (storyChannelId == null) {
-      const { getChannelAllowedCategories } = await import('./orbix-network-jobs.js');
-      const allowedCategories = await getChannelAllowedCategories(channelId);
-      const storyCategory = (storyRow?.category || '').toLowerCase().trim();
-      if (allowedCategories?.size && storyCategory && !allowedCategories.has(storyCategory)) {
-        return res.status(400).json({
-          error: 'Wrong content type for this channel',
-          message: `This video is "${storyRow?.category || storyCategory}" content but this channel only has sources for: ${[...allowedCategories].join(', ')}. Upload blocked to prevent wrong-format videos.`
-        });
-      }
-    }
+    // No category check for manual upload — user chose the channel and render; trust their choice.
 
     const allowedStatuses = ['READY_FOR_UPLOAD', 'COMPLETED', 'UPLOAD_FAILED', 'STEP_FAILED'];
     if (!allowedStatuses.includes(render.render_status)) {
-      return res.status(400).json({
-        error: `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD, UPLOAD_FAILED, COMPLETED, or STEP_FAILED (with video) renders can be uploaded.`
-      });
+      const msg = `Cannot upload — render status is ${render.render_status}. Only READY_FOR_UPLOAD, UPLOAD_FAILED, COMPLETED, or STEP_FAILED (with video) renders can be uploaded.`;
+      return res.status(400).json({ error: msg, message: msg });
     }
 
     if (!render.output_url) {
-      return res.status(400).json({ error: 'No video file available to upload. Re-render first.' });
+      return res.status(400).json({ error: 'No video file available to upload. Re-render first.', message: 'No video file available to upload. Re-render first.' });
     }
 
     console.log(`[POST renders/:id/upload-to-youtube] Triggering MANUAL YouTube upload for render ${id} channel_id=${channelId} (will use Manual-tab OAuth for this channel)`);
