@@ -471,7 +471,12 @@ function ChannelSettingsTab({ channel }) {
   const [addingSource, setAddingSource] = useState(false);
 
   // Active sub-tab within the channel
-  const [subTab, setSubTab] = useState('youtube');
+  const [subTab, setSubTab] = useState('youtube-auto');
+
+  // Redirect legacy 'youtube' tab to youtube-auto
+  useEffect(() => {
+    if (subTab === 'youtube') setSubTab('youtube-auto');
+  }, [subTab]);
 
   // Loading state for the whole channel tab
   const [loading, setLoading] = useState(true);
@@ -798,7 +803,8 @@ function ChannelSettingsTab({ channel }) {
   };
 
   const subTabs = [
-    { id: 'youtube', label: 'YouTube', icon: Youtube },
+    { id: 'youtube-auto', label: 'YouTube (auto upload)', icon: Youtube },
+    { id: 'youtube-manual', label: 'YouTube (manual upload)', icon: Youtube },
     { id: 'backgrounds', label: 'Backgrounds', icon: Image },
     { id: 'music', label: 'Music', icon: Music },
     { id: 'sources', label: 'Sources', icon: Rss },
@@ -838,25 +844,28 @@ function ChannelSettingsTab({ channel }) {
           >
             <Icon className="w-4 h-4" />
             {label}
-            {id === 'youtube' && (
-              <span className={`ml-1 w-2 h-2 rounded-full ${ytConnected ? 'bg-green-500' : 'bg-amber-400'}`} />
+            {id === 'youtube-auto' && (
+              <span className={`ml-1 w-2 h-2 rounded-full ${ytConnected ? 'bg-green-500' : 'bg-amber-400'}`} title={ytConnected ? 'Connected' : 'Not connected'} />
+            )}
+            {id === 'youtube-manual' && (
+              <span className={`ml-1 w-2 h-2 rounded-full ${ytConnectedManual ? 'bg-green-500' : 'bg-amber-400'}`} title={ytConnectedManual ? 'Connected' : 'Not connected'} />
             )}
           </button>
         ))}
       </div>
 
-      {/* ── YouTube sub-tab ── */}
-      {subTab === 'youtube' && (
+      {/* ── YouTube (auto upload) sub-tab ── */}
+      {subTab === 'youtube-auto' && (
         <div className="space-y-4">
           <p className="text-sm text-gray-600">
-            Connect a YouTube account to this channel. Completed renders will automatically upload to that YouTube account.
+            Connect a YouTube account for <strong>automatic</strong> uploads. The pipeline uses this OAuth when it publishes at scheduled times (~6 uploads/day per Google project).
           </p>
 
-          {/* Per-channel OAuth app: separate Google Cloud project = separate 10k quota (~6 uploads/day per channel) */}
+          {/* Per-channel OAuth app: separate Google Cloud project = separate quota */}
           <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-            <h3 className="text-sm font-semibold text-slate-800">Separate quota (optional)</h3>
+            <h3 className="text-sm font-semibold text-slate-800">Auto-upload OAuth app</h3>
             <p className="text-xs text-slate-600">
-              Use a different Google Cloud project for this channel so it gets its own daily quota (~6 uploads/day). Create a project, enable YouTube Data API v3, add OAuth credentials, and set the redirect URI to your app&apos;s callback URL (same as global).
+              Use a Google Cloud project for this channel so it gets its own daily quota (~6 uploads/day). Create a project, enable YouTube Data API v3, add OAuth credentials, and set the redirect URI to your app&apos;s callback URL (see below).
             </p>
             {customOauth && (
               <>
@@ -1032,31 +1041,39 @@ function ChannelSettingsTab({ channel }) {
               <p className="text-xs text-amber-700 mt-2">If Google says you already authorized: revoke the app at <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener noreferrer" className="underline">Google account → Third-party apps</a>, then use &quot;Clear YouTube and reconnect&quot;.</p>
             </div>
           )}
+        </div>
+      )}
 
-          {/* Manual upload OAuth: second Google project so Force Upload still works if auto is rate-limited */}
-          <div className="mt-8 p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-            <h3 className="text-sm font-semibold text-slate-800">Manual upload OAuth (optional)</h3>
+      {/* ── YouTube (manual upload) sub-tab ── */}
+      {subTab === 'youtube-manual' && (
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Connect a <strong>second</strong> YouTube OAuth for <strong>Force Upload</strong> / manual publishes. Use a different Google Cloud project so when the auto-upload OAuth is rate-limited or blocked, you can still publish manually.
+          </p>
+
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
+            <h3 className="text-sm font-semibold text-slate-800">Manual-upload OAuth app</h3>
             <p className="text-xs text-slate-600">
-              Use a <strong>second</strong> Google Cloud OAuth app for &quot;Force Upload&quot; / manual publishes. If the auto-upload OAuth hits limits or gets blocked, you can still publish manually with this one.
+              Create a separate OAuth client in Google Cloud (or use another project). Add the redirect URI below to that client&apos;s Authorized redirect URIs. Same YouTube channel is fine — this is just a second OAuth app so manual uploads keep working.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Manual OAuth Client ID</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">OAuth Client ID</label>
                 <input
                   type="text"
                   value={manualOauthClientId}
                   onChange={(e) => setManualOauthClientId(e.target.value)}
-                  placeholder={customOauthManual ? 'Leave blank to keep current' : 'Different Google Cloud project'}
+                  placeholder={customOauthManual ? 'Leave blank to keep current' : 'From Google Cloud (manual-upload project)'}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Manual OAuth Client Secret</label>
+                <label className="block text-xs font-medium text-slate-700 mb-1">OAuth Client Secret</label>
                 <input
                   type="password"
                   value={manualOauthClientSecret}
                   onChange={(e) => setManualOauthClientSecret(e.target.value)}
-                  placeholder={customOauthManual ? 'Leave blank to keep current' : 'From second OAuth client'}
+                  placeholder={customOauthManual ? 'Leave blank to keep current' : 'From same OAuth client'}
                   className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white"
                 />
               </div>
@@ -1091,35 +1108,45 @@ function ChannelSettingsTab({ channel }) {
                 disabled={savingManualOauth}
                 className="px-3 py-1.5 bg-slate-700 text-white rounded-lg text-sm font-medium hover:bg-slate-800 disabled:opacity-50"
               >
-                {savingManualOauth ? 'Saving…' : 'Save manual OAuth'}
+                {savingManualOauth ? 'Saving…' : 'Save'}
               </button>
+              {customOauthManual && <span className="text-xs text-slate-500">Clear both fields and Save to clear manual OAuth.</span>}
             </div>
+            {customOauthManual && ytRedirectUriManual && (
+              <div className="p-3 bg-white border border-amber-300 rounded-lg">
+                <p className="text-xs font-medium text-slate-700 mb-1">Add this in Google Cloud → Credentials → [manual OAuth client] → Authorized redirect URIs:</p>
+                <code className="block text-xs text-slate-900 break-all select-all p-2 bg-slate-50 border border-slate-200 rounded">{ytRedirectUriManual}</code>
+                <button type="button" onClick={() => { navigator.clipboard?.writeText(ytRedirectUriManual); success('Copied'); }} className="mt-2 text-xs text-blue-600 hover:underline font-medium">Copy</button>
+              </div>
+            )}
             {ytConnectedManual && ytChannelManual ? (
-              <div className="flex items-center justify-between flex-wrap gap-4 p-3 bg-green-50 border border-green-200 rounded-lg">
+              <div className="flex items-center justify-between flex-wrap gap-4 p-4 bg-green-50 border border-green-200 rounded-xl">
                 <div className="flex items-center gap-3">
                   <CheckCircle2 className="w-5 h-5 text-green-600 shrink-0" />
                   <div>
-                    <p className="text-sm font-semibold text-green-800">Manual: Connected</p>
-                    <p className="text-xs text-green-700">{ytChannelManual.title || ytChannelManual.id}</p>
+                    <p className="text-sm font-semibold text-green-800">Connected</p>
+                    <p className="text-sm text-green-700">{ytChannelManual.title || ytChannelManual.id}</p>
                     {manualClientIdPreview && <p className="text-xs text-green-600">OAuth: {manualClientIdPreview}</p>}
                   </div>
                 </div>
-                <button type="button" onClick={handleDisconnectYtManual} className="px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">Disconnect manual</button>
+                <button type="button" onClick={handleDisconnectYtManual} className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 text-sm">Disconnect</button>
               </div>
             ) : (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                <p className="text-xs text-amber-800 mb-2">No manual OAuth connected. Force Upload will use the auto OAuth above if manual is not set.</p>
-                {customOauthManual && ytRedirectUriManual && (
-                  <p className="text-xs text-amber-700 mb-2">Add this redirect URI in Google Cloud for your <strong>manual</strong> OAuth client: <code className="block mt-1 break-all text-slate-800">{ytRedirectUriManual}</code></p>
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                <p className="text-sm text-amber-800 mb-3">No manual OAuth connected. Force Upload will fall back to the auto-upload OAuth if needed.</p>
+                {customOauthManual && (
+                  <>
+                    <p className="text-xs text-amber-700 mb-3">Add the redirect URI above in Google Cloud, then:</p>
+                    <button
+                      onClick={handleConnectYtManual}
+                      disabled={connectingYtManual}
+                      className="inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+                    >
+                      {connectingYtManual ? <><Loader className="w-4 h-4 animate-spin" /> Connecting…</> : <>Connect YouTube (manual)</>}
+                    </button>
+                  </>
                 )}
-                <button
-                  onClick={handleConnectYtManual}
-                  disabled={connectingYtManual || !customOauthManual}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
-                >
-                  {connectingYtManual ? <><Loader className="w-4 h-4 animate-spin" /> Connecting…</> : <>Connect YouTube (manual)</>}
-                </button>
-                {!customOauthManual && <p className="text-xs text-slate-500 mt-2">Save Manual OAuth Client ID and Secret above first.</p>}
+                {!customOauthManual && <p className="text-xs text-slate-500">Save Client ID and Secret above first, then connect.</p>}
               </div>
             )}
           </div>
