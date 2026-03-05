@@ -554,6 +554,7 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
     }
 
     const pads = inputs.map((_, i) => Math.max(0, totalDuration - delays[i] - durs[i]));
+    const contentEndSeconds = inputs.length ? Math.max(...inputs.map((_, i) => delays[i] + durs[i])) : 0;
 
     const streams = inputs
       .map((_, i) => `[${i}:a]adelay=${Math.round(delays[i] * 1000)}|${Math.round(delays[i] * 1000)},apad=pad_dur=${pads[i]}[s${i}]`)
@@ -566,7 +567,7 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
       { timeout: 90000 }
     );
 
-    return { audioPath: mixedPath, duration: totalDuration };
+    return { audioPath: mixedPath, duration: totalDuration, contentEndSeconds };
   } finally {
     for (const p of [hookPath, questionPath, answerPath].filter(Boolean)) {
       try { await unlinkAsync(p); } catch (_) {}

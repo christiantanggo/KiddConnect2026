@@ -1,13 +1,14 @@
 /**
  * Orbix Dad Jokes Render Pipeline
  *
- * Format (per spec):
- *   0–4s:   Joke setup text on screen (no intro); AI voice reads setup
+ * Format:
+ *   0–4s:   Joke setup on screen; AI voice reads setup
  *   4–7s:   3-2-1 countdown (large, visible)
- *   7–7.5s: Punchline appears, hard stop
- *   7.5–8s: Optional "Comment your worst dad joke 👇" then loop
+ *   7s:     Countdown to zero, then TTS says the answer (punchline)
+ *   7s–end: Punchline on screen; TTS can continue over CTA
+ *   last 1.5s: "Comment your worst dad joke" then loop
  *
- * Total: 8s. No fades. Loop-friendly.
+ * Total: variable (min 8s). Video length = TTS content end + CTA; no hard 8s stop.
  */
 
 import { exec } from 'child_process';
@@ -37,15 +38,12 @@ function stripEmoji(s) {
   return s.replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, '').replace(/\s+/g, ' ').trim();
 }
 
-const SETUP_START   = 0;
-const SETUP_END     = 4.0;   // setup on screen 0–4s
-const COUNTDOWN_END = 7.0;   // 3-2-1: 4s → 7s
-const PUNCHLINE_END_SHORT = 7.5;  // punchline 7 → 7.5s when ≤2 words
-const LOOP_END_SHORT      = 8.0;   // loop line 7.5 → 8s
-const PUNCHLINE_END_LONG  = 8.0;   // punchline 7 → 8s when >2 words
-const LOOP_END_LONG       = 8.5;   // loop line 8 → 8.5s
-const DURATION_SHORT      = 8;
-const DURATION_LONG       = 8.5;
+const SETUP_START    = 0;
+const SETUP_END      = 4.0;   // setup on screen 0–4s
+const COUNTDOWN_END  = 7.0;   // 3-2-1: 4s → 7s; answer TTS starts at 7s (after countdown)
+const MIN_DURATION   = 8;     // minimum video length
+const CTA_SECONDS    = 1.5;   // call-to-action at end
+const AUDIO_CAP_SEC  = 30;    // generate audio with this cap so TTS is never cut; we trim to actual duration when mixing
 
 /** Resolve channel for dad joke music: use the channel that has the DAD_JOKE_GENERATOR source so music comes from the dad joke channel, not trivia. */
 async function resolveDadJokeMusicChannelId(businessId, storyChannelId) {
@@ -83,8 +81,8 @@ async function generateDadJokeASSFile(opts) {
     return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
   };
 
-  const punchlineEnd = opts.punchlineEnd ?? PUNCHLINE_END_SHORT;
-  const loopEnd = opts.loopEnd ?? LOOP_END_SHORT;
+  const punchlineEnd = opts.punchlineEnd ?? COUNTDOWN_END + 1;
+  const loopEnd = opts.loopEnd ?? COUNTDOWN_END + 2;
 
   const setupText = (opts.setup || '').trim().toUpperCase();
   const punchlineText = (opts.punchline || '').trim().toUpperCase();
@@ -179,27 +177,33 @@ export async function processDadJokeRenderJob(render, story, script) {
     throw new Error(`Dad joke render missing content: setup="${setup}" punchline="${punchline}"`);
   }
 
-  const punchlineWordCount = punchline.split(/\s+/).filter(Boolean).length;
-  const longPunchline = punchlineWordCount > 2;
-  const PUNCHLINE_END = longPunchline ? PUNCHLINE_END_LONG : PUNCHLINE_END_SHORT;
-  const LOOP_END = longPunchline ? LOOP_END_LONG : LOOP_END_SHORT;
-  const DURATION = longPunchline ? DURATION_LONG : DURATION_SHORT;
-
   const backgroundStoragePath = render.background_storage_path ?? null;
   const backgroundId = render.background_id ?? 1;
   let bgPath, motionPath, audioPath, musicPath, baseVideoPath, finalVideoPath, assPath, simpleAssPath;
 
   try {
-    const imageUrl = await getBackgroundImageUrl(backgroundId, backgroundStoragePath);
     const axios = (await import('axios')).default;
     const fs = (await import('fs')).default;
+
+    // Generate audio first so we know how long the TTS runs. Answer starts at 7s (after countdown to zero).
+    const audioResult = await generateTriviaAudio(
+      { hook: null, question: voice_script, answerText: punchline, enableIntroHook: false, answerStartSeconds: 7 },
+      AUDIO_CAP_SEC
+    );
+    audioPath = audioResult.audioPath;
+    const contentEndSeconds = audioResult.contentEndSeconds ?? COUNTDOWN_END;
+    const DURATION = Math.max(MIN_DURATION, Math.ceil((contentEndSeconds + CTA_SECONDS) * 2) / 2);
+    const punchlineEnd = DURATION - CTA_SECONDS;
+    const loopEnd = DURATION;
+
+    const imageUrl = await getBackgroundImageUrl(backgroundId, backgroundStoragePath);
     bgPath = join(tmpdir(), `dadjoke-bg-${renderId}-${Date.now()}.png`);
     const imgResp = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000 });
     await fs.promises.writeFile(bgPath, imgResp.data);
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
-    assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd: PUNCHLINE_END, loopEnd: LOOP_END });
+    assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd });
     simpleAssPath = join(tmpdir(), `dadjoke-ass-${renderId}-${Date.now()}.ass`);
     await fs.promises.copyFile(assPath, simpleAssPath);
     const escapedAssPath = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
@@ -213,28 +217,22 @@ export async function processDadJokeRenderJob(render, story, script) {
     try { await unlinkAsync(assPath); } catch (_) {}
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
 
-    const audioResult = await generateTriviaAudio(
-      { hook: null, question: voice_script, answerText: punchline, enableIntroHook: false, answerStartSeconds: 6 },
-      DURATION
-    );
-    audioPath = audioResult.audioPath;
-    const audioDuration = audioResult.duration;
-    const padDur = Math.max(0, DURATION - audioDuration);
     finalVideoPath = join(tmpdir(), `dadjoke-final-${renderId}-${Date.now()}.mp4`);
-
     const storyChannelId = story?.channel_id ?? null;
     const channelId = await resolveDadJokeMusicChannelId(businessId, storyChannelId);
     const musicTrack = await getRandomMusicTrack(businessId, channelId);
     if (musicTrack) musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
 
+    // Trim generated audio (AUDIO_CAP_SEC long) to DURATION, then mix with optional music
+    const voiceTrim = `[1:a]atrim=0:${DURATION},asetpts=PTS-STARTPTS,volume=1.5625`;
     if (musicPath) {
       await execAsync(
-        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceTrim}[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       await execAsync(
-        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "${voiceTrim}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }
