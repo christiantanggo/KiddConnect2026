@@ -27,20 +27,17 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=invalid_state`);
     }
 
-    if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET) {
+    const clientId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
+    const clientSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
       return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_not_configured`);
     }
 
-    // Build the kidquiz callback URI — strip the path from YOUTUBE_REDIRECT_URI and append kidquiz path
     const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
     const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
     const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
-    const oauth2Client = new google.auth.OAuth2(
-      process.env.YOUTUBE_CLIENT_ID,
-      process.env.YOUTUBE_CLIENT_SECRET,
-      redirectUri
-    );
+    const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
     let tokens;
     try {

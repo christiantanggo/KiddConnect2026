@@ -21,6 +21,7 @@ import { supabaseClient } from '../../config/database.js';
 import {
   getBackgroundImageUrl,
   prepareMusicTrack,
+  getRandomMusicTrack,
   generateTriviaAudio,
   uploadRenderToStorage,
   applyMotionToImage
@@ -31,9 +32,6 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
-
-const MUSIC_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_MUSIC || 'orbix-network-music';
-const MUSIC_EXT = /\.(mp3|m4a|aac|wav|ogg)$/i;
 
 // Timing (9s total)
 const RIDDLE_START  = 0;    // riddle text appears immediately
@@ -53,41 +51,6 @@ const RIDDLE_LOOP_LINES = [
   'And that was just the warm-up…',
   'Next riddle is harder…'
 ];
-
-/**
- * Pick a random music track from any channel under this business.
- * Same pattern as KidQuiz so riddle channels share music with trivia etc.
- */
-async function getAnyMusicTrack(businessId) {
-  try {
-    const { data: folders, error: fErr } = await supabaseClient.storage
-      .from(MUSIC_BUCKET)
-      .list(businessId, { limit: 50 });
-    if (fErr || !folders?.length) return null;
-
-    const allTracks = [];
-    for (const folder of folders) {
-      if (!folder.name) continue;
-      const prefix = `${businessId}/${folder.name}`;
-      const { data: files } = await supabaseClient.storage
-        .from(MUSIC_BUCKET)
-        .list(prefix, { limit: 100 });
-      if (!files?.length) continue;
-      for (const f of files) {
-        if (f.name && MUSIC_EXT.test(f.name)) {
-          const path = `${prefix}/${f.name}`;
-          const { data } = supabaseClient.storage.from(MUSIC_BUCKET).getPublicUrl(path);
-          if (data?.publicUrl) allTracks.push({ name: f.name, url: data.publicUrl });
-        }
-      }
-    }
-    if (!allTracks.length) return null;
-    return allTracks[randomInt(allTracks.length)];
-  } catch (e) {
-    console.warn('[Riddle Renderer] Could not load music track:', e?.message);
-    return null;
-  }
-}
 
 /**
  * Generate ASS subtitle file for the riddle layout (1080x1920).
@@ -298,7 +261,7 @@ export async function processRiddleRenderJob(render, story, script) {
     const padDur = Math.max(0, DURATION - audioDuration);
     finalVideoPath = join(tmpdir(), `riddle-final-${renderId}-${Date.now()}.mp4`);
 
-    const musicTrack = await getAnyMusicTrack(businessId);
+    const musicTrack = await getRandomMusicTrack(businessId, channelId);
     if (musicTrack) {
       musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
     }

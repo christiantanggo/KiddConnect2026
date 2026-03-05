@@ -13,7 +13,7 @@ import { scrapeAllSources } from '../../services/orbix-network/scraper.js';
 import { processRawItem } from '../../services/orbix-network/classifier.js';
 import { generateAndSaveScript } from '../../services/orbix-network/script-generator.js';
 import { processRenderJob, selectTemplate, selectBackground } from '../../services/orbix-network/video-renderer.js';
-import { publishVideo, SKIP_YOUTUBE_UPLOAD_CODE } from '../../services/orbix-network/youtube-publisher.js';
+import { publishVideo, getVideoAnalytics, SKIP_YOUTUBE_UPLOAD_CODE } from '../../services/orbix-network/youtube-publisher.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { runAutomatedPipeline } from '../../services/orbix-network/pipeline-scheduler.js';
 
@@ -1928,6 +1928,7 @@ export async function runScheduledAnalyticsCheck() {
 
 /**
  * Run analytics job for a specific business. When businessId is omitted, runs for all (backwards compat).
+ * Fetches views/likes/comments from YouTube Data API and upserts into orbix_analytics_daily for today.
  */
 export async function runAnalyticsJob(businessId = null) {
   try {
@@ -1945,13 +1946,50 @@ export async function runAnalyticsJob(businessId = null) {
     }
     if (businessIds.length === 0) return { success: true, videos_updated: 0 };
 
-    // TODO: Implement analytics fetching from YouTube API per businessId
-    // For now, return success
-    return {
-      success: true,
-      message: 'Analytics job placeholder - implementation pending',
-      videos_updated: 0
-    };
+    const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD UTC
+    let videosUpdated = 0;
+
+    for (const bid of businessIds) {
+      const { data: publishes, error: pubError } = await supabaseClient
+        .from('orbix_publishes')
+        .select('id, platform_video_id')
+        .eq('business_id', bid)
+        .eq('publish_status', 'PUBLISHED')
+        .not('platform_video_id', 'is', null);
+      if (pubError || !publishes?.length) continue;
+
+      const seen = new Set();
+      for (const p of publishes) {
+        const videoId = (p.platform_video_id || '').trim();
+        if (!videoId || seen.has(videoId)) continue;
+        seen.add(videoId);
+        try {
+          const stats = await getVideoAnalytics(bid, videoId);
+          const { error: upsertErr } = await supabaseClient
+            .from('orbix_analytics_daily')
+            .upsert(
+              {
+                business_id: bid,
+                platform_video_id: videoId,
+                date: today,
+                views: stats.views ?? 0,
+                likes: stats.likes ?? 0,
+                comments: stats.comments ?? 0,
+                avg_watch_time_seconds: 0,
+                completion_rate: 0,
+                updated_at: new Date().toISOString()
+              },
+              { onConflict: 'business_id,platform_video_id,date' }
+            );
+          if (!upsertErr) videosUpdated++;
+        } catch (err) {
+          if (err?.code === SKIP_YOUTUBE_UPLOAD_CODE) continue;
+          console.warn(`[Orbix Jobs] Analytics skip video ${videoId} (${bid}):`, err?.message || err);
+        }
+      }
+    }
+
+    return { success: true, videos_updated: videosUpdated };
   } catch (error) {
     console.error('[Orbix Jobs] Analytics job error:', error);
     throw error;

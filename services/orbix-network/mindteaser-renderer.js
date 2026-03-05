@@ -21,6 +21,7 @@ import { supabaseClient } from '../../config/database.js';
 import {
   getBackgroundImageUrl,
   prepareMusicTrack,
+  getRandomMusicTrack,
   uploadRenderToStorage,
   applyMotionToImage
 } from './video-renderer.js';
@@ -30,9 +31,6 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
-
-const MUSIC_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_MUSIC || 'orbix-network-music';
-const MUSIC_EXT = /\.(mp3|m4a|aac|wav|ogg)$/i;
 
 const PAUSE_AFTER_QUESTION = 1.0;
 const COUNTDOWN_DURATION = 3.0;
@@ -45,34 +43,6 @@ const MINDTEASER_LOOP_LINES = [
   'Most people miss this.',
   'Watch one more time.'
 ];
-
-async function getAnyMusicTrack(businessId) {
-  try {
-    const { data: folders, error: fErr } = await supabaseClient.storage
-      .from(MUSIC_BUCKET)
-      .list(businessId, { limit: 50 });
-    if (fErr || !folders?.length) return null;
-    const allTracks = [];
-    for (const folder of folders) {
-      if (!folder.name) continue;
-      const prefix = `${businessId}/${folder.name}`;
-      const { data: files } = await supabaseClient.storage.from(MUSIC_BUCKET).list(prefix, { limit: 100 });
-      if (!files?.length) continue;
-      for (const f of files) {
-        if (f.name && MUSIC_EXT.test(f.name)) {
-          const path = `${prefix}/${f.name}`;
-          const { data } = supabaseClient.storage.from(MUSIC_BUCKET).getPublicUrl(path);
-          if (data?.publicUrl) allTracks.push({ name: f.name, url: data.publicUrl });
-        }
-      }
-    }
-    if (!allTracks.length) return null;
-    return allTracks[randomInt(allTracks.length)];
-  } catch (e) {
-    console.warn('[Mind Teaser Renderer] Could not load music track:', e?.message);
-    return null;
-  }
-}
 
 /**
  * Generate TTS for question and answer; return paths and durations.
@@ -250,6 +220,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 export async function processMindTeaserRenderJob(render, story, script) {
   const renderId = render.id;
   const businessId = render.business_id;
+  const channelId = story?.channel_id ?? null;
 
   const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network').catch(() => null);
   const ENABLE_INTRO_HOOK = moduleSettings?.settings?.enable_intro_hook === true;
@@ -320,7 +291,7 @@ export async function processMindTeaserRenderJob(render, story, script) {
 
     // 5. Mix voice + optional music
     finalVideoPath = join(tmpdir(), `mindteaser-final-${renderId}-${Date.now()}.mp4`);
-    const musicTrack = await getAnyMusicTrack(businessId);
+    const musicTrack = await getRandomMusicTrack(businessId, channelId);
     if (musicTrack) {
       musicPath = await prepareMusicTrack(musicTrack.url, totalDuration);
     }

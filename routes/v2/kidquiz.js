@@ -23,11 +23,9 @@ router.use(requireBusinessContext);
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function isYouTubeConfigured() {
-  return !!(
-    process.env.YOUTUBE_CLIENT_ID &&
-    process.env.YOUTUBE_CLIENT_SECRET &&
-    process.env.YOUTUBE_REDIRECT_URI
-  );
+  const id = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
+  const secret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
+  return !!(id && secret && (process.env.YOUTUBE_REDIRECT_URI || process.env.YOUTUBE_CLIENT_ID));
 }
 
 async function getProjectOrFail(res, projectId, businessId) {
@@ -130,14 +128,15 @@ router.get('/youtube/auth-url', async (req, res) => {
       return res.status(400).json({ error: 'YouTube OAuth not configured on the server.' });
     }
     const businessId = req.active_business_id;
-    // Use YOUTUBE_REDIRECT_URI exactly as-is (same as Orbix) — no modification
-    const redirectUri = process.env.YOUTUBE_REDIRECT_URI?.startsWith('http')
-      ? process.env.YOUTUBE_REDIRECT_URI
-      : `https://${process.env.YOUTUBE_REDIRECT_URI || ''}`;
+    const clientId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
+    const clientSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
+    const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
+    const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
+    const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
     const oauth2Client = new google.auth.OAuth2(
-      process.env.YOUTUBE_CLIENT_ID,
-      process.env.YOUTUBE_CLIENT_SECRET,
+      clientId,
+      clientSecret,
       redirectUri
     );
     // Encode kidquiz module in state so the callback knows where to save

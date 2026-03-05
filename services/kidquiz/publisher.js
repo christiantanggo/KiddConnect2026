@@ -10,9 +10,18 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 const MODULE_KEY = 'kidquiz';
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS || 'kidquiz-videos';
 
+function getKidQuizOAuthCredentials() {
+  const kidquizId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
+  const kidquizSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
+  return { clientId: kidquizId, clientSecret: kidquizSecret };
+}
+
 async function getYouTubeClient(businessId) {
-  const hasOAuth = process.env.YOUTUBE_CLIENT_ID && process.env.YOUTUBE_CLIENT_SECRET && process.env.YOUTUBE_REDIRECT_URI;
-  if (!hasOAuth) throw new Error('YouTube OAuth not configured on this server.');
+  const { clientId, clientSecret } = getKidQuizOAuthCredentials();
+  const hasOAuth = clientId && clientSecret && (process.env.YOUTUBE_REDIRECT_URI || process.env.YOUTUBE_CLIENT_ID);
+  if (!hasOAuth) {
+    throw new Error('YouTube OAuth not configured. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET (or KIDQUIZ_YOUTUBE_CLIENT_ID and KIDQUIZ_YOUTUBE_CLIENT_SECRET) in your environment.');
+  }
 
   const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
   const yt = moduleSettings?.settings?.youtube;
@@ -24,11 +33,7 @@ async function getYouTubeClient(businessId) {
   const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
   const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.YOUTUBE_CLIENT_ID,
-    process.env.YOUTUBE_CLIENT_SECRET,
-    redirectUri
-  );
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
   oauth2Client.setCredentials({
     access_token: yt.access_token,
@@ -126,15 +131,20 @@ export async function publishKidQuizVideo(publish, render, project) {
     console.log(`[KidQuiz Publisher] Published videoId=${videoId}`);
     return { videoId, youtubeUrl };
   } catch (err) {
-    console.error(`[KidQuiz Publisher] FAILED publish_id=${publishId}`, err.message);
+    const msg = err.message || '';
+    const isInvalidClient = msg.includes('invalid_client') || err?.response?.data?.error === 'invalid_client';
+    const userMessage = isInvalidClient
+      ? 'YouTube OAuth client invalid. In Railway (or .env) set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to the same Google OAuth client used when you connected YouTube in Kid Quiz Settings. If you use a different OAuth app for Kid Quiz, set KIDQUIZ_YOUTUBE_CLIENT_ID and KIDQUIZ_YOUTUBE_CLIENT_SECRET. Then re-connect YouTube in Kid Quiz → Settings.'
+      : msg;
+    console.error(`[KidQuiz Publisher] FAILED publish_id=${publishId}`, msg);
     await supabaseClient
       .from('kidquiz_publishes')
-      .update({ publish_status: 'FAILED', error_message: err.message, updated_at: new Date().toISOString() })
+      .update({ publish_status: 'FAILED', error_message: userMessage, updated_at: new Date().toISOString() })
       .eq('id', publishId);
     await supabaseClient
       .from('kidquiz_projects')
       .update({ status: 'FAILED', updated_at: new Date().toISOString() })
       .eq('id', project.id);
-    throw err;
+    throw new Error(userMessage);
   }
 }
