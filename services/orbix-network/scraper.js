@@ -612,7 +612,8 @@ export async function saveRawItem(businessId, item) {
       item.content_type === 'trivia' || item.category === 'trivia' ||
       item.content_type === 'facts' || item.category === 'facts' ||
       item.content_type === 'riddle' || item.category === 'riddle' ||
-      item.content_type === 'mindteaser' || item.category === 'mindteaser';
+      item.content_type === 'mindteaser' || item.category === 'mindteaser' ||
+      item.content_type === 'dadjoke' || item.category === 'dadjoke';
     const insertPayload = {
       business_id: businessId,
       channel_id: channelId,
@@ -627,14 +628,15 @@ export async function saveRawItem(businessId, item) {
     if (item.content_fingerprint) {
       insertPayload.content_fingerprint = item.content_fingerprint;
     }
-    if (isEvergreen && item.category && item.shock_score != null) {
+    if (isEvergreen && item.category && (item.shock_score != null || item.category === 'dadjoke')) {
       insertPayload.category = item.category;
-      insertPayload.shock_score = item.shock_score;
+      insertPayload.shock_score = item.shock_score ?? (item.category === 'dadjoke' ? 70 : null);
       insertPayload.factors_json = item.factors_json || (
         item.category === 'trivia' ? { source: 'trivia_generator' } :
         item.category === 'facts' ? { source: 'wikidata_facts' } :
         item.category === 'riddle' ? { source: 'riddle_generator' } :
         item.category === 'mindteaser' ? { source: 'mindteaser_generator' } :
+        item.category === 'dadjoke' ? { source: 'dad_joke_generator' } :
         item.category === 'money' ? { source: 'wikipedia_money' } : { source: 'wikipedia_psychology' }
       );
     }

@@ -173,8 +173,14 @@ export async function processRawItem(businessId, rawItem) {
     const threshold = moduleSettings?.settings?.scoring?.shock_score_threshold ?? 45;
     
     // Use pre-calculated shock score from raw item (calculated during scraping)
-    const shockScore = rawItem.shock_score;
+    let shockScore = rawItem.shock_score;
     let category = rawItem.category;
+    // Normalize dad joke: older raw items may have been saved without category (scraper didn't treat dadjoke as evergreen)
+    const isDadJokeBySource = (rawItem.content_type === 'dadjoke') || (rawItem.url && String(rawItem.url).startsWith('dadjoke://'));
+    if (isDadJokeBySource && !category) {
+      category = 'dadjoke';
+      if (shockScore == null || shockScore === undefined) shockScore = 70;
+    }
     const factorsJson = rawItem.factors_json;
     const evergreenCategories = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
     const isEvergreenCategory = category && evergreenCategories.includes(category);
