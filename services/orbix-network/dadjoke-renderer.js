@@ -47,6 +47,26 @@ const LOOP_END_LONG       = 8.5;   // loop line 8 → 8.5s
 const DURATION_SHORT      = 8;
 const DURATION_LONG       = 8.5;
 
+/** Resolve channel for dad joke music: use the channel that has the DAD_JOKE_GENERATOR source so music comes from the dad joke channel, not trivia. */
+async function resolveDadJokeMusicChannelId(businessId, storyChannelId) {
+  try {
+    const { data: sources, error } = await supabaseClient
+      .from('orbix_sources')
+      .select('channel_id')
+      .eq('business_id', businessId)
+      .eq('type', 'DAD_JOKE_GENERATOR')
+      .eq('enabled', true)
+      .not('channel_id', 'is', null)
+      .limit(1);
+    if (!error && sources?.length && sources[0].channel_id) {
+      return sources[0].channel_id;
+    }
+  } catch (e) {
+    // ignore
+  }
+  return storyChannelId;
+}
+
 async function generateDadJokeASSFile(opts) {
   const fs = (await import('fs')).default;
   const assPath = join(tmpdir(), `orbix-dadjoke-${Date.now()}.ass`);
@@ -202,7 +222,8 @@ export async function processDadJokeRenderJob(render, story, script) {
     const padDur = Math.max(0, DURATION - audioDuration);
     finalVideoPath = join(tmpdir(), `dadjoke-final-${renderId}-${Date.now()}.mp4`);
 
-    const channelId = story?.channel_id ?? null;
+    const storyChannelId = story?.channel_id ?? null;
+    const channelId = await resolveDadJokeMusicChannelId(businessId, storyChannelId);
     const musicTrack = await getRandomMusicTrack(businessId, channelId);
     if (musicTrack) musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
 
