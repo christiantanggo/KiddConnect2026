@@ -1658,7 +1658,8 @@ export async function runPublishJob() {
                 .from('orbix_publishes')
                 .update({
                   publish_status: 'FAILED',
-                  error_message: lastPublishErr.message?.slice(0, 500)
+                  error_message: lastPublishErr.message?.slice(0, 500),
+                  updated_at: new Date().toISOString()
                 })
                 .eq('render_id', render.id)
                 .eq('publish_status', 'PENDING');
@@ -1670,7 +1671,8 @@ export async function runPublishJob() {
                 .from('orbix_publishes')
                 .update({
                   publish_status: 'FAILED',
-                  error_message: (publishErr?.message || 'Skipped')?.slice(0, 500)
+                  error_message: (publishErr?.message || 'Skipped')?.slice(0, 500),
+                  updated_at: new Date().toISOString()
                 })
                 .eq('render_id', render.id)
                 .eq('publish_status', 'PENDING');
@@ -1681,7 +1683,8 @@ export async function runPublishJob() {
                 .from('orbix_publishes')
                 .update({
                   publish_status: 'FAILED',
-                  error_message: msg.slice(0, 500)
+                  error_message: msg.slice(0, 500),
+                  updated_at: new Date().toISOString()
                 })
                 .eq('render_id', render.id)
                 .eq('publish_status', 'PENDING');
@@ -1716,14 +1719,15 @@ const CHANNEL_QUOTA_SKIP_MS = 24 * 60 * 60 * 1000;
  */
 async function getChannelQuotaSkipStatus(businessId) {
   const since = new Date(Date.now() - CHANNEL_QUOTA_SKIP_MS).toISOString();
+  // Match both "exceeded" (API wording) and "upload limit" (our YouTube publisher message when uploadLimitExceeded)
   const { data: failedPublishes } = await supabaseClient
     .from('orbix_publishes')
-    .select('render_id, created_at')
+    .select('render_id, created_at, updated_at')
     .eq('business_id', businessId)
     .eq('publish_status', 'FAILED')
     .gte('created_at', since)
-    .ilike('error_message', '%exceeded%')
-    .order('created_at', { ascending: false });
+    .or('error_message.ilike.%exceeded%,error_message.ilike.%upload limit%')
+    .order('updated_at', { ascending: false });
   if (!failedPublishes?.length) return [];
   const renderIds = [...new Set(failedPublishes.map(p => p.render_id).filter(Boolean))];
   const { data: renders } = await supabaseClient
@@ -1746,7 +1750,7 @@ async function getChannelQuotaSkipStatus(businessId) {
   for (const p of failedPublishes) {
     const chId = renderToChannel[p.render_id];
     if (!chId) continue;
-    const at = p.created_at;
+    const at = p.updated_at || p.created_at;
     if (!channelToLatestHit[chId] || at > channelToLatestHit[chId]) channelToLatestHit[chId] = at;
   }
   const channelIds = Object.keys(channelToLatestHit);
@@ -1867,6 +1871,59 @@ router.get('/upload-limit-status', async (req, res) => {
     res.json({ channel_quota_skip_status: channelQuotaSkipStatus });
   } catch (error) {
     console.error('[Orbix Jobs] Upload limit status error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** YouTube per-channel rolling 24h limit (observed ~7). Used for post-upload modal. */
+const YOUTUBE_UPLOADS_PER_CHANNEL_24H = 7;
+
+/**
+ * GET /api/v2/orbix-network/jobs/upload-count-last-24h
+ * Query: channel_id (orbix channel UUID). Returns uploads in last 24h for that channel and remaining slots.
+ */
+router.get('/upload-count-last-24h', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const channelId = req.query.channel_id || null;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    if (!channelId) return res.status(400).json({ error: 'channel_id required' });
+
+    const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const { data: rows, error } = await supabaseClient
+      .from('orbix_publishes')
+      .select('render_id')
+      .eq('business_id', businessId)
+      .eq('publish_status', 'PUBLISHED')
+      .gte('posted_at', since);
+    if (error) throw error;
+    const renderIds = (rows || []).map(r => r.render_id).filter(Boolean);
+    if (renderIds.length === 0) {
+      return res.json({
+        channel_id: channelId,
+        uploads_last_24h: 0,
+        limit: YOUTUBE_UPLOADS_PER_CHANNEL_24H,
+        remaining: YOUTUBE_UPLOADS_PER_CHANNEL_24H
+      });
+    }
+    const { data: renders } = await supabaseClient
+      .from('orbix_renders')
+      .select('id, orbix_stories(channel_id)')
+      .eq('business_id', businessId)
+      .in('id', renderIds);
+    const countForChannel = (renders || []).filter(r => {
+      const ch = r.orbix_stories?.channel_id ?? '__legacy__';
+      return ch === channelId;
+    }).length;
+    const remaining = Math.max(0, YOUTUBE_UPLOADS_PER_CHANNEL_24H - countForChannel);
+    res.json({
+      channel_id: channelId,
+      uploads_last_24h: countForChannel,
+      limit: YOUTUBE_UPLOADS_PER_CHANNEL_24H,
+      remaining
+    });
+  } catch (error) {
+    console.error('[Orbix Jobs] Upload count last 24h error:', error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -1,20 +1,23 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { X, RefreshCw, Loader, CheckCircle2, XCircle, Clock, AlertCircle, AlertTriangle, Play, Youtube, Download } from 'lucide-react';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { useOrbixChannel } from '../OrbixChannelContext';
 
-export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onForceProcess }) {
+export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onForceProcess, uploadPollingForItem, onClearUploadPolling }) {
   const { success, error: showErrorToast } = useToast();
-  const { apiParams } = useOrbixChannel();
+  const { apiParams, currentChannelId } = useOrbixChannel();
   const [loading, setLoading] = useState(false);
   const [uploadingYouTube, setUploadingYouTube] = useState(false);
   const [downloadingVideo, setDownloadingVideo] = useState(false);
   const [details, setDetails] = useState(null);
   const [logs, setLogs] = useState([]);
-  
+  /** After upload completes: { uploads_last_24h, remaining, limit } to show in modal */
+  const [uploadSuccessModal, setUploadSuccessModal] = useState(null);
+  const uploadPollRef = useRef(null);
+
   // Check if this is a raw item (has raw_item_id but no story_id)
   const isRawItem = item.raw_item_id && !item.story_id;
 
@@ -25,6 +28,63 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
       loadDetails();
     }
   }, [isOpen, item]);
+
+  useEffect(() => {
+    return () => {
+      if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+    };
+  }, []);
+
+  // When modal opened after Force upload from pipeline card: poll until upload completes, then show count modal
+  useEffect(() => {
+    if (!isOpen || !item?.render_id || !currentChannelId || !uploadPollingForItem || uploadPollingForItem.render_id !== item.render_id) return;
+    const startedAt = Date.now();
+    const pollMs = 2000;
+    const maxMs = 90000;
+    const tick = async () => {
+      if (Date.now() - startedAt > maxMs) {
+        if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+        uploadPollRef.current = null;
+        if (onClearUploadPolling) onClearUploadPolling();
+        return;
+      }
+      try {
+        const res = await orbixNetworkAPI.getRender(item.render_id, apiParams());
+        const status = res.data?.render?.render_status;
+        if (status === 'COMPLETED') {
+          if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+          uploadPollRef.current = null;
+          if (onClearUploadPolling) onClearUploadPolling();
+          if (onForceProcess) onForceProcess();
+          await loadDetails();
+          try {
+            const countRes = await orbixNetworkAPI.getUploadCountLast24h({ channel_id: currentChannelId });
+            const d = countRes.data;
+            setUploadSuccessModal({
+              uploads_last_24h: d.uploads_last_24h ?? 0,
+              remaining: d.remaining ?? 0,
+              limit: d.limit ?? 7
+            });
+          } catch (e) {
+            setUploadSuccessModal({ uploads_last_24h: 1, remaining: 6, limit: 7 });
+          }
+          return;
+        }
+        if (status === 'FAILED' || status === 'STEP_FAILED') {
+          if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+          uploadPollRef.current = null;
+          if (onClearUploadPolling) onClearUploadPolling();
+          if (onForceProcess) onForceProcess();
+          await loadDetails();
+        }
+      } catch (e) { /* ignore */ }
+    };
+    tick();
+    uploadPollRef.current = setInterval(tick, pollMs);
+    return () => {
+      if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+    };
+  }, [isOpen, item?.render_id, currentChannelId, uploadPollingForItem?.render_id]);
 
   const loadDetails = async () => {
     if (isRawItem) {
@@ -251,14 +311,64 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
     console.log('[Modal] render_id=', item.render_id);
     try {
       setUploadingYouTube(true);
+      setUploadSuccessModal(null);
       console.log('[Modal] Calling API: uploadRenderToYoutube');
       const startTime = Date.now();
       const response = await orbixNetworkAPI.uploadRenderToYoutube(item.render_id, apiParams());
       const duration = Date.now() - startTime;
       console.log('[Modal] uploadRenderToYoutube completed in', duration, 'ms', response.data);
-      success('Uploaded to YouTube');
+      success('Upload started — you\'ll see a summary when it finishes.');
       await loadDetails();
       if (onForceProcess) onForceProcess();
+
+      // Poll until upload completes, then show "X of 7 used, Y remaining" modal
+      if (currentChannelId) {
+        const startedAt = Date.now();
+        const pollMs = 2000;
+        const maxMs = 90000;
+        uploadPollRef.current = setInterval(async () => {
+          if (Date.now() - startedAt > maxMs) {
+            if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+            uploadPollRef.current = null;
+            setUploadingYouTube(false);
+            return;
+          }
+          try {
+            const res = await orbixNetworkAPI.getRender(item.render_id, apiParams());
+            const status = res.data?.render?.render_status;
+            if (status === 'COMPLETED') {
+              if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+              uploadPollRef.current = null;
+              setUploadingYouTube(false);
+              await loadDetails();
+              if (onForceProcess) onForceProcess();
+              try {
+                const countRes = await orbixNetworkAPI.getUploadCountLast24h({ channel_id: currentChannelId });
+                const d = countRes.data;
+                setUploadSuccessModal({
+                  uploads_last_24h: d.uploads_last_24h ?? 0,
+                  remaining: d.remaining ?? 0,
+                  limit: d.limit ?? 7
+                });
+              } catch (e) {
+                setUploadSuccessModal({ uploads_last_24h: 1, remaining: 6, limit: 7 });
+              }
+              return;
+            }
+            if (status === 'FAILED' || status === 'STEP_FAILED') {
+              if (uploadPollRef.current) clearInterval(uploadPollRef.current);
+              uploadPollRef.current = null;
+              setUploadingYouTube(false);
+              await loadDetails();
+              if (onForceProcess) onForceProcess();
+            }
+          } catch (e) {
+            // ignore poll errors
+          }
+        }, pollMs);
+      } else {
+        setUploadingYouTube(false);
+      }
       console.log('[Modal] ========== handleForceUploadYouTube SUCCESS ==========');
     } catch (error) {
       console.error('[Modal] ========== handleForceUploadYouTube ERROR ==========');
@@ -266,7 +376,6 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
       const data = error?.response?.data || {};
       const msg = data.message || data.error || 'Failed to upload to YouTube';
       showErrorToast(msg);
-    } finally {
       setUploadingYouTube(false);
     }
   };
@@ -323,7 +432,9 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
   if (!isOpen || !item) return null;
 
   const currentStep = details?.render_step || item.render_step;
-  const stepProgress = details?.step_progress !== undefined ? details.step_progress : item.step_progress;
+  let stepProgress = details?.step_progress !== undefined ? details.step_progress : item.step_progress;
+  // Don't show step number (e.g. 8) as % for Step 8: single-digit 1-9 is likely step index, not 0-100
+  if (currentStep === 'STEP_8_YOUTUBE_UPLOAD' && stepProgress != null && stepProgress >= 1 && stepProgress <= 9) stepProgress = 0;
   const renderStatus = details?.render_status || item.render_status;
   const isFailed = renderStatus === 'FAILED' || renderStatus === 'STEP_FAILED';
   // Video exists and user can Force upload / Re-Render: completed, ready-for-upload, or failed at Step 8 (upload limit) or upload_failed
@@ -1142,6 +1253,31 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
           </div>
         </div>
       </div>
+
+      {/* Post-upload: how many uploads left in the last 24h for this channel */}
+      {uploadSuccessModal && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-10 rounded-lg" onClick={() => setUploadSuccessModal(null)}>
+          <div className="bg-white rounded-xl shadow-xl p-6 max-w-sm mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-2 text-green-700 mb-3">
+              <CheckCircle2 className="w-6 h-6 shrink-0" />
+              <h3 className="text-lg font-semibold">Upload complete</h3>
+            </div>
+            <p className="text-sm text-gray-700 mb-4">
+              This channel has used <strong>{uploadSuccessModal.uploads_last_24h} of {uploadSuccessModal.limit}</strong> uploads in the last 24 hours (YouTube&apos;s rolling limit).
+            </p>
+            <p className="text-sm font-medium text-gray-800 mb-4">
+              <strong>{uploadSuccessModal.remaining} upload{uploadSuccessModal.remaining !== 1 ? 's' : ''}</strong> remaining for this channel in the next 24 hours.
+            </p>
+            <button
+              type="button"
+              onClick={() => setUploadSuccessModal(null)}
+              className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

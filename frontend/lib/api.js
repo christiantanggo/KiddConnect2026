@@ -452,6 +452,7 @@ export const orbixNetworkAPI = {
   triggerAutomatedPipeline: () => api.post('/v2/orbix-network/jobs/automated-pipeline'),
   triggerPublishJob: () => api.post('/v2/orbix-network/jobs/publish'),
   getUploadLimitStatus: () => api.get('/v2/orbix-network/jobs/upload-limit-status'),
+  getUploadCountLast24h: (params) => api.get('/v2/orbix-network/jobs/upload-count-last-24h', { params }),
   forceProcessRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/force-process`, {}, { params }),
   forceScoreRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/force-score`, {}, { params }),
   allowStoryRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/allow-story`, {}, { params }),

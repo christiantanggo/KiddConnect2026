@@ -15,6 +15,13 @@ import VideoDetailModal from './VideoDetailModal';
 import OrbixChannelSelector from '../OrbixChannelSelector';
 import UploadLimitStatusCard from '../UploadLimitStatusCard';
 
+// Don't show step number (8) as progress for Step 8 — single-digit 1-9 is likely step index, not 0-100
+function displayStepProgress(renderStep, stepProgress, fallback = 0) {
+  const p = stepProgress ?? fallback;
+  if (renderStep === 'STEP_8_YOUTUBE_UPLOAD' && p >= 1 && p <= 9) return fallback;
+  return p;
+}
+
 // Renders in PROCESSING/PENDING longer than this are treated as "stuck" - we stop polling and show a cancel option
 const STUCK_RENDER_MINUTES = 60;
 function isRenderStuck(r) {
@@ -41,6 +48,8 @@ export default function OrbixNetworkDashboard() {
   const [loadingRenderDetails, setLoadingRenderDetails] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [isVideoModalOpen, setIsVideoModalOpen] = useState(false);
+  /** When set, VideoDetailModal will poll until upload completes and show the "X of 7 used" modal */
+  const [uploadPollingForItem, setUploadPollingForItem] = useState(null);
   const [stats, setStats] = useState({
     totalRawItems: 0,
     totalStories: 0,
@@ -650,6 +659,9 @@ export default function OrbixNetworkDashboard() {
               </button>
             </div>
           )}
+          {/* Upload limit status: show for everyone so "when can I upload again" is always visible */}
+          <UploadLimitStatusCard />
+
           {noChannel ? (
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center">
               <p className="text-gray-600 mb-2">
@@ -690,9 +702,6 @@ export default function OrbixNetworkDashboard() {
               </Link>
             </div>
           </div>
-
-          {/* When can I upload again? */}
-          <UploadLimitStatusCard />
 
           {/* Manual Job Triggers */}
           <div className="bg-white rounded-lg shadow p-6">
@@ -922,8 +931,14 @@ export default function OrbixNetworkDashboard() {
             onVideoClick={(item) => {
               setSelectedVideo(item);
               setIsVideoModalOpen(true);
+              setUploadPollingForItem(null);
             }}
             onRefresh={loadDashboardData}
+            onForceUploadStarted={(item) => {
+              setSelectedVideo(item);
+              setIsVideoModalOpen(true);
+              setUploadPollingForItem(item);
+            }}
           />
 
           {/* Video Detail Modal */}
@@ -934,6 +949,7 @@ export default function OrbixNetworkDashboard() {
               onClose={() => {
                 setIsVideoModalOpen(false);
                 setSelectedVideo(null);
+                setUploadPollingForItem(null);
               }}
               onRestart={() => {
                 loadDashboardData();
@@ -941,6 +957,8 @@ export default function OrbixNetworkDashboard() {
               onForceProcess={() => {
                 loadDashboardData();
               }}
+              uploadPollingForItem={uploadPollingForItem}
+              onClearUploadPolling={() => setUploadPollingForItem(null)}
             />
           )}
 
@@ -1061,9 +1079,13 @@ export default function OrbixNetworkDashboard() {
                                   : 'Progress'}
                               </span>
                               <span className="text-sm font-medium text-gray-700">
-                                {(renderDetails.step_progress !== undefined || selectedRender.step_progress !== undefined)
-                                  ? (renderDetails.step_progress !== undefined ? renderDetails.step_progress : selectedRender.step_progress)
-                                  : (renderDetails.progress_percentage || selectedRender.progress_percentage || 0)}%
+                                {displayStepProgress(
+                                  renderDetails.render_step || selectedRender.render_step,
+                                  (renderDetails.step_progress !== undefined || selectedRender.step_progress !== undefined)
+                                    ? (renderDetails.step_progress !== undefined ? renderDetails.step_progress : selectedRender.step_progress)
+                                    : (renderDetails.progress_percentage ?? selectedRender.progress_percentage),
+                                  renderDetails.progress_percentage ?? selectedRender.progress_percentage ?? 0
+                                )}%
                               </span>
                             </div>
                             <div className="w-full bg-gray-200 rounded-full h-3">
@@ -1074,9 +1096,13 @@ export default function OrbixNetworkDashboard() {
                                     : 'bg-gray-400'
                                 }`}
                                 style={{ 
-                                  width: `${(renderDetails.step_progress !== undefined || selectedRender.step_progress !== undefined)
-                                    ? (renderDetails.step_progress !== undefined ? renderDetails.step_progress : selectedRender.step_progress)
-                                    : (renderDetails.progress_percentage || selectedRender.progress_percentage || 0)}%` 
+                                  width: `${displayStepProgress(
+                                    renderDetails.render_step || selectedRender.render_step,
+                                    (renderDetails.step_progress !== undefined || selectedRender.step_progress !== undefined)
+                                      ? (renderDetails.step_progress !== undefined ? renderDetails.step_progress : selectedRender.step_progress)
+                                      : (renderDetails.progress_percentage ?? selectedRender.progress_percentage),
+                                    renderDetails.progress_percentage ?? selectedRender.progress_percentage ?? 0
+                                  )}%` 
                                 }}
                               />
                             </div>

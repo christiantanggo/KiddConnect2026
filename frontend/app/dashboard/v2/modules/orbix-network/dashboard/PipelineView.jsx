@@ -1,13 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { CheckCircle2, XCircle, Loader, Clock, Zap, ThumbsUp, RefreshCw, CheckCheck, Trash2, Upload, Square } from 'lucide-react';
+import { CheckCircle2, XCircle, Loader, Clock, Zap, ThumbsUp, RefreshCw, CheckCheck, Trash2, Upload, Square, Download } from 'lucide-react';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
 import { useOrbixChannel } from '../OrbixChannelContext';
 
-export default function PipelineView({ pipeline = [], onVideoClick, onRefresh }) {
+export default function PipelineView({ pipeline = [], onVideoClick, onRefresh, onForceUploadStarted }) {
   const { success, error: showErrorToast } = useToast();
   const { apiParams, channels, currentChannelId } = useOrbixChannel();
   const currentChannel = channels?.find((c) => c.id === currentChannelId);
@@ -20,6 +20,7 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
   const [deletingId, setDeletingId] = useState(null); // raw_item_id or story_id
   const [forceUploadId, setForceUploadId] = useState(null);
   const [cancelUploadId, setCancelUploadId] = useState(null);
+  const [downloadingId, setDownloadingId] = useState(null);
   const steps = [
     { key: 'step1', name: 'News Scraping', shortName: 'Step 1' },
     { key: 'step2', name: 'Story Creation', shortName: 'Step 2' },
@@ -200,7 +201,9 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                   {videos.map((item, index) => {
                     const status = getStepStatus(item);
-                    const progress = item.step_progress || 0;
+                    // Avoid showing step number (e.g. 8) as progress: 1-9 when on step 8 is likely step index, not 0-100
+                    let progress = item.step_progress ?? 0;
+                    if (item.render_step === 'STEP_8_YOUTUBE_UPLOAD' && progress >= 1 && progress <= 9) progress = 0;
                     const hasScore = (item.story_shock_score ?? item.shock_score) != null;
                     const isStep1Unscored = step.key === 'step1' && item.raw_item_id && !hasScore;
                     const isStep1Rejected = step.key === 'step1' && item.rejected && item.raw_item_id;
@@ -461,8 +464,9 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
                                           setForceUploadId(item.render_id);
                                           try {
                                             await orbixNetworkAPI.uploadRenderToYoutube(item.render_id, apiParams());
-                                            success('YouTube upload started');
+                                            success('Upload started — opening video to show status when complete.');
                                             if (typeof onRefresh === 'function') onRefresh();
+                                            if (typeof onForceUploadStarted === 'function') onForceUploadStarted(item);
                                           } catch (err) {
                                             const info = handleAPIError(err);
                                             showErrorToast(info.message || 'Upload failed');
@@ -475,6 +479,38 @@ export default function PipelineView({ pipeline = [], onVideoClick, onRefresh })
                                       >
                                         {forceUploadId === item.render_id ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Upload className="w-3.5 h-3.5" />}
                                         {forceUploadId === item.render_id ? 'Uploading…' : 'Force upload'}
+                                      </button>
+                                    )}
+                                    {canForceUpload && (
+                                      <button
+                                        type="button"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          if (!item.render_id) return;
+                                          setDownloadingId(item.render_id);
+                                          try {
+                                            const res = await orbixNetworkAPI.downloadVideo(item.render_id, apiParams());
+                                            const url = URL.createObjectURL(res.data);
+                                            const a = document.createElement('a');
+                                            a.href = url;
+                                            a.download = `orbix-video-${item.render_id}.mp4`;
+                                            document.body.appendChild(a);
+                                            a.click();
+                                            document.body.removeChild(a);
+                                            URL.revokeObjectURL(url);
+                                            success('Video downloaded');
+                                          } catch (err) {
+                                            const info = handleAPIError(err);
+                                            showErrorToast(info.message || 'Download failed');
+                                          } finally {
+                                            setDownloadingId(null);
+                                          }
+                                        }}
+                                        disabled={downloadingId === item.render_id}
+                                        className="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium bg-slate-700 text-white rounded-lg hover:bg-slate-800 disabled:opacity-50"
+                                      >
+                                        {downloadingId === item.render_id ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
+                                        {downloadingId === item.render_id ? 'Downloading…' : 'Download video'}
                                       </button>
                                     )}
                                   </>
