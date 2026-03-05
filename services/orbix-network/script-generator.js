@@ -356,8 +356,45 @@ export async function generateScript(story, rawItem) {
   const isMoney = story.category === 'money';
   const isTrivia = story.category === 'trivia';
   const isFacts = story.category === 'facts';
+  const isDadJoke = story.category === 'dadjoke';
 
   try {
+    // Dad joke: use actual setup + punchline from raw item (no LLM — these are real jokes, not a story about jokes)
+    if (isDadJoke && rawItem?.snippet) {
+      let joke;
+      try {
+        joke = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+      } catch {
+        console.error('[Script Generator] Dad joke snippet is not valid JSON');
+        throw new Error('Dad joke snippet must be valid JSON');
+      }
+      const setup = (joke.setup || '').trim();
+      const punchline = (joke.punchline || '').trim();
+      const voice_script = (joke.voice_script || setup).trim();
+      const hook = (joke.hook || 'Comment your worst dad joke 👇').trim();
+      if (!setup || !punchline) {
+        throw new Error('Dad joke snippet missing setup or punchline');
+      }
+      const script = {
+        hook,
+        what_happened: setup,
+        why_it_matters: punchline,
+        what_happens_next: '',
+        cta_line: hook,
+        duration_target_seconds: 10,
+        content_type: 'dadjoke',
+        content_json: {
+          setup,
+          punchline,
+          voice_script,
+          hook,
+          episode_number: joke.episode_number
+        }
+      };
+      console.log('[Script Generator] Dad joke script from snippet (setup + punchline, no LLM)');
+      return script;
+    }
+
     // Facts: turn raw fact into Shorts-native script (hook, twist, payoff, loop) via LLM
     if (isFacts && rawItem?.snippet) {
       let factsPayload;
