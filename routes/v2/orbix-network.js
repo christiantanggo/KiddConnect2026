@@ -2033,6 +2033,14 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
   let shockScore = rawItem.shock_score;
   let factorsJson = rawItem.factors_json;
 
+  // Dad joke (and other evergreen) raw items may have been saved without category; detect by url
+  const isDadJokeByUrl = rawItem.url && String(rawItem.url).startsWith('dadjoke://');
+  if (isDadJokeByUrl && !category) {
+    category = 'dadjoke';
+    shockScore = shockScore ?? 70;
+    factorsJson = factorsJson || { source: 'dad_joke_generator' };
+  }
+
   if (!category || shockScore == null) {
     const classified = await classifyStory(rawItem);
     if (!classified) return null;
@@ -2052,6 +2060,9 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
       .eq('business_id', businessId);
   }
 
+  const evergreenCategories = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+  const storyStatus = evergreenCategories.includes(category) ? 'APPROVED' : 'PENDING';
+
   const { data: story, error: storyError } = await supabaseClient
     .from('orbix_stories')
     .insert({
@@ -2060,8 +2071,8 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
       raw_item_id: rawItem.id,
       category,
       shock_score: shockScore,
-      factors_json: factorsJson,
-      status: 'PENDING',
+      factors_json: factorsJson ?? {},
+      status: storyStatus,
       is_manual_force: true
     })
     .select()
