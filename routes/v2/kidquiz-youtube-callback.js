@@ -39,8 +39,10 @@ router.get('/youtube/callback', async (req, res) => {
         return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_not_configured`);
       }
     } else {
-      clientId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
-      clientSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
+      const existingAuto = await ModuleSettings.findByBusinessAndModule(businessId, 'kidquiz');
+      const yt = existingAuto?.settings?.youtube || {};
+      clientId = (yt.client_id || '').trim() || (process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID);
+      clientSecret = (yt.client_secret || '').trim() || (process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET);
       if (!clientId || !clientSecret) {
         return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_not_configured`);
       }

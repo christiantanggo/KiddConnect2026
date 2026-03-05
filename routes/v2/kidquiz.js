@@ -133,6 +133,9 @@ router.get('/youtube/auth-url', async (req, res) => {
   try {
     const businessId = req.active_business_id;
     const usageManual = (req.query.usage || '').toLowerCase() === 'manual';
+    const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
+    const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
+    const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
     if (usageManual) {
       const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
@@ -141,13 +144,10 @@ router.get('/youtube/auth-url', async (req, res) => {
       const clientSecret = (ytManual.manual_client_secret || '').trim();
       if (!clientId || !clientSecret) {
         return res.status(400).json({
-          error: 'Manual OAuth not set. Enter Client ID and Secret in the Manual OAuth section and click Save, then try Connect again.',
+          error: 'Manual OAuth not set. Enter Client ID and Secret in the Manual-upload OAuth section and click Save, then try Connect again.',
           configured: false
         });
       }
-      const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
-      const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
-      const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
       const url = oauth2Client.generateAuthUrl({
         access_type: 'offline',
@@ -158,14 +158,20 @@ router.get('/youtube/auth-url', async (req, res) => {
       return res.json({ url, redirect_uri: redirectUri });
     }
 
-    if (!isYouTubeConfigured()) {
-      return res.status(400).json({ error: 'YouTube OAuth not configured on the server.' });
+    const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    const yt = moduleSettings?.settings?.youtube || {};
+    const customId = (yt.client_id || '').trim();
+    const customSecret = (yt.client_secret || '').trim();
+    const useCustom = customId && customSecret;
+
+    const clientId = useCustom ? customId : (process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID);
+    const clientSecret = useCustom ? customSecret : (process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET);
+    if (!clientId || !clientSecret) {
+      return res.status(400).json({
+        error: 'YouTube OAuth not configured. Add Client ID and Secret in the Upload OAuth app section above and click Save, or set YOUTUBE_CLIENT_ID/SECRET on the server.',
+        configured: false
+      });
     }
-    const clientId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
-    const clientSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
-    const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
-    const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
-    const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
     const url = oauth2Client.generateAuthUrl({
@@ -174,7 +180,7 @@ router.get('/youtube/auth-url', async (req, res) => {
       state: `${businessId}:kidquiz`,
       prompt: 'consent'
     });
-    res.json({ url });
+    res.json({ url, redirect_uri: redirectUri });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -185,20 +191,25 @@ router.get('/youtube/status', async (req, res) => {
     const businessId = req.active_business_id;
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
     const settings = moduleSettings?.settings || {};
-    const yt = settings.youtube;
+    const yt = settings.youtube || {};
     const ytManual = settings.youtube_manual || {};
 
-    const connected = !!(yt?.access_token);
+    const connected = !!(yt.access_token);
     const connected_manual = !!(ytManual.manual_access_token);
+    const custom_oauth = !!(yt.client_id);
     const manual_custom_oauth = !!(ytManual.manual_client_id);
     const channel_manual = connected_manual && ytManual.manual_channel_id
       ? { id: ytManual.manual_channel_id, title: ytManual.manual_channel_title || '' }
       : null;
+    const credentials_source = custom_oauth ? 'custom_oauth' : 'global';
 
     res.json({
       connected,
-      channel_title: yt?.channel_title || null,
-      channel_id: yt?.channel_id || null,
+      channel_title: yt.channel_title || null,
+      channel_id: yt.channel_id || null,
+      custom_oauth,
+      credentials_source,
+      client_id_preview: clientIdPreview(yt.client_id),
       connected_manual,
       channel_manual,
       manual_custom_oauth,
@@ -209,41 +220,62 @@ router.get('/youtube/status', async (req, res) => {
   }
 });
 
-/** POST /youtube/custom-oauth — save manual OAuth client id/secret (like Orbix per-channel manual). Body: { client_id, client_secret, usage: 'manual' } */
+/** POST /youtube/custom-oauth — save OAuth client id/secret. Body: { client_id, client_secret, usage: 'auto'|'manual' }. Same as Orbix: auto = main uploads, manual = manual slot. */
 router.post('/youtube/custom-oauth', async (req, res) => {
   try {
     const businessId = req.active_business_id;
-    const usage = (req.body?.usage || '').toLowerCase();
-    if (usage !== 'manual') {
-      return res.status(400).json({ error: 'Kid Quiz only supports usage=manual for custom OAuth.' });
-    }
+    const usage = (req.body?.usage || 'auto').toLowerCase();
+    const isManual = usage === 'manual';
     const clientId = (req.body?.client_id ?? '').trim();
     const clientSecret = (req.body?.client_secret ?? '').trim();
 
     const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
     const settings = moduleSettings?.settings ? { ...moduleSettings.settings } : {};
-    settings.youtube_manual = settings.youtube_manual || {};
-    const existing = settings.youtube_manual;
 
-    if (!clientId) {
-      delete existing.manual_client_id;
-      delete existing.manual_client_secret;
-      existing.manual_access_token = '';
-      existing.manual_refresh_token = '';
-      existing.manual_channel_id = '';
-      existing.manual_channel_title = '';
-      existing.manual_token_expiry = null;
-    } else {
-      existing.manual_client_id = clientId;
-      if (clientSecret) existing.manual_client_secret = clientSecret;
+    if (isManual) {
+      settings.youtube_manual = settings.youtube_manual || {};
+      const existing = settings.youtube_manual;
+      if (!clientId) {
+        delete existing.manual_client_id;
+        delete existing.manual_client_secret;
+        existing.manual_access_token = '';
+        existing.manual_refresh_token = '';
+        existing.manual_channel_id = '';
+        existing.manual_channel_title = '';
+        existing.manual_token_expiry = null;
+      } else {
+        existing.manual_client_id = clientId;
+        if (clientSecret) existing.manual_client_secret = clientSecret;
+      }
+      settings.youtube_manual = { ...existing };
+      await ModuleSettings.update(businessId, MODULE_KEY, settings);
+      return res.json({
+        success: true,
+        manual_custom_oauth: !!clientId,
+        message: clientId ? 'Manual OAuth app saved. Use "Connect YouTube (manual)" to authorize.' : 'Manual OAuth cleared.'
+      });
     }
-    settings.youtube_manual = { ...existing };
 
+    settings.youtube = settings.youtube || {};
+    const existing = settings.youtube;
+    if (!clientId) {
+      delete existing.client_id;
+      delete existing.client_secret;
+      existing.access_token = '';
+      existing.refresh_token = '';
+      existing.channel_id = '';
+      existing.channel_title = '';
+      existing.token_expiry = null;
+    } else {
+      existing.client_id = clientId;
+      if (clientSecret) existing.client_secret = clientSecret;
+    }
+    settings.youtube = { ...existing };
     await ModuleSettings.update(businessId, MODULE_KEY, settings);
     res.json({
       success: true,
-      manual_custom_oauth: !!clientId,
-      message: clientId ? 'Manual OAuth app saved. Use "Connect YouTube (manual)" to authorize.' : 'Manual OAuth cleared.'
+      custom_oauth: !!clientId,
+      message: clientId ? 'Upload OAuth app saved. Use "Connect YouTube account" to authorize.' : 'Upload OAuth cleared; server env will be used if set.'
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -272,7 +304,16 @@ router.post('/youtube/disconnect', async (req, res) => {
         manual_token_expiry: null
       };
     } else {
-      delete settings.youtube;
+      const ex = settings.youtube || {};
+      settings.youtube = {
+        ...(ex.client_id && { client_id: ex.client_id }),
+        ...(ex.client_secret && { client_secret: ex.client_secret }),
+        access_token: '',
+        refresh_token: '',
+        channel_id: '',
+        channel_title: '',
+        token_expiry: null
+      };
     }
     await ModuleSettings.update(businessId, MODULE_KEY, settings);
     res.json({ success: true });

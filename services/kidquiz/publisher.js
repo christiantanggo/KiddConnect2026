@@ -33,15 +33,21 @@ async function getYouTubeClient(businessId) {
     tokenExpiry = ytManual.manual_token_expiry;
     persistSlot = 'youtube_manual';
   } else {
-    const envCreds = getKidQuizOAuthCredentials();
-    clientId = envCreds.clientId;
-    clientSecret = envCreds.clientSecret;
-    const hasEnv = clientId && clientSecret && (process.env.YOUTUBE_REDIRECT_URI || process.env.YOUTUBE_CLIENT_ID);
-    if (!hasEnv) {
-      throw new Error('YouTube OAuth not configured. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in your environment, or add Manual OAuth in Kid Quiz → Settings.');
+    const customId = (yt.client_id || '').trim();
+    const customSecret = (yt.client_secret || '').trim();
+    if (customId && customSecret) {
+      clientId = customId;
+      clientSecret = customSecret;
+    } else {
+      const envCreds = getKidQuizOAuthCredentials();
+      clientId = envCreds.clientId;
+      clientSecret = envCreds.clientSecret;
+    }
+    if (!clientId || !clientSecret) {
+      throw new Error('YouTube OAuth not configured. Add Client ID and Secret in Kid Quiz → Settings (Upload OAuth app or Manual OAuth), or set YOUTUBE_CLIENT_ID/SECRET on the server.');
     }
     if (!yt?.access_token) {
-      throw new Error('YouTube not connected for Kid Quiz Studio. Go to Kid Quiz Studio → Settings and connect YouTube (or connect Manual OAuth).');
+      throw new Error('YouTube not connected for Kid Quiz Studio. Go to Kid Quiz Studio → Settings and connect YouTube (Upload or Manual OAuth section).');
     }
     accessToken = yt.access_token;
     refreshToken = yt.refresh_token;
