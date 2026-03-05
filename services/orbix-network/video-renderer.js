@@ -519,7 +519,7 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
   // When hook is disabled, question starts at 0s; when enabled, question starts at 1s
   const HOOK_START = 0;
   const QUESTION_START = enableIntroHook ? 1 : 0;
-  const ANSWER_START = 9;
+  const ANSWER_START = opts.answerStartSeconds ?? 9;
   const answerTtsPhrase = answerPhrase;
 
   try {

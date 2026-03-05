@@ -31,15 +31,24 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
+/** Remove emoji so ASS/TTS display and speak cleanly. */
+function stripEmoji(s) {
+  if (typeof s !== 'string') return '';
+  return s.replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, '').replace(/\s+/g, ' ').trim();
+}
+
 const MUSIC_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_MUSIC || 'orbix-network-music';
 const MUSIC_EXT = /\.(mp3|m4a|aac|wav|ogg)$/i;
 
-const SETUP_START  = 0;
-const SETUP_END    = 4.0;   // setup on screen 0–4s
-const COUNTDOWN_END = 7.0;  // 3-2-1: 4s → 7s
-const PUNCHLINE_END = 7.5;  // punchline 7 → 7.5s
-const LOOP_END      = 8.0;   // loop line 7.5 → 8s
-const DURATION      = 8;
+const SETUP_START   = 0;
+const SETUP_END     = 4.0;   // setup on screen 0–4s
+const COUNTDOWN_END = 7.0;   // 3-2-1: 4s → 7s
+const PUNCHLINE_END_SHORT = 7.5;  // punchline 7 → 7.5s when ≤2 words
+const LOOP_END_SHORT      = 8.0;   // loop line 7.5 → 8s
+const PUNCHLINE_END_LONG  = 8.0;   // punchline 7 → 8s when >2 words
+const LOOP_END_LONG       = 8.5;   // loop line 8 → 8.5s
+const DURATION_SHORT      = 8;
+const DURATION_LONG       = 8.5;
 
 async function getAnyMusicTrack(businessId) {
   try {
@@ -84,9 +93,12 @@ async function generateDadJokeASSFile(opts) {
     return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
   };
 
+  const punchlineEnd = opts.punchlineEnd ?? PUNCHLINE_END_SHORT;
+  const loopEnd = opts.loopEnd ?? LOOP_END_SHORT;
+
   const setupText = (opts.setup || '').trim().toUpperCase();
   const punchlineText = (opts.punchline || '').trim().toUpperCase();
-  const loopLine = (opts.loopLine || 'Comment your worst dad joke 👇').trim();
+  const loopLine = (opts.loopLine || 'Comment your worst dad joke').trim();
 
   const wrapText = (text, maxChars) => {
     const words = (text || '').split(/\s+/).filter(Boolean);
@@ -151,8 +163,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   for (const seg of countdownSegments) {
     lines.push(`Dialogue: 3,${t(seg.start)},${t(seg.end)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${COUNTDOWN_NUM_Y})}${seg.digit}`);
   }
-  lines.push(`Dialogue: 4,${t(COUNTDOWN_END)},${t(PUNCHLINE_END)},Punchline,,0,0,0,,{\\an5\\pos(540,960)}${esc(punchlineText)}`);
-  lines.push(`Dialogue: 0,${t(PUNCHLINE_END)},${t(LOOP_END)},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopLine)}`);
+  lines.push(`Dialogue: 4,${t(COUNTDOWN_END)},${t(punchlineEnd)},Punchline,,0,0,0,,{\\an5\\pos(540,960)}${esc(punchlineText)}`);
+  lines.push(`Dialogue: 0,${t(punchlineEnd)},${t(loopEnd)},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopLine)}`);
 
   await fs.promises.writeFile(assPath, assContent + lines.join('\n') + '\n', 'utf8');
   return assPath;
@@ -168,14 +180,20 @@ export async function processDadJokeRenderJob(render, story, script) {
   const content = script?.content_json
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
     : {};
-  const setup = (content?.setup || '').trim().slice(0, 200);
-  const punchline = (content?.punchline || '').trim().slice(0, 100);
-  const voice_script = (content?.voice_script || setup).trim().slice(0, 300);
-  const hook = (content?.hook || 'Comment your worst dad joke 👇').trim();
+  const setup = stripEmoji((content?.setup || '').trim().slice(0, 200));
+  const punchline = stripEmoji((content?.punchline || '').trim().slice(0, 100));
+  const voice_script = stripEmoji((content?.voice_script || setup).trim().slice(0, 300));
+  const hook = stripEmoji((content?.hook || 'Comment your worst dad joke').trim());
 
   if (!setup || !punchline) {
     throw new Error(`Dad joke render missing content: setup="${setup}" punchline="${punchline}"`);
   }
+
+  const punchlineWordCount = punchline.split(/\s+/).filter(Boolean).length;
+  const longPunchline = punchlineWordCount > 2;
+  const PUNCHLINE_END = longPunchline ? PUNCHLINE_END_LONG : PUNCHLINE_END_SHORT;
+  const LOOP_END = longPunchline ? LOOP_END_LONG : LOOP_END_SHORT;
+  const DURATION = longPunchline ? DURATION_LONG : DURATION_SHORT;
 
   const backgroundStoragePath = render.background_storage_path ?? null;
   const backgroundId = render.background_id ?? 1;
@@ -191,13 +209,13 @@ export async function processDadJokeRenderJob(render, story, script) {
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
-    assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook });
+    assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd: PUNCHLINE_END, loopEnd: LOOP_END });
     simpleAssPath = join(tmpdir(), `dadjoke-ass-${renderId}-${Date.now()}.ass`);
     await fs.promises.copyFile(assPath, simpleAssPath);
     const escapedAssPath = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
     baseVideoPath = join(tmpdir(), `dadjoke-base-${renderId}-${Date.now()}.mp4`);
-    const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.45:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
+    const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.22:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
     await execAsync(
       `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
@@ -206,7 +224,7 @@ export async function processDadJokeRenderJob(render, story, script) {
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
 
     const audioResult = await generateTriviaAudio(
-      { hook: null, question: voice_script, answerText: '', enableIntroHook: false },
+      { hook: null, question: voice_script, answerText: punchline, enableIntroHook: false, answerStartSeconds: 7 },
       DURATION
     );
     audioPath = audioResult.audioPath;
