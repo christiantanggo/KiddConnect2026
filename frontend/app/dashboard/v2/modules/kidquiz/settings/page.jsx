@@ -31,18 +31,26 @@ function KidQuizSettingsInner() {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(null);
   const [error, setError] = useState(null);
+  const [manualClientId, setManualClientId] = useState('');
+  const [manualClientSecret, setManualClientSecret] = useState('');
+  const [savingManualOauth, setSavingManualOauth] = useState(false);
+  const [ytRedirectUriManual, setYtRedirectUriManual] = useState(null);
+  const [connectingManual, setConnectingManual] = useState(false);
 
   useEffect(() => {
     loadData();
-    // Handle OAuth callback params
+  }, []);
+
+  useEffect(() => {
     if (searchParams.get('youtube_connected') === 'true') {
       setSuccess('YouTube connected successfully! 🎉');
       setTimeout(() => setSuccess(null), 5000);
+      loadData();
     }
     if (searchParams.get('error')) {
       setError(`YouTube connection failed: ${searchParams.get('error')}`);
     }
-  }, []);
+  }, [searchParams.get('youtube_connected'), searchParams.get('error')]);
 
   async function loadData() {
     try {
@@ -55,6 +63,14 @@ function KidQuizSettingsInner() {
       const ytData = await ytRes.json();
       if (settingsData.settings) setSettings(settingsData.settings);
       setYtStatus(ytData);
+      if (ytData?.manual_custom_oauth) {
+        fetch(`${API_URL}/api/v2/kidquiz/youtube/auth-url?usage=manual`, { headers })
+          .then(r => r.json())
+          .then(d => d.redirect_uri && setYtRedirectUriManual(d.redirect_uri))
+          .catch(() => {});
+      } else {
+        setYtRedirectUriManual(null);
+      }
     } catch (err) {
       setError(err.message);
     }
@@ -88,16 +104,66 @@ function KidQuizSettingsInner() {
     }
   }
 
-  async function disconnectYouTube() {
-    if (!confirm('Disconnect YouTube? You will need to reconnect to upload videos.')) return;
+  async function disconnectYouTube(usage = 'auto') {
+    const msg = usage === 'manual' ? 'Disconnect Manual OAuth? Uploads will use the default connection if set.' : 'Disconnect YouTube? You will need to reconnect to upload videos.';
+    if (!confirm(msg)) return;
     try {
-      const headers = { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() };
-      await fetch(`${API_URL}/api/v2/kidquiz/youtube/disconnect`, { method: 'POST', headers });
-      setYtStatus({ connected: false });
-      setSuccess('YouTube disconnected.');
+      const headers = { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId(), 'Content-Type': 'application/json' };
+      await fetch(`${API_URL}/api/v2/kidquiz/youtube/disconnect`, { method: 'POST', headers, body: JSON.stringify({ usage }) });
+      setYtStatus(s => ({ ...s, ...(usage === 'manual' ? { connected_manual: false, channel_manual: null } : { connected: false, channel_title: null, channel_id: null }) }));
+      setSuccess(usage === 'manual' ? 'Manual OAuth disconnected.' : 'YouTube disconnected.');
       setTimeout(() => setSuccess(null), 2000);
     } catch (err) {
       setError(err.message);
+    }
+  }
+
+  async function saveManualOauth() {
+    setSavingManualOauth(true); setError(null);
+    try {
+      const headers = { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId(), 'Content-Type': 'application/json' };
+      const res = await fetch(`${API_URL}/api/v2/kidquiz/youtube/custom-oauth`, {
+        method: 'POST', headers,
+        body: JSON.stringify({ client_id: manualClientId.trim(), client_secret: manualClientSecret.trim(), usage: 'manual' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save');
+      setSuccess(data.message || 'Manual OAuth saved.');
+      setTimeout(() => setSuccess(null), 3000);
+      await loadData();
+      if (data.manual_custom_oauth && manualClientId.trim()) {
+        const authRes = await fetch(`${API_URL}/api/v2/kidquiz/youtube/auth-url?usage=manual`, { headers });
+        const authData = await authRes.json();
+        if (authData.redirect_uri) setYtRedirectUriManual(authData.redirect_uri);
+      } else {
+        setYtRedirectUriManual(null);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingManualOauth(false);
+    }
+  }
+
+  async function connectYouTubeManual() {
+    setConnectingManual(true); setError(null);
+    try {
+      const headers = { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() };
+      const res = await fetch(`${API_URL}/api/v2/kidquiz/youtube/auth-url?usage=manual`, { headers });
+      const data = await res.json();
+      if (data.configured === false) {
+        setError(data.error || 'Set Client ID and Secret above and click Save first.');
+        return;
+      }
+      if (data.url) {
+        window.location.href = data.url;
+        return;
+      }
+      setError(data.error || 'Could not get auth URL');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setConnectingManual(false);
     }
   }
 
@@ -146,10 +212,10 @@ function KidQuizSettingsInner() {
                     <span className="text-xl">✅</span>
                     <div>
                       <p className="font-semibold text-sm" style={{ color: 'var(--color-text-main)' }}>{ytStatus.channel_title}</p>
-                      <p className="text-xs" style={{ color: '#10b981' }}>Connected</p>
+                      <p className="text-xs" style={{ color: '#10b981' }}>Connected (default)</p>
                     </div>
                   </div>
-                  <button onClick={disconnectYouTube} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: '#fee2e2', color: '#dc2626' }}>
+                  <button onClick={() => disconnectYouTube('auto')} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: '#fee2e2', color: '#dc2626' }}>
                     Disconnect
                   </button>
                 </div>
@@ -157,6 +223,88 @@ function KidQuizSettingsInner() {
                 <button onClick={connectYouTube} className="w-full py-3 rounded-xl font-bold text-white" style={{ background: '#ef4444' }}>
                   🔴 Connect YouTube Channel
                 </button>
+              )}
+            </div>
+
+            {/* Manual OAuth (same as Orbix per-channel manual) */}
+            <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <h2 className="font-bold text-base mb-2" style={{ color: 'var(--color-text-main)' }}>Manual OAuth (optional)</h2>
+              <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
+                Use your own Google OAuth client so uploads don&apos;t depend on server env. Create an OAuth client in Google Cloud, add the redirect URI below to Authorized redirect URIs, then paste Client ID and Secret here.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>OAuth Client ID</label>
+                  <input
+                    type="text"
+                    value={manualClientId}
+                    onChange={e => setManualClientId(e.target.value)}
+                    placeholder={ytStatus?.manual_custom_oauth ? 'Leave blank to keep current' : 'From Google Cloud'}
+                    className="w-full px-3 py-2 rounded-lg text-sm border"
+                    style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text-main)' }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>OAuth Client Secret</label>
+                  <input
+                    type="password"
+                    value={manualClientSecret}
+                    onChange={e => setManualClientSecret(e.target.value)}
+                    placeholder={ytStatus?.manual_custom_oauth ? 'Leave blank to keep current' : 'From same OAuth client'}
+                    className="w-full px-3 py-2 rounded-lg text-sm border"
+                    style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text-main)' }}
+                  />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center mb-4">
+                <button
+                  type="button"
+                  onClick={saveManualOauth}
+                  disabled={savingManualOauth}
+                  className="px-3 py-1.5 rounded-lg text-sm font-medium text-white"
+                  style={{ background: savingManualOauth ? '#9ca3af' : '#4b5563' }}
+                >
+                  {savingManualOauth ? 'Saving…' : 'Save'}
+                </button>
+                {ytStatus?.manual_custom_oauth && (
+                  <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Clear both fields and Save to clear manual OAuth.</span>
+                )}
+              </div>
+              {ytStatus?.manual_custom_oauth && ytRedirectUriManual && (
+                <div className="p-3 rounded-lg mb-4" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                  <p className="text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>Add this in Google Cloud → Credentials → [your OAuth client] → Authorized redirect URIs:</p>
+                  <code className="block text-xs break-all select-all p-2 rounded mt-1" style={{ background: 'var(--color-surface)', color: 'var(--color-text-main)' }}>{ytRedirectUriManual}</code>
+                  <button type="button" onClick={() => { navigator.clipboard?.writeText(ytRedirectUriManual); setSuccess('Copied'); setTimeout(() => setSuccess(null), 2000); }} className="mt-2 text-xs font-medium" style={{ color: '#6366f1' }}>Copy</button>
+                </div>
+              )}
+              {ytStatus?.connected_manual && ytStatus?.channel_manual ? (
+                <div className="flex items-center justify-between p-4 rounded-xl" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: '#166534' }}>Manual OAuth connected</p>
+                    <p className="text-sm" style={{ color: '#15803d' }}>{ytStatus.channel_manual.title || ytStatus.channel_manual.id}</p>
+                    {ytStatus.manual_client_id_preview && <p className="text-xs mt-1" style={{ color: '#166534' }}>OAuth: {ytStatus.manual_client_id_preview}</p>}
+                  </div>
+                  <button type="button" onClick={() => disconnectYouTube('manual')} className="px-4 py-2 rounded-lg text-sm border border-gray-300" style={{ color: '#374151' }}>Disconnect</button>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                  <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>Uploads use the default connection above unless you connect Manual OAuth here.</p>
+                  {ytStatus?.manual_custom_oauth ? (
+                    <>
+                      <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>Add the redirect URI above in Google Cloud, then:</p>
+                      <button
+                        onClick={connectYouTubeManual}
+                        disabled={connectingManual}
+                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium"
+                        style={{ background: connectingManual ? '#9ca3af' : '#dc2626' }}
+                      >
+                        {connectingManual ? 'Connecting…' : 'Connect YouTube (manual)'}
+                      </button>
+                    </>
+                  ) : (
+                    <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Enter Client ID and Secret above and click Save, then connect.</p>
+                  )}
+                </div>
               )}
             </div>
 

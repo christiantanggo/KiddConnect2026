@@ -17,16 +17,36 @@ function getKidQuizOAuthCredentials() {
 }
 
 async function getYouTubeClient(businessId) {
-  const { clientId, clientSecret } = getKidQuizOAuthCredentials();
-  const hasOAuth = clientId && clientSecret && (process.env.YOUTUBE_REDIRECT_URI || process.env.YOUTUBE_CLIENT_ID);
-  if (!hasOAuth) {
-    throw new Error('YouTube OAuth not configured. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET (or KIDQUIZ_YOUTUBE_CLIENT_ID and KIDQUIZ_YOUTUBE_CLIENT_SECRET) in your environment.');
-  }
-
   const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
-  const yt = moduleSettings?.settings?.youtube;
-  if (!yt?.access_token) {
-    throw new Error('YouTube not connected for Kid Quiz Studio. Go to Kid Quiz Studio → Settings and connect YouTube.');
+  const settings = moduleSettings?.settings || {};
+  const ytManual = settings.youtube_manual || {};
+  const yt = settings.youtube;
+
+  const useManual = !!(ytManual.manual_client_id && ytManual.manual_access_token);
+  let clientId, clientSecret, accessToken, refreshToken, tokenExpiry, persistSlot;
+
+  if (useManual) {
+    clientId = (ytManual.manual_client_id || '').trim();
+    clientSecret = (ytManual.manual_client_secret || '').trim();
+    accessToken = ytManual.manual_access_token;
+    refreshToken = ytManual.manual_refresh_token;
+    tokenExpiry = ytManual.manual_token_expiry;
+    persistSlot = 'youtube_manual';
+  } else {
+    const envCreds = getKidQuizOAuthCredentials();
+    clientId = envCreds.clientId;
+    clientSecret = envCreds.clientSecret;
+    const hasEnv = clientId && clientSecret && (process.env.YOUTUBE_REDIRECT_URI || process.env.YOUTUBE_CLIENT_ID);
+    if (!hasEnv) {
+      throw new Error('YouTube OAuth not configured. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in your environment, or add Manual OAuth in Kid Quiz → Settings.');
+    }
+    if (!yt?.access_token) {
+      throw new Error('YouTube not connected for Kid Quiz Studio. Go to Kid Quiz Studio → Settings and connect YouTube (or connect Manual OAuth).');
+    }
+    accessToken = yt.access_token;
+    refreshToken = yt.refresh_token;
+    tokenExpiry = yt.token_expiry;
+    persistSlot = 'youtube';
   }
 
   const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
@@ -34,25 +54,30 @@ async function getYouTubeClient(businessId) {
   const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-
   oauth2Client.setCredentials({
-    access_token: yt.access_token,
-    refresh_token: yt.refresh_token,
-    expiry_date: yt.token_expiry ? new Date(yt.token_expiry).getTime() : undefined
+    access_token: accessToken,
+    refresh_token: refreshToken,
+    expiry_date: tokenExpiry ? new Date(tokenExpiry).getTime() : undefined
   });
 
-  // Auto-refresh tokens and persist
   oauth2Client.on('tokens', async (tokens) => {
     try {
       const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
-      const settings = existing?.settings ? { ...existing.settings } : {};
-      settings.youtube = {
-        ...settings.youtube,
-        access_token: tokens.access_token || settings.youtube?.access_token,
-        refresh_token: tokens.refresh_token || settings.youtube?.refresh_token,
-        token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : settings.youtube?.token_expiry
-      };
-      await ModuleSettings.update(businessId, MODULE_KEY, settings);
+      const next = existing?.settings ? { ...existing.settings } : {};
+      if (persistSlot === 'youtube_manual') {
+        next.youtube_manual = next.youtube_manual || {};
+        next.youtube_manual.manual_access_token = tokens.access_token || next.youtube_manual.manual_access_token;
+        next.youtube_manual.manual_refresh_token = tokens.refresh_token || next.youtube_manual.manual_refresh_token;
+        next.youtube_manual.manual_token_expiry = tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : next.youtube_manual.manual_token_expiry;
+      } else {
+        next.youtube = {
+          ...next.youtube,
+          access_token: tokens.access_token || next.youtube?.access_token,
+          refresh_token: tokens.refresh_token || next.youtube?.refresh_token,
+          token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : next.youtube?.token_expiry
+        };
+      }
+      await ModuleSettings.update(businessId, MODULE_KEY, next);
     } catch (e) {
       console.error('[KidQuiz Publisher] Token refresh save failed:', e.message);
     }

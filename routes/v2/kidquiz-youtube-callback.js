@@ -22,15 +22,28 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_oauth_failed`);
     }
 
-    const businessId = state;
+    const stateParts = (state || '').split(':');
+    const businessId = stateParts[0] || state;
+    const isManual = stateParts[2] === 'manual';
     if (!businessId) {
       return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=invalid_state`);
     }
 
-    const clientId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
-    const clientSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
-    if (!clientId || !clientSecret) {
-      return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_not_configured`);
+    let clientId, clientSecret;
+    if (isManual) {
+      const existing = await ModuleSettings.findByBusinessAndModule(businessId, 'kidquiz');
+      const ytManual = existing?.settings?.youtube_manual || {};
+      clientId = (ytManual.manual_client_id || '').trim();
+      clientSecret = (ytManual.manual_client_secret || '').trim();
+      if (!clientId || !clientSecret) {
+        return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_not_configured`);
+      }
+    } else {
+      clientId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
+      clientSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
+      if (!clientId || !clientSecret) {
+        return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=youtube_not_configured`);
+      }
     }
 
     const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
@@ -60,9 +73,9 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?error=no_channel_found`);
     }
 
-    const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
+    const existing = await ModuleSettings.findByBusinessAndModule(businessId, 'kidquiz');
     const settings = existing?.settings ? { ...existing.settings } : {};
-    settings.youtube = {
+    const ytCreds = {
       channel_id: channel.id,
       channel_title: channel.snippet?.title || '',
       access_token: tokens.access_token,
@@ -70,8 +83,24 @@ router.get('/youtube/callback', async (req, res) => {
       token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null
     };
 
-    await ModuleSettings.update(businessId, MODULE_KEY, settings);
-    console.log('[KidQuiz YouTube Callback] Saved credentials businessId=', businessId, 'channel=', channel.id);
+    if (isManual) {
+      settings.youtube_manual = settings.youtube_manual || {};
+      const ex = settings.youtube_manual;
+      settings.youtube_manual = {
+        ...(ex.manual_client_id && { manual_client_id: ex.manual_client_id }),
+        ...(ex.manual_client_secret && { manual_client_secret: ex.manual_client_secret }),
+        manual_access_token: ytCreds.access_token,
+        manual_refresh_token: ytCreds.refresh_token,
+        manual_channel_id: ytCreds.channel_id,
+        manual_channel_title: ytCreds.channel_title,
+        manual_token_expiry: ytCreds.token_expiry
+      };
+    } else {
+      settings.youtube = ytCreds;
+    }
+
+    await ModuleSettings.update(businessId, 'kidquiz', settings);
+    console.log('[KidQuiz YouTube Callback] Saved credentials businessId=', businessId, 'channel=', channel.id, 'slot=', isManual ? 'manual' : 'default');
 
     res.redirect(`${FRONTEND}/dashboard/v2/modules/kidquiz/settings?youtube_connected=true`);
   } catch (err) {
