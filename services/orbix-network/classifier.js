@@ -174,11 +174,15 @@ export async function processRawItem(businessId, rawItem) {
     
     // Use pre-calculated shock score from raw item (calculated during scraping)
     const shockScore = rawItem.shock_score;
-    const category = rawItem.category;
+    let category = rawItem.category;
     const factorsJson = rawItem.factors_json;
-    
-    // If shock score wasn't calculated during scraping, calculate it now
-    if (!shockScore || !category) {
+    const evergreenCategories = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+    const isEvergreenCategory = category && evergreenCategories.includes(category);
+    // If category is set and evergreen, we can use pre-calculated path even without shock_score (use default)
+    const effectiveScore = (isEvergreenCategory && (shockScore == null || shockScore === undefined)) ? 50 : shockScore;
+    const hasPreCalculated = (effectiveScore != null && effectiveScore !== undefined) && category;
+    // If shock score wasn't calculated during scraping (and not evergreen), calculate it now
+    if (!hasPreCalculated) {
       console.log(`[Classifier] Shock score not pre-calculated for raw item ${rawItem.id}, calculating now...`);
       
       // Classify
@@ -213,8 +217,8 @@ export async function processRawItem(businessId, rawItem) {
         })
         .eq('id', rawItem.id);
       
-      // Check threshold (evergreen categories psychology/money/trivia/facts/riddle always pass)
-      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'money' || classifiedCategory === 'trivia' || classifiedCategory === 'facts' || classifiedCategory === 'riddle' || classifiedCategory === 'mindteaser';
+      // Check threshold (evergreen categories always pass — no shock score required)
+      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'money' || classifiedCategory === 'trivia' || classifiedCategory === 'facts' || classifiedCategory === 'riddle' || classifiedCategory === 'mindteaser' || classifiedCategory === 'dadjoke';
       if (!isEvergreen && !shouldProcess(scoreResult, threshold)) {
         // Mark raw item as discarded
         await supabaseClient
@@ -233,8 +237,8 @@ export async function processRawItem(businessId, rawItem) {
       const finalFactors = scoreResult.factors;
       
       // Create story (channel_id from raw item for multi-channel support)
-      // Trivia, facts, riddle and mindteaser are auto-approved; others start as PENDING
-      const storyStatus = (finalCategory === 'trivia' || finalCategory === 'facts' || finalCategory === 'riddle' || finalCategory === 'mindteaser') ? 'APPROVED' : 'PENDING';
+      // Trivia, facts, riddle, mindteaser, dadjoke are auto-approved; others start as PENDING
+      const storyStatus = (finalCategory === 'trivia' || finalCategory === 'facts' || finalCategory === 'riddle' || finalCategory === 'mindteaser' || finalCategory === 'dadjoke') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({
@@ -260,24 +264,24 @@ export async function processRawItem(businessId, rawItem) {
       console.log(`[Orbix Classifier] Created story: ${story.id} (score: ${finalScore})`);
       return story;
     } else {
-      // Use pre-calculated values
-      // Check threshold (skip for evergreen categories: psychology, money, trivia, facts, riddle — they always pass)
-      const isEvergreen = category === 'psychology' || category === 'money' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser';
-      if (!isEvergreen && shockScore < threshold) {
+      // Use pre-calculated values (or effectiveScore for evergreen when raw item had no score)
+      const isEvergreen = category === 'psychology' || category === 'money' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke';
+      const scoreForThreshold = effectiveScore != null ? effectiveScore : shockScore;
+      if (!isEvergreen && scoreForThreshold < threshold) {
         // Mark raw item as discarded
         await supabaseClient
           .from('orbix_raw_items')
           .update({
             status: 'DISCARDED',
-            discard_reason: `Score too low: ${shockScore} < ${threshold}`
+            discard_reason: `Score too low: ${scoreForThreshold} < ${threshold}`
           })
           .eq('id', rawItem.id);
         return null;
       }
 
       // Create story using pre-calculated values (channel_id from raw item)
-      // Trivia, facts, riddle and mindteaser are auto-approved; others start as PENDING
-      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser') ? 'APPROVED' : 'PENDING';
+      const storyScore = scoreForThreshold ?? shockScore ?? 50;
+      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({
@@ -285,7 +289,7 @@ export async function processRawItem(businessId, rawItem) {
           channel_id: rawItem.channel_id ?? null,
           raw_item_id: rawItem.id,
           category: category,
-          shock_score: shockScore,
+          shock_score: storyScore,
           factors_json: factorsJson ?? {},
           status: storyStatus
         })
@@ -300,7 +304,7 @@ export async function processRawItem(businessId, rawItem) {
         .update({ status: 'PROCESSED' })
         .eq('id', rawItem.id);
       
-      console.log(`[Orbix Classifier] Created story: ${story.id} (score: ${shockScore})`);
+      console.log(`[Orbix Classifier] Created story: ${story.id} (score: ${storyScore})`);
       return story;
     }
   } catch (error) {
