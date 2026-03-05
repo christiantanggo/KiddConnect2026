@@ -15,10 +15,10 @@ import { promisify } from 'util';
 import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
 import {
   getBackgroundImageUrl,
+  getRandomMusicTrack,
   prepareMusicTrack,
   generateTriviaAudio,
   uploadRenderToStorage,
@@ -37,9 +37,6 @@ function stripEmoji(s) {
   return s.replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, '').replace(/\s+/g, ' ').trim();
 }
 
-const MUSIC_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_MUSIC || 'orbix-network-music';
-const MUSIC_EXT = /\.(mp3|m4a|aac|wav|ogg)$/i;
-
 const SETUP_START   = 0;
 const SETUP_END     = 4.0;   // setup on screen 0–4s
 const COUNTDOWN_END = 7.0;   // 3-2-1: 4s → 7s
@@ -49,33 +46,6 @@ const PUNCHLINE_END_LONG  = 8.0;   // punchline 7 → 8s when >2 words
 const LOOP_END_LONG       = 8.5;   // loop line 8 → 8.5s
 const DURATION_SHORT      = 8;
 const DURATION_LONG       = 8.5;
-
-async function getAnyMusicTrack(businessId) {
-  try {
-    const { data: folders, error: fErr } = await supabaseClient.storage
-      .from(MUSIC_BUCKET)
-      .list(businessId, { limit: 50 });
-    if (fErr || !folders?.length) return null;
-    const allTracks = [];
-    for (const folder of folders) {
-      if (!folder.name) continue;
-      const prefix = `${businessId}/${folder.name}`;
-      const { data: files } = await supabaseClient.storage.from(MUSIC_BUCKET).list(prefix, { limit: 100 });
-      if (!files?.length) continue;
-      for (const f of files) {
-        if (f.name && MUSIC_EXT.test(f.name)) {
-          const path = `${prefix}/${f.name}`;
-          const { data } = supabaseClient.storage.from(MUSIC_BUCKET).getPublicUrl(path);
-          if (data?.publicUrl) allTracks.push({ name: f.name, url: data.publicUrl });
-        }
-      }
-    }
-    if (!allTracks.length) return null;
-    return allTracks[randomInt(allTracks.length)];
-  } catch (e) {
-    return null;
-  }
-}
 
 async function generateDadJokeASSFile(opts) {
   const fs = (await import('fs')).default;
@@ -224,7 +194,7 @@ export async function processDadJokeRenderJob(render, story, script) {
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
 
     const audioResult = await generateTriviaAudio(
-      { hook: null, question: voice_script, answerText: punchline, enableIntroHook: false, answerStartSeconds: 7 },
+      { hook: null, question: voice_script, answerText: punchline, enableIntroHook: false, answerStartSeconds: 6 },
       DURATION
     );
     audioPath = audioResult.audioPath;
@@ -232,7 +202,8 @@ export async function processDadJokeRenderJob(render, story, script) {
     const padDur = Math.max(0, DURATION - audioDuration);
     finalVideoPath = join(tmpdir(), `dadjoke-final-${renderId}-${Date.now()}.mp4`);
 
-    const musicTrack = await getAnyMusicTrack(businessId);
+    const channelId = story?.channel_id ?? null;
+    const musicTrack = await getRandomMusicTrack(businessId, channelId);
     if (musicTrack) musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
 
     if (musicPath) {
