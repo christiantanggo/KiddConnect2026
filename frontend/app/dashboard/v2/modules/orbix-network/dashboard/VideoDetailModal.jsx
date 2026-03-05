@@ -683,7 +683,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
           {details?.orbix_scripts && details.orbix_scripts.length > 0 && item.story_id && (
             <div>
               <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="text-lg font-semibold">Story Script</h3>
+                <h3 className="text-lg font-semibold">{(item.story_category || '').toLowerCase() === 'dadjoke' ? 'Joke' : 'Story Script'}</h3>
                 {!isRawItem && (
                   <button
                     onClick={handleGenerateScript}
@@ -786,6 +786,40 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                       </div>
                     );
                   }
+                  if (cat === 'dadjoke') {
+                    const cj = script.content_json
+                      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                      : {};
+                    const setup = cj.setup || script.hook || script.what_happened || '';
+                    const punchline = cj.punchline || script.why_it_matters || '';
+                    const endCta = script.cta_line || cj.hook || '';
+                    return (
+                      <div className="space-y-3">
+                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
+                        {setup && (
+                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
+                            <p className="text-xs font-semibold text-blue-600 mb-1">1 · Setup <span className="font-normal">(on screen + TTS)</span></p>
+                            <p className="text-base text-blue-900 font-medium">{setup}</p>
+                          </div>
+                        )}
+                        <div className="rounded-md bg-yellow-50 border border-yellow-200 p-3 text-center">
+                          <p className="text-xs font-semibold text-yellow-700 mb-1">2 · 3-2-1 Countdown</p>
+                        </div>
+                        {punchline && (
+                          <div className="rounded-md bg-green-50 border border-green-300 p-3">
+                            <p className="text-xs font-semibold text-green-700 mb-1">3 · Punchline <span className="font-normal">(on screen)</span></p>
+                            <p className="text-base text-green-900 font-bold">{punchline}</p>
+                          </div>
+                        )}
+                        {endCta && (
+                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">4 · End card</p>
+                            <p className="text-base text-gray-900">{endCta}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
                   if (isConceptFirst) {
                     // Psychology + Money: show fields in exact video playback order
                     const question = (script.what_happens_next || '').trim();
@@ -872,24 +906,32 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
           <div>
             <h3 className="text-lg font-semibold mb-3">Story Information</h3>
             <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm text-gray-600">Shock Score</p>
-                <p className="text-xl font-bold">{item.story_shock_score || 0}/100</p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Status</p>
-                <p className="text-lg font-medium">{item.story_status}</p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-600">Category</p>
-                <p className="text-lg font-medium">{item.story_category}</p>
-              </div>
-              {item.render_id && (
-                <div>
-                  <p className="text-sm text-gray-600">Render Status</p>
-                  <p className="text-lg font-medium">{renderStatus}</p>
-                </div>
-              )}
+              {(() => {
+                const cat = (item.story_category || '').toLowerCase();
+                const isEvergreen = ['dadjoke', 'trivia', 'facts', 'riddle', 'mindteaser', 'psychology', 'money'].includes(cat);
+                return (
+                  <>
+                    <div>
+                      <p className="text-sm text-gray-600">{isEvergreen ? 'Score' : 'Shock Score'}</p>
+                      <p className="text-xl font-bold">{isEvergreen && cat === 'dadjoke' ? '—' : `${item.story_shock_score ?? 0}/100`}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Status</p>
+                      <p className="text-lg font-medium">{item.story_status}</p>
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-600">Category</p>
+                      <p className="text-lg font-medium">{item.story_category}</p>
+                    </div>
+                    {item.render_id && (
+                      <div>
+                        <p className="text-sm text-gray-600">Render Status</p>
+                        <p className="text-lg font-medium">{renderStatus}</p>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </div>
 
