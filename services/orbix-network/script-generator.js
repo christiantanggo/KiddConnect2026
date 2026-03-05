@@ -371,27 +371,28 @@ export async function generateScript(story, rawItem) {
       const setup = (joke.setup || '').trim();
       const punchline = (joke.punchline || '').trim();
       const voice_script = (joke.voice_script || setup).trim();
-      const hook = (joke.hook || 'Comment your worst dad joke 👇').trim();
+      const endCta = (joke.hook || 'Comment your worst dad joke 👇').trim();
       if (!setup || !punchline) {
         throw new Error('Dad joke snippet missing setup or punchline');
       }
+      // Hook = actual joke content (setup), like trivia/riddle. CTA = end-only, must differ from hook.
       const script = {
-        hook,
+        hook: setup,
         what_happened: setup,
         why_it_matters: punchline,
         what_happens_next: '',
-        cta_line: hook,
+        cta_line: endCta,
         duration_target_seconds: 10,
         content_type: 'dadjoke',
         content_json: {
           setup,
           punchline,
           voice_script,
-          hook,
+          hook: endCta,
           episode_number: joke.episode_number
         }
       };
-      console.log('[Script Generator] Dad joke script from snippet (setup + punchline, no LLM)');
+      console.log('[Script Generator] Dad joke script from snippet (hook=setup, cta=end only)');
       return script;
     }
 
