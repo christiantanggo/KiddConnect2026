@@ -375,9 +375,9 @@ export async function generateScript(story, rawItem) {
       if (!setup || !punchline) {
         throw new Error('Dad joke snippet missing setup or punchline');
       }
-      // Hook = actual joke content (setup), like trivia/riddle. CTA = end-only, must differ from hook.
+      // No hook — joke is only in main content (setup + punchline). Hook would duplicate the joke.
       const script = {
-        hook: setup,
+        hook: '',
         what_happened: setup,
         why_it_matters: punchline,
         what_happens_next: '',
@@ -392,7 +392,7 @@ export async function generateScript(story, rawItem) {
           episode_number: joke.episode_number
         }
       };
-      console.log('[Script Generator] Dad joke script from snippet (hook=setup, cta=end only)');
+      console.log('[Script Generator] Dad joke script from snippet (no hook, main content only)');
       return script;
     }
 
