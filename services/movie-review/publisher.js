@@ -8,23 +8,21 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 const MODULE_KEY = 'movie-review';
 
 async function getYouTubeClient(businessId) {
-  if (!process.env.YOUTUBE_CLIENT_ID || !process.env.YOUTUBE_CLIENT_SECRET || !process.env.YOUTUBE_REDIRECT_URI) {
-    throw new Error('YouTube OAuth not configured on this server.');
-  }
+  const raw = process.env.YOUTUBE_REDIRECT_URI || '';
+  const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
   const ms = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
-  const yt = ms?.settings?.youtube;
+  const yt = ms?.settings?.youtube || {};
   if (!yt?.access_token) {
     throw new Error('YouTube not connected for Movie Review Studio. Go to Settings and connect YouTube.');
   }
 
-  const raw = process.env.YOUTUBE_REDIRECT_URI || '';
-  const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
+  const clientId = (yt.client_id || '').trim() || process.env.YOUTUBE_CLIENT_ID;
+  const clientSecret = (yt.client_secret || '').trim() || process.env.YOUTUBE_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new Error('YouTube OAuth not configured. Add Client ID and Secret in Settings → Upload OAuth app, or set YOUTUBE_CLIENT_ID/SECRET on the server.');
+  }
 
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.YOUTUBE_CLIENT_ID,
-    process.env.YOUTUBE_CLIENT_SECRET,
-    redirectUri
-  );
+  const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
   oauth2Client.setCredentials({
     access_token: yt.access_token,
     refresh_token: yt.refresh_token,

@@ -34,17 +34,28 @@ function MovieReviewSettingsInner() {
   const [saving, setSaving] = useState(false);
   const [success, setSuccess] = useState(null);
   const [error, setError] = useState(null);
+  const [customOauthClientId, setCustomOauthClientId] = useState('');
+  const [customOauthClientSecret, setCustomOauthClientSecret] = useState('');
+  const [savingCustomOauth, setSavingCustomOauth] = useState(false);
+  const [ytRedirectUri, setYtRedirectUri] = useState(null);
+  const [manualClientId, setManualClientId] = useState('');
+  const [manualClientSecret, setManualClientSecret] = useState('');
+  const [savingManualOauth, setSavingManualOauth] = useState(false);
+  const [ytRedirectUriManual, setYtRedirectUriManual] = useState(null);
+  const [connectingManual, setConnectingManual] = useState(false);
+  const [connectingYt, setConnectingYt] = useState(false);
 
   useEffect(() => {
     loadData();
     if (searchParams.get('youtube_connected') === 'true') {
       setSuccess('YouTube connected successfully! 🎉');
       setTimeout(() => setSuccess(null), 5000);
+      loadData();
     }
     if (searchParams.get('error')) {
       setError(`YouTube connection failed: ${searchParams.get('error')}`);
     }
-  }, []);
+  }, [searchParams.get('youtube_connected'), searchParams.get('error')]);
 
   async function loadData() {
     try {
@@ -56,6 +67,14 @@ function MovieReviewSettingsInner() {
       const yd = await ytRes.json();
       if (sd.settings) setSettings(sd.settings);
       setYtStatus(yd);
+      if (yd?.custom_oauth) {
+        fetch(`${API_URL}/api/v2/movie-review/youtube/auth-url`, { headers: apiHeaders() })
+          .then(r => r.json()).then(d => d.redirect_uri && setYtRedirectUri(d.redirect_uri)).catch(() => {});
+      } else setYtRedirectUri(null);
+      if (yd?.manual_custom_oauth) {
+        fetch(`${API_URL}/api/v2/movie-review/youtube/auth-url?usage=manual`, { headers: apiHeaders() })
+          .then(r => r.json()).then(d => d.redirect_uri && setYtRedirectUriManual(d.redirect_uri)).catch(() => {});
+      } else setYtRedirectUriManual(null);
     } catch (err) {
       setError(err.message);
     }
@@ -77,25 +96,99 @@ function MovieReviewSettingsInner() {
   }
 
   async function connectYouTube() {
+    setConnectingYt(true); setError(null);
     try {
       const res = await fetch(`${API_URL}/api/v2/movie-review/youtube/auth-url`, { headers: apiHeaders() });
       const data = await res.json();
-      if (data.url) window.location.href = data.url;
-      else setError(data.error || 'Could not get auth URL');
+      if (data.configured === false) {
+        setError(data.error || 'Add Client ID and Secret in the Upload OAuth app section above and click Save, then try Connect again.');
+        return;
+      }
+      if (data.url) { window.location.href = data.url; return; }
+      setError(data.error || 'Could not get auth URL');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setConnectingYt(false);
+    }
+  }
+
+  async function disconnectYouTube(usage = 'auto') {
+    const msg = usage === 'manual' ? 'Disconnect Manual OAuth?' : 'Disconnect YouTube? You will need to reconnect to upload videos.';
+    if (!confirm(msg)) return;
+    try {
+      await fetch(`${API_URL}/api/v2/movie-review/youtube/disconnect`, {
+        method: 'POST', headers: apiHeaders(), body: JSON.stringify({ usage }),
+      });
+      setYtStatus(s => ({ ...s, ...(usage === 'manual' ? { connected_manual: false, channel_manual: null } : { connected: false, channel_title: null, channel_id: null }) }));
+      setSuccess(usage === 'manual' ? 'Manual OAuth disconnected.' : 'YouTube disconnected.');
+      setTimeout(() => setSuccess(null), 2000);
     } catch (err) {
       setError(err.message);
     }
   }
 
-  async function disconnectYouTube() {
-    if (!confirm('Disconnect YouTube? You will need to reconnect to upload videos.')) return;
+  async function saveCustomOauth() {
+    setSavingCustomOauth(true); setError(null);
     try {
-      await fetch(`${API_URL}/api/v2/movie-review/youtube/disconnect`, { method: 'POST', headers: apiHeaders() });
-      setYtStatus({ connected: false });
-      setSuccess('YouTube disconnected.');
-      setTimeout(() => setSuccess(null), 2000);
+      const res = await fetch(`${API_URL}/api/v2/movie-review/youtube/custom-oauth`, {
+        method: 'POST', headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: customOauthClientId.trim(), client_secret: customOauthClientSecret.trim(), usage: 'auto' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save');
+      setSuccess(data.message || 'Upload OAuth saved.'); setTimeout(() => setSuccess(null), 3000);
+      await loadData();
+      if (data.custom_oauth && customOauthClientId.trim()) {
+        const authRes = await fetch(`${API_URL}/api/v2/movie-review/youtube/auth-url`, { headers: apiHeaders() });
+        const authData = await authRes.json();
+        if (authData.redirect_uri) setYtRedirectUri(authData.redirect_uri);
+      } else setYtRedirectUri(null);
     } catch (err) {
       setError(err.message);
+    } finally {
+      setSavingCustomOauth(false);
+    }
+  }
+
+  async function saveManualOauth() {
+    setSavingManualOauth(true); setError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/v2/movie-review/youtube/custom-oauth`, {
+        method: 'POST', headers: { ...apiHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: manualClientId.trim(), client_secret: manualClientSecret.trim(), usage: 'manual' }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save');
+      setSuccess(data.message || 'Manual OAuth saved.'); setTimeout(() => setSuccess(null), 3000);
+      await loadData();
+      if (data.manual_custom_oauth && manualClientId.trim()) {
+        const authRes = await fetch(`${API_URL}/api/v2/movie-review/youtube/auth-url?usage=manual`, { headers: apiHeaders() });
+        const authData = await authRes.json();
+        if (authData.redirect_uri) setYtRedirectUriManual(authData.redirect_uri);
+      } else setYtRedirectUriManual(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingManualOauth(false);
+    }
+  }
+
+  async function connectYouTubeManual() {
+    setConnectingManual(true); setError(null);
+    try {
+      const res = await fetch(`${API_URL}/api/v2/movie-review/youtube/auth-url?usage=manual`, { headers: apiHeaders() });
+      const data = await res.json();
+      if (data.configured === false) {
+        setError(data.error || 'Set Client ID and Secret above and click Save first.');
+        return;
+      }
+      if (data.url) { window.location.href = data.url; return; }
+      setError(data.error || 'Could not get auth URL');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setConnectingManual(false);
     }
   }
 
@@ -129,30 +222,110 @@ function MovieReviewSettingsInner() {
           {success && <div className="p-3 mb-4 rounded-lg text-sm" style={{ background: '#f0fdf4', color: '#16a34a' }}>{success}</div>}
 
           <div className="space-y-5">
-            {/* YouTube connection */}
+            {/* Upload OAuth app — same as Kid Quiz / Orbix */}
             <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
-              <h2 className="font-bold text-base mb-3" style={{ color: 'var(--color-text-main)' }}>📺 YouTube Connection</h2>
+              <h2 className="font-bold text-base mb-2" style={{ color: 'var(--color-text-main)' }}>📺 Upload OAuth app</h2>
               <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
-                Connect the YouTube channel where your Shorts will be uploaded. This is separate from your other channels.
+                Use a Google Cloud project for Movie Review so it gets its own quota. Create a project, enable YouTube Data API v3, add OAuth credentials, and set the redirect URI to your app&apos;s callback URL (see below).
               </p>
-
-              {ytStatus?.connected ? (
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-xl">✅</span>
-                    <div>
-                      <p className="font-semibold text-sm" style={{ color: 'var(--color-text-main)' }}>{ytStatus.channel_title}</p>
-                      <p className="text-xs" style={{ color: '#10b981' }}>Connected</p>
+              {ytStatus?.custom_oauth && (
+                <>
+                  <p className="text-xs font-medium mb-2" style={{ color: '#15803d' }}>Custom OAuth app is set — uploads use that project&apos;s quota.</p>
+                  {ytRedirectUri && (
+                    <div className="p-3 rounded-lg mb-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                      <p className="text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>Redirect URI — add this exact value in Google Cloud:</p>
+                      <code className="block text-xs break-all select-all p-2 rounded mt-1" style={{ background: 'var(--color-surface)', color: 'var(--color-text-main)' }}>{ytRedirectUri}</code>
+                      <button type="button" onClick={() => { navigator.clipboard?.writeText(ytRedirectUri); setSuccess('Copied'); setTimeout(() => setSuccess(null), 2000); }} className="mt-2 text-xs font-medium" style={{ color: '#6366f1' }}>Copy</button>
                     </div>
+                  )}
+                </>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>OAuth Client ID</label>
+                  <input type="text" value={customOauthClientId} onChange={e => setCustomOauthClientId(e.target.value)} placeholder={ytStatus?.custom_oauth ? 'Leave blank to keep current' : 'From Google Cloud Console'}
+                    className="w-full px-3 py-2 rounded-lg text-sm border" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text-main)' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>OAuth Client Secret</label>
+                  <input type="password" value={customOauthClientSecret} onChange={e => setCustomOauthClientSecret(e.target.value)} placeholder={ytStatus?.custom_oauth ? 'Leave blank to keep current' : 'From Google Cloud Console'}
+                    className="w-full px-3 py-2 rounded-lg text-sm border" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text-main)' }} />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center mb-4">
+                <button type="button" onClick={saveCustomOauth} disabled={savingCustomOauth} className="px-3 py-1.5 rounded-lg text-sm font-medium text-white" style={{ background: savingCustomOauth ? '#9ca3af' : '#4b5563' }}>
+                  {savingCustomOauth ? 'Saving…' : 'Save'}
+                </button>
+                {ytStatus?.custom_oauth && <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Clear both fields and Save to use global credentials.</span>}
+              </div>
+              {ytStatus?.connected ? (
+                <div className="flex items-center justify-between p-4 rounded-xl" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: '#166534' }}>Connected</p>
+                    <p className="text-sm" style={{ color: '#15803d' }}>YouTube channel: {ytStatus.channel_title || ytStatus.channel_id}</p>
+                    {(ytStatus.credentials_source === 'custom_oauth' || ytStatus.client_id_preview) && (
+                      <p className="text-xs mt-1" style={{ color: '#166534' }}>OAuth app: {ytStatus.credentials_source === 'custom_oauth' ? `This app${ytStatus.client_id_preview ? ` (${ytStatus.client_id_preview})` : ''}` : 'Global (server env)'}</p>
+                    )}
                   </div>
-                  <button onClick={disconnectYouTube} className="text-xs px-3 py-1.5 rounded-lg" style={{ background: '#fee2e2', color: '#dc2626' }}>
-                    Disconnect
-                  </button>
+                  <button type="button" onClick={() => disconnectYouTube('auto')} className="px-4 py-2 rounded-lg text-sm border border-gray-300" style={{ color: '#374151' }}>Disconnect</button>
                 </div>
               ) : (
-                <button onClick={connectYouTube} className="w-full py-3 rounded-xl font-bold text-white" style={{ background: '#ef4444' }}>
-                  🔴 Connect YouTube Channel
+                <div className="p-4 rounded-xl" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                  <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>No YouTube account connected. Add Client ID and Secret above and Save, then connect.</p>
+                  <button onClick={connectYouTube} disabled={connectingYt} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ background: connectingYt ? '#9ca3af' : '#ef4444' }}>
+                    {connectingYt ? 'Connecting…' : '🔴 Connect YouTube account'}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Manual-upload OAuth app */}
+            <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <h2 className="font-bold text-base mb-2" style={{ color: 'var(--color-text-main)' }}>Manual-upload OAuth app</h2>
+              <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
+                Create a separate OAuth client in Google Cloud (or use another project). Add the redirect URI below to that client&apos;s Authorized redirect URIs. Same YouTube channel is fine — this is just a second OAuth app so uploads keep working if the first hits limits.
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>OAuth Client ID</label>
+                  <input type="text" value={manualClientId} onChange={e => setManualClientId(e.target.value)} placeholder={ytStatus?.manual_custom_oauth ? 'Leave blank to keep current' : 'From Google Cloud (manual-upload project)'}
+                    className="w-full px-3 py-2 rounded-lg text-sm border" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text-main)' }} />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>OAuth Client Secret</label>
+                  <input type="password" value={manualClientSecret} onChange={e => setManualClientSecret(e.target.value)} placeholder={ytStatus?.manual_custom_oauth ? 'Leave blank to keep current' : 'From same OAuth client'}
+                    className="w-full px-3 py-2 rounded-lg text-sm border" style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text-main)' }} />
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 items-center mb-4">
+                <button type="button" onClick={saveManualOauth} disabled={savingManualOauth} className="px-3 py-1.5 rounded-lg text-sm font-medium text-white" style={{ background: savingManualOauth ? '#9ca3af' : '#4b5563' }}>
+                  {savingManualOauth ? 'Saving…' : 'Save'}
                 </button>
+                {ytStatus?.manual_custom_oauth && <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Clear both fields and Save to clear manual OAuth.</span>}
+              </div>
+              {ytStatus?.manual_custom_oauth && ytRedirectUriManual && (
+                <div className="p-3 rounded-lg mb-4" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                  <p className="text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>Add this in Google Cloud → Credentials → [manual OAuth client] → Authorized redirect URIs:</p>
+                  <code className="block text-xs break-all select-all p-2 rounded mt-1" style={{ background: 'var(--color-surface)', color: 'var(--color-text-main)' }}>{ytRedirectUriManual}</code>
+                  <button type="button" onClick={() => { navigator.clipboard?.writeText(ytRedirectUriManual); setSuccess('Copied'); setTimeout(() => setSuccess(null), 2000); }} className="mt-2 text-xs font-medium" style={{ color: '#6366f1' }}>Copy</button>
+                </div>
+              )}
+              {ytStatus?.connected_manual && ytStatus?.channel_manual ? (
+                <div className="flex items-center justify-between p-4 rounded-xl" style={{ background: '#f0fdf4', border: '1px solid #bbf7d0' }}>
+                  <div>
+                    <p className="text-sm font-semibold" style={{ color: '#166534' }}>Connected</p>
+                    <p className="text-sm" style={{ color: '#15803d' }}>{ytStatus.channel_manual.title || ytStatus.channel_manual.id}</p>
+                    {ytStatus.manual_client_id_preview && <p className="text-xs mt-1" style={{ color: '#166534' }}>OAuth: {ytStatus.manual_client_id_preview}</p>}
+                  </div>
+                  <button type="button" onClick={() => disconnectYouTube('manual')} className="px-4 py-2 rounded-lg text-sm border border-gray-300" style={{ color: '#374151' }}>Disconnect</button>
+                </div>
+              ) : (
+                <div className="p-4 rounded-xl" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                  <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>No manual OAuth connected. Set Client ID and Secret above and Save, then connect.</p>
+                  <button onClick={connectYouTubeManual} disabled={connectingManual} className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-white text-sm font-medium" style={{ background: connectingManual ? '#9ca3af' : '#4b5563' }}>
+                    {connectingManual ? 'Connecting…' : 'Connect YouTube (manual)'}
+                  </button>
+                </div>
               )}
             </div>
 

@@ -26,7 +26,8 @@ router.get('/youtube/callback', async (req, res) => {
     let rest = state;
     if (state && state.includes('|')) rest = state.slice(0, state.lastIndexOf('|'));
     const fromSettings = !!(rest && rest.includes(':'));
-    const errPath = fromSettings ? '/dashboard/v2/modules/orbix-network/settings' : '/modules/orbix-network/setup';
+    const isMovieReviewState = (rest || '').includes('movie-review');
+    const errPath = isMovieReviewState ? '/dashboard/v2/modules/movie-review/settings' : (fromSettings ? '/dashboard/v2/modules/orbix-network/settings' : '/modules/orbix-network/setup');
 
     if (error) {
       return res.redirect(`${redirectBase}${errPath}?error=youtube_oauth_denied`);
@@ -76,7 +77,23 @@ router.get('/youtube/callback', async (req, res) => {
     // Use per-channel OAuth client (auto or manual slot) or env. Manual slot can use second project via YOUTUBE_MANUAL_CLIENT_*.
     let clientId = process.env.YOUTUBE_CLIENT_ID;
     let clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
-    if (orbixChannelId && !isKidquiz && !isMovieReview) {
+    if (isMovieReview) {
+      const mrExisting = await ModuleSettings.findByBusinessAndModule(businessId, 'movie-review');
+      const mrSettings = mrExisting?.settings || {};
+      if (usageManual) {
+        const ytManual = mrSettings.youtube_manual || {};
+        if (ytManual.manual_client_id && ytManual.manual_client_secret) {
+          clientId = ytManual.manual_client_id;
+          clientSecret = ytManual.manual_client_secret;
+        }
+      } else {
+        const yt = mrSettings.youtube || {};
+        if (yt.client_id && yt.client_secret) {
+          clientId = yt.client_id;
+          clientSecret = yt.client_secret;
+        }
+      }
+    } else if (orbixChannelId && !isKidquiz) {
       const existing = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');
       const byChannel = existing?.settings?.youtube_by_channel || {};
       const channelEntry = byChannel[orbixChannelId];
@@ -143,9 +160,26 @@ router.get('/youtube/callback', async (req, res) => {
     if (isMovieReview) {
       const mrExisting = await ModuleSettings.findByBusinessAndModule(businessId, 'movie-review');
       const mrSettings = mrExisting?.settings ? { ...mrExisting.settings } : {};
-      mrSettings.youtube = ytCreds;
+      if (usageManual) {
+        mrSettings.youtube_manual = mrSettings.youtube_manual || {};
+        const ex = mrSettings.youtube_manual;
+        mrSettings.youtube_manual = {
+          ...(ex.manual_client_id && { manual_client_id: ex.manual_client_id }),
+          ...(ex.manual_client_secret && { manual_client_secret: ex.manual_client_secret }),
+          manual_channel_id: ytCreds.channel_id,
+          manual_channel_title: ytCreds.channel_title,
+          manual_access_token: ytCreds.access_token,
+          manual_refresh_token: ytCreds.refresh_token,
+          manual_token_expiry: ytCreds.token_expiry
+        };
+      } else {
+        mrSettings.youtube = { ...(mrSettings.youtube || {}), ...ytCreds };
+        const ex = mrSettings.youtube;
+        if (ex.client_id) mrSettings.youtube.client_id = ex.client_id;
+        if (ex.client_secret) mrSettings.youtube.client_secret = ex.client_secret;
+      }
       await ModuleSettings.update(businessId, 'movie-review', mrSettings);
-      console.log('[YouTube Callback] Saved YouTube credentials for Movie Review Studio businessId=', businessId, 'youtube_channel_id=', channel.id);
+      console.log('[YouTube Callback] Saved YouTube credentials for Movie Review Studio businessId=', businessId, 'usage=', usageManual ? 'manual' : 'auto', 'youtube_channel_id=', channel.id);
       return res.redirect(`${redirectBase}/dashboard/v2/modules/movie-review/settings?youtube_connected=true`);
     }
 
