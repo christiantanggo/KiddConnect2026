@@ -8,7 +8,7 @@ import { emergencyNetworkAPI } from '@/lib/api';
 import {
   ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Trash2, Bot,
   Settings, ListChecks, Wrench, RotateCcw, PhoneCall, Mail, Truck, GripVertical, ChevronUp, ChevronDown,
-  LayoutDashboard,
+  LayoutDashboard, Layers,
 } from 'lucide-react';
 
 const STATUS_OPTIONS = ['New', 'Contacting Providers', 'Accepted', 'Connected', 'Closed', 'Needs Manual Assist'];
@@ -18,6 +18,7 @@ const TIER_OPTIONS = ['premium', 'priority', 'basic'];
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'settings', label: 'Settings', icon: Settings },
+  { id: 'service-types', label: 'Services we collect for', icon: Layers },
   { id: 'ai-collects', label: 'What the AI collects', icon: ListChecks },
   { id: 'services', label: 'Emergency services', icon: Wrench },
   { id: 'rebuild-agent', label: 'Rebuild agent', icon: RotateCcw },
@@ -412,127 +413,203 @@ export default function EmergencyDispatchPage() {
             </section>
           )}
 
-          {/* What the AI collects */}
-          {activeTab === 'ai-collects' && (
-            <section className="bg-white rounded-xl border border-slate-200 p-6">
-              <h2 className="text-lg font-medium mb-4">What the AI collects</h2>
-              <p className="text-slate-600 text-sm mb-4">Configure which details the AI asks for on the phone. Reorder with the arrows. Rebuild the agent after saving to apply changes.</p>
-              <div className="space-y-2 mb-4">
-                {(config.intake_fields || []).map((field, index) => (
-                  <div key={field.key || index} className="flex items-center gap-2 flex-wrap p-2 rounded-lg border border-slate-200 bg-slate-50/50">
-                    <span className="text-slate-400" title="Drag to reorder"><GripVertical className="w-4 h-4" /></span>
+          {/* Services we collect for (service category - moved out of What the AI collects) */}
+          {activeTab === 'service-types' && (() => {
+            const full = config.intake_fields || [];
+            const serviceCategoryField = full.find((f) => f.key === 'service_category') || { key: 'service_category', label: 'Confirm: plumbing (pipe, drain, water heater, leak, etc.)', required: false, enabled: true };
+            const idx = full.findIndex((f) => f.key === 'service_category');
+            const updateServiceCategory = (patch) => {
+              if (idx >= 0) {
+                const next = full.map((f, i) => i === idx ? { ...f, ...patch } : f);
+                setConfig((c) => ({ ...c, intake_fields: next }));
+              } else {
+                setConfig((c) => ({ ...c, intake_fields: [...full, { ...serviceCategoryField, ...patch }] }));
+              }
+              setConfigDirty(true);
+            };
+            return (
+              <section className="bg-white rounded-xl border border-slate-200 p-6">
+                <h2 className="text-lg font-medium mb-4">Services we collect for</h2>
+                <p className="text-slate-600 text-sm mb-4">Configure which service type this line collects (e.g. plumbing). The phrase below is what the AI uses to confirm with the caller. Rebuild the agent after saving.</p>
+                <div className="max-w-2xl space-y-3">
+                  <div className="flex items-center gap-2 flex-wrap p-3 rounded-lg border border-slate-200 bg-slate-50/50">
                     <label className="flex items-center gap-1 shrink-0">
                       <input
                         type="checkbox"
-                        checked={field.enabled !== false}
-                        onChange={(e) => {
-                          const next = (config.intake_fields || []).map((f, i) => i === index ? { ...f, enabled: e.target.checked } : f);
-                          setConfig((c) => ({ ...c, intake_fields: next }));
-                          setConfigDirty(true);
-                        }}
+                        checked={serviceCategoryField.enabled !== false}
+                        onChange={(e) => updateServiceCategory({ enabled: e.target.checked })}
                         className="rounded border-slate-300"
                       />
                       <span className="text-sm">Collect</span>
                     </label>
-                    {BUILT_IN_KEYS.has(field.key) ? (
-                      <span className="flex-1 min-w-[200px] text-sm text-slate-700">{field.label}</span>
-                    ) : (
-                      <input
-                        type="text"
-                        className="flex-1 min-w-[180px] rounded border border-slate-300 px-2 py-1.5 text-sm"
-                        placeholder="Field label (e.g. Preferred contact time)"
-                        value={field.label || ''}
-                        onChange={(e) => {
-                          const next = (config.intake_fields || []).map((f, i) => i === index ? { ...f, label: e.target.value } : f);
-                          setConfig((c) => ({ ...c, intake_fields: next }));
-                          setConfigDirty(true);
-                        }}
-                      />
-                    )}
+                    <input
+                      type="text"
+                      className="flex-1 min-w-[200px] rounded border border-slate-300 px-2 py-1.5 text-sm"
+                      placeholder="e.g. Confirm: plumbing (pipe, drain, water heater, leak, etc.)"
+                      value={serviceCategoryField.label || ''}
+                      onChange={(e) => updateServiceCategory({ label: e.target.value })}
+                    />
                     <label className="flex items-center gap-1 shrink-0 text-sm text-slate-600">
                       <input
                         type="checkbox"
-                        checked={!!field.required}
-                        onChange={(e) => {
-                          const next = (config.intake_fields || []).map((f, i) => i === index ? { ...f, required: e.target.checked } : f);
-                          setConfig((c) => ({ ...c, intake_fields: next }));
-                          setConfigDirty(true);
-                        }}
+                        checked={!!serviceCategoryField.required}
+                        onChange={(e) => updateServiceCategory({ required: e.target.checked })}
                         className="rounded border-slate-300"
                       />
                       Required
                     </label>
-                    <div className="flex gap-0.5 shrink-0">
-                      <button
-                        type="button"
-                        disabled={index === 0}
-                        onClick={() => {
-                          if (index === 0) return;
-                          const next = [...(config.intake_fields || [])];
-                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
-                          setConfig((c) => ({ ...c, intake_fields: next }));
-                          setConfigDirty(true);
-                        }}
-                        className="p-1 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
-                        title="Move up"
-                      >
-                        <ChevronUp className="w-4 h-4" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={index === (config.intake_fields || []).length - 1}
-                        onClick={() => {
-                          const arr = config.intake_fields || [];
-                          if (index >= arr.length - 1) return;
-                          const next = [...arr];
-                          [next[index], next[index + 1]] = [next[index + 1], next[index]];
-                          setConfig((c) => ({ ...c, intake_fields: next }));
-                          setConfigDirty(true);
-                        }}
-                        className="p-1 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
-                        title="Move down"
-                      >
-                        <ChevronDown className="w-4 h-4" />
-                      </button>
-                    </div>
-                    {!BUILT_IN_KEYS.has(field.key) && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const next = (config.intake_fields || []).filter((_, i) => i !== index);
-                          setConfig((c) => ({ ...c, intake_fields: next }));
-                          setConfigDirty(true);
-                        }}
-                        className="p-1 text-red-600 hover:bg-red-50 rounded"
-                        title="Remove field"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    )}
                   </div>
-                ))}
-              </div>
-              <div className="flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = [...(config.intake_fields || []), { key: `custom_${Date.now()}`, label: 'New field', required: false, enabled: true }];
-                    setConfig((c) => ({ ...c, intake_fields: next }));
-                    setConfigDirty(true);
-                  }}
-                  className="inline-flex items-center gap-2 px-3 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700"
-                >
-                  <Plus className="w-4 h-4" /> Add field
-                </button>
-                {configDirty && (
-                  <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
-                    <Save className="w-4 h-4" /> {configSaving ? 'Saving...' : 'Save'}
+                </div>
+                <div className="flex items-center gap-4 mt-4">
+                  {configDirty && (
+                    <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
+                      <Save className="w-4 h-4" /> {configSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  )}
+                </div>
+                {configSaveMessage && <p className={`text-sm mt-2 ${configSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{configSaveMessage}</p>}
+              </section>
+            );
+          })()}
+
+          {/* What the AI collects (excludes service_category; that is in "Services we collect for") */}
+          {activeTab === 'ai-collects' && (() => {
+            const fullFields = config.intake_fields || [];
+            const displayedFields = fullFields.filter((f) => f.key !== 'service_category');
+            const mergeIntakeFields = (newDisplayed) => {
+              const serviceCat = fullFields.find((f) => f.key === 'service_category');
+              const next = [];
+              let j = 0;
+              for (let i = 0; i < fullFields.length; i++) {
+                if (fullFields[i].key === 'service_category') next.push(serviceCat || fullFields[i]);
+                else if (j < newDisplayed.length) next.push(newDisplayed[j++]);
+              }
+              while (j < newDisplayed.length) next.push(newDisplayed[j++]);
+              return next;
+            };
+            return (
+              <section className="bg-white rounded-xl border border-slate-200 p-6">
+                <h2 className="text-lg font-medium mb-4">What the AI collects</h2>
+                <p className="text-slate-600 text-sm mb-4">Configure which details the AI asks for on the phone (excluding service type, which is in Services we collect for). Reorder with the arrows. Rebuild the agent after saving to apply changes.</p>
+                <div className="space-y-2 mb-4">
+                  {displayedFields.map((field, displayIndex) => {
+                    const fullIdx = fullFields.findIndex((f) => f.key === field.key);
+                    return (
+                      <div key={field.key || displayIndex} className="flex items-center gap-2 flex-wrap p-2 rounded-lg border border-slate-200 bg-slate-50/50">
+                        <span className="text-slate-400" title="Drag to reorder"><GripVertical className="w-4 h-4" /></span>
+                        <label className="flex items-center gap-1 shrink-0">
+                          <input
+                            type="checkbox"
+                            checked={field.enabled !== false}
+                            onChange={(e) => {
+                              const next = fullFields.map((f, i) => i === fullIdx ? { ...f, enabled: e.target.checked } : f);
+                              setConfig((c) => ({ ...c, intake_fields: next }));
+                              setConfigDirty(true);
+                            }}
+                            className="rounded border-slate-300"
+                          />
+                          <span className="text-sm">Collect</span>
+                        </label>
+                        {BUILT_IN_KEYS.has(field.key) ? (
+                          <span className="flex-1 min-w-[200px] text-sm text-slate-700">{field.label}</span>
+                        ) : (
+                          <input
+                            type="text"
+                            className="flex-1 min-w-[180px] rounded border border-slate-300 px-2 py-1.5 text-sm"
+                            placeholder="Field label (e.g. Preferred contact time)"
+                            value={field.label || ''}
+                            onChange={(e) => {
+                              const next = fullFields.map((f, i) => i === fullIdx ? { ...f, label: e.target.value } : f);
+                              setConfig((c) => ({ ...c, intake_fields: next }));
+                              setConfigDirty(true);
+                            }}
+                          />
+                        )}
+                        <label className="flex items-center gap-1 shrink-0 text-sm text-slate-600">
+                          <input
+                            type="checkbox"
+                            checked={!!field.required}
+                            onChange={(e) => {
+                              const next = fullFields.map((f, i) => i === fullIdx ? { ...f, required: e.target.checked } : f);
+                              setConfig((c) => ({ ...c, intake_fields: next }));
+                              setConfigDirty(true);
+                            }}
+                            className="rounded border-slate-300"
+                          />
+                          Required
+                        </label>
+                        <div className="flex gap-0.5 shrink-0">
+                          <button
+                            type="button"
+                            disabled={displayIndex === 0}
+                            onClick={() => {
+                              if (displayIndex === 0) return;
+                              const reordered = [...displayedFields];
+                              [reordered[displayIndex - 1], reordered[displayIndex]] = [reordered[displayIndex], reordered[displayIndex - 1]];
+                              setConfig((c) => ({ ...c, intake_fields: mergeIntakeFields(reordered) }));
+                              setConfigDirty(true);
+                            }}
+                            className="p-1 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
+                            title="Move up"
+                          >
+                            <ChevronUp className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={displayIndex === displayedFields.length - 1}
+                            onClick={() => {
+                              if (displayIndex >= displayedFields.length - 1) return;
+                              const reordered = [...displayedFields];
+                              [reordered[displayIndex], reordered[displayIndex + 1]] = [reordered[displayIndex + 1], reordered[displayIndex]];
+                              setConfig((c) => ({ ...c, intake_fields: mergeIntakeFields(reordered) }));
+                              setConfigDirty(true);
+                            }}
+                            className="p-1 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
+                            title="Move down"
+                          >
+                            <ChevronDown className="w-4 h-4" />
+                          </button>
+                        </div>
+                        {!BUILT_IN_KEYS.has(field.key) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = displayedFields.filter((_, i) => i !== displayIndex);
+                              setConfig((c) => ({ ...c, intake_fields: mergeIntakeFields(next) }));
+                              setConfigDirty(true);
+                            }}
+                            className="p-1 text-red-600 hover:bg-red-50 rounded"
+                            title="Remove field"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="flex items-center gap-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = mergeIntakeFields([...displayedFields, { key: `custom_${Date.now()}`, label: 'New field', required: false, enabled: true }]);
+                      setConfig((c) => ({ ...c, intake_fields: next }));
+                      setConfigDirty(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700"
+                  >
+                    <Plus className="w-4 h-4" /> Add field
                   </button>
-                )}
-              </div>
-              {configSaveMessage && <p className={`text-sm mt-2 ${configSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{configSaveMessage}</p>}
-            </section>
-          )}
+                  {configDirty && (
+                    <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
+                      <Save className="w-4 h-4" /> {configSaving ? 'Saving...' : 'Save'}
+                    </button>
+                  )}
+                </div>
+                {configSaveMessage && <p className={`text-sm mt-2 ${configSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{configSaveMessage}</p>}
+              </section>
+            );
+          })()}
 
           {/* Emergency services (providers) */}
           {activeTab === 'services' && (
