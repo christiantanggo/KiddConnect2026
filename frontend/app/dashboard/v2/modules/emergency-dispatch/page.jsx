@@ -234,21 +234,21 @@ export default function EmergencyDispatchPage() {
             24/7 Emergency & Priority Service Network. Public page: <a href="/emergency" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">/emergency</a>
           </p>
 
-          {/* Tab bar */}
-          <div className="flex flex-wrap gap-1 border-b border-slate-200 mb-6">
+          {/* Single row of square nav buttons (all pages) — one row, sizes scale with screen */}
+          <div className="flex flex-nowrap gap-1 sm:gap-2 mb-6 w-full">
             {TABS.map(({ id, label, icon: Icon }) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => setActiveTab(id)}
-                className={`inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition-colors ${
+                className={`flex-1 min-w-0 flex flex-col items-center justify-center p-2 sm:p-3 md:p-4 rounded-xl border text-center transition-all focus:outline-none focus:ring-2 focus:ring-emerald-500/30 ${
                   activeTab === id
-                    ? 'border-emerald-600 text-emerald-700 bg-emerald-50'
-                    : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                    ? 'border-emerald-600 bg-emerald-50 text-emerald-800 shadow-sm'
+                    : 'border-slate-200 bg-white text-slate-800 hover:shadow-md hover:border-emerald-300'
                 }`}
               >
-                <Icon className="w-4 h-4" />
-                {label}
+                <Icon className="w-5 h-5 sm:w-6 sm:h-6 md:w-8 md:h-8 text-emerald-600 shrink-0 mb-0.5 sm:mb-1" />
+                <span className="text-[10px] sm:text-xs md:text-sm font-semibold truncate w-full leading-tight">{label}</span>
               </button>
             ))}
           </div>
@@ -263,22 +263,6 @@ export default function EmergencyDispatchPage() {
                   <button type="button" onClick={() => setActiveTab('settings')} className="text-sm font-medium text-amber-800 underline">Go to Settings →</button>
                 </div>
               )}
-              {/* Action cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4 mb-8">
-                {TABS.filter((t) => t.id !== 'dashboard').map(({ id, label, icon: Icon }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setActiveTab(id)}
-                    className="p-4 rounded-xl border border-slate-200 bg-white text-center transition-all hover:shadow-md hover:border-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
-                  >
-                    <div className="flex justify-center mb-2">
-                      <Icon className="w-8 h-8 text-emerald-600" />
-                    </div>
-                    <h3 className="text-sm font-semibold text-slate-800">{label}</h3>
-                  </button>
-                ))}
-              </div>
               {/* Stats cards */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                 {(config.emergency_phone_numbers || [])[0] && (
