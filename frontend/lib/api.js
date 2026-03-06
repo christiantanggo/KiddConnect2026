@@ -469,6 +469,7 @@ export const emergencyNetworkAPI = {
   getConfig: () => api.get('/v2/emergency-network/config', { headers: emergencyNetworkHeaders() }),
   getPhoneNumbers: () => api.get('/v2/emergency-network/phone-numbers', { headers: emergencyNetworkHeaders() }),
   createAgent: () => api.post('/v2/emergency-network/create-agent', {}, { headers: emergencyNetworkHeaders() }),
+  linkAgent: () => api.post('/v2/emergency-network/link-agent', {}, { headers: emergencyNetworkHeaders() }),
   updateConfig: (data) => api.put('/v2/emergency-network/config', data, { headers: emergencyNetworkHeaders() }),
   getRequests: () => api.get('/v2/emergency-network/requests', { headers: emergencyNetworkHeaders() }),
   updateRequest: (id, data) => api.patch(`/v2/emergency-network/requests/${id}`, data, { headers: emergencyNetworkHeaders() }),

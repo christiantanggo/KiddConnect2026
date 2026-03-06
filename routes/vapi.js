@@ -589,6 +589,9 @@ async function handleAssistantRequest(body, res) {
   if (!destinationNumber && (body?.message || body?.call)) {
     console.log("[VAPI Webhook] assistant-request: body.message keys=%s body.call keys=%s", Object.keys(body?.message || {}).join(","), Object.keys(body?.call || {}).join(","));
   }
+  if (!destinationNumber) {
+    console.warn("[VAPI Webhook] assistant-request: no destination number in body — emergency routing requires destination; body keys=%s", Object.keys(body || {}).join(","));
+  }
 
   // EMERGENCY NETWORK: separate stream — dedicated number(s) route to Emergency assistant only; existing agent untouched
   if (phoneNumber) {

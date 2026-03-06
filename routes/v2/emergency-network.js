@@ -9,9 +9,50 @@ import { supabaseClient } from '../../config/database.js';
 import { createServiceRequest } from '../../services/emergency-network/intake.js';
 import { getEmergencyConfig, invalidateEmergencyConfigCache } from '../../services/emergency-network/config.js';
 import { createEmergencyNetworkAssistant } from '../../services/emergency-network/create-vapi-assistant.js';
-import { getAllVapiPhoneNumbers } from '../../services/vapi.js';
+import { getAllVapiPhoneNumbers, checkIfNumberProvisionedInVAPI, linkAssistantToNumber, provisionPhoneNumber } from '../../services/vapi.js';
 
 const router = express.Router();
+
+/**
+ * Link the emergency assistant to all emergency_phone_numbers.
+ * Same flow as the existing phone agent: provision from Telnyx to VAPI if not already there, then link.
+ * @param {string} assistantId - emergency_vapi_assistant_id
+ * @param {string[]} phoneNumbers - emergency_phone_numbers (E.164 or any format we normalize)
+ * @returns {{ linked: string[], notInVapi: string[], errors: string[] }}
+ */
+async function linkEmergencyAssistantToNumbers(assistantId, phoneNumbers) {
+  const result = { linked: [], notInVapi: [], errors: [] };
+  if (!assistantId || !Array.isArray(phoneNumbers) || phoneNumbers.length === 0) return result;
+  for (const raw of phoneNumbers) {
+    const e164 = normalizeE164(raw);
+    if (!e164) continue;
+    try {
+      let vapiNumber = await checkIfNumberProvisionedInVAPI(e164);
+      if (!vapiNumber) {
+        try {
+          vapiNumber = await provisionPhoneNumber(e164, null);
+          console.log('[EmergencyNetwork] Provisioned number to VAPI (same as phone agent):', e164);
+        } catch (provisionErr) {
+          result.notInVapi.push(e164);
+          result.errors.push(`${e164}: provision to VAPI failed — ${provisionErr?.message || provisionErr}`);
+          continue;
+        }
+      }
+      const phoneNumberId = vapiNumber?.id || vapiNumber?.phoneNumberId;
+      if (!phoneNumberId) {
+        result.errors.push(`${e164}: no VAPI phone number id`);
+        continue;
+      }
+      await linkAssistantToNumber(assistantId, phoneNumberId);
+      result.linked.push(e164);
+      console.log('[EmergencyNetwork] Linked emergency assistant to number', e164);
+    } catch (err) {
+      result.errors.push(`${e164}: ${err?.message || err}`);
+      console.warn('[EmergencyNetwork] Link number failed:', e164, err?.message || err);
+    }
+  }
+  return result;
+}
 
 /** Normalize to E.164 for display/dedupe. */
 function normalizeE164(value) {
@@ -198,6 +239,25 @@ router.post('/create-agent', async (req, res) => {
     }
     invalidateEmergencyConfigCache();
 
+    // Attach the new agent to emergency dispatch phone number(s) in VAPI
+    const numbers = Array.isArray(newValue.emergency_phone_numbers) ? newValue.emergency_phone_numbers : [];
+    if (numbers.length > 0) {
+      try {
+        const linkResult = await linkEmergencyAssistantToNumbers(assistantId, numbers);
+        if (linkResult.linked.length) {
+          console.log('[EmergencyNetwork] create-agent: linked to', linkResult.linked.length, 'number(s) in VAPI');
+        }
+        if (linkResult.notInVapi.length) {
+          console.warn('[EmergencyNetwork] create-agent: numbers not in VAPI (link in VAPI or add to Telnyx first):', linkResult.notInVapi);
+        }
+        if (linkResult.errors.length) {
+          console.warn('[EmergencyNetwork] create-agent: link errors', linkResult.errors);
+        }
+      } catch (linkErr) {
+        console.warn('[EmergencyNetwork] create-agent: link to numbers failed (non-blocking)', linkErr?.message || linkErr);
+      }
+    }
+
     res.status(201).json({
       success: true,
       assistant_id: assistantId,
@@ -210,6 +270,41 @@ router.post('/create-agent', async (req, res) => {
     console.error('[EmergencyNetwork] create-agent error:', err?.message || err, vapiBody ? { status, vapiBody } : '');
     const message = vapiMessage || err?.message || 'Failed to create agent';
     res.status(status === 400 ? 400 : 500).json({ error: message });
+  }
+});
+
+/**
+ * POST /api/v2/emergency-network/link-agent
+ * Explicitly link the emergency assistant to all configured emergency_phone_numbers in VAPI.
+ * Use this to "attach" the agent to the dispatch number(s) if it was not done on config save.
+ */
+router.post('/link-agent', async (req, res) => {
+  try {
+    const config = await getEmergencyConfig();
+    const assistantId = config.emergency_vapi_assistant_id || null;
+    const numbers = config.emergency_phone_numbers || [];
+    if (!assistantId) {
+      return res.status(400).json({ error: 'No emergency assistant configured. Create an agent first.', linked: [], notInVapi: [], errors: [] });
+    }
+    if (numbers.length === 0) {
+      return res.status(400).json({ error: 'No emergency phone numbers configured. Add at least one number in Settings.', linked: [], notInVapi: [], errors: [] });
+    }
+    const result = await linkEmergencyAssistantToNumbers(assistantId, numbers);
+    const success = result.errors.length === 0 && result.linked.length > 0;
+    res.status(200).json({
+      success,
+      message: success
+        ? `Linked agent to ${result.linked.length} number(s).`
+        : result.notInVapi.length
+          ? `Could not provision/link: ${result.notInVapi.join(', ')}. Ensure numbers are in Telnyx and VAPI has a Telnyx credential. ${result.errors.length ? result.errors.join('; ') : ''}`
+          : result.errors.join('; '),
+      linked: result.linked,
+      notInVapi: result.notInVapi,
+      errors: result.errors,
+    });
+  } catch (err) {
+    console.error('[EmergencyNetwork] link-agent error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to link agent', linked: [], notInVapi: [], errors: [] });
   }
 });
 
@@ -261,7 +356,26 @@ router.put('/config', express.json(), async (req, res) => {
       });
     }
     invalidateEmergencyConfigCache();
-    res.json(await getEmergencyConfig());
+    const finalConfig = await getEmergencyConfig();
+    const assistantId = finalConfig.emergency_vapi_assistant_id || null;
+    const numbers = finalConfig.emergency_phone_numbers || [];
+    if (assistantId && numbers.length > 0) {
+      try {
+        const linkResult = await linkEmergencyAssistantToNumbers(assistantId, numbers);
+        if (linkResult.linked.length) {
+          console.log('[EmergencyNetwork] config: linked emergency agent to', linkResult.linked.length, 'number(s) in VAPI');
+        }
+        if (linkResult.notInVapi.length) {
+          console.warn('[EmergencyNetwork] config: numbers not in VAPI:', linkResult.notInVapi);
+        }
+        if (linkResult.errors.length) {
+          console.warn('[EmergencyNetwork] config: link errors', linkResult.errors);
+        }
+      } catch (linkErr) {
+        console.warn('[EmergencyNetwork] config: link to numbers failed (non-blocking)', linkErr?.message || linkErr);
+      }
+    }
+    res.json(finalConfig);
   } catch (err) {
     console.error('[EmergencyNetwork] config put error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to update config' });

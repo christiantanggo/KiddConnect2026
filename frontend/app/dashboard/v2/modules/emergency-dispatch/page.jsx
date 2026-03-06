@@ -162,6 +162,21 @@ export default function EmergencyDispatchPage() {
       if (id) setConfig((c) => ({ ...c, emergency_vapi_assistant_id: id }));
       setConfigDirty(false);
       await load();
+      // Attach the agent to configured emergency phone number(s) in VAPI
+      try {
+        const linkRes = await emergencyNetworkAPI.linkAgent();
+        const d = linkRes.data;
+        if (d?.linked?.length) {
+          setCreateAgentError(null);
+        }
+        if (d?.notInVapi?.length && !d?.linked?.length) {
+          setCreateAgentError(`Agent created. Could not provision/link ${d.notInVapi.join(', ')} — ensure they are in Telnyx and VAPI has a Telnyx credential.`);
+        } else if (d?.errors?.length && !d?.linked?.length) {
+          setCreateAgentError(`Agent created. Link failed: ${d.errors.join('; ')}`);
+        }
+      } catch (_) {
+        // link-agent is best-effort; create succeeded
+      }
     } catch (e) {
       setCreateAgentError(e.response?.data?.error || e.message || 'Failed to create agent');
     } finally {

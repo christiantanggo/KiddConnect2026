@@ -201,10 +201,13 @@ export async function runScrapeJob() {
   }
 }
 
+/** Max retries when all scraped items are duplicates (e.g. dad joke) — keep scraping until we get new ones. */
+const SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX = 15;
+
 /**
  * POST /api/v2/orbix-network/jobs/scrape
  * Scrape sources. If body.channel_id and active_business_id, scrape only that channel for that business.
- * Otherwise scrape all businesses with active subscriptions (scheduled job behavior).
+ * When all items are duplicates, retries automatically until at least one new item is saved or max retries.
  */
 router.post('/scrape', async (req, res) => {
   try {
@@ -213,13 +216,30 @@ router.post('/scrape', async (req, res) => {
 
     let result;
     if (businessId && channelId) {
-      const raw = await scrapeAllSources(businessId, channelId);
+      let totalScraped = 0;
+      let totalSaved = 0;
+      let allSourceResults = [];
+      let sourcesProcessed = 0;
+      let attempt = 0;
+      do {
+        attempt++;
+        const raw = await scrapeAllSources(businessId, channelId);
+        const scraped = raw.scraped ?? 0;
+        const saved = raw.saved ?? 0;
+        totalScraped += scraped;
+        totalSaved += saved;
+        if (raw.source_results?.length) allSourceResults.push(...raw.source_results);
+        sourcesProcessed = raw.sources_processed ?? 0;
+        const allDuplicates = scraped > 0 && saved === 0;
+        if (!allDuplicates || totalSaved > 0 || attempt >= SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX) break;
+        console.log(`[Orbix Jobs] Scrape attempt ${attempt}: all duplicates, retrying...`);
+      } while (true);
       result = {
-        total_scraped: raw.scraped ?? 0,
-        total_saved: raw.saved ?? 0,
-        duplicates_skipped: raw.duplicates_skipped ?? (raw.scraped ?? 0) - (raw.saved ?? 0),
-        source_results: raw.source_results ?? [],
-        sources_processed: raw.sources_processed ?? 0
+        total_scraped: totalScraped,
+        total_saved: totalSaved,
+        duplicates_skipped: totalScraped - totalSaved,
+        source_results: allSourceResults,
+        sources_processed: sourcesProcessed
       };
     } else {
       result = await runScrapeJob();
@@ -236,7 +256,7 @@ router.post('/scrape', async (req, res) => {
     res.json({
       success: true,
       message: (result.total_saved ?? 0) === 0 && (result.total_scraped ?? 0) > 0
-        ? `Scrape found ${result.total_scraped} items; all were already in the database (duplicates skipped).`
+        ? `Scrape found ${result.total_scraped} items; all were already in the database (duplicates skipped) after ${SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX} attempts.`
         : `Scraped ${result.total_scraped} items, saved ${result.total_saved} new.`,
       status: 'completed',
       results
