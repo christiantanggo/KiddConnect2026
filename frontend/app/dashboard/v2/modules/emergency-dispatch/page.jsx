@@ -18,12 +18,16 @@ const TIER_OPTIONS = ['premium', 'priority', 'basic'];
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'settings', label: 'Settings', icon: Settings },
-  { id: 'service-types', label: 'Services we collect for', icon: Layers },
-  { id: 'ai-collects', label: 'What the AI collects', icon: ListChecks },
-  { id: 'services', label: 'Emergency services', icon: Wrench },
   { id: 'recent-calls', label: 'Recent calls', icon: PhoneCall },
   { id: 'recent-messages', label: 'Recent messages', icon: Mail },
   { id: 'dispatched', label: 'Dispatched', icon: Truck },
+];
+
+const SETTINGS_SUB_TABS = [
+  { id: 'service-types', label: 'Services we collect for' },
+  { id: 'ai-collects', label: 'What the AI collects' },
+  { id: 'services', label: 'Emergency Services (Provider Directory)' },
+  { id: 'communication', label: 'Communication Settings' },
 ];
 
 const BUILT_IN_KEYS = new Set(['caller_name', 'callback_phone', 'service_category', 'urgency_level', 'location', 'issue_summary']);
@@ -38,6 +42,7 @@ const DEFAULT_INTAKE_FIELDS = [
 
 export default function EmergencyDispatchPage() {
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [settingsSubTab, setSettingsSubTab] = useState('communication');
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState([]);
   const [providers, setProviders] = useState([]);
@@ -340,71 +345,27 @@ export default function EmergencyDispatchPage() {
             </>
           )}
 
-          {/* Settings */}
+          {/* Settings: 4 sub-tabs (Services we collect for, What the AI collects, Provider Directory, Communication Settings) */}
           {activeTab === 'settings' && (
-            <section className="bg-white rounded-xl border border-slate-200 p-6">
-              <h2 className="text-lg font-medium mb-4">Settings</h2>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1">Emergency phone numbers</label>
-                  {config.webhook_url && (
-                    <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
-                      <p className="font-medium text-amber-800 mb-1">VAPI setup</p>
-                      <p className="text-amber-700 mb-2">In VAPI dashboard, set each number’s <strong>Server URL</strong> to:</p>
-                      <code className="block px-2 py-1.5 bg-white border border-amber-200 rounded text-xs font-mono break-all select-all">{config.webhook_url}</code>
-                      <p className="text-amber-700 mt-2 text-xs">Leave Assistant unset (dynamic).</p>
-                    </div>
-                  )}
-                  <div className="flex flex-wrap gap-2 mb-2">
-                    {(config.emergency_phone_numbers || []).map((n, i) => (
-                      <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 rounded text-sm">
-                        {n}
-                        <button type="button" onClick={() => removePhoneNumber(i)} className="text-red-600 hover:underline">×</button>
-                      </span>
-                    ))}
-                  </div>
-                  <div className="flex gap-2 mb-2">
-                    <select
-                      className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm bg-white max-w-xs"
-                      value={selectedNumberToAdd}
-                      onChange={(e) => setSelectedNumberToAdd(e.target.value)}
-                    >
-                      <option value="">Choose number...</option>
-                      {(availablePhoneNumbers || []).filter((pn) => !(config.emergency_phone_numbers || []).includes(pn.e164 || pn.number)).map((pn) => {
-                        const num = pn.e164 || pn.number;
-                        return <option key={num} value={num}>{num}</option>;
-                      })}
-                    </select>
-                    <button type="button" onClick={addSelectedPhoneNumber} disabled={!selectedNumberToAdd || configSaving} className="px-3 py-2 bg-slate-800 text-white rounded text-sm hover:bg-slate-700 disabled:opacity-50">
-                      Add selected
-                    </button>
-                  </div>
-                  <div className="flex gap-2">
-                    <input type="tel" placeholder="+15551234567" className="flex-1 max-w-xs rounded border border-slate-300 px-3 py-2 text-sm" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
-                    <button type="button" onClick={addPhoneNumber} className="px-3 py-2 bg-slate-200 rounded text-sm hover:bg-slate-300">Add</button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1">Notification email (phone intake)</label>
-                  <input type="email" className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm" placeholder="email@example.com" value={config.notification_email || ''} onChange={(e) => { setConfig((c) => ({ ...c, notification_email: e.target.value })); setConfigDirty(true); }} />
-                  <p className="text-xs text-slate-500 mt-1">Intake details from phone calls are sent here.</p>
-                </div>
-                <div>
-                  <label className="block text-sm text-slate-600 mb-1">Max dispatch attempts</label>
-                  <input type="number" min={1} max={20} className="w-24 rounded border border-slate-300 px-3 py-2 text-sm" value={config.max_dispatch_attempts} onChange={(e) => { setConfig((c) => ({ ...c, max_dispatch_attempts: parseInt(e.target.value, 10) || 5 })); setConfigDirty(true); }} />
-                </div>
-                {configSaveMessage && <p className={`text-sm ${configSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{configSaveMessage}</p>}
-                {configDirty && (
-                  <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
-                    <Save className="w-4 h-4" /> {configSaving ? 'Saving...' : 'Save config'}
+            <>
+              <div className="flex flex-wrap gap-1 border-b border-slate-200 mb-6">
+                {SETTINGS_SUB_TABS.map(({ id, label }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setSettingsSubTab(id)}
+                    className={`px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition-colors ${
+                      settingsSubTab === id
+                        ? 'border-emerald-600 text-emerald-700 bg-emerald-50'
+                        : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                    }`}
+                  >
+                    {label}
                   </button>
-                )}
+                ))}
               </div>
-            </section>
-          )}
 
-          {/* Services we collect for (service category - moved out of What the AI collects) */}
-          {activeTab === 'service-types' && (() => {
+              {settingsSubTab === 'service-types' && (() => {
             const full = config.intake_fields || [];
             const serviceCategoryField = full.find((f) => f.key === 'service_category') || { key: 'service_category', label: 'Confirm: plumbing (pipe, drain, water heater, leak, etc.)', required: false, enabled: true };
             const idx = full.findIndex((f) => f.key === 'service_category');
@@ -462,8 +423,7 @@ export default function EmergencyDispatchPage() {
             );
           })()}
 
-          {/* What the AI collects (excludes service_category; that is in "Services we collect for") */}
-          {activeTab === 'ai-collects' && (() => {
+              {settingsSubTab === 'ai-collects' && (() => {
             const fullFields = config.intake_fields || [];
             const displayedFields = fullFields.filter((f) => f.key !== 'service_category');
             const mergeIntakeFields = (newDisplayed) => {
@@ -601,11 +561,10 @@ export default function EmergencyDispatchPage() {
             );
           })()}
 
-          {/* Emergency services (providers) */}
-          {activeTab === 'services' && (
+              {settingsSubTab === 'services' && (
             <section className="bg-white rounded-xl border border-slate-200 p-6">
               <div className="flex items-center justify-between mb-4">
-                <h2 className="text-lg font-medium">Emergency services (provider directory)</h2>
+                <h2 className="text-lg font-medium">Emergency Services (Provider Directory)</h2>
                 <button type="button" onClick={() => setShowAddProvider(true)} className="inline-flex items-center gap-1 px-3 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700">
                   <Plus className="w-4 h-4" /> Add provider
                 </button>
@@ -663,6 +622,70 @@ export default function EmergencyDispatchPage() {
                 </table>
               </div>
             </section>
+          )}
+
+              {settingsSubTab === 'communication' && (
+            <section className="bg-white rounded-xl border border-slate-200 p-6">
+              <h2 className="text-lg font-medium mb-4">Communication Settings</h2>
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Emergency phone numbers</label>
+                  {config.webhook_url && (
+                    <div className="mb-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm">
+                      <p className="font-medium text-amber-800 mb-1">VAPI setup</p>
+                      <p className="text-amber-700 mb-2">In VAPI dashboard, set each number’s <strong>Server URL</strong> to:</p>
+                      <code className="block px-2 py-1.5 bg-white border border-amber-200 rounded text-xs font-mono break-all select-all">{config.webhook_url}</code>
+                      <p className="text-amber-700 mt-2 text-xs">Leave Assistant unset (dynamic).</p>
+                    </div>
+                  )}
+                  <div className="flex flex-wrap gap-2 mb-2">
+                    {(config.emergency_phone_numbers || []).map((n, i) => (
+                      <span key={i} className="inline-flex items-center gap-1 px-2 py-1 bg-slate-100 rounded text-sm">
+                        {n}
+                        <button type="button" onClick={() => removePhoneNumber(i)} className="text-red-600 hover:underline">×</button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="flex gap-2 mb-2">
+                    <select
+                      className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm bg-white max-w-xs"
+                      value={selectedNumberToAdd}
+                      onChange={(e) => setSelectedNumberToAdd(e.target.value)}
+                    >
+                      <option value="">Choose number...</option>
+                      {(availablePhoneNumbers || []).filter((pn) => !(config.emergency_phone_numbers || []).includes(pn.e164 || pn.number)).map((pn) => {
+                        const num = pn.e164 || pn.number;
+                        return <option key={num} value={num}>{num}</option>;
+                      })}
+                    </select>
+                    <button type="button" onClick={addSelectedPhoneNumber} disabled={!selectedNumberToAdd || configSaving} className="px-3 py-2 bg-slate-800 text-white rounded text-sm hover:bg-slate-700 disabled:opacity-50">
+                      Add selected
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <input type="tel" placeholder="+15551234567" className="flex-1 max-w-xs rounded border border-slate-300 px-3 py-2 text-sm" value={newPhone} onChange={(e) => setNewPhone(e.target.value)} />
+                    <button type="button" onClick={addPhoneNumber} className="px-3 py-2 bg-slate-200 rounded text-sm hover:bg-slate-300">Add</button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Notification email (phone intake)</label>
+                  <input type="email" className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm" placeholder="email@example.com" value={config.notification_email || ''} onChange={(e) => { setConfig((c) => ({ ...c, notification_email: e.target.value })); setConfigDirty(true); }} />
+                  <p className="text-xs text-slate-500 mt-1">Intake details from phone calls are sent here.</p>
+                </div>
+                <div>
+                  <label className="block text-sm text-slate-600 mb-1">Max dispatch attempts</label>
+                  <input type="number" min={1} max={20} className="w-24 rounded border border-slate-300 px-3 py-2 text-sm" value={config.max_dispatch_attempts} onChange={(e) => { setConfig((c) => ({ ...c, max_dispatch_attempts: parseInt(e.target.value, 10) || 5 })); setConfigDirty(true); }} />
+                </div>
+                {configSaveMessage && <p className={`text-sm ${configSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{configSaveMessage}</p>}
+                {configDirty && (
+                  <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
+                    <Save className="w-4 h-4" /> {configSaving ? 'Saving...' : 'Save config'}
+                  </button>
+                )}
+              </div>
+            </section>
+          )}
+            </>
           )}
 
           {/* Recent calls */}
