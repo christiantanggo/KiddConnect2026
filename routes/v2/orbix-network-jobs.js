@@ -204,7 +204,7 @@ export async function runScrapeJob() {
 /** Max retries when all scraped items are duplicates (e.g. dad joke) — keep scraping until we get new ones. */
 const SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX = 15;
 /** When channel scrape returns 0 items but has sources (e.g. trivia generator failed), retry this many times. */
-const SCRAPE_RETRY_WHEN_ZERO_ITEMS_MAX = 3;
+const SCRAPE_RETRY_WHEN_ZERO_ITEMS_MAX = 8;
 
 /**
  * POST /api/v2/orbix-network/jobs/scrape
@@ -260,19 +260,33 @@ router.post('/scrape', async (req, res) => {
       result = await runScrapeJob();
     }
 
-    const enabledSources = (result.source_results?.length ?? 0) || (result.sources_processed ?? 0);
+    const totalScraped = result.total_scraped ?? 0;
+    const totalSaved = result.total_saved ?? 0;
+    const sourcesProcessed = result.sources_processed ?? 0;
+    const enabledSources = (result.source_results?.length ?? 0) || sourcesProcessed;
     const results = [{
-      scraped: result.total_scraped ?? 0,
-      saved: result.total_saved ?? 0,
+      scraped: totalScraped,
+      saved: totalSaved,
       duplicates_skipped: result.duplicates_skipped ?? 0,
       enabled_sources: enabledSources,
+      sources_processed: sourcesProcessed,
       error: result.error ?? null
     }];
+    let message;
+    if (totalSaved > 0) {
+      message = `Scraped ${totalScraped} items, saved ${totalSaved} new.`;
+    } else if (totalScraped > 0) {
+      message = `Scrape found ${totalScraped} items; all were already in the database (duplicates skipped) after ${SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX} attempts.`;
+    } else if (sourcesProcessed === 0 && businessId && channelId) {
+      message = 'No enabled sources for this channel. Add a source (e.g. Trivia Generator or Dad Joke Generator) in Settings → Sources and enable it.';
+    } else if (sourcesProcessed > 0) {
+      message = `Generator produced 0 items after ${SCRAPE_RETRY_WHEN_ZERO_ITEMS_MAX} retries. Check OPENAI_API_KEY and server logs for [Trivia Generator] or [Orbix Scraper] errors.`;
+    } else {
+      message = `Scraped ${totalScraped} items, saved ${totalSaved} new.`;
+    }
     res.json({
       success: true,
-      message: (result.total_saved ?? 0) === 0 && (result.total_scraped ?? 0) > 0
-        ? `Scrape found ${result.total_scraped} items; all were already in the database (duplicates skipped) after ${SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX} attempts.`
-        : `Scraped ${result.total_scraped} items, saved ${result.total_saved} new.`,
+      message,
       status: 'completed',
       results
     });
