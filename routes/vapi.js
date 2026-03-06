@@ -8,7 +8,7 @@ import { Business } from "../models/Business.js";
 import { Message } from "../models/Message.js";
 import { getCallSummary, forwardCallToBusiness, getVapiClient } from "../services/vapi.js";
 import { checkMinutesAvailable, recordCallUsage } from "../services/usage.js";
-import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail } from "../services/notifications.js";
+import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail, sendEmergencyIntakeEmail } from "../services/notifications.js";
 import { isBusinessOpenAtTime } from "../utils/businessHours.js";
 import { AIAgent } from "../models/AIAgent.js";
 import { Notification } from "../models/v2/Notification.js";
@@ -1186,6 +1186,64 @@ async function handleCallEnd(event) {
     // The frontend endpoint (/api/demo/send-summary) handles sending the email
     // Skip webhook handler entirely for demos to prevent duplicate emails
     console.log(`[VAPI Webhook] Demo call - skipping webhook handler (frontend will handle email via /api/demo/send-summary)`);
+    return;
+  }
+
+  // Emergency Network: handle end-of-call for emergency assistant (no CallSession; persist request + email)
+  const { getEmergencyAssistantId, getEmergencyConfig } = await import("../services/emergency-network/config.js");
+  const emergencyAssistantId = await getEmergencyAssistantId();
+  if (assistantId && emergencyAssistantId && assistantId === emergencyAssistantId) {
+    console.log(`[VAPI Webhook] Emergency Network call-end for call: ${callId}`);
+    let transcript = "";
+    let summary = "";
+    if (event.message?.analysis?.summary) summary = event.message.analysis.summary;
+    if (event.message?.artifact?.transcript) {
+      transcript = event.message.artifact.transcript;
+    } else if (event.message?.artifact?.messages) {
+      const messages = event.message.artifact.messages || [];
+      transcript = messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => `${m.role === "user" ? "User" : "AI"}: ${m.message || m.content || ""}`)
+        .join("\n");
+    } else if (event.transcript) transcript = event.transcript;
+    if (!transcript && !summary && callId) {
+      try {
+        const callSummary = await getCallSummary(callId);
+        transcript = callSummary.transcript || "";
+        summary = summary || callSummary.summary || "";
+      } catch (e) {
+        console.warn("[VAPI Webhook] Emergency: getCallSummary failed", e?.message);
+      }
+    }
+    const callerNumberFromCall = call.customer?.number || event.message?.customer?.number;
+    const extracted = extractEmergencyFromTranscript(transcript, summary, callerNumberFromCall);
+    if (!extracted.callback_phone) {
+      console.warn("[VAPI Webhook] Emergency: no callback phone (inbound or extracted), using placeholder");
+      extracted.callback_phone = callerNumberFromCall || "Unknown";
+    }
+    try {
+      const { createServiceRequest } = await import("../services/emergency-network/intake.js");
+      const payload = {
+        caller_name: extracted.caller_name || null,
+        callback_phone: extracted.callback_phone,
+        service_category: extracted.service_category || "Other",
+        urgency_level: extracted.urgency_level || "Schedule",
+        location: extracted.location || null,
+        issue_summary: extracted.issue_summary || (summary || transcript).slice(0, 2000) || null,
+        intake_channel: "phone",
+      };
+      const request = await createServiceRequest(payload);
+      const config = await getEmergencyConfig();
+      const toEmail = config.notification_email || process.env.EMERGENCY_DISPATCH_NOTIFICATION_EMAIL;
+      if (toEmail) {
+        await sendEmergencyIntakeEmail(toEmail, payload, { transcript, summary });
+      } else {
+        console.warn("[VAPI Webhook] Emergency: no notification_email configured, skipping email");
+      }
+      console.log("[VAPI Webhook] Emergency request created:", request.id);
+    } catch (err) {
+      console.error("[VAPI Webhook] Emergency intake/email error:", err?.message || err);
+    }
     return;
   }
 
@@ -2802,6 +2860,43 @@ function determineIntent(summary, transcript) {
   }
   
   return "general";
+}
+
+/**
+ * Extract emergency intake fields from transcript/summary (Emergency Network phone calls).
+ * callerNumberFromCall = inbound caller number from VAPI (call.customer.number).
+ */
+function extractEmergencyFromTranscript(transcript, summary, callerNumberFromCall = null) {
+  const text = `${summary || ""} ${transcript || ""}`;
+  const lower = text.toLowerCase();
+  const result = {
+    caller_name: null,
+    callback_phone: callerNumberFromCall && String(callerNumberFromCall).trim() ? String(callerNumberFromCall).trim() : null,
+    service_category: "Other",
+    urgency_level: "Schedule",
+    location: null,
+    issue_summary: (summary || transcript || "").slice(0, 2000).trim() || null,
+  };
+  // Service: Plumbing, HVAC, Gas, Other
+  if (/\bplumb/i.test(lower)) result.service_category = "Plumbing";
+  else if (/\bhvac|heating|air\s*cond|ac\s*unit/i.test(lower)) result.service_category = "HVAC";
+  else if (/\bgas\b|gas\s*line|gas\s*leak/i.test(lower)) result.service_category = "Gas";
+  // Urgency
+  if (/immediate|emergency|urgent|as\s*ap|right\s*away/i.test(lower)) result.urgency_level = "Immediate Emergency";
+  else if (/same\s*day|today|this\s*afternoon|this\s*evening/i.test(lower)) result.urgency_level = "Same Day";
+  // Name: "my name is X", "this is X", "call me X"
+  const nameMatch = text.match(/(?:my\s+name\s+is|this\s+is|i'm|i\s+am|call\s+me)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)/i);
+  if (nameMatch && nameMatch[1]) result.caller_name = nameMatch[1].trim();
+  // Phone from text if not from call (e.g. callback number given)
+  if (!result.callback_phone) {
+    const phoneMatch = text.match(/(?:\+?1?[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\b/);
+    if (phoneMatch) result.callback_phone = `+1${phoneMatch[1]}${phoneMatch[2]}${phoneMatch[3]}`;
+  }
+  // Location: address-like (digits + street words) or postal code
+  const addrMatch = text.match(/(\d+\s+[\w\s]+(?:street|st|avenue|ave|road|rd|drive|dr|lane|ln|blvd|way|place|pl)\b[\w\s]*)/i)
+    || text.match(/([A-Z]\d[A-Z]\s*\d[A-Z]\d)/i);
+  if (addrMatch && addrMatch[1]) result.location = addrMatch[1].trim().slice(0, 500);
+  return result;
 }
 
 /**

@@ -29,7 +29,7 @@ function normalizePhone(phone) {
 export async function getEmergencyConfig() {
   const now = Date.now();
   if (cachedConfig && (now - cacheTime) < CACHE_MS) return cachedConfig;
-  const empty = { emergency_phone_numbers: [], emergency_vapi_assistant_id: null, max_dispatch_attempts: 5 };
+  const empty = { emergency_phone_numbers: [], emergency_vapi_assistant_id: null, max_dispatch_attempts: 5, notification_email: null };
   try {
     const { data, error } = await supabaseClient
       .from('emergency_network_config')
@@ -47,10 +47,12 @@ export async function getEmergencyConfig() {
       return cachedConfig;
     }
     const value = data?.value || {};
+    const fromEnv = process.env.EMERGENCY_DISPATCH_NOTIFICATION_EMAIL || null;
     cachedConfig = {
       emergency_phone_numbers: Array.isArray(value.emergency_phone_numbers) ? value.emergency_phone_numbers : [],
       emergency_vapi_assistant_id: value.emergency_vapi_assistant_id || null,
       max_dispatch_attempts: typeof value.max_dispatch_attempts === 'number' ? value.max_dispatch_attempts : 5,
+      notification_email: (value.notification_email && String(value.notification_email).trim()) || fromEnv || null,
     };
     cacheTime = now;
     return cachedConfig;

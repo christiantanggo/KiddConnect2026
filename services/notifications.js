@@ -297,6 +297,67 @@ export async function sendCallSummaryEmail(business, callSession, transcript, su
 }
 
 /**
+ * Send emergency intake email with structured fields (name, callback number, service type, urgency, location, issue).
+ * Used when someone calls the Emergency Network line and the AI collects their info.
+ */
+export async function sendEmergencyIntakeEmail(toEmail, request, options = {}) {
+  if (!toEmail || !String(toEmail).trim()) {
+    console.warn('[Emergency Intake Email] No recipient email, skipping');
+    return;
+  }
+  const { transcript = '', summary = '' } = options;
+  const name = request.caller_name || 'Not provided';
+  const phone = formatPhoneNumber(request.callback_phone) || request.callback_phone || 'Not provided';
+  const serviceType = request.service_category || 'Not provided';
+  const urgency = request.urgency_level || 'Not provided';
+  const location = request.location || 'Not provided';
+  const issue = request.issue_summary || 'Not provided';
+  const subject = `Emergency Dispatch: ${serviceType} – ${urgency}`;
+  const bodyText = [
+    'Emergency Dispatch – New intake (phone)',
+    '',
+    `Name: ${name}`,
+    `Callback number: ${phone}`,
+    `Service type: ${serviceType}`,
+    `Urgency: ${urgency}`,
+    `Location: ${location}`,
+    `Issue: ${issue}`,
+    '',
+    summary ? `Summary: ${summary}` : '',
+    transcript ? `Transcript:\n${transcript}` : '',
+  ].filter(Boolean).join('\n');
+  const bodyHtml = [
+    '<h2>Emergency Dispatch – New intake (phone)</h2>',
+    '<table style="border-collapse:collapse; max-width:560px;">',
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Name</td><td style="padding:6px 0;">${escapeHtml(name)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Callback number</td><td style="padding:6px 0;">${escapeHtml(phone)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Service type</td><td style="padding:6px 0;">${escapeHtml(serviceType)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Urgency</td><td style="padding:6px 0;">${escapeHtml(urgency)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Location</td><td style="padding:6px 0;">${escapeHtml(location)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Issue</td><td style="padding:6px 0;">${escapeHtml(issue)}</td></tr>`,
+    '</table>',
+    summary ? `<p><strong>Summary</strong><br><pre style="white-space:pre-wrap; font-family:inherit;">${escapeHtml(summary)}</pre></p>` : '',
+    transcript ? `<p><strong>Transcript</strong><br><pre style="white-space:pre-wrap; font-family:inherit; max-height:200px; overflow:auto;">${escapeHtml(transcript)}</pre></p>` : '',
+  ].filter(Boolean).join('\n');
+  try {
+    await sendEmail(toEmail.trim(), subject, bodyText, bodyHtml, 'Tavari Emergency Dispatch', null);
+    console.log('[Emergency Intake Email] Sent to', toEmail.trim());
+  } catch (err) {
+    console.error('[Emergency Intake Email] Failed:', err?.message || err);
+    throw err;
+  }
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
  * Send SMS notification (premium, 3x Telnyx cost)
  */
 export async function sendSMSNotification(business, callSession, summary, message = null) {

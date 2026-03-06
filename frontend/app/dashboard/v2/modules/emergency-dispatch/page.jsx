@@ -15,7 +15,7 @@ export default function EmergencyDispatchPage() {
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState([]);
   const [providers, setProviders] = useState([]);
-  const [config, setConfig] = useState({ emergency_phone_numbers: [], emergency_vapi_assistant_id: '', max_dispatch_attempts: 5 });
+  const [config, setConfig] = useState({ emergency_phone_numbers: [], emergency_vapi_assistant_id: '', max_dispatch_attempts: 5, notification_email: '' });
   const [analytics, setAnalytics] = useState(null);
   const [configSaving, setConfigSaving] = useState(false);
   const [configDirty, setConfigDirty] = useState(false);
@@ -42,6 +42,7 @@ export default function EmergencyDispatchPage() {
         emergency_phone_numbers: configRes.data?.emergency_phone_numbers ?? [],
         emergency_vapi_assistant_id: configRes.data?.emergency_vapi_assistant_id ?? '',
         max_dispatch_attempts: configRes.data?.max_dispatch_attempts ?? 5,
+        notification_email: configRes.data?.notification_email ?? '',
       });
       setRequests(requestsRes.data?.requests ?? []);
       setProviders(providersRes.data?.providers ?? []);
@@ -65,6 +66,7 @@ export default function EmergencyDispatchPage() {
         emergency_phone_numbers: Array.isArray(c.emergency_phone_numbers) ? c.emergency_phone_numbers : [],
         emergency_vapi_assistant_id: c.emergency_vapi_assistant_id || null,
         max_dispatch_attempts: c.max_dispatch_attempts ?? 5,
+        notification_email: (c.notification_email && String(c.notification_email).trim()) || null,
       };
       await emergencyNetworkAPI.updateConfig(toSend);
       setConfig(toSend);
@@ -310,6 +312,17 @@ export default function EmergencyDispatchPage() {
                   value={config.max_dispatch_attempts}
                   onChange={(e) => { setConfig((c) => ({ ...c, max_dispatch_attempts: parseInt(e.target.value, 10) || 5 })); setConfigDirty(true); }}
                 />
+              </div>
+              <div>
+                <label className="block text-sm text-slate-600 mb-1">Notification email (phone intake)</label>
+                <input
+                  type="email"
+                  className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="email@example.com"
+                  value={config.notification_email || ''}
+                  onChange={(e) => { setConfig((c) => ({ ...c, notification_email: e.target.value })); setConfigDirty(true); }}
+                />
+                <p className="text-xs text-slate-500 mt-1">Intake details from phone calls are sent to this address.</p>
               </div>
               {configDirty && (
                 <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
