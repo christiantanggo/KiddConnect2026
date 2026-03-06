@@ -1,6 +1,7 @@
 // server.js
 // Tavari Voice Agent - VAPI Integration
 // BULLETPROOF VERSION - Won't crash on startup
+// (touched to trigger backend deploy)
 
 // Polyfill for File API (required by undici/fetch in Node.js 18)
 // This must be done BEFORE any other imports
