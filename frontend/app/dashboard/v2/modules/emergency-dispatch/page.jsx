@@ -6,8 +6,8 @@ import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { emergencyNetworkAPI } from '@/lib/api';
 import {
-  ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Edit2, Trash2, Bot,
-  Settings, ListChecks, Wrench, RotateCcw, PhoneCall, Mail, Truck,
+  ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Trash2, Bot,
+  Settings, ListChecks, Wrench, RotateCcw, PhoneCall, Mail, Truck, GripVertical, ChevronUp, ChevronDown,
 } from 'lucide-react';
 
 const STATUS_OPTIONS = ['New', 'Contacting Providers', 'Accepted', 'Connected', 'Closed', 'Needs Manual Assist'];
@@ -24,13 +24,14 @@ const TABS = [
   { id: 'dispatched', label: 'Dispatched', icon: Truck },
 ];
 
-const AI_COLLECT_FIELDS = [
-  { key: 'caller_name', label: "Caller's name" },
-  { key: 'callback_phone', label: 'Callback number' },
-  { key: 'service_category', label: 'Service type (Plumbing, HVAC, Gas, Other)' },
-  { key: 'urgency_level', label: 'Urgency (Immediate Emergency, Same Day, Schedule)' },
-  { key: 'location', label: 'Address or postal code' },
-  { key: 'issue_summary', label: 'Brief description of the issue' },
+const BUILT_IN_KEYS = new Set(['caller_name', 'callback_phone', 'service_category', 'urgency_level', 'location', 'issue_summary']);
+const DEFAULT_INTAKE_FIELDS = [
+  { key: 'caller_name', label: "Caller's name", required: false, enabled: true },
+  { key: 'callback_phone', label: 'Callback phone number', required: true, enabled: true },
+  { key: 'service_category', label: 'Service type (Plumbing, HVAC, Gas, Other)', required: false, enabled: true },
+  { key: 'urgency_level', label: 'Urgency (Immediate Emergency, Same Day, Schedule)', required: false, enabled: true },
+  { key: 'location', label: 'Address or postal code', required: false, enabled: true },
+  { key: 'issue_summary', label: 'Brief description of the issue', required: false, enabled: true },
 ];
 
 export default function EmergencyDispatchPage() {
@@ -44,6 +45,7 @@ export default function EmergencyDispatchPage() {
     emergency_vapi_assistant_id: '',
     max_dispatch_attempts: 5,
     notification_email: '',
+    intake_fields: [...DEFAULT_INTAKE_FIELDS],
   });
   const [analytics, setAnalytics] = useState(null);
   const [configSaving, setConfigSaving] = useState(false);
@@ -76,6 +78,9 @@ export default function EmergencyDispatchPage() {
         emergency_vapi_assistant_id: configRes.data?.emergency_vapi_assistant_id ?? '',
         max_dispatch_attempts: configRes.data?.max_dispatch_attempts ?? 5,
         notification_email: configRes.data?.notification_email ?? '',
+        intake_fields: Array.isArray(configRes.data?.intake_fields) && configRes.data.intake_fields.length > 0
+          ? configRes.data.intake_fields
+          : [...DEFAULT_INTAKE_FIELDS],
       });
       setRequests(requestsRes.data?.requests ?? []);
       setProviders(providersRes.data?.providers ?? []);
@@ -101,6 +106,7 @@ export default function EmergencyDispatchPage() {
         emergency_vapi_assistant_id: c.emergency_vapi_assistant_id || null,
         max_dispatch_attempts: c.max_dispatch_attempts ?? 5,
         notification_email: (c.notification_email && String(c.notification_email).trim()) || null,
+        intake_fields: Array.isArray(c.intake_fields) ? c.intake_fields : [...DEFAULT_INTAKE_FIELDS],
       };
       await emergencyNetworkAPI.updateConfig(toSend);
       setConfig(toSend);
@@ -311,15 +317,121 @@ export default function EmergencyDispatchPage() {
           {activeTab === 'ai-collects' && (
             <section className="bg-white rounded-xl border border-slate-200 p-6">
               <h2 className="text-lg font-medium mb-4">What the AI collects</h2>
-              <p className="text-slate-600 text-sm mb-4">When someone calls your emergency number, the AI collects these details before ending the call.</p>
-              <ul className="space-y-2">
-                {AI_COLLECT_FIELDS.map(({ key, label }) => (
-                  <li key={key} className="flex items-center gap-2 text-sm">
-                    <ListChecks className="w-4 h-4 text-emerald-600 shrink-0" />
-                    {label}
-                  </li>
+              <p className="text-slate-600 text-sm mb-4">Configure which details the AI asks for on the phone. Reorder with the arrows. Rebuild the agent after saving to apply changes.</p>
+              <div className="space-y-2 mb-4">
+                {(config.intake_fields || []).map((field, index) => (
+                  <div key={field.key || index} className="flex items-center gap-2 flex-wrap p-2 rounded-lg border border-slate-200 bg-slate-50/50">
+                    <span className="text-slate-400" title="Drag to reorder"><GripVertical className="w-4 h-4" /></span>
+                    <label className="flex items-center gap-1 shrink-0">
+                      <input
+                        type="checkbox"
+                        checked={field.enabled !== false}
+                        onChange={(e) => {
+                          const next = (config.intake_fields || []).map((f, i) => i === index ? { ...f, enabled: e.target.checked } : f);
+                          setConfig((c) => ({ ...c, intake_fields: next }));
+                          setConfigDirty(true);
+                        }}
+                        className="rounded border-slate-300"
+                      />
+                      <span className="text-sm">Collect</span>
+                    </label>
+                    {BUILT_IN_KEYS.has(field.key) ? (
+                      <span className="flex-1 min-w-[200px] text-sm text-slate-700">{field.label}</span>
+                    ) : (
+                      <input
+                        type="text"
+                        className="flex-1 min-w-[180px] rounded border border-slate-300 px-2 py-1.5 text-sm"
+                        placeholder="Field label (e.g. Preferred contact time)"
+                        value={field.label || ''}
+                        onChange={(e) => {
+                          const next = (config.intake_fields || []).map((f, i) => i === index ? { ...f, label: e.target.value } : f);
+                          setConfig((c) => ({ ...c, intake_fields: next }));
+                          setConfigDirty(true);
+                        }}
+                      />
+                    )}
+                    <label className="flex items-center gap-1 shrink-0 text-sm text-slate-600">
+                      <input
+                        type="checkbox"
+                        checked={!!field.required}
+                        onChange={(e) => {
+                          const next = (config.intake_fields || []).map((f, i) => i === index ? { ...f, required: e.target.checked } : f);
+                          setConfig((c) => ({ ...c, intake_fields: next }));
+                          setConfigDirty(true);
+                        }}
+                        className="rounded border-slate-300"
+                      />
+                      Required
+                    </label>
+                    <div className="flex gap-0.5 shrink-0">
+                      <button
+                        type="button"
+                        disabled={index === 0}
+                        onClick={() => {
+                          if (index === 0) return;
+                          const next = [...(config.intake_fields || [])];
+                          [next[index - 1], next[index]] = [next[index], next[index - 1]];
+                          setConfig((c) => ({ ...c, intake_fields: next }));
+                          setConfigDirty(true);
+                        }}
+                        className="p-1 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
+                        title="Move up"
+                      >
+                        <ChevronUp className="w-4 h-4" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={index === (config.intake_fields || []).length - 1}
+                        onClick={() => {
+                          const arr = config.intake_fields || [];
+                          if (index >= arr.length - 1) return;
+                          const next = [...arr];
+                          [next[index], next[index + 1]] = [next[index + 1], next[index]];
+                          setConfig((c) => ({ ...c, intake_fields: next }));
+                          setConfigDirty(true);
+                        }}
+                        className="p-1 rounded border border-slate-300 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
+                        title="Move down"
+                      >
+                        <ChevronDown className="w-4 h-4" />
+                      </button>
+                    </div>
+                    {!BUILT_IN_KEYS.has(field.key) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next = (config.intake_fields || []).filter((_, i) => i !== index);
+                          setConfig((c) => ({ ...c, intake_fields: next }));
+                          setConfigDirty(true);
+                        }}
+                        className="p-1 text-red-600 hover:bg-red-50 rounded"
+                        title="Remove field"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
+                  </div>
                 ))}
-              </ul>
+              </div>
+              <div className="flex items-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = [...(config.intake_fields || []), { key: `custom_${Date.now()}`, label: 'New field', required: false, enabled: true }];
+                    setConfig((c) => ({ ...c, intake_fields: next }));
+                    setConfigDirty(true);
+                  }}
+                  className="inline-flex items-center gap-2 px-3 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700"
+                >
+                  <Plus className="w-4 h-4" /> Add field
+                </button>
+                {configDirty && (
+                  <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
+                    <Save className="w-4 h-4" /> {configSaving ? 'Saving...' : 'Save'}
+                  </button>
+                )}
+              </div>
+              {configSaveMessage && <p className={`text-sm mt-2 ${configSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{configSaveMessage}</p>}
             </section>
           )}
 

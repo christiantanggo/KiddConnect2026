@@ -312,6 +312,7 @@ export async function sendEmergencyIntakeEmail(toEmail, request, options = {}) {
   const urgency = request.urgency_level || 'Not provided';
   const location = request.location || 'Not provided';
   const issue = request.issue_summary || 'Not provided';
+  const customIntake = request.custom_intake && typeof request.custom_intake === 'object' ? request.custom_intake : {};
   const subject = `Emergency Dispatch: ${serviceType} – ${urgency}`;
   const bodyText = [
     'Emergency Dispatch – New intake (phone)',
@@ -322,19 +323,24 @@ export async function sendEmergencyIntakeEmail(toEmail, request, options = {}) {
     `Urgency: ${urgency}`,
     `Location: ${location}`,
     `Issue: ${issue}`,
+    ...Object.entries(customIntake).map(([k, v]) => `${k}: ${v}`),
     '',
     summary ? `Summary: ${summary}` : '',
     transcript ? `Transcript:\n${transcript}` : '',
   ].filter(Boolean).join('\n');
-  const bodyHtml = [
-    '<h2>Emergency Dispatch – New intake (phone)</h2>',
-    '<table style="border-collapse:collapse; max-width:560px;">',
+  const bodyHtmlRows = [
     `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Name</td><td style="padding:6px 0;">${escapeHtml(name)}</td></tr>`,
     `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Callback number</td><td style="padding:6px 0;">${escapeHtml(phone)}</td></tr>`,
     `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Service type</td><td style="padding:6px 0;">${escapeHtml(serviceType)}</td></tr>`,
     `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Urgency</td><td style="padding:6px 0;">${escapeHtml(urgency)}</td></tr>`,
     `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Location</td><td style="padding:6px 0;">${escapeHtml(location)}</td></tr>`,
     `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Issue</td><td style="padding:6px 0;">${escapeHtml(issue)}</td></tr>`,
+    ...Object.entries(customIntake).map(([k, v]) => `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">${escapeHtml(k)}</td><td style="padding:6px 0;">${escapeHtml(String(v))}</td></tr>`),
+  ];
+  const bodyHtml = [
+    '<h2>Emergency Dispatch – New intake (phone)</h2>',
+    '<table style="border-collapse:collapse; max-width:560px;">',
+    ...bodyHtmlRows,
     '</table>',
     summary ? `<p><strong>Summary</strong><br><pre style="white-space:pre-wrap; font-family:inherit;">${escapeHtml(summary)}</pre></p>` : '',
     transcript ? `<p><strong>Transcript</strong><br><pre style="white-space:pre-wrap; font-family:inherit; max-height:200px; overflow:auto;">${escapeHtml(transcript)}</pre></p>` : '',

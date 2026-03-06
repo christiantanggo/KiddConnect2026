@@ -22,7 +22,7 @@ function clampUrgency(u) {
 
 /**
  * Create a service request (form or SMS intake).
- * @param {Object} params - caller_name, callback_phone, service_category, urgency_level, location, issue_summary, preferred_contact_method, access_notes, intake_channel
+ * @param {Object} params - caller_name, callback_phone, service_category, urgency_level, location, issue_summary, preferred_contact_method, access_notes, intake_channel, custom_intake
  */
 export async function createServiceRequest(params) {
   const {
@@ -35,6 +35,7 @@ export async function createServiceRequest(params) {
     preferred_contact_method = null,
     access_notes = null,
     intake_channel = 'form',
+    custom_intake = null,
   } = params;
 
   if (!callback_phone || !String(callback_phone).trim()) {
@@ -54,6 +55,9 @@ export async function createServiceRequest(params) {
     status: 'New',
     updated_at: new Date().toISOString(),
   };
+  if (custom_intake && typeof custom_intake === 'object' && Object.keys(custom_intake).length > 0) {
+    payload.custom_intake = custom_intake;
+  }
 
   const { data, error } = await supabaseClient
     .from('emergency_service_requests')

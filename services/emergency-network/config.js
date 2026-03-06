@@ -1,5 +1,5 @@
 /**
- * Emergency Network config: phone numbers and VAPI assistant id.
+ * Emergency Network config: phone numbers, VAPI assistant id, intake_fields (what the AI collects).
  * Used to route calls/SMS to EmergencyNetworkAgent without touching existing agent.
  */
 import { supabaseClient } from '../../config/database.js';
@@ -8,6 +8,16 @@ const CONFIG_KEY = 'settings';
 let cachedConfig = null;
 let cacheTime = 0;
 const CACHE_MS = 30 * 1000; // 30s
+
+/** Default intake fields for "what the AI collects". Order and enabled state are configurable. */
+export const DEFAULT_INTAKE_FIELDS = [
+  { key: 'caller_name', label: "Caller's name", required: false, enabled: true },
+  { key: 'callback_phone', label: 'Callback phone number', required: true, enabled: true },
+  { key: 'service_category', label: 'Service type (Plumbing, HVAC, Gas, Other)', required: false, enabled: true },
+  { key: 'urgency_level', label: 'Urgency (Immediate Emergency, Same Day, Schedule)', required: false, enabled: true },
+  { key: 'location', label: 'Address or postal code', required: false, enabled: true },
+  { key: 'issue_summary', label: 'Brief description of the issue', required: false, enabled: true },
+];
 
 function normalizePhone(phone) {
   if (!phone || typeof phone !== 'string') return '';
@@ -29,7 +39,13 @@ function normalizePhone(phone) {
 export async function getEmergencyConfig() {
   const now = Date.now();
   if (cachedConfig && (now - cacheTime) < CACHE_MS) return cachedConfig;
-  const empty = { emergency_phone_numbers: [], emergency_vapi_assistant_id: null, max_dispatch_attempts: 5, notification_email: null };
+  const empty = {
+    emergency_phone_numbers: [],
+    emergency_vapi_assistant_id: null,
+    max_dispatch_attempts: 5,
+    notification_email: null,
+    intake_fields: [...DEFAULT_INTAKE_FIELDS],
+  };
   try {
     const { data, error } = await supabaseClient
       .from('emergency_network_config')
@@ -48,11 +64,15 @@ export async function getEmergencyConfig() {
     }
     const value = data?.value || {};
     const fromEnv = process.env.EMERGENCY_DISPATCH_NOTIFICATION_EMAIL || null;
+    const intakeFields = Array.isArray(value.intake_fields) && value.intake_fields.length > 0
+      ? value.intake_fields
+      : [...DEFAULT_INTAKE_FIELDS];
     cachedConfig = {
       emergency_phone_numbers: Array.isArray(value.emergency_phone_numbers) ? value.emergency_phone_numbers : [],
       emergency_vapi_assistant_id: value.emergency_vapi_assistant_id || null,
       max_dispatch_attempts: typeof value.max_dispatch_attempts === 'number' ? value.max_dispatch_attempts : 5,
       notification_email: (value.notification_email && String(value.notification_email).trim()) || fromEnv || null,
+      intake_fields: intakeFields,
     };
     cacheTime = now;
     return cachedConfig;

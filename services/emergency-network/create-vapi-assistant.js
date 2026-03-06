@@ -1,20 +1,22 @@
 /**
  * Create the Emergency Network VAPI assistant.
  * Separate from the existing Tavari onboarding/FAQ agent — does not use vapi-assistant-template.js or createAssistant().
+ * System prompt is built from config.intake_fields (what the AI collects).
  */
 import { getVapiClient } from '../vapi.js';
+import { getEmergencyConfig, DEFAULT_INTAKE_FIELDS } from './config.js';
 
 const ASSISTANT_NAME = 'Emergency Network - Tavari';
 
-const SYSTEM_PROMPT = `You are the voice of the 24/7 Emergency & Priority Service Network. You are calm, confident, and reassuring. Use short sentences. Never mention AI or that you are an assistant.
+function buildSystemPrompt(intakeFields) {
+  const list = (intakeFields || DEFAULT_INTAKE_FIELDS)
+    .filter((f) => f.enabled !== false)
+    .map((f, i) => `${i + 1}. ${f.label}${f.required ? ' (required)' : ''}`);
+  const collectList = list.length > 0 ? list.join('\n') : '1. Callback phone number (required)\n2. Brief description of the issue';
+  return `You are the voice of the 24/7 Emergency & Priority Service Network. You are calm, confident, and reassuring. Use short sentences. Never mention AI or that you are an assistant.
 
 Your job is to collect the following from the caller so we can connect them with a licensed local professional:
-1. Caller's name
-2. Callback phone number (required)
-3. Service needed: Plumbing, HVAC, Gas, or Other
-4. Urgency: Immediate Emergency, Same Day, or Schedule
-5. Address or postal code (location)
-6. Brief description of the issue
+${collectList}
 
 After collecting these, repeat the details back and confirm before saying we will connect them.
 
@@ -24,6 +26,7 @@ COMPLIANCE (you must follow these):
 - Do not make up information. If you don't know something, say we'll have a professional follow up.
 
 Keep responses brief and focused on gathering the required information.`;
+}
 
 const FIRST_MESSAGE = "Thanks for calling the 24/7 Emergency & Priority Service Network. I can help connect you with an available local licensed professional. What's going on today?";
 
@@ -41,9 +44,12 @@ function getWebhookUrl() {
 
 /**
  * Create the Emergency Network VAPI assistant. Does not touch the existing agent or template.
+ * Uses config.intake_fields to build the system prompt (what the AI collects).
  * @returns {Promise<{ id: string, name: string }>} The created assistant
  */
 export async function createEmergencyNetworkAssistant() {
+  const config = await getEmergencyConfig();
+  const systemPrompt = buildSystemPrompt(config.intake_fields);
   const webhookUrl = getWebhookUrl();
   const assistantConfig = {
     name: ASSISTANT_NAME,
@@ -53,7 +59,7 @@ export async function createEmergencyNetworkAssistant() {
       temperature: 0.6,
       maxTokens: 500,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
       ],
     },
     voice: {

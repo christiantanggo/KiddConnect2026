@@ -219,12 +219,20 @@ router.post('/create-agent', async (req, res) => {
  */
 router.put('/config', express.json(), async (req, res) => {
   try {
-    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email } = req.body || {};
+    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email, intake_fields } = req.body || {};
     const updates = {};
     if (Array.isArray(emergency_phone_numbers)) updates.emergency_phone_numbers = emergency_phone_numbers;
     if (emergency_vapi_assistant_id !== undefined) updates.emergency_vapi_assistant_id = emergency_vapi_assistant_id || null;
     if (typeof max_dispatch_attempts === 'number') updates.max_dispatch_attempts = max_dispatch_attempts;
     if (notification_email !== undefined) updates.notification_email = notification_email ? String(notification_email).trim() || null : null;
+    if (intake_fields !== undefined && Array.isArray(intake_fields)) {
+      updates.intake_fields = intake_fields.map((f) => ({
+        key: String(f.key || '').trim() || undefined,
+        label: String(f.label || '').trim() || undefined,
+        required: !!f.required,
+        enabled: f.enabled !== false,
+      })).filter((f) => f.key);
+    }
 
     const { data: row, error } = await supabaseClient
       .from('emergency_network_config')
@@ -268,7 +276,7 @@ router.get('/requests', async (req, res) => {
   try {
     const { data, error } = await supabaseClient
       .from('emergency_service_requests')
-      .select('id, caller_name, callback_phone, service_category, urgency_level, location, issue_summary, intake_channel, status, accepted_provider_id, created_at, updated_at')
+      .select('id, caller_name, callback_phone, service_category, urgency_level, location, issue_summary, intake_channel, status, accepted_provider_id, created_at, updated_at, custom_intake')
       .order('created_at', { ascending: false })
       .limit(200);
 
