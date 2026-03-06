@@ -21,7 +21,6 @@ const TABS = [
   { id: 'service-types', label: 'Services we collect for', icon: Layers },
   { id: 'ai-collects', label: 'What the AI collects', icon: ListChecks },
   { id: 'services', label: 'Emergency services', icon: Wrench },
-  { id: 'rebuild-agent', label: 'Rebuild agent', icon: RotateCcw },
   { id: 'recent-calls', label: 'Recent calls', icon: PhoneCall },
   { id: 'recent-messages', label: 'Recent messages', icon: Mail },
   { id: 'dispatched', label: 'Dispatched', icon: Truck },
@@ -226,10 +225,17 @@ export default function EmergencyDispatchPage() {
               <ArrowLeft className="w-5 h-5" />
             </Link>
             <h1 className="text-2xl font-semibold">Emergency Dispatch</h1>
-            <button type="button" onClick={load} className="ml-auto p-2 rounded-lg border border-slate-200 hover:bg-slate-50" title="Refresh">
-              <RefreshCw className="w-4 h-4" />
-            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button type="button" onClick={createAgent} disabled={creatingAgent} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white hover:bg-slate-50 disabled:opacity-60" title="Create or replace VAPI assistant">
+                {creatingAgent ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <RotateCcw className="w-3.5 h-3.5" />}
+                Rebuild Agent
+              </button>
+              <button type="button" onClick={load} className="p-2 rounded-lg border border-slate-200 hover:bg-slate-50" title="Refresh">
+                <RefreshCw className="w-4 h-4" />
+              </button>
+            </div>
           </div>
+          {createAgentError && <p className="text-red-600 text-sm mb-2">Rebuild: {createAgentError}</p>}
           <p className="text-slate-600 mb-4">
             24/7 Emergency & Priority Service Network. Public page: <a href="/emergency" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">/emergency</a>
           </p>
@@ -655,39 +661,6 @@ export default function EmergencyDispatchPage() {
                     )}
                   </tbody>
                 </table>
-              </div>
-            </section>
-          )}
-
-          {/* Rebuild agent */}
-          {activeTab === 'rebuild-agent' && (
-            <section className="bg-white rounded-xl border border-slate-200 p-6">
-              <h2 className="text-lg font-medium mb-4">Rebuild agent</h2>
-              <p className="text-slate-600 text-sm mb-4">Create or replace the Emergency Network VAPI assistant. Calls to your emergency number use this agent.</p>
-              {config.emergency_vapi_assistant_id ? (
-                <div className="space-y-2 mb-4">
-                  <p className="text-sm text-slate-600">Current assistant ID:</p>
-                  <code className="block px-3 py-2 bg-slate-100 rounded text-sm font-mono break-all">{config.emergency_vapi_assistant_id}</code>
-                  <button type="button" onClick={createAgent} disabled={creatingAgent} className="inline-flex items-center gap-2 px-4 py-2 bg-amber-600 text-white rounded-lg text-sm hover:bg-amber-700 disabled:opacity-60">
-                    {creatingAgent ? <Loader className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
-                    {creatingAgent ? 'Creating…' : 'Create new (replace)'}
-                  </button>
-                </div>
-              ) : (
-                <button type="button" onClick={createAgent} disabled={creatingAgent} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
-                  {creatingAgent ? <Loader className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4" />}
-                  {creatingAgent ? 'Creating agent…' : 'Create Emergency Network agent'}
-                </button>
-              )}
-              {createAgentError && <p className="text-red-600 text-sm mt-2">{createAgentError}</p>}
-              <div className="mt-4">
-                <label className="block text-sm text-slate-600 mb-1">Or paste an existing VAPI assistant ID</label>
-                <input type="text" className="w-full rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Paste assistant ID" value={config.emergency_vapi_assistant_id || ''} onChange={(e) => { setConfig((c) => ({ ...c, emergency_vapi_assistant_id: e.target.value })); setConfigDirty(true); }} />
-                {configDirty && (
-                  <button type="button" onClick={saveConfig} disabled={configSaving} className="mt-2 inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700">
-                    <Save className="w-4 h-4" /> Save
-                  </button>
-                )}
               </div>
             </section>
           )}
