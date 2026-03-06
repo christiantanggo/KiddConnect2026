@@ -720,16 +720,22 @@ export async function scrapeAllSources(businessId, channelId = null) {
 
     if (error) throw error;
 
-    // Skip sources in disabled channels (orbix_channels.enabled = false)
-    const { data: enabledChannels } = await supabaseClient
-      .from('orbix_channels')
-      .select('id')
-      .eq('business_id', businessId)
-      .or('enabled.eq.true,enabled.is.null');
-    const enabledChannelIds = new Set((enabledChannels || []).map(c => c.id));
-    const sources = (rawSources || []).filter(
-      s => s.channel_id == null || enabledChannelIds.has(s.channel_id)
-    );
+    // When scraping a specific channel, use its sources as-is (user explicitly asked to scrape that channel).
+    // When scraping all (no channelId), skip sources in disabled channels (orbix_channels.enabled = false).
+    let sources;
+    if (channelId) {
+      sources = rawSources || [];
+    } else {
+      const { data: enabledChannels } = await supabaseClient
+        .from('orbix_channels')
+        .select('id')
+        .eq('business_id', businessId)
+        .or('enabled.eq.true,enabled.is.null');
+      const enabledChannelIds = new Set((enabledChannels || []).map(c => c.id));
+      sources = (rawSources || []).filter(
+        s => s.channel_id == null || enabledChannelIds.has(s.channel_id)
+      );
+    }
     
     console.log(`[Orbix Scraper] ========== SCRAPING START ==========`);
     console.log(`[Orbix Scraper] Business ID: ${businessId}`);
