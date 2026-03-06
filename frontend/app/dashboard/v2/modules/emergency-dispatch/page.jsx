@@ -8,6 +8,7 @@ import { emergencyNetworkAPI } from '@/lib/api';
 import {
   ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Trash2, Bot,
   Settings, ListChecks, Wrench, RotateCcw, PhoneCall, Mail, Truck, GripVertical, ChevronUp, ChevronDown,
+  LayoutDashboard,
 } from 'lucide-react';
 
 const STATUS_OPTIONS = ['New', 'Contacting Providers', 'Accepted', 'Connected', 'Closed', 'Needs Manual Assist'];
@@ -15,6 +16,7 @@ const TRADE_TYPES = ['Plumbing', 'HVAC', 'Gas', 'Other'];
 const TIER_OPTIONS = ['premium', 'priority', 'basic'];
 
 const TABS = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'settings', label: 'Settings', icon: Settings },
   { id: 'ai-collects', label: 'What the AI collects', icon: ListChecks },
   { id: 'services', label: 'Emergency services', icon: Wrench },
@@ -35,7 +37,7 @@ const DEFAULT_INTAKE_FIELDS = [
 ];
 
 export default function EmergencyDispatchPage() {
-  const [activeTab, setActiveTab] = useState('settings');
+  const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
   const [requests, setRequests] = useState([]);
   const [providers, setProviders] = useState([]);
@@ -249,6 +251,103 @@ export default function EmergencyDispatchPage() {
               </button>
             ))}
           </div>
+
+          {/* Dashboard home (like AI phone agent) */}
+          {activeTab === 'dashboard' && (
+            <>
+              {(!config.notification_email || !String(config.notification_email).trim()) && (
+                <div className="mb-6 p-4 rounded-xl border border-amber-200 bg-amber-50">
+                  <h3 className="text-sm font-semibold text-amber-800 mb-1">Set notification email</h3>
+                  <p className="text-sm text-amber-700 mb-2">Intake details from phone calls are emailed to you. Add an address in Settings.</p>
+                  <button type="button" onClick={() => setActiveTab('settings')} className="text-sm font-medium text-amber-800 underline">Go to Settings →</button>
+                </div>
+              )}
+              {/* Action cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7 gap-4 mb-8">
+                {TABS.filter((t) => t.id !== 'dashboard').map(({ id, label, icon: Icon }) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setActiveTab(id)}
+                    className="p-4 rounded-xl border border-slate-200 bg-white text-center transition-all hover:shadow-md hover:border-emerald-300 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                  >
+                    <div className="flex justify-center mb-2">
+                      <Icon className="w-8 h-8 text-emerald-600" />
+                    </div>
+                    <h3 className="text-sm font-semibold text-slate-800">{label}</h3>
+                  </button>
+                ))}
+              </div>
+              {/* Stats cards */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+                {(config.emergency_phone_numbers || [])[0] && (
+                  <div className="p-5 rounded-xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white shadow-lg">
+                    <Phone className="w-8 h-8 mb-2 opacity-90" />
+                    <h3 className="text-sm font-semibold opacity-90">Emergency line</h3>
+                    <p className="text-lg font-bold mt-1">{(config.emergency_phone_numbers || [])[0]}</p>
+                    <p className="text-xs opacity-80 mt-1">Primary number</p>
+                  </div>
+                )}
+                <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm border-l-4 border-l-emerald-500">
+                  <h3 className="text-sm font-semibold text-slate-500">Requests today</h3>
+                  <p className="text-3xl font-bold text-slate-800 mt-1">{analytics?.requests_today ?? 0}</p>
+                </div>
+                <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm border-l-4 border-l-emerald-500">
+                  <h3 className="text-sm font-semibold text-slate-500">Total requests</h3>
+                  <p className="text-3xl font-bold text-slate-800 mt-1">{analytics?.total_requests ?? 0}</p>
+                </div>
+                <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm border-l-4 border-l-emerald-500">
+                  <h3 className="text-sm font-semibold text-slate-500">Acceptance rate</h3>
+                  <p className="text-3xl font-bold text-slate-800 mt-1">{analytics?.acceptance_rate ?? 0}%</p>
+                </div>
+              </div>
+              {/* Recent activity: two columns */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-slate-800">Recent calls</h3>
+                    <button type="button" onClick={() => setActiveTab('recent-calls')} className="text-sm font-medium text-emerald-600 hover:underline">View all →</button>
+                  </div>
+                  {recentCalls.length === 0 ? (
+                    <p className="text-center py-6 text-slate-500">No phone calls yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {recentCalls.slice(0, 5).map((r) => (
+                        <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100">
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
+                            <p className="text-xs text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : ''} · {r.service_category}</p>
+                          </div>
+                          <span className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700">{r.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-slate-800">Recent messages</h3>
+                    <button type="button" onClick={() => setActiveTab('recent-messages')} className="text-sm font-medium text-emerald-600 hover:underline">View all →</button>
+                  </div>
+                  {recentMessages.length === 0 ? (
+                    <p className="text-center py-6 text-slate-500">No form or SMS requests yet</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {recentMessages.slice(0, 5).map((r) => (
+                        <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100">
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
+                            <p className="text-xs text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : ''} · {r.intake_channel}</p>
+                          </div>
+                          <span className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700">{r.status}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Settings */}
           {activeTab === 'settings' && (
