@@ -203,11 +203,14 @@ export async function runScrapeJob() {
 
 /** Max retries when all scraped items are duplicates (e.g. dad joke) — keep scraping until we get new ones. */
 const SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX = 15;
+/** When channel scrape returns 0 items but has sources (e.g. trivia generator failed), retry this many times. */
+const SCRAPE_RETRY_WHEN_ZERO_ITEMS_MAX = 3;
 
 /**
  * POST /api/v2/orbix-network/jobs/scrape
  * Scrape sources. If body.channel_id and active_business_id, scrape only that channel for that business.
- * When all items are duplicates, retries automatically until at least one new item is saved or max retries.
+ * - When all items are duplicates: retries until at least one new item is saved or max retries.
+ * - When 0 items but channel has sources (e.g. trivia/facts generator returned null): retries to handle transient failures.
  */
 router.post('/scrape', async (req, res) => {
   try {
@@ -221,18 +224,30 @@ router.post('/scrape', async (req, res) => {
       let allSourceResults = [];
       let sourcesProcessed = 0;
       let attempt = 0;
+      let zeroItemAttempts = 0;
       do {
         attempt++;
         const raw = await scrapeAllSources(businessId, channelId);
         const scraped = raw.scraped ?? 0;
         const saved = raw.saved ?? 0;
+        const hasSources = (raw.sources_processed ?? 0) > 0;
         totalScraped += scraped;
         totalSaved += saved;
         if (raw.source_results?.length) allSourceResults.push(...raw.source_results);
         sourcesProcessed = raw.sources_processed ?? 0;
+
         const allDuplicates = scraped > 0 && saved === 0;
-        if (!allDuplicates || totalSaved > 0 || attempt >= SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX) break;
-        console.log(`[Orbix Jobs] Scrape attempt ${attempt}: all duplicates, retrying...`);
+        const zeroItemsWithSources = scraped === 0 && hasSources;
+
+        if (allDuplicates) {
+          if (totalSaved > 0 || attempt >= SCRAPE_RETRY_WHEN_ALL_DUPLICATES_MAX) break;
+          console.log(`[Orbix Jobs] Scrape attempt ${attempt}: all duplicates, retrying...`);
+        } else if (zeroItemsWithSources && zeroItemAttempts < SCRAPE_RETRY_WHEN_ZERO_ITEMS_MAX) {
+          zeroItemAttempts++;
+          console.log(`[Orbix Jobs] Scrape attempt ${attempt}: 0 items from ${sourcesProcessed} source(s) (e.g. generator failed), retry ${zeroItemAttempts}/${SCRAPE_RETRY_WHEN_ZERO_ITEMS_MAX}...`);
+        } else {
+          break;
+        }
       } while (true);
       result = {
         total_scraped: totalScraped,
