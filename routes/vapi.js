@@ -1226,7 +1226,7 @@ async function handleCallEnd(event) {
       const payload = {
         caller_name: extracted.caller_name || null,
         callback_phone: extracted.callback_phone,
-        service_category: extracted.service_category || "Other",
+        service_category: extracted.service_category || "Plumbing",
         urgency_level: extracted.urgency_level || "Schedule",
         location: extracted.location || null,
         issue_summary: extracted.issue_summary || (summary || transcript).slice(0, 2000) || null,
@@ -2872,7 +2872,7 @@ function extractEmergencyFromTranscript(transcript, summary, callerNumberFromCal
   const result = {
     caller_name: null,
     callback_phone: callerNumberFromCall && String(callerNumberFromCall).trim() ? String(callerNumberFromCall).trim() : null,
-    service_category: "Other",
+    service_category: "Plumbing", // Plumbing-only focus; only override if they clearly say HVAC/Gas
     urgency_level: "Schedule",
     location: null,
     issue_summary: (summary || transcript || "").slice(0, 2000).trim() || null,

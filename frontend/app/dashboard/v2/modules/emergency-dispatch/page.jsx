@@ -28,7 +28,7 @@ const BUILT_IN_KEYS = new Set(['caller_name', 'callback_phone', 'service_categor
 const DEFAULT_INTAKE_FIELDS = [
   { key: 'caller_name', label: "Caller's name", required: false, enabled: true },
   { key: 'callback_phone', label: 'Callback phone number', required: true, enabled: true },
-  { key: 'service_category', label: 'Service type (Plumbing, HVAC, Gas, Other)', required: false, enabled: true },
+  { key: 'service_category', label: 'Confirm: plumbing (pipe, drain, water heater, leak, etc.)', required: false, enabled: true },
   { key: 'urgency_level', label: 'Urgency (Immediate Emergency, Same Day, Schedule)', required: false, enabled: true },
   { key: 'location', label: 'Address or postal code', required: false, enabled: true },
   { key: 'issue_summary', label: 'Brief description of the issue', required: false, enabled: true },
