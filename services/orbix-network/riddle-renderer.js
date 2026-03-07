@@ -197,9 +197,26 @@ export async function processRiddleRenderJob(render, story, script) {
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
     : {};
 
-  const hook      = (script?.hook || content?.hook || 'Can you solve this?').trim();
-  const riddleText = (content?.riddle_text || '').trim().slice(0, 250);
-  const answerText = (content?.answer_text || '').trim().slice(0, 60);
+  let riddleText = (content?.riddle_text || '').trim().slice(0, 250);
+  let answerText = (content?.answer_text || '').trim().slice(0, 60);
+
+  // Fallback: script may have been created/rewritten without content_json (e.g. latest script on restart). Load from raw item so we never lose the riddle.
+  if ((!riddleText || !answerText) && story?.raw_item_id) {
+    const { data: rawItem } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('snippet')
+      .eq('id', story.raw_item_id)
+      .single();
+    if (rawItem?.snippet) {
+      try {
+        const snippet = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+        if (!riddleText && snippet.riddle_text) riddleText = (snippet.riddle_text || '').trim().slice(0, 250);
+        if (!answerText && snippet.answer_text) answerText = (snippet.answer_text || '').trim().slice(0, 60);
+      } catch (_) { /* non-fatal */ }
+    }
+  }
+
+  const hook = (script?.hook || content?.hook || 'Can you solve this?').trim();
 
   if (!riddleText || !answerText) {
     throw new Error(`Riddle render missing content: riddle_text="${riddleText}" answer_text="${answerText}"`);
