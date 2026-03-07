@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useState, useRef, Suspense } from 'react';
 import { useSearchParams, usePathname } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
@@ -41,10 +41,19 @@ function KidQuizSettingsInner() {
   const [ytRedirectUriManual, setYtRedirectUriManual] = useState(null);
   const [connectingManual, setConnectingManual] = useState(false);
   const [connectingYt, setConnectingYt] = useState(false);
+  const youtubeSectionRef = useRef(null);
 
   useEffect(() => {
     loadData();
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get('highlight') !== 'youtube') return;
+    const t = setTimeout(() => {
+      youtubeSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+    return () => clearTimeout(t);
+  }, [searchParams]);
 
   useEffect(() => {
     if (searchParams.get('youtube_connected') === 'true') {
@@ -250,7 +259,7 @@ function KidQuizSettingsInner() {
 
           <div className="space-y-5">
             {/* Section 1: Upload OAuth app — same as Orbix "Auto-upload OAuth app" */}
-            <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+            <div ref={youtubeSectionRef} className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
               <h2 className="font-bold text-base mb-2" style={{ color: 'var(--color-text-main)' }}>📺 Upload OAuth app</h2>
               <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
                 Use a Google Cloud project for Kid Quiz so it gets its own quota. Create a project, enable YouTube Data API v3, add OAuth credentials, and set the redirect URI to your app&apos;s callback URL (see below).

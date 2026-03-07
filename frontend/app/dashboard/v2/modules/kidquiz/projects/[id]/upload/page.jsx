@@ -79,6 +79,11 @@ export default function UploadPage() {
 
   const isPublished = project?.status === 'PUBLISHED' || publish?.publish_status === 'PUBLISHED';
   const isUploading = project?.status === 'UPLOADING' || publish?.publish_status === 'UPLOADING' || uploading;
+  const isFailed = publish?.publish_status === 'FAILED';
+  const uploadErrorMessage = publish?.error_message || '';
+  const needsYoutubeReconnect = isFailed && (
+    /re-connect YouTube|invalid_client|OAuth app|YouTube was connected with a different/i.test(uploadErrorMessage)
+  );
   const canUpload = project?.status === 'READY' && ytStatus?.connected;
 
   return (
@@ -167,6 +172,26 @@ export default function UploadPage() {
                 <div className="text-center py-4">
                   <div className="text-4xl mb-2">&#x2B06;&#xFE0F;</div>
                   <p className="font-semibold" style={{ color: '#6366f1' }}>Uploading to YouTube... this may take a minute.</p>
+                </div>
+              )}
+
+              {isFailed && (
+                <div className="rounded-xl p-4 mb-4" style={{ background: '#fef2f2', border: '1px solid #fecaca' }}>
+                  <p className="font-semibold text-sm mb-1" style={{ color: '#b91c1c' }}>Upload failed</p>
+                  <p className="text-sm mb-3" style={{ color: '#991b1b' }}>
+                    {needsYoutubeReconnect
+                      ? 'YouTube is connected with a different app than the server is using. Re-connect YouTube in Settings to fix it—no need to change anything in Railway.'
+                      : uploadErrorMessage}
+                  </p>
+                  {needsYoutubeReconnect && (
+                    <Link
+                      href="/dashboard/v2/modules/kidquiz/settings?highlight=youtube"
+                      className="inline-block px-4 py-2.5 rounded-xl font-bold text-white text-sm"
+                      style={{ background: '#dc2626' }}
+                    >
+                      Re-connect YouTube in Settings
+                    </Link>
+                  )}
                 </div>
               )}
 
