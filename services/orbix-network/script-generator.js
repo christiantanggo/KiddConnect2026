@@ -857,6 +857,12 @@ export async function generateAndSaveScript(businessId, story) {
   const startTime = Date.now();
   console.log(`[Script Generator] ========== generateAndSaveScript START ==========`);
   console.log(`[Script Generator] Story ID: ${story.id}, Business ID: ${businessId}`);
+
+  // Riddle/trivia/facts/mindteaser/dadjoke must use ensureTriviaScript (script from raw item snippet). This generator has no riddle branch and would produce an explainer.
+  const pipelineOnly = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story?.category || '').toLowerCase());
+  if (pipelineOnly) {
+    throw new Error(`Script for ${story?.category || 'this content type'} must be created via ensureTriviaScript (pipeline), not generateAndSaveScript. Use the pipeline or ensureTriviaScript.`);
+  }
   
   try {
     // Get raw item data

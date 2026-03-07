@@ -12,6 +12,7 @@ import { supabaseClient } from '../../config/database.js';
 import { scrapeAllSources } from '../../services/orbix-network/scraper.js';
 import { processRawItem } from '../../services/orbix-network/classifier.js';
 import { generateAndSaveScript } from '../../services/orbix-network/script-generator.js';
+import { ensureTriviaScript } from '../../services/orbix-network/pipeline-scheduler.js';
 import { processRenderJob, selectTemplate, selectBackground } from '../../services/orbix-network/video-renderer.js';
 import { publishVideo, getVideoAnalytics, SKIP_YOUTUBE_UPLOAD_CODE } from '../../services/orbix-network/youtube-publisher.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
@@ -342,8 +343,13 @@ export async function runProcessJob() {
             const story = await processRawItem(businessId, rawItem);
             
             if (story) {
-              // Generate script for the story
-              await generateAndSaveScript(businessId, story);
+              // Riddle/trivia/facts/mindteaser/dadjoke: script from raw item snippet. Others: LLM script generator.
+              const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story.category || '').toLowerCase());
+              if (usePipelineScript) {
+                await ensureTriviaScript(businessId, story);
+              } else {
+                await generateAndSaveScript(businessId, story);
+              }
               
               // Check if review mode is enabled
               const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, 'orbix-network');

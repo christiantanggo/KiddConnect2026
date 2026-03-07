@@ -15,10 +15,10 @@ import { selectTemplate, selectBackground } from './video-renderer.js';
 const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
 
 /**
- * For trivia/facts stories the voice_script is embedded in the raw item's snippet JSON.
- * Extract it and save directly to orbix_scripts so tryRenderStory can find it.
+ * For trivia/facts/riddle/mindteaser/dadjoke the script is in the raw item's snippet JSON.
+ * Extract it and save to orbix_scripts. Exported so process job and force-process/allow-story use it instead of generateAndSaveScript (which would create an explainer for riddles).
  */
-async function ensureTriviaScript(businessId, story) {
+export async function ensureTriviaScript(businessId, story) {
   // Check if a script already exists
   const { data: existing } = await supabaseClient
     .from('orbix_scripts')
@@ -271,6 +271,19 @@ export async function runAutomatedPipeline(businessId) {
     }
     const other = eligibleStories.filter(s => !EVERGREEN_CATEGORIES.includes(s.category))[0];
     if (other && !storiesToRender.includes(other)) storiesToRender.push(other);
+
+    // Render in channel creation order (same as dropdown); new categories/channels slot in by creation order
+    const { data: channelRows } = await supabaseClient
+      .from('orbix_channels')
+      .select('id')
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: true });
+    const channelOrder = (channelRows || []).map(r => r.id);
+    storiesToRender.sort((a, b) => {
+      const iA = a.channel_id == null ? 1e9 : channelOrder.indexOf(a.channel_id);
+      const iB = b.channel_id == null ? 1e9 : channelOrder.indexOf(b.channel_id);
+      return iA - iB;
+    });
 
     // FALLBACK: If no stories selected, try creating one from highest-scoring raw item
     if (storiesToRender.length === 0) {

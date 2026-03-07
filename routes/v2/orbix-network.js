@@ -1402,6 +1402,15 @@ router.post('/stories/:id/generate-script', async (req, res) => {
       category: story.category,
       shock_score: story.shock_score
     });
+
+    // Riddle/trivia/facts/mindteaser/dadjoke scripts come from the pipeline (raw item snippet). generateAndSaveScript has no riddle branch and would replace the riddle with an explainer — do not allow.
+    const scriptFromPipeline = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story.category || '').toLowerCase());
+    if (scriptFromPipeline) {
+      return res.status(400).json({
+        error: 'Script cannot be rewritten for this content type',
+        message: 'Riddles, trivia, facts, mind teasers and dad jokes use the script created from the pipeline. Rewriting would replace it with an explainer. Use the existing script or re-run the pipeline for a new item.'
+      });
+    }
     
     // If script already exists, delete it so we can regenerate (Rewrite flow)
     console.log(`[Generate Script API] Step 2: Checking for existing script...`);
@@ -1630,12 +1639,19 @@ router.post('/stories/:id/force-render', async (req, res) => {
     if (scriptError || !script) {
       try {
         const { generateAndSaveScript } = await import('../../services/orbix-network/script-generator.js');
-        const newScript = await generateAndSaveScript(businessId, story);
-        script = { id: newScript.id };
+        const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
+        const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story.category || '').toLowerCase());
+        const newScript = usePipelineScript
+          ? await ensureTriviaScript(businessId, story)
+          : await generateAndSaveScript(businessId, story);
+        if (newScript) script = { id: newScript.id };
       } catch (genErr) {
         console.error('[force-render] Script generation failed:', genErr);
         return res.status(400).json({ error: 'Script not found and generation failed. Try "Force Generate Script" first.' });
       }
+    }
+    if (!script) {
+      return res.status(400).json({ error: 'No script for this story. Riddle/trivia/facts need a script from the pipeline; ensure the raw item has snippet data.' });
     }
 
     // If render already exists, return success (pipeline already started)
@@ -1993,6 +2009,7 @@ router.post('/raw-items/:id/force-process', async (req, res) => {
     // Process the raw item into a story
     const { processRawItem } = await import('../../services/orbix-network/classifier.js');
     const { generateAndSaveScript } = await import('../../services/orbix-network/script-generator.js');
+    const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
     
     const story = await processRawItem(businessId, rawItem);
     
@@ -2006,9 +2023,14 @@ router.post('/raw-items/:id/force-process', async (req, res) => {
       .update({ is_manual_force: true })
       .eq('id', story.id);
     
-    // Generate script for the story (this happens automatically in pipeline, but we need it here too)
+    // Riddle/trivia/facts/mindteaser/dadjoke: script from raw item. Others: LLM script.
     try {
-      await generateAndSaveScript(businessId, story);
+      const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story.category || '').toLowerCase());
+      if (usePipelineScript) {
+        await ensureTriviaScript(businessId, story);
+      } else {
+        await generateAndSaveScript(businessId, story);
+      }
     } catch (scriptError) {
       console.error('[Force Process] Error generating script:', scriptError);
       // Don't fail the request, script generation can happen later
@@ -2048,6 +2070,7 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
 
   const { classifyStory, scoreShock } = await import('../../services/orbix-network/classifier.js');
   const { generateAndSaveScript } = await import('../../services/orbix-network/script-generator.js');
+  const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
 
   let category = rawItem.category;
   let shockScore = rawItem.shock_score;
@@ -2107,7 +2130,12 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
     .eq('business_id', businessId);
 
   try {
-    await generateAndSaveScript(businessId, story);
+    const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((category || '').toLowerCase());
+    if (usePipelineScript) {
+      await ensureTriviaScript(businessId, story);
+    } else {
+      await generateAndSaveScript(businessId, story);
+    }
   } catch (scriptError) {
     console.error('[Allow Story] Error generating script:', scriptError);
   }
