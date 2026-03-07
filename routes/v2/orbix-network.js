@@ -619,18 +619,19 @@ router.post('/renders/:id/restart', async (req, res) => {
     const storyCategory = (storyForRestart.category || '').toLowerCase();
     const scriptContentType = ['trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'].includes(storyCategory) ? storyCategory : null;
 
-    // Update the script_id to the latest script for this story (picks up rewrites), matching content_type so we never attach a trivia script to a dad joke render
-    let latestScriptQuery = supabaseClient
-      .from('orbix_scripts')
-      .select('id')
-      .eq('story_id', render.story_id)
-      .eq('business_id', businessId)
-      .order('created_at', { ascending: false })
-      .limit(1);
-    if (scriptContentType) {
-      latestScriptQuery = latestScriptQuery.eq('content_type', scriptContentType);
+    // Only swap to latest script for psychology/money (rewrite flow). Riddle/trivia/facts/mindteaser/dadjoke use script-from-scrape with content_json; do NOT replace script_id on restart or we can attach a script that lost riddle_text/answer_text etc.
+    let latestScript = null;
+    if (storyCategory === 'psychology' || storyCategory === 'money') {
+      const { data: latestScriptData } = await supabaseClient
+        .from('orbix_scripts')
+        .select('id')
+        .eq('story_id', render.story_id)
+        .eq('business_id', businessId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      latestScript = latestScriptData;
     }
-    const { data: latestScript } = await latestScriptQuery.maybeSingle();
 
     // Re-select background from the story's current channel so we never keep a stale/wrong channel background (e.g. after story move or past bug)
     const { selectBackground } = await import('../../services/orbix-network/video-renderer.js');
