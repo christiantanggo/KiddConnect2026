@@ -82,7 +82,10 @@ router.get('/youtube/callback', async (req, res) => {
       channel_title: channel.snippet?.title || '',
       access_token: tokens.access_token,
       refresh_token: tokens.refresh_token,
-      token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null
+      token_expiry: tokens.expiry_date ? new Date(tokens.expiry_date).toISOString() : null,
+      // Store the OAuth client used so upload uses the same (same pattern as Orbix/Movie Review)
+      client_id: clientId || null,
+      client_secret: clientSecret || null
     };
 
     if (isManual) {
@@ -98,7 +101,7 @@ router.get('/youtube/callback', async (req, res) => {
         manual_token_expiry: ytCreds.token_expiry
       };
     } else {
-      settings.youtube = ytCreds;
+      settings.youtube = { ...(settings.youtube || {}), ...ytCreds };
     }
 
     await ModuleSettings.update(businessId, 'kidquiz', settings);

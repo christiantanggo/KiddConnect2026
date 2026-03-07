@@ -10,12 +10,10 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 const MODULE_KEY = 'kidquiz';
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS || 'kidquiz-videos';
 
-function getKidQuizOAuthCredentials() {
-  const kidquizId = process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID;
-  const kidquizSecret = process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET;
-  return { clientId: kidquizId, clientSecret: kidquizSecret };
-}
-
+/**
+ * Use only stored credentials (same pattern as Orbix/Movie Review). No env fallback —
+ * connect and upload both use whatever OAuth app is configured in Kid Quiz Settings.
+ */
 async function getYouTubeClient(businessId) {
   const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
   const settings = moduleSettings?.settings || {};
@@ -33,21 +31,13 @@ async function getYouTubeClient(businessId) {
     tokenExpiry = ytManual.manual_token_expiry;
     persistSlot = 'youtube_manual';
   } else {
-    const customId = (yt.client_id || '').trim();
-    const customSecret = (yt.client_secret || '').trim();
-    if (customId && customSecret) {
-      clientId = customId;
-      clientSecret = customSecret;
-    } else {
-      const envCreds = getKidQuizOAuthCredentials();
-      clientId = envCreds.clientId;
-      clientSecret = envCreds.clientSecret;
-    }
+    clientId = (yt?.client_id || '').trim();
+    clientSecret = (yt?.client_secret || '').trim();
     if (!clientId || !clientSecret) {
-      throw new Error('YouTube OAuth not configured. Add Client ID and Secret in Kid Quiz → Settings (Upload OAuth app or Manual OAuth), or set YOUTUBE_CLIENT_ID/SECRET on the server.');
+      throw new Error('YouTube OAuth not configured. In Kid Quiz Studio → Settings add Client ID and Secret (Upload OAuth app), save, then connect YouTube.');
     }
     if (!yt?.access_token) {
-      throw new Error('YouTube not connected for Kid Quiz Studio. Go to Kid Quiz Studio → Settings and connect YouTube (Upload or Manual OAuth section).');
+      throw new Error('YouTube not connected for Kid Quiz Studio. Go to Kid Quiz Studio → Settings and connect YouTube (Upload OAuth section).');
     }
     accessToken = yt.access_token;
     refreshToken = yt.refresh_token;
@@ -165,7 +155,7 @@ export async function publishKidQuizVideo(publish, render, project) {
     const msg = err.message || '';
     const isInvalidClient = msg.includes('invalid_client') || err?.response?.data?.error === 'invalid_client';
     const userMessage = isInvalidClient
-      ? 'YouTube OAuth client invalid. In Railway (or .env) set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET to the same Google OAuth client used when you connected YouTube in Kid Quiz Settings. If you use a different OAuth app for Kid Quiz, set KIDQUIZ_YOUTUBE_CLIENT_ID and KIDQUIZ_YOUTUBE_CLIENT_SECRET. Then re-connect YouTube in Kid Quiz → Settings.'
+      ? 'YouTube OAuth client invalid. Go to Kid Quiz Studio → Settings and re-connect YouTube (same Client ID/Secret you used before, or add them in Upload OAuth app and connect).'
       : msg;
     console.error(`[KidQuiz Publisher] FAILED publish_id=${publishId}`, msg);
     await supabaseClient
