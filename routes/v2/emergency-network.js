@@ -511,10 +511,14 @@ router.patch('/requests/:id', express.json(), async (req, res) => {
       }
       const { data, error } = await supabaseClient.from('emergency_service_requests').update(updates).eq('id', id).select().single();
       if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
+      console.log('[EmergencyNetwork] PATCH request status updated', { id, from_status: current?.status, to_status: status });
       try {
         const { logRequestActivity } = await import("../../services/emergency-network/activity.js");
         await logRequestActivity(id, 'status_change', { from_status: current?.status, to_status: status, source: 'manual', changed_by: 'Dashboard' });
-      } catch (_) { /* activity log optional */ }
+        console.log('[EmergencyNetwork] PATCH activity logged for request', id);
+      } catch (logErr) {
+        console.error('[EmergencyNetwork] PATCH activity log failed for request', id, logErr?.message || logErr);
+      }
       return res.json(data);
     }
     const updates = { updated_at: new Date().toISOString() };
@@ -681,6 +685,7 @@ router.get('/dispatch-log', async (req, res) => {
 router.get('/requests/:id/activity', async (req, res) => {
   try {
     const { id: requestId } = req.params;
+    console.log('[EmergencyNetwork] GET request activity', { requestId });
     const { data, error } = await supabaseClient
       .from('emergency_request_activity')
       .select('id, activity_type, from_status, to_status, source, changed_by, created_at')
@@ -688,12 +693,18 @@ router.get('/requests/:id/activity', async (req, res) => {
       .order('created_at', { ascending: false })
       .limit(100);
     if (error) {
-      if (error.code === '42P01' || error.message?.includes('does not exist')) return res.json({ activity: [] });
+      console.error('[EmergencyNetwork] GET request activity error', { requestId, code: error.code, message: error.message });
+      if (error.code === '42P01' || error.message?.includes('does not exist')) {
+        console.log('[EmergencyNetwork] GET request activity table missing, returning []');
+        return res.json({ activity: [] });
+      }
       return res.status(500).json({ error: error.message });
     }
-    res.json({ activity: data || [] });
+    const list = data || [];
+    console.log('[EmergencyNetwork] GET request activity result', { requestId, count: list.length });
+    res.json({ activity: list });
   } catch (err) {
-    console.error('[EmergencyNetwork] request activity error:', err?.message || err);
+    console.error('[EmergencyNetwork] GET request activity exception', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load activity' });
   }
 });

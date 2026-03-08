@@ -5,6 +5,7 @@ import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { emergencyNetworkAPI } from '@/lib/api';
+import { useBusinessTimezone } from '@/hooks/useBusinessTimezone';
 import {
   ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Trash2, Bot, Pencil,
   Settings, ListChecks, Wrench, RotateCcw, PhoneCall, Mail, Truck, GripVertical, ChevronUp, ChevronDown,
@@ -45,6 +46,7 @@ const DEFAULT_INTAKE_FIELDS = [
 ];
 
 export default function EmergencyDispatchPage() {
+  const { formatDate } = useBusinessTimezone();
   const [activeTab, setActiveTab] = useState('dashboard');
   const [settingsSubTab, setSettingsSubTab] = useState('communication');
   const [loading, setLoading] = useState(true);
@@ -383,6 +385,17 @@ export default function EmergencyDispatchPage() {
     try {
       await emergencyNetworkAPI.updateRequest(id, { status });
       load();
+      // If the detail modal is open for this request, refetch activity so the new status change appears
+      if (selectedRequestId === id) {
+        try {
+          const res = await emergencyNetworkAPI.getRequestActivity(id);
+          const activity = res.data?.activity ?? [];
+          console.log('[EmergencyDispatch] refetched activity after status change', { id, count: activity.length, activity });
+          setRequestDetailActivity(activity);
+        } catch (e) {
+          console.error('[EmergencyDispatch] refetch activity after status change failed', e);
+        }
+      }
     } catch (e) {
       console.error('[EmergencyDispatch] update request error', e);
     }
@@ -506,7 +519,7 @@ export default function EmergencyDispatchPage() {
                         <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-white border border-amber-200">
                           <div>
                             <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
-                            <p className="text-xs text-slate-600">{r.callback_phone} · {r.service_category} · {r.created_at ? new Date(r.created_at).toLocaleString() : ''}</p>
+                            <p className="text-xs text-slate-600">{r.callback_phone} · {r.service_category} · {formatDate(r.created_at)}</p>
                             {r.location && <p className="text-xs text-slate-500">{r.location}</p>}
                           </div>
                           <span className="text-xs font-medium px-2 py-1 rounded bg-amber-200 text-amber-900">Declined / needs manual assist</span>
@@ -539,7 +552,7 @@ export default function EmergencyDispatchPage() {
                         >
                           <div>
                             <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
-                            <p className="text-xs text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : ''} · {r.service_category}</p>
+                            <p className="text-xs text-slate-500">{formatDate(r.created_at)} · {r.service_category}</p>
                           </div>
                           <span className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700">{r.status}</span>
                         </div>
@@ -567,7 +580,7 @@ export default function EmergencyDispatchPage() {
                         >
                           <div>
                             <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
-                            <p className="text-xs text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : ''} · {r.intake_channel}</p>
+                            <p className="text-xs text-slate-500">{formatDate(r.created_at)} · {r.intake_channel}</p>
                           </div>
                           <span className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700">{r.status}</span>
                         </div>
@@ -1032,7 +1045,7 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2">{r.urgency_level}</td>
                           <td className="py-2 pr-2 max-w-[120px] truncate" title={r.location}>{r.location || '—'}</td>
                           <td className="py-2 pr-2">{r.status}</td>
-                          <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
                           <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
                               <button
@@ -1106,7 +1119,7 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2">{r.service_category}</td>
                           <td className="py-2 pr-2">{r.urgency_level}</td>
                           <td className="py-2 pr-2">{r.status}</td>
-                          <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
+                          <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
                           <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
                               <button
@@ -1178,7 +1191,7 @@ export default function EmergencyDispatchPage() {
                             <td className="py-2 pr-2">{r.urgency_level}</td>
                             <td className="py-2 pr-2">{provider ? provider.business_name : (r.accepted_provider_id ? '—' : '—')}</td>
                             <td className="py-2 pr-2">{r.status}</td>
-                            <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
+                            <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
                             <td className="py-2">
                               <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
                                 {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -1214,7 +1227,7 @@ export default function EmergencyDispatchPage() {
                               <td className="py-1 pr-2">{prov ? prov.business_name : entry.provider_id}</td>
                               <td className="py-1 pr-2">{entry.attempt_order}</td>
                               <td className="py-1 pr-2">{entry.result || '—'}</td>
-                              <td className="py-1">{entry.attempted_at ? new Date(entry.attempted_at).toLocaleString() : '—'}</td>
+                              <td className="py-1">{formatDate(entry.attempted_at)}</td>
                             </tr>
                           );
                         })}
@@ -1267,7 +1280,7 @@ export default function EmergencyDispatchPage() {
                           <p><span className="text-slate-500">Service</span> {req.service_category}</p>
                           <p><span className="text-slate-500">Urgency</span> {req.urgency_level}</p>
                           <p><span className="text-slate-500">Status</span> <span className="font-medium">{req.status}</span></p>
-                          <p><span className="text-slate-500">Created</span> {req.created_at ? new Date(req.created_at).toLocaleString() : '—'}</p>
+                          <p><span className="text-slate-500">Created</span> {formatDate(req.created_at)}</p>
                           {req.location && <p className="sm:col-span-2"><span className="text-slate-500">Location</span> {req.location}</p>}
                           {req.issue_summary && <p className="sm:col-span-2"><span className="text-slate-500">Issue</span> {req.issue_summary}</p>}
                         </div>
@@ -1288,20 +1301,20 @@ export default function EmergencyDispatchPage() {
                                       {resultLabel(entry.result)}
                                     </span>
                                     {entry.attempted_at && (
-                                      <span className="text-slate-500 text-xs">{new Date(entry.attempted_at).toLocaleString()}</span>
+                                      <span className="text-slate-500 text-xs">{formatDate(entry.attempted_at)}</span>
                                     )}
                                   </div>
                                   <div className="mt-1.5 flex flex-wrap gap-3 text-slate-600">
                                     {entry.email_sent_at && (
                                       <span className="inline-flex items-center gap-1">
                                         <Mail className="w-3.5 h-3.5 text-emerald-600" />
-                                        Email sent {new Date(entry.email_sent_at).toLocaleString()}
+                                        Email sent {formatDate(entry.email_sent_at)}
                                       </span>
                                     )}
                                     {entry.sms_sent_at && (
                                       <span className="inline-flex items-center gap-1">
                                         <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
-                                        SMS sent {new Date(entry.sms_sent_at).toLocaleString()}
+                                        SMS sent {formatDate(entry.sms_sent_at)}
                                       </span>
                                     )}
                                   </div>
@@ -1331,7 +1344,7 @@ export default function EmergencyDispatchPage() {
                                       <span className="text-slate-500 text-xs ml-2">{ev.source === 'ai' ? 'by AI' : 'by staff'}{ev.changed_by ? ` (${ev.changed_by})` : ''}</span>
                                     </>
                                   )}
-                                  {ev.created_at && <span className="block text-xs text-slate-500 mt-0.5">{new Date(ev.created_at).toLocaleString()}</span>}
+                                  {ev.created_at && <span className="block text-xs text-slate-500 mt-0.5">{formatDate(ev.created_at)}</span>}
                                 </li>
                               ))}
                             </ul>

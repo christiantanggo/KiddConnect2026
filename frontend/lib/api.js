@@ -490,6 +490,16 @@ export const emergencyNetworkAPI = {
   getAnalytics: () => api.get('/v2/emergency-network/analytics', { headers: emergencyNetworkHeaders() }),
 };
 
+// V2 Settings – business profile (timezone, etc.). Uses same active-business header for consistency.
+function v2ActiveBusinessHeaders() {
+  if (typeof window === 'undefined') return {};
+  const id = localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
+  return id ? { 'X-Active-Business-Id': id } : {};
+}
+export const settingsV2API = {
+  getBusiness: () => api.get('/v2/settings/business', { headers: v2ActiveBusinessHeaders() }),
+};
+
 // Contacts API
 export const contactsAPI = {
   getContacts: (params) => api.get('/contacts', { params }),
