@@ -1840,9 +1840,11 @@ export async function createOutboundCall(options) {
   if (!assistantId && !assistant) {
     throw new Error('Either assistantId or assistant object is required');
   }
+  const digits = String(toNumber).replace(/\D/g, '');
+  const e164 = digits.length === 10 && !digits.startsWith('0') ? `+1${digits}` : digits.length === 11 && digits.startsWith('1') ? `+${digits}` : toNumber.trim().startsWith('+') ? toNumber.trim() : digits ? `+${digits}` : toNumber;
   const payload = {
     phoneNumberId,
-    customer: { number: toNumber.replace(/^(\d{10})$/, '+1$1').replace(/^([^+])/, '+$1') },
+    customer: { number: e164 },
     ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
   };
   if (assistantId) {
