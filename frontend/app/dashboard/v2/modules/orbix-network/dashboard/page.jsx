@@ -700,6 +700,12 @@ export default function OrbixNetworkDashboard() {
               >
                 Video Renders (Download)
               </Link>
+              <Link
+                href="/dashboard/v2/modules/orbix-network/longform"
+                className="px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700"
+              >
+                Long-form videos
+              </Link>
             </div>
           </div>
 

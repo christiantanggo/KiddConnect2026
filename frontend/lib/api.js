@@ -457,6 +457,12 @@ export const orbixNetworkAPI = {
   forceScoreRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/force-score`, {}, { params }),
   allowStoryRawItem: (id, params) => api.post(`/v2/orbix-network/raw-items/${id}/allow-story`, {}, { params }),
   allowAllRawItems: (params) => api.post('/v2/orbix-network/raw-items/allow-all', {}, { params }),
+  // Long-form (puzzle library + long-form videos). All require channel_id in params or body.
+  getLongformPuzzles: (params) => api.get('/v2/orbix-network/longform/puzzles', { params }),
+  getLongformPuzzle: (id, params) => api.get(`/v2/orbix-network/longform/puzzles/${id}`, { params }),
+  getLongformVideos: (params) => api.get('/v2/orbix-network/longform/videos', { params }),
+  getLongformVideo: (id, params) => api.get(`/v2/orbix-network/longform/videos/${id}`, { params }),
+  createLongformVideo: (data) => api.post('/v2/orbix-network/longform/videos', data),
 };
 
 // Emergency Network API (v2). Requires X-Active-Business-Id for admin routes.
