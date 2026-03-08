@@ -684,7 +684,6 @@ router.post("/webhook", async (req, res) => {
   }
 
   // function-call: handle synchronously so we can return a result for the assistant to speak (e.g. "no email on file")
-  const eventType = req.body?.type || req.body?.event || req.body?.message?.type;
   if (eventType === 'function-call') {
     try {
       const result = await handleFunctionCall(req.body.message || req.body);
