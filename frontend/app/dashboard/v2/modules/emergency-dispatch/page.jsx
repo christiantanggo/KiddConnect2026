@@ -78,6 +78,21 @@ export default function EmergencyDispatchPage() {
   const [linkResult, setLinkResult] = useState(null); // { linked: [], notInVapi: [], errors: [] } from last save or link-agent
   const [linkingAgent, setLinkingAgent] = useState(false);
   const [callProviderLoadingId, setCallProviderLoadingId] = useState(null);
+  const [resetDispatchLoadingId, setResetDispatchLoadingId] = useState(null);
+
+  const handleResetDispatch = async (requestId) => {
+    setResetDispatchLoadingId(requestId);
+    try {
+      await emergencyNetworkAPI.resetDispatch(requestId);
+      await load();
+    } catch (e) {
+      console.error('[EmergencyDispatch] resetDispatch error', e);
+      const msg = e.response?.data?.error || e.message || 'Failed to reset dispatch';
+      alert(msg);
+    } finally {
+      setResetDispatchLoadingId(null);
+    }
+  };
 
   const handleCallProvider = async (requestId) => {
     setCallProviderLoadingId(requestId);
@@ -887,6 +902,18 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2">{r.status}</td>
                           <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
                           <td className="py-2 flex flex-wrap items-center gap-1">
+                            {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
+                              <button
+                                type="button"
+                                onClick={() => handleResetDispatch(r.id)}
+                                disabled={resetDispatchLoadingId === r.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-500 text-white text-xs font-medium hover:bg-slate-600 disabled:opacity-60"
+                                title="Clear dispatch attempts so Call plumber can try again"
+                              >
+                                {resetDispatchLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+                                Reset dispatch
+                              </button>
+                            )}
                             {['New', 'Contacting Providers'].includes(r.status) && (
                               <button
                                 type="button"
@@ -945,6 +972,18 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2">{r.status}</td>
                           <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
                           <td className="py-2 flex flex-wrap items-center gap-1">
+                            {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
+                              <button
+                                type="button"
+                                onClick={() => handleResetDispatch(r.id)}
+                                disabled={resetDispatchLoadingId === r.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-500 text-white text-xs font-medium hover:bg-slate-600 disabled:opacity-60"
+                                title="Clear dispatch attempts so Call plumber can try again"
+                              >
+                                {resetDispatchLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+                                Reset dispatch
+                              </button>
+                            )}
                             {['New', 'Contacting Providers'].includes(r.status) && (
                               <button
                                 type="button"

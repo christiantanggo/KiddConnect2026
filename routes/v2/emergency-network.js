@@ -418,6 +418,42 @@ router.get('/requests', async (req, res) => {
  * Manually trigger placing an outbound call to the next eligible provider (e.g. plumber).
  * Use this to test the call flow. Sets status to Contacting Providers if still New, then calls callNextProvider.
  */
+/**
+ * POST /api/v2/emergency-network/requests/:id/reset-dispatch
+ * Clear all dispatch attempts for this request and set status to New so "Call plumber" can try again.
+ */
+router.post('/requests/:id/reset-dispatch', async (req, res) => {
+  try {
+    const { id: requestId } = req.params;
+    const { data: request, error: fetchErr } = await supabaseClient
+      .from('emergency_service_requests')
+      .select('id')
+      .eq('id', requestId)
+      .single();
+    if (fetchErr || !request) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    await supabaseClient.from('emergency_dispatch_calls').delete().eq('service_request_id', requestId);
+    await supabaseClient.from('emergency_dispatch_log').delete().eq('service_request_id', requestId);
+    const { error: updateErr } = await supabaseClient
+      .from('emergency_service_requests')
+      .update({ status: 'New', updated_at: new Date().toISOString() })
+      .eq('id', requestId);
+    if (updateErr) {
+      return res.status(500).json({ error: 'Failed to reset status: ' + (updateErr.message || updateErr) });
+    }
+    res.json({ success: true, message: 'Dispatch reset. You can tap Call plumber again.' });
+  } catch (err) {
+    console.error('[EmergencyNetwork] reset-dispatch error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to reset dispatch' });
+  }
+});
+
+/**
+ * POST /api/v2/emergency-network/requests/:id/call-provider
+ * Manually trigger placing an outbound call to the next eligible provider (e.g. plumber).
+ * Use this to test the call flow. Sets status to Contacting Providers if still New, then calls callNextProvider.
+ */
 router.post('/requests/:id/call-provider', async (req, res) => {
   try {
     const { id: requestId } = req.params;
