@@ -109,11 +109,13 @@ export function buildDispatchAssistantConfig(firstMessage) {
       provider: 'openai',
       model: 'gpt-4o-mini',
       temperature: 0.3,
-      maxTokens: 300,
+      maxTokens: 400,
       messages: [
         {
           role: 'system',
-          content: `You are calling a service provider on behalf of an emergency dispatch line. As soon as the call is answered, deliver your first message in full: read the request details, then ask them to press 1 to accept or 2 to decline. Do not end the call until they have accepted or declined. When they say "one", "1", "accept", or "I'll take it", call dispatch_accept. When they say "two", "2", "decline", "no", or "I can't", call dispatch_decline. Keep the call short; no small talk.`,
+          content: `You are calling a service provider on behalf of an emergency dispatch line. As soon as the call is answered, deliver your first message in full. Then wait for their keypress or reply.
+Keypresses: When they PRESS 1 (or say "one" or "accept"), call dispatch_accept immediately—do not ask again. When they PRESS 2 (or say "two" or "decline"), call dispatch_decline immediately. When they PRESS 3 or say "repeat", repeat the same request details you just said (caller, callback number, urgency, location, issue, and the 1–5 options). When they PRESS 4, call dispatch_email_details then say "I've emailed the details to you." When they PRESS 5, call dispatch_sms_details then say "I've texted the details to you. Standard message rates may apply."
+Do not end the call until they have accepted (1) or declined (2). Keep the call short; no small talk.`,
         },
       ],
       tools: [
@@ -121,7 +123,7 @@ export function buildDispatchAssistantConfig(firstMessage) {
           type: 'function',
           function: {
             name: 'dispatch_accept',
-            description: 'Call this when the provider accepts the job (e.g. says yes, 1, or accept).',
+            description: 'Call when the provider accepts: they pressed 1 or said one, yes, or accept.',
             parameters: { type: 'object', properties: {} },
           },
         },
@@ -129,7 +131,23 @@ export function buildDispatchAssistantConfig(firstMessage) {
           type: 'function',
           function: {
             name: 'dispatch_decline',
-            description: 'Call this when the provider declines (e.g. says no, 2, or decline).',
+            description: 'Call when the provider declines: they pressed 2 or said two, no, or decline.',
+            parameters: { type: 'object', properties: {} },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'dispatch_email_details',
+            description: 'Call when they press 4 to have the request details emailed to them. After calling, say "I\'ve emailed the details to you."',
+            parameters: { type: 'object', properties: {} },
+          },
+        },
+        {
+          type: 'function',
+          function: {
+            name: 'dispatch_sms_details',
+            description: 'Call when they press 5 to have the request details texted to them. After calling, say "I\'ve texted the details to you. Standard message rates may apply."',
             parameters: { type: 'object', properties: {} },
           },
         },
@@ -162,7 +180,7 @@ export function buildDispatchFirstMessage(request, provider) {
     request.urgency_level ? `Urgency: ${request.urgency_level}.` : '',
     request.location ? `Location: ${request.location}.` : '',
     request.issue_summary ? `Issue: ${(request.issue_summary || '').slice(0, 200)}.` : '',
-    'Press 1 to accept this job, or 2 to decline.',
+    'Press 1 to accept, 2 to decline, 3 to repeat this message, 4 to email these details, or 5 to text these details. SMS rates may apply.',
   ];
   return parts.filter(Boolean).join(' ');
 }
