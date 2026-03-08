@@ -1278,9 +1278,19 @@ async function handleCallEnd(event) {
         .update({ result: 'no_answer' })
         .eq('id', dispatchRow.dispatch_log_id);
     }
-    const { callNextProvider } = await import("../services/emergency-network/dispatch.js");
-    await callNextProvider(dispatchRow.service_request_id);
-    console.log("[VAPI Webhook] Emergency dispatch call ended:", callId, dispatchRow.service_request_id);
+    // Only call next provider if they didn't accept or decline (no_answer/hang up). If they accepted, request is already 'Accepted'; if they declined, we already called next in function-call handler.
+    const { data: req } = await supabaseClient
+      .from('emergency_service_requests')
+      .select('status')
+      .eq('id', dispatchRow.service_request_id)
+      .single();
+    if (req && ['New', 'Contacting Providers'].includes(req.status)) {
+      const { callNextProvider } = await import("../services/emergency-network/dispatch.js");
+      await callNextProvider(dispatchRow.service_request_id);
+      console.log("[VAPI Webhook] Emergency dispatch call ended, trying next provider:", callId, dispatchRow.service_request_id);
+    } else {
+      console.log("[VAPI Webhook] Emergency dispatch call ended (already accepted or closed):", callId, dispatchRow.service_request_id);
+    }
     return;
   }
 

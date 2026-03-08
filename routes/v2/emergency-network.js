@@ -541,7 +541,7 @@ router.get('/providers', async (req, res) => {
  */
 router.post('/providers', express.json(), async (req, res) => {
   try {
-    const { business_name, trade_type, service_areas, phone, verification_status, priority_tier, is_available } = req.body || {};
+    const { business_name, trade_type, service_areas, phone, email, verification_status, priority_tier, is_available } = req.body || {};
     if (!business_name || !trade_type || !phone) {
       return res.status(400).json({ error: 'business_name, trade_type, and phone are required' });
     }
@@ -554,6 +554,9 @@ router.post('/providers', express.json(), async (req, res) => {
       priority_tier: ['premium', 'priority', 'basic'].includes(priority_tier) ? priority_tier : 'basic',
       is_available: is_available !== false,
     };
+    if (email !== undefined && email !== null && String(email).trim() !== '') {
+      payload.email = String(email).trim();
+    }
     const { data, error } = await supabaseClient.from('emergency_providers').insert(payload).select().single();
     if (error) return res.status(500).json({ error: error.message });
     res.status(201).json(data);
@@ -570,10 +573,12 @@ router.patch('/providers/:id', express.json(), async (req, res) => {
   try {
     const { id } = req.params;
     const body = req.body || {};
-    const allowed = ['business_name', 'trade_type', 'service_areas', 'phone', 'verification_status', 'priority_tier', 'is_available'];
+    const allowed = ['business_name', 'trade_type', 'service_areas', 'phone', 'email', 'verification_status', 'priority_tier', 'is_available'];
     const updates = { updated_at: new Date().toISOString() };
     for (const k of allowed) {
-      if (body[k] !== undefined) updates[k] = body[k];
+      if (body[k] !== undefined) {
+        updates[k] = k === 'email' ? (body[k] == null || String(body[k]).trim() === '' ? null : String(body[k]).trim()) : body[k];
+      }
     }
     const { data, error } = await supabaseClient.from('emergency_providers').update(updates).eq('id', id).select().single();
     if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });

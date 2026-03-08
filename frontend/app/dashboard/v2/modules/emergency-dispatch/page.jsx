@@ -6,7 +6,7 @@ import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { emergencyNetworkAPI } from '@/lib/api';
 import {
-  ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Trash2, Bot,
+  ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Trash2, Bot, Pencil,
   Settings, ListChecks, Wrench, RotateCcw, PhoneCall, Mail, Truck, GripVertical, ChevronUp, ChevronDown,
   LayoutDashboard, Layers,
 } from 'lucide-react';
@@ -67,9 +67,10 @@ export default function EmergencyDispatchPage() {
   const [newPhone, setNewPhone] = useState('');
   const [showAddProvider, setShowAddProvider] = useState(false);
   const [providerForm, setProviderForm] = useState({
-    business_name: '', trade_type: 'Plumbing', service_areas: '', phone: '',
+    business_name: '', trade_type: 'Plumbing', service_areas: '', phone: '', email: '',
     verification_status: 'pending', priority_tier: 'basic', is_available: true,
   });
+  const [editingProviderId, setEditingProviderId] = useState(null);
   const [creatingAgent, setCreatingAgent] = useState(false);
   const [createAgentError, setCreateAgentError] = useState(null);
   const [availablePhoneNumbers, setAvailablePhoneNumbers] = useState([]);
@@ -144,6 +145,22 @@ export default function EmergencyDispatchPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  // Refetch requests (and dispatch log) periodically when viewing dashboard or recent calls so status updates (e.g. Accepted) appear without manual refresh
+  useEffect(() => {
+    if (!['dashboard', 'recent-calls', 'recent-messages', 'dispatched'].includes(activeTab)) return;
+    const interval = setInterval(async () => {
+      try {
+        const [requestsRes, dispatchLogRes] = await Promise.all([
+          emergencyNetworkAPI.getRequests(),
+          emergencyNetworkAPI.getDispatchLog(),
+        ]);
+        setRequests(requestsRes.data?.requests ?? []);
+        setDispatchLog(dispatchLogRes.data?.log ?? []);
+      } catch (_) {}
+    }, 15000);
+    return () => clearInterval(interval);
+  }, [activeTab]);
 
   const saveConfig = async (overrides = null) => {
     try {
@@ -291,10 +308,46 @@ export default function EmergencyDispatchPage() {
         service_areas: providerForm.service_areas ? providerForm.service_areas.split(',').map((s) => s.trim()).filter(Boolean) : [],
       });
       setShowAddProvider(false);
-      setProviderForm({ business_name: '', trade_type: 'Plumbing', service_areas: '', phone: '', verification_status: 'pending', priority_tier: 'basic', is_available: true });
+      setProviderForm({ business_name: '', trade_type: 'Plumbing', service_areas: '', phone: '', email: '', verification_status: 'pending', priority_tier: 'basic', is_available: true });
       load();
     } catch (e) {
       console.error('[EmergencyDispatch] create provider error', e);
+    }
+  };
+
+  const openEditProvider = (p) => {
+    setEditingProviderId(p.id);
+    setProviderForm({
+      business_name: p.business_name || '',
+      trade_type: p.trade_type || 'Plumbing',
+      service_areas: Array.isArray(p.service_areas) ? p.service_areas.join(', ') : (p.service_areas || ''),
+      phone: p.phone || '',
+      email: p.email || '',
+      verification_status: p.verification_status || 'pending',
+      priority_tier: p.priority_tier || 'basic',
+      is_available: p.is_available !== false,
+    });
+    setShowAddProvider(false);
+  };
+
+  const saveProviderEdit = async () => {
+    if (!editingProviderId) return;
+    try {
+      await emergencyNetworkAPI.updateProvider(editingProviderId, {
+        business_name: providerForm.business_name,
+        trade_type: providerForm.trade_type,
+        service_areas: providerForm.service_areas ? providerForm.service_areas.split(',').map((s) => s.trim()).filter(Boolean) : [],
+        phone: providerForm.phone,
+        email: providerForm.email?.trim() || null,
+        verification_status: providerForm.verification_status,
+        priority_tier: providerForm.priority_tier,
+        is_available: providerForm.is_available,
+      });
+      setEditingProviderId(null);
+      setProviderForm({ business_name: '', trade_type: 'Plumbing', service_areas: '', phone: '', email: '', verification_status: 'pending', priority_tier: 'basic', is_available: true });
+      load();
+    } catch (e) {
+      console.error('[EmergencyDispatch] update provider error', e);
     }
   };
 
@@ -752,25 +805,31 @@ export default function EmergencyDispatchPage() {
             <section className="bg-white rounded-xl border border-slate-200 p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-lg font-medium">Emergency Services (Provider Directory)</h2>
-                <button type="button" onClick={() => setShowAddProvider(true)} className="inline-flex items-center gap-1 px-3 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700">
+                <button type="button" onClick={() => { setShowAddProvider(true); setEditingProviderId(null); setProviderForm({ business_name: '', trade_type: 'Plumbing', service_areas: '', phone: '', email: '', verification_status: 'pending', priority_tier: 'basic', is_available: true }); }} className="inline-flex items-center gap-1 px-3 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700">
                   <Plus className="w-4 h-4" /> Add provider
                 </button>
               </div>
-              {showAddProvider && (
+              {(showAddProvider || editingProviderId) && (
                 <div className="mb-4 p-4 bg-slate-50 rounded-lg space-y-2">
+                  <h3 className="text-sm font-semibold text-slate-700">{editingProviderId ? 'Edit provider' : 'Add provider'}</h3>
                   <input placeholder="Business name" className="w-full rounded border px-3 py-2 text-sm" value={providerForm.business_name} onChange={(e) => setProviderForm((f) => ({ ...f, business_name: e.target.value }))} />
                   <select className="w-full rounded border px-3 py-2 text-sm" value={providerForm.trade_type} onChange={(e) => setProviderForm((f) => ({ ...f, trade_type: e.target.value }))}>
                     {TRADE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                   <input placeholder="Phone" className="w-full rounded border px-3 py-2 text-sm" value={providerForm.phone} onChange={(e) => setProviderForm((f) => ({ ...f, phone: e.target.value }))} />
+                  <input type="email" placeholder="Email (optional; for Press 4 to email details)" className="w-full rounded border px-3 py-2 text-sm" value={providerForm.email} onChange={(e) => setProviderForm((f) => ({ ...f, email: e.target.value }))} />
                   <input placeholder="Service areas (comma-separated)" className="w-full rounded border px-3 py-2 text-sm" value={providerForm.service_areas} onChange={(e) => setProviderForm((f) => ({ ...f, service_areas: e.target.value }))} />
                   <select className="w-full rounded border px-3 py-2 text-sm" value={providerForm.priority_tier} onChange={(e) => setProviderForm((f) => ({ ...f, priority_tier: e.target.value }))}>
                     {TIER_OPTIONS.map((t) => <option key={t} value={t}>{t}</option>)}
                   </select>
                   <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={providerForm.is_available} onChange={(e) => setProviderForm((f) => ({ ...f, is_available: e.target.checked }))} /> Available</label>
                   <div className="flex gap-2">
-                    <button type="button" onClick={createProvider} className="px-4 py-2 bg-emerald-600 text-white rounded text-sm">Create</button>
-                    <button type="button" onClick={() => setShowAddProvider(false)} className="px-4 py-2 border rounded text-sm">Cancel</button>
+                    {editingProviderId ? (
+                      <button type="button" onClick={saveProviderEdit} className="px-4 py-2 bg-emerald-600 text-white rounded text-sm">Save</button>
+                    ) : (
+                      <button type="button" onClick={createProvider} className="px-4 py-2 bg-emerald-600 text-white rounded text-sm">Create</button>
+                    )}
+                    <button type="button" onClick={() => { setShowAddProvider(false); setEditingProviderId(null); }} className="px-4 py-2 border rounded text-sm">Cancel</button>
                   </div>
                 </div>
               )}
@@ -781,6 +840,7 @@ export default function EmergencyDispatchPage() {
                       <th className="pb-2 pr-2">Business</th>
                       <th className="pb-2 pr-2">Trade</th>
                       <th className="pb-2 pr-2">Phone</th>
+                      <th className="pb-2 pr-2">Email</th>
                       <th className="pb-2 pr-2">Tier</th>
                       <th className="pb-2 pr-2">Verified</th>
                       <th className="pb-2 pr-2">Available</th>
@@ -789,18 +849,20 @@ export default function EmergencyDispatchPage() {
                   </thead>
                   <tbody>
                     {providers.length === 0 ? (
-                      <tr><td colSpan={7} className="py-4 text-slate-500 text-center">No providers. Add one to start dispatching.</td></tr>
+                      <tr><td colSpan={8} className="py-4 text-slate-500 text-center">No providers. Add one to start dispatching.</td></tr>
                     ) : (
                       providers.map((p) => (
                         <tr key={p.id} className="border-b border-slate-100">
                           <td className="py-2 pr-2">{p.business_name}</td>
                           <td className="py-2 pr-2">{p.trade_type}</td>
                           <td className="py-2 pr-2">{p.phone}</td>
+                          <td className="py-2 pr-2">{p.email || '—'}</td>
                           <td className="py-2 pr-2">{p.priority_tier}</td>
                           <td className="py-2 pr-2">{p.verification_status}</td>
                           <td className="py-2 pr-2">{p.is_available ? 'Yes' : 'No'}</td>
-                          <td className="py-2">
-                            <button type="button" onClick={() => deleteProviderById(p.id)} className="text-red-600 hover:underline text-xs"><Trash2 className="w-4 h-4 inline" /></button>
+                          <td className="py-2 flex flex-wrap items-center gap-1">
+                            <button type="button" onClick={() => openEditProvider(p)} className="text-slate-600 hover:text-emerald-600 p-1 rounded hover:bg-emerald-50" title="Edit"><Pencil className="w-4 h-4 inline" /></button>
+                            <button type="button" onClick={() => deleteProviderById(p.id)} className="text-red-600 hover:underline text-xs p-1 rounded hover:bg-red-50" title="Remove"><Trash2 className="w-4 h-4 inline" /></button>
                           </td>
                         </tr>
                       ))
