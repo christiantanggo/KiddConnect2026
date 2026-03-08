@@ -17,6 +17,7 @@
     "format": "prettier --write .",
     "migrate": "node scripts/migrate.js",
     "migrate:legacy-users": "node scripts/migrate-legacy-users.js",
+    "backfill:orbix-puzzles": "node scripts/backfill-orbix-puzzles.js",
     "check:migration-status": "node scripts/check-user-migration-status.js",
     "test:vapi": "node scripts/test-vapi-connection.js",
     "test:hook": "node scripts/test-orbix-hook-rewriter.js",

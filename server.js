@@ -467,6 +467,17 @@ try {
     console.warn('⚠️  The Orbix Network module will not be available until this is fixed.');
   }
 
+  // Load Orbix Network long-form routes (puzzle library + long-form videos; additive only)
+  try {
+    const v2OrbixNetworkLongformRoutes = (await import("./routes/v2/orbix-network-longform.js")).default;
+    if (v2OrbixNetworkLongformRoutes) {
+      app.use("/api/v2/orbix-network/longform", v2OrbixNetworkLongformRoutes);
+      console.log('✅ Orbix Network long-form routes loaded at /api/v2/orbix-network/longform');
+    }
+  } catch (longformErr) {
+    console.warn('⚠️  Orbix Network long-form routes not loaded:', longformErr.message);
+  }
+
   // Load Orbix Network job routes (for scheduled tasks)
   // NOTE: This import may fail on Node.js 18 due to undici/File API dependency
   // If it fails, the server will still start but Orbix Network jobs won't be available
