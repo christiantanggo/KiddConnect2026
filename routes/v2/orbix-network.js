@@ -275,7 +275,7 @@ router.delete('/stories/:id', async (req, res) => {
 
     const { data: story, error: getError } = await supabaseClient
       .from('orbix_stories')
-      .select('id, raw_item_id')
+      .select('id, raw_item_id, category')
       .eq('id', id)
       .eq('business_id', businessId)
       .eq('channel_id', channelId)
@@ -285,6 +285,46 @@ router.delete('/stories/:id', async (req, res) => {
     }
 
     const storyId = story.id;
+
+    // Log riddle content when deleted so generator does not reuse it
+    if ((story.category || '').toLowerCase() === 'riddle') {
+      let riddleText = '';
+      let answerText = '';
+      const { data: scriptRow } = await supabaseClient
+        .from('orbix_scripts')
+        .select('content_json')
+        .eq('story_id', storyId)
+        .maybeSingle();
+      if (scriptRow?.content_json) {
+        const c = typeof scriptRow.content_json === 'string' ? JSON.parse(scriptRow.content_json) : scriptRow.content_json;
+        riddleText = (c.riddle_text || '').trim().slice(0, 1000);
+        answerText = (c.answer_text || '').trim().slice(0, 200);
+      }
+      if ((!riddleText || !answerText) && story.raw_item_id) {
+        const { data: rawRow } = await supabaseClient
+          .from('orbix_raw_items')
+          .select('snippet')
+          .eq('id', story.raw_item_id)
+          .maybeSingle();
+        if (rawRow?.snippet) {
+          try {
+            const sn = typeof rawRow.snippet === 'string' ? JSON.parse(rawRow.snippet) : rawRow.snippet;
+            if (!riddleText) riddleText = (sn.riddle_text || '').trim().slice(0, 1000);
+            if (!answerText) answerText = (sn.answer_text || '').trim().slice(0, 200);
+          } catch (_) {}
+        }
+      }
+      if (riddleText && answerText) {
+        await supabaseClient.from('orbix_deleted_riddles').insert({
+          business_id: businessId,
+          channel_id: channelId,
+          riddle_text: riddleText,
+          answer_text: answerText,
+          source: 'deleted'
+        });
+      }
+    }
+
     await supabaseClient.from('orbix_scripts').delete().eq('story_id', storyId);
     await supabaseClient.from('orbix_review_queue').delete().eq('story_id', storyId);
     await supabaseClient.from('orbix_renders').delete().eq('story_id', storyId);
@@ -1834,6 +1874,52 @@ router.post('/stories/:id/reject', async (req, res) => {
     const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
     const { id } = req.params;
+
+    const { data: story } = await supabaseClient
+      .from('orbix_stories')
+      .select('id, raw_item_id, category')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+
+    if (story && (story.category || '').toLowerCase() === 'riddle') {
+      let riddleText = '';
+      let answerText = '';
+      const { data: scriptRow } = await supabaseClient
+        .from('orbix_scripts')
+        .select('content_json')
+        .eq('story_id', id)
+        .maybeSingle();
+      if (scriptRow?.content_json) {
+        const c = typeof scriptRow.content_json === 'string' ? JSON.parse(scriptRow.content_json) : scriptRow.content_json;
+        riddleText = (c.riddle_text || '').trim().slice(0, 1000);
+        answerText = (c.answer_text || '').trim().slice(0, 200);
+      }
+      if ((!riddleText || !answerText) && story.raw_item_id) {
+        const { data: rawRow } = await supabaseClient
+          .from('orbix_raw_items')
+          .select('snippet')
+          .eq('id', story.raw_item_id)
+          .maybeSingle();
+        if (rawRow?.snippet) {
+          try {
+            const sn = typeof rawRow.snippet === 'string' ? JSON.parse(rawRow.snippet) : rawRow.snippet;
+            if (!riddleText) riddleText = (sn.riddle_text || '').trim().slice(0, 1000);
+            if (!answerText) answerText = (sn.answer_text || '').trim().slice(0, 200);
+          } catch (_) {}
+        }
+      }
+      if (riddleText && answerText) {
+        await supabaseClient.from('orbix_deleted_riddles').insert({
+          business_id: businessId,
+          channel_id: channelId,
+          riddle_text: riddleText,
+          answer_text: answerText,
+          source: 'rejected'
+        });
+      }
+    }
 
     const { error: storyError } = await supabaseClient
       .from('orbix_stories')

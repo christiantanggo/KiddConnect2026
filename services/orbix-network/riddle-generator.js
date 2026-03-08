@@ -148,6 +148,80 @@ export async function isRiddleDuplicate(businessId, channelId, fingerprint) {
   return !!data;
 }
 
+// ─── Quality Filter (pre-approval validation for short-form retention) ─────────
+
+const WORDPLAY_KEYWORDS = [
+  'rearranged', 'rearrange', 'anagram', 'letters', 'spelled', 'word',
+  'sounds like', 'rhyme', 'synonym'
+];
+
+const ABSTRACT_ANSWERS = new Set([
+  'time', 'tomorrow', 'yesterday', 'future', 'past', 'infinity',
+  'destiny', 'fate', 'life', 'love'
+]);
+
+const LETTERS_LANGUAGE_PHRASES = [
+  'first letter', 'last letter', 'spelling', 'alphabet'
+];
+
+/**
+ * Validate riddle for short-form retention. Rejects wordplay mechanics, abstract answers,
+ * vague riddles, letter/language tricks, and multi-word answers. Logs rejected riddles.
+ * @param {string} riddleText
+ * @param {string} answer
+ * @returns {{ status: 'APPROVED'|'REJECTED', reason?: string }}
+ */
+export function validateRiddle(riddleText, answer) {
+  const r = (riddleText || '').trim().toLowerCase();
+  const a = (answer || '').trim().toLowerCase();
+  if (!r || !a) return { status: 'REJECTED', reason: 'missing_riddle_or_answer' };
+
+  // 1. Wordplay mechanics
+  for (const kw of WORDPLAY_KEYWORDS) {
+    if (r.includes(kw)) {
+      console.log(`[Riddle Validator] REJECTED (wordplay): "${riddleText?.slice(0, 80)}..." answer="${answer}"`);
+      return { status: 'REJECTED', reason: `wordplay:${kw}` };
+    }
+  }
+
+  // 2. Abstract answer (single-word check)
+  const answerWord = a.split(/\s+/)[0] || a;
+  if (ABSTRACT_ANSWERS.has(answerWord)) {
+    console.log(`[Riddle Validator] REJECTED (abstract answer): riddle="${riddleText?.slice(0, 60)}..." answer="${answer}"`);
+    return { status: 'REJECTED', reason: 'abstract_answer' };
+  }
+
+  // 3. Too vague: very short riddle or no descriptive hints (simple heuristic)
+  const wordCount = r.split(/\s+/).length;
+  if (wordCount < 6) {
+    console.log(`[Riddle Validator] REJECTED (too short/vague): "${riddleText?.slice(0, 80)}..." answer="${answer}"`);
+    return { status: 'REJECTED', reason: 'too_vague' };
+  }
+  const descriptiveHints = ['have', 'has', 'can', 'cannot', 'never', 'always', 'without', 'with', 'but', 'yet', 'see', 'hear', 'touch', 'eyes', 'hands', 'feet', 'teeth', 'mouth', 'head', 'body', 'wings', 'shell', 'skin', 'green', 'red', 'round', 'long', 'small', 'big'];
+  const hasHint = descriptiveHints.some(h => r.includes(h));
+  if (!hasHint) {
+    console.log(`[Riddle Validator] REJECTED (no descriptive hints): "${riddleText?.slice(0, 80)}..." answer="${answer}"`);
+    return { status: 'REJECTED', reason: 'too_vague' };
+  }
+
+  // 4. Letters/language tricks
+  for (const phrase of LETTERS_LANGUAGE_PHRASES) {
+    if (r.includes(phrase)) {
+      console.log(`[Riddle Validator] REJECTED (letters/language): "${riddleText?.slice(0, 80)}..." answer="${answer}"`);
+      return { status: 'REJECTED', reason: `letters:${phrase}` };
+    }
+  }
+
+  // 5. Multi-word answer only
+  const answerWords = a.split(/\s+/).filter(Boolean);
+  if (answerWords.length > 1) {
+    console.log(`[Riddle Validator] REJECTED (multi-word answer): riddle="${riddleText?.slice(0, 60)}..." answer="${answer}"`);
+    return { status: 'REJECTED', reason: 'multi_word_answer' };
+  }
+
+  return { status: 'APPROVED' };
+}
+
 // ─── Content Policy Check ─────────────────────────────────────────────────────
 
 export async function checkRiddleContentPolicy(riddle) {
@@ -278,6 +352,26 @@ async function loadRiddleHistory(businessId, channelId) {
           categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
         }
       } catch (_) {}
+    }
+
+    // Include riddles deleted/rejected from UI so they are not generated again
+    const { data: deletedRows } = await supabaseClient
+      .from('orbix_deleted_riddles')
+      .select('riddle_text, answer_text')
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (deletedRows?.length) {
+      const deletedRiddles = [];
+      for (const row of deletedRows) {
+        const ans = (row.answer_text || '').trim().toLowerCase();
+        if (ans) usedAnswers.push(ans);
+        const r = (row.riddle_text || '').trim();
+        if (r) deletedRiddles.push(r);
+      }
+      recentRiddles.unshift(...deletedRiddles.slice(0, 20));
+      if (recentRiddles.length > 40) recentRiddles.length = 40;
     }
 
     return { usedAnswers, recentRiddles, categoryCounts, recentCategories };
@@ -486,6 +580,12 @@ export async function generateAndValidateRiddle(businessId, channelId, options =
     console.log(`[Riddle Generator] Candidate scores: ${scored.map(c => c._qualityScore).join(', ')}`);
 
     for (const candidate of scored) {
+      const validation = validateRiddle(candidate.riddle_text, candidate.answer_text);
+      if (validation.status === 'REJECTED') {
+        console.log(`[Riddle Generator] Quality filter reject (score ${candidate._qualityScore}): ${validation.reason || 'unknown'}`);
+        continue;
+      }
+
       const policy = await checkRiddleContentPolicy(candidate);
       if (!policy.approved) {
         console.log(`[Riddle Generator] Policy reject (score ${candidate._qualityScore}): ${policy.reason || 'unknown'}`);
