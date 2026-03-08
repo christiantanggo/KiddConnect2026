@@ -1,7 +1,10 @@
 -- Emergency Network: allow pending dispatch attempts and track outbound dispatch calls
 -- so we can correlate VAPI call-end/function-call with request_id and provider_id.
+--
+-- Run this on production Supabase if "Call plumber" fails with:
+--   violates check constraint "emergency_dispatch_log_result_check"
 
--- Allow 'pending' in dispatch_log.result (attempt in progress)
+-- Allow 'pending' and NULL in dispatch_log.result (attempt in progress)
 ALTER TABLE emergency_dispatch_log
   DROP CONSTRAINT IF EXISTS emergency_dispatch_log_result_check;
 

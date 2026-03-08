@@ -121,8 +121,8 @@ STEP 1 – As soon as the call is answered, deliver your first message in full (
 - If they say Repeat: re-read the full request details (caller name, callback number, urgency, location, issue), then say again "Say Accept, Decline, or Repeat." Wait.
 
 STEP 2 – Only after they accepted. Say: "Would you like the details to be emailed, sent by SMS – data rates may apply, or repeat?" Wait for their reply.
-- If they say Email: call dispatch_email_details, then say "I've emailed the details to you." You may then say goodbye and end.
-- If they say SMS: call dispatch_sms_details, then say "I've texted the details to you. Data rates may apply." You may then say goodbye and end.
+- If they say Email: call dispatch_email_details. Then say exactly the result message the system returns (e.g. "I've emailed the details to you" or "There is no email on file..."). Do not say you sent the email unless the result says so.
+- If they say SMS: call dispatch_sms_details. Then say exactly the result message the system returns. Do not say you sent the text unless the result says so.
 - If they say Repeat: re-read the FULL request details again (caller name, callback number, urgency, location, issue) so they can write them down. Then say again: "Would you like the details emailed, by SMS, or repeat?" Wait.
 
 If they are silent for 3–4 seconds, say once: "Just say Accept, Decline, or Repeat" (in step 1) or "Say Email, SMS, or Repeat" (in step 2). Then wait. Do not stay silent. Keep the call short.`,
@@ -149,7 +149,7 @@ If they are silent for 3–4 seconds, say once: "Just say Accept, Decline, or Re
           type: 'function',
           function: {
             name: 'dispatch_email_details',
-            description: 'Call only in step 2 after they accepted, when they say Email (to email details). Then say "I\'ve emailed the details to you."',
+            description: 'Call only in step 2 after they accepted, when they say Email. Then say the exact result message returned (may say email sent or no email on file).',
             parameters: { type: 'object', properties: {} },
           },
         },
@@ -157,7 +157,7 @@ If they are silent for 3–4 seconds, say once: "Just say Accept, Decline, or Re
           type: 'function',
           function: {
             name: 'dispatch_sms_details',
-            description: 'Call only in step 2 after they accepted, when they say SMS (to text details). Then say "I\'ve texted the details to you. Data rates may apply."',
+            description: 'Call only in step 2 after they accepted, when they say SMS. Then say the exact result message returned.',
             parameters: { type: 'object', properties: {} },
           },
         },

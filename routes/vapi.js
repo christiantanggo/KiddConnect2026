@@ -683,6 +683,18 @@ router.post("/webhook", async (req, res) => {
     }
   }
 
+  // function-call: handle synchronously so we can return a result for the assistant to speak (e.g. "no email on file")
+  const eventType = req.body?.type || req.body?.event || req.body?.message?.type;
+  if (eventType === 'function-call') {
+    try {
+      const result = await handleFunctionCall(req.body.message || req.body);
+      return res.status(200).json(result != null && typeof result === 'object' ? result : { received: true });
+    } catch (e) {
+      console.error('[VAPI Webhook] function-call error', e);
+      return res.status(200).json({ received: true });
+    }
+  }
+
   // For all other events: respond immediately so VAPI doesn't time out
   res.status(200).json({ received: true });
 
@@ -1931,18 +1943,17 @@ async function handleFunctionCall(event) {
       return;
     }
     if (functionName === 'dispatch_email_details') {
-      await handleDispatchEmailDetails(event);
-      return;
+      return await handleDispatchEmailDetails(event);
     }
     if (functionName === 'dispatch_sms_details') {
-      await handleDispatchSmsDetails(event);
-      return;
+      return await handleDispatchSmsDetails(event);
     }
     console.log(`[VAPI Webhook] ⚠️ Unhandled function: ${functionName}`);
   } catch (error) {
     console.error(`[VAPI Webhook] ❌ Error handling function call:`, error);
     // Don't throw - function calls are non-blocking
   }
+  return undefined;
 }
 
 /**
@@ -1990,14 +2001,14 @@ async function handleDispatchProviderResponse(functionName, event) {
 
 /**
  * Get dispatch call row and request + provider for a VAPI call (emergency dispatch).
- * @returns {{ request, provider } | null}
+ * @returns {{ request, provider, dispatch_log_id } | null}
  */
 async function getDispatchCallContext(callId) {
   if (!callId) return null;
   const { supabaseClient } = await import("../config/database.js");
   const { data: row } = await supabaseClient
     .from('emergency_dispatch_calls')
-    .select('service_request_id, provider_id')
+    .select('service_request_id, provider_id, dispatch_log_id')
     .eq('vapi_call_id', callId)
     .single();
   if (!row) return null;
@@ -2012,11 +2023,12 @@ async function getDispatchCallContext(callId) {
     .eq('id', row.provider_id)
     .single();
   if (!request || !provider) return null;
-  return { request, provider };
+  return { request, provider, dispatch_log_id: row.dispatch_log_id };
 }
 
 /**
  * Handle dispatch_email_details: email request details to the provider.
+ * Returns { result: string } for the assistant to speak (e.g. "no email on file").
  */
 async function handleDispatchEmailDetails(event) {
   const call = event.call || event.message?.call || event.message?.artifact?.call || {};
@@ -2024,25 +2036,35 @@ async function handleDispatchEmailDetails(event) {
   const ctx = await getDispatchCallContext(callId);
   if (!ctx) {
     console.warn('[VAPI Webhook] dispatch_email_details: no dispatch context for call', callId);
-    return;
+    return { result: "I couldn't find this call. Please try again or say SMS to get the details by text." };
   }
-  const { request, provider } = ctx;
+  const { request, provider, dispatch_log_id } = ctx;
   const email = (provider.email && String(provider.email).trim()) || null;
   if (!email) {
     console.warn('[VAPI Webhook] dispatch_email_details: provider has no email', provider.id);
-    return;
+    return { result: "There is no email on file for your business. Add your email in the provider directory, or say SMS to get the details by text." };
   }
   try {
     const { sendEmergencyIntakeEmail } = await import("../services/notifications.js");
     await sendEmergencyIntakeEmail(email, request);
     console.log('[VAPI Webhook] Emergency dispatch: emailed details to provider', provider.id);
+    if (dispatch_log_id) {
+      const { supabaseClient } = await import("../config/database.js");
+      await supabaseClient
+        .from('emergency_dispatch_log')
+        .update({ email_sent_at: new Date().toISOString() })
+        .eq('id', dispatch_log_id);
+    }
+    return { result: "I've emailed the details to you." };
   } catch (err) {
     console.error('[VAPI Webhook] dispatch_email_details failed:', err?.message || err);
+    return { result: "The email could not be sent. Say SMS to get the details by text instead." };
   }
 }
 
 /**
  * Handle dispatch_sms_details: text request details to the provider. SMS rates may apply.
+ * Returns { result: string } for the assistant to speak.
  */
 async function handleDispatchSmsDetails(event) {
   const call = event.call || event.message?.call || event.message?.artifact?.call || {};
@@ -2050,20 +2072,20 @@ async function handleDispatchSmsDetails(event) {
   const ctx = await getDispatchCallContext(callId);
   if (!ctx) {
     console.warn('[VAPI Webhook] dispatch_sms_details: no dispatch context for call', callId);
-    return;
+    return { result: "I couldn't find this call. Please try again." };
   }
-  const { request, provider } = ctx;
+  const { request, provider, dispatch_log_id } = ctx;
   const toNumber = (provider.phone && String(provider.phone).replace(/\D/g, '')) || null;
   if (!toNumber) {
     console.warn('[VAPI Webhook] dispatch_sms_details: provider has no phone', provider.id);
-    return;
+    return { result: "There is no phone number on file to text. The details were shared at the start of this call." };
   }
   const fromConfig = await (await import("../services/emergency-network/config.js")).getEmergencyConfig();
   const numbers = fromConfig?.emergency_phone_numbers || [];
   const fromDigits = numbers.length > 0 ? String(numbers[0]).replace(/\D/g, '') : '';
   if (!fromDigits) {
     console.warn('[VAPI Webhook] dispatch_sms_details: no emergency from number configured');
-    return;
+    return { result: "Text is not configured. The details were shared at the start of this call." };
   }
   const fromE164 = fromDigits.length === 10 ? `+1${fromDigits}` : fromDigits.length === 11 && fromDigits.startsWith('1') ? `+${fromDigits}` : `+${fromDigits}`;
   const toE164 = toNumber.length === 10 ? `+1${toNumber}` : toNumber.startsWith('+') ? toNumber : `+${toNumber}`;
@@ -2080,8 +2102,17 @@ async function handleDispatchSmsDetails(event) {
     const { sendSMSDirect } = await import("../services/notifications.js");
     await sendSMSDirect(fromE164, toE164, messageText, true);
     console.log('[VAPI Webhook] Emergency dispatch: texted details to provider', provider.id);
+    if (dispatch_log_id) {
+      const { supabaseClient } = await import("../config/database.js");
+      await supabaseClient
+        .from('emergency_dispatch_log')
+        .update({ sms_sent_at: new Date().toISOString() })
+        .eq('id', dispatch_log_id);
+    }
+    return { result: "I've texted the details to you. Data rates may apply." };
   } catch (err) {
     console.error('[VAPI Webhook] dispatch_sms_details failed:', err?.message || err);
+    return { result: "The text could not be sent. The details were shared at the start of this call." };
   }
 }
 

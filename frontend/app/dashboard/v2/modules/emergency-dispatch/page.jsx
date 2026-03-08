@@ -8,7 +8,7 @@ import { emergencyNetworkAPI } from '@/lib/api';
 import {
   ArrowLeft, Loader, RefreshCw, Phone, MessageSquare, Globe, Save, Plus, Trash2, Bot, Pencil,
   Settings, ListChecks, Wrench, RotateCcw, PhoneCall, Mail, Truck, GripVertical, ChevronUp, ChevronDown,
-  LayoutDashboard, Layers,
+  LayoutDashboard, Layers, X,
 } from 'lucide-react';
 
 const STATUS_OPTIONS = ['New', 'Contacting Providers', 'Accepted', 'Connected', 'Closed', 'Needs Manual Assist'];
@@ -80,6 +80,9 @@ export default function EmergencyDispatchPage() {
   const [linkingAgent, setLinkingAgent] = useState(false);
   const [callProviderLoadingId, setCallProviderLoadingId] = useState(null);
   const [resetDispatchLoadingId, setResetDispatchLoadingId] = useState(null);
+  const [selectedRequestId, setSelectedRequestId] = useState(null);
+  const [requestDetailLog, setRequestDetailLog] = useState([]);
+  const [loadingDetail, setLoadingDetail] = useState(false);
 
   const handleResetDispatch = async (requestId) => {
     setResetDispatchLoadingId(requestId);
@@ -145,6 +148,21 @@ export default function EmergencyDispatchPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  // When a request is selected for detail view, fetch its dispatch log (provider call-outs, email/SMS)
+  useEffect(() => {
+    if (!selectedRequestId) {
+      setRequestDetailLog([]);
+      return;
+    }
+    let cancelled = false;
+    setLoadingDetail(true);
+    emergencyNetworkAPI.getDispatchLog(selectedRequestId)
+      .then((res) => { if (!cancelled) setRequestDetailLog(res.data?.log ?? []); })
+      .catch(() => { if (!cancelled) setRequestDetailLog([]); })
+      .finally(() => { if (!cancelled) setLoadingDetail(false); });
+    return () => { cancelled = true; };
+  }, [selectedRequestId]);
 
   // Refetch requests (and dispatch log) periodically when viewing dashboard or recent calls so status updates (e.g. Accepted) appear without manual refresh
   useEffect(() => {
@@ -501,7 +519,14 @@ export default function EmergencyDispatchPage() {
                   ) : (
                     <div className="space-y-2">
                       {recentCalls.slice(0, 5).map((r) => (
-                        <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100">
+                        <div
+                          key={r.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedRequestId(r.id)}
+                          onKeyDown={(e) => e.key === 'Enter' && setSelectedRequestId(r.id)}
+                          className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 cursor-pointer"
+                        >
                           <div>
                             <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
                             <p className="text-xs text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : ''} · {r.service_category}</p>
@@ -522,7 +547,14 @@ export default function EmergencyDispatchPage() {
                   ) : (
                     <div className="space-y-2">
                       {recentMessages.slice(0, 5).map((r) => (
-                        <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100">
+                        <div
+                          key={r.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={() => setSelectedRequestId(r.id)}
+                          onKeyDown={(e) => e.key === 'Enter' && setSelectedRequestId(r.id)}
+                          className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 cursor-pointer"
+                        >
                           <div>
                             <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
                             <p className="text-xs text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : ''} · {r.intake_channel}</p>
@@ -979,7 +1011,11 @@ export default function EmergencyDispatchPage() {
                       <tr><td colSpan={8} className="py-4 text-slate-500 text-center">No phone calls yet</td></tr>
                     ) : (
                       recentCalls.map((r) => (
-                        <tr key={r.id} className="border-b border-slate-100">
+                        <tr
+                          key={r.id}
+                          className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                          onClick={() => setSelectedRequestId(r.id)}
+                        >
                           <td className="py-2 pr-2">{r.caller_name || '—'}</td>
                           <td className="py-2 pr-2">{r.callback_phone}</td>
                           <td className="py-2 pr-2">{r.service_category}</td>
@@ -987,7 +1023,7 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2 max-w-[120px] truncate" title={r.location}>{r.location || '—'}</td>
                           <td className="py-2 pr-2">{r.status}</td>
                           <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
-                          <td className="py-2 flex flex-wrap items-center gap-1">
+                          <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
                               <button
                                 type="button"
@@ -1049,7 +1085,11 @@ export default function EmergencyDispatchPage() {
                       <tr><td colSpan={8} className="py-4 text-slate-500 text-center">No form or SMS requests yet</td></tr>
                     ) : (
                       recentMessages.map((r) => (
-                        <tr key={r.id} className="border-b border-slate-100">
+                        <tr
+                          key={r.id}
+                          className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                          onClick={() => setSelectedRequestId(r.id)}
+                        >
                           <td className="py-2 pr-2">{r.intake_channel === 'form' ? <Globe className="w-4 h-4 inline" /> : <MessageSquare className="w-4 h-4 inline" />} {r.intake_channel}</td>
                           <td className="py-2 pr-2">{r.caller_name || '—'}</td>
                           <td className="py-2 pr-2">{r.callback_phone}</td>
@@ -1057,7 +1097,7 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2">{r.urgency_level}</td>
                           <td className="py-2 pr-2">{r.status}</td>
                           <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
-                          <td className="py-2 flex flex-wrap items-center gap-1">
+                          <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
                             {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
                               <button
                                 type="button"
@@ -1193,6 +1233,82 @@ export default function EmergencyDispatchPage() {
               </div>
             </section>
           )}
+
+          {/* Request detail modal: what happened (provider call-outs, email, SMS) */}
+          {selectedRequestId && (() => {
+            const req = requests.find((r) => r.id === selectedRequestId);
+            const activity = [...(requestDetailLog || [])].reverse(); // chronological: first call first
+            const resultLabel = (r) => ({ accepted: 'Accepted', declined: 'Declined', no_answer: 'No answer', error: 'Error', pending: 'Pending' })[r] || r;
+            return (
+              <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setSelectedRequestId(null)}>
+                <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center justify-between p-4 border-b border-slate-200">
+                    <h3 className="text-lg font-semibold text-slate-800">Request details & activity</h3>
+                    <button type="button" onClick={() => setSelectedRequestId(null)} className="p-2 rounded-lg hover:bg-slate-100 text-slate-600">
+                      <X className="w-5 h-5" />
+                    </button>
+                  </div>
+                  <div className="p-4 overflow-y-auto flex-1 space-y-4">
+                    {req ? (
+                      <>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                          <p><span className="text-slate-500">Caller</span> {req.caller_name || '—'}</p>
+                          <p><span className="text-slate-500">Callback</span> {req.callback_phone}</p>
+                          <p><span className="text-slate-500">Service</span> {req.service_category}</p>
+                          <p><span className="text-slate-500">Urgency</span> {req.urgency_level}</p>
+                          <p><span className="text-slate-500">Status</span> <span className="font-medium">{req.status}</span></p>
+                          <p><span className="text-slate-500">Created</span> {req.created_at ? new Date(req.created_at).toLocaleString() : '—'}</p>
+                          {req.location && <p className="sm:col-span-2"><span className="text-slate-500">Location</span> {req.location}</p>}
+                          {req.issue_summary && <p className="sm:col-span-2"><span className="text-slate-500">Issue</span> {req.issue_summary}</p>}
+                        </div>
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-700 mb-2">What happened</h4>
+                          {loadingDetail ? (
+                            <p className="text-slate-500 flex items-center gap-2"><Loader className="w-4 h-4 animate-spin" /> Loading activity…</p>
+                          ) : activity.length === 0 ? (
+                            <p className="text-slate-500">No provider call-outs yet.</p>
+                          ) : (
+                            <ul className="space-y-3">
+                              {activity.map((entry) => (
+                                <li key={entry.id} className="p-3 rounded-lg border border-slate-200 bg-slate-50/50 text-sm">
+                                  <div className="flex flex-wrap items-center gap-2 font-medium text-slate-800">
+                                    <PhoneCall className="w-4 h-4 text-slate-500" />
+                                    {entry.provider_business_name || entry.emergency_providers?.business_name || 'Provider'}
+                                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-slate-200 text-slate-700">
+                                      {resultLabel(entry.result)}
+                                    </span>
+                                    {entry.attempted_at && (
+                                      <span className="text-slate-500 text-xs">{new Date(entry.attempted_at).toLocaleString()}</span>
+                                    )}
+                                  </div>
+                                  <div className="mt-1.5 flex flex-wrap gap-3 text-slate-600">
+                                    {entry.email_sent_at && (
+                                      <span className="inline-flex items-center gap-1">
+                                        <Mail className="w-3.5 h-3.5 text-emerald-600" />
+                                        Email sent {new Date(entry.email_sent_at).toLocaleString()}
+                                      </span>
+                                    )}
+                                    {entry.sms_sent_at && (
+                                      <span className="inline-flex items-center gap-1">
+                                        <MessageSquare className="w-3.5 h-3.5 text-emerald-600" />
+                                        SMS sent {new Date(entry.sms_sent_at).toLocaleString()}
+                                      </span>
+                                    )}
+                                  </div>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      </>
+                    ) : (
+                      <p className="text-slate-500">Request not found.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </V2AppShell>
     </AuthGuard>

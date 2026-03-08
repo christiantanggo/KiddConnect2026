@@ -606,18 +606,56 @@ router.delete('/providers/:id', async (req, res) => {
 
 /**
  * GET /api/v2/emergency-network/dispatch-log?request_id=xxx
+ * Returns log entries with provider business_name and email_sent_at, sms_sent_at when present.
+ * Falls back to basic columns + separate provider fetch if new columns or embed are missing (e.g. migration not run yet).
  */
 router.get('/dispatch-log', async (req, res) => {
   try {
     const requestId = req.query.request_id;
+    // Try full query first (new columns + provider embed)
     let q = supabaseClient
       .from('emergency_dispatch_log')
-      .select('id, service_request_id, provider_id, attempt_order, result, attempted_at')
+      .select('id, service_request_id, provider_id, attempt_order, result, attempted_at, email_sent_at, sms_sent_at, emergency_providers(business_name)')
       .order('attempted_at', { ascending: false });
     if (requestId) q = q.eq('service_request_id', requestId);
-    const { data, error } = await q.limit(100);
-    if (error) return res.status(500).json({ error: error.message });
-    res.json({ log: data || [] });
+    let { data, error } = await q.limit(100);
+
+    // Fallback: if columns or embed fail (e.g. migration not run), use basic select and fetch provider names separately
+    if (error) {
+      console.warn('[EmergencyNetwork] dispatch-log fallback:', error.message);
+      let basicQ = supabaseClient
+        .from('emergency_dispatch_log')
+        .select('id, service_request_id, provider_id, attempt_order, result, attempted_at')
+        .order('attempted_at', { ascending: false });
+      if (requestId) basicQ = basicQ.eq('service_request_id', requestId);
+      const basicRes = await basicQ.limit(100);
+      if (basicRes.error) return res.status(500).json({ error: basicRes.error.message });
+      data = basicRes.data || [];
+      const providerIds = [...new Set((data).map((r) => r.provider_id).filter(Boolean))];
+      let providers = [];
+      if (providerIds.length > 0) {
+        const { data: provData } = await supabaseClient
+          .from('emergency_providers')
+          .select('id, business_name')
+          .in('id', providerIds);
+        providers = provData || [];
+      }
+      const provById = Object.fromEntries(providers.map((p) => [p.id, p]));
+      const log = (data || []).map((row) => ({
+        ...row,
+        email_sent_at: null,
+        sms_sent_at: null,
+        provider_business_name: provById[row.provider_id]?.business_name ?? null,
+      }));
+      return res.json({ log });
+    }
+
+    // Normalize: Supabase may return emergency_providers as object or array
+    const log = (data || []).map((row) => ({
+      ...row,
+      provider_business_name: row.emergency_providers?.business_name ?? (Array.isArray(row.emergency_providers) ? row.emergency_providers[0]?.business_name : null),
+    }));
+    res.json({ log });
   } catch (err) {
     console.error('[EmergencyNetwork] dispatch-log error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load dispatch log' });
