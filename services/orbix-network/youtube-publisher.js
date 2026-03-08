@@ -445,6 +445,41 @@ export async function publishVideo(businessId, renderId, videoUrlOrPath, metadat
 }
 
 /**
+ * Post a top-level comment on a YouTube video. Uses same OAuth as upload (for dad joke: same channel).
+ * YouTube Data API v3 does not support pinning comments; the first comment by the channel will appear at top by time.
+ * @param {string} businessId - Business ID
+ * @param {string} videoId - YouTube video ID
+ * @param {string} text - Comment text
+ * @param {{ orbixChannelId?: string, useManual?: boolean }} [options] - Same as publishVideo for consistent channel
+ * @returns {Promise<Object>} Comment resource
+ */
+export async function insertComment(businessId, videoId, text, options = {}) {
+  const orbixChannelId = options.orbixChannelId || null;
+  try {
+    const auth = await getYouTubeClient(businessId, orbixChannelId, { useManual: options.useManual });
+    const youtube = google.youtube({ version: 'v3', auth });
+    const response = await youtube.commentThreads.insert({
+      part: ['snippet'],
+      requestBody: {
+        snippet: {
+          videoId,
+          topLevelComment: {
+            snippet: {
+              textOriginal: (text || '').trim().slice(0, 10000)
+            }
+          }
+        }
+      }
+    });
+    console.log('[YouTube Publisher] Comment posted videoId=', videoId, 'commentId=', response.data?.id);
+    return response.data;
+  } catch (error) {
+    console.error('[YouTube Publisher] insertComment failed', { videoId, message: error.message });
+    throw error;
+  }
+}
+
+/**
  * Upload a caption track (SRT) to an existing YouTube video.
  * @param {string} businessId - Business ID
  * @param {string} videoId - YouTube video ID

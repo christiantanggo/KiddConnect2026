@@ -6,7 +6,7 @@
  *   4–7s:   3-2-1 countdown (large, visible)
  *   7s:     Countdown to zero, then TTS says the answer (punchline)
  *   7s–end: Punchline on screen; TTS can continue over CTA
- *   last 1.5s: "Comment your worst dad joke" then loop
+ *   last 1.5s: rotating CTA (e.g. "Rate this dad joke 1-10") then loop
  *
  * Total: variable (min 8s). Video length = TTS content end + CTA; no hard 8s stop.
  */
@@ -84,9 +84,12 @@ async function generateDadJokeASSFile(opts) {
   const punchlineEnd = opts.punchlineEnd ?? COUNTDOWN_END + 1;
   const loopEnd = opts.loopEnd ?? COUNTDOWN_END + 2;
 
+  const { getDadJokeCta } = await import('./dad-joke-cta.js');
+  const episodeIndex = opts.episode_number ?? 0;
+  const defaultCta = getDadJokeCta(episodeIndex);
   const setupText = (opts.setup || '').trim().toUpperCase();
   const punchlineText = (opts.punchline || '').trim().toUpperCase();
-  const loopLine = (opts.loopLine || 'Comment your worst dad joke').trim();
+  const loopLine = (opts.loopLine || defaultCta).trim();
 
   const wrapText = (text, maxChars) => {
     const words = (text || '').split(/\s+/).filter(Boolean);
@@ -168,10 +171,13 @@ export async function processDadJokeRenderJob(render, story, script) {
   const content = script?.content_json
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
     : {};
+  const { getDadJokeCta } = await import('./dad-joke-cta.js');
+  const episodeIndex = content?.episode_number ?? 0;
+  const defaultCta = getDadJokeCta(episodeIndex);
   const setup = stripEmoji((content?.setup || '').trim().slice(0, 200));
   const punchline = stripEmoji((content?.punchline || '').trim().slice(0, 100));
   const voice_script = stripEmoji((content?.voice_script || setup).trim().slice(0, 300));
-  const hook = stripEmoji((content?.hook || 'Comment your worst dad joke').trim());
+  const hook = stripEmoji((content?.hook || defaultCta).trim());
 
   if (!setup || !punchline) {
     throw new Error(`Dad joke render missing content: setup="${setup}" punchline="${punchline}"`);
@@ -203,7 +209,7 @@ export async function processDadJokeRenderJob(render, story, script) {
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
-    assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd });
+    assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd, episode_number: episodeIndex });
     simpleAssPath = join(tmpdir(), `dadjoke-ass-${renderId}-${Date.now()}.ass`);
     await fs.promises.copyFile(assPath, simpleAssPath);
     const escapedAssPath = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");

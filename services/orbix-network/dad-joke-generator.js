@@ -140,13 +140,14 @@ Return JSON:
         continue;
       }
 
+      const { getDadJokeCta } = await import('./dad-joke-cta.js');
       return {
         setup,
         punchline,
         voice_script,
         content_fingerprint,
         episode_number: episodeNumber,
-        hook: 'Comment your worst dad joke 👇'
+        hook: getDadJokeCta(episodeNumber)
       };
     } catch (err) {
       console.error(`[Dad Joke Generator] Attempt ${attempt} error:`, err?.message);

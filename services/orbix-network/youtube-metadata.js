@@ -2,6 +2,7 @@
  * YouTube Shorts metadata generation for Orbix Network.
  * Psychology and money categories use dedicated title/description/hashtag rules.
  */
+import { getDadJokeCta } from './dad-joke-cta.js';
 
 const PSYCHOLOGY_HASHTAGS = [
   '#psychology',
@@ -215,9 +216,9 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
 
   if (isDadJoke) {
     title = sanitizeTitleForYouTube(story?.title || 'Dad Joke');
-    const setup = (content?.setup || '').trim();
-    const punchline = (content?.punchline || '').trim();
-    description = (setup ? `${setup}\n\n${punchline}\n\n` : '') + 'Clean humor. Family friendly. Comment your worst dad joke 👇';
+    const episodeIndex = content?.episode_number ?? 0;
+    const cta = getDadJokeCta(episodeIndex);
+    description = 'Clean humor. Family friendly. ' + cta;
     hashtags = DAD_JOKE_HASHTAGS.slice(0, 6).join(' ');
   } else if (isMindTeaser) {
     const questionText = (content?.question || '').trim();

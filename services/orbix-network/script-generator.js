@@ -371,7 +371,8 @@ export async function generateScript(story, rawItem) {
       const setup = (joke.setup || '').trim();
       const punchline = (joke.punchline || '').trim();
       const voice_script = (joke.voice_script || setup).trim();
-      const endCta = (joke.hook || 'Comment your worst dad joke 👇').trim();
+      const { getDadJokeCta } = await import('./dad-joke-cta.js');
+      const endCta = (joke.hook || getDadJokeCta(joke.episode_number ?? 0)).trim();
       if (!setup || !punchline) {
         throw new Error('Dad joke snippet missing setup or punchline');
       }

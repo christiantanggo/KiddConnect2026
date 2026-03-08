@@ -865,6 +865,23 @@ export async function step8YouTubeUpload(renderId, renderJob, step6VideoPath, st
     writeProgressLog('STEP_8_PUBLISH_DONE', { renderId, videoId: result?.videoId });
     console.log(`[Step 8 YouTube] SUCCESS videoId=${result.videoId} url=${result.url}`);
 
+    // Dad joke: post CTA as first comment (same rotating line as description/video). API does not support pinning; first comment by channel appears at top.
+    try {
+      const { data: storyRow } = await supabaseClient.from('orbix_stories').select('category').eq('id', render.story_id).single();
+      if ((storyRow?.category || '').toLowerCase() === 'dadjoke' && result?.videoId) {
+        const { data: scriptRow } = await supabaseClient.from('orbix_scripts').select('content_json').eq('id', render.script_id).single();
+        const content = scriptRow?.content_json ? (typeof scriptRow.content_json === 'string' ? JSON.parse(scriptRow.content_json) : scriptRow.content_json) : {};
+        const episodeIndex = content?.episode_number ?? 0;
+        const { getDadJokeCta } = await import('./dad-joke-cta.js');
+        const ctaText = getDadJokeCta(episodeIndex);
+        const { insertComment } = await import('./youtube-publisher.js');
+        await insertComment(businessId, result.videoId, ctaText, publishOptions);
+        console.log('[Step 8 YouTube] Dad joke comment posted', { videoId: result.videoId, cta: ctaText.slice(0, 40) });
+      }
+    } catch (commentErr) {
+      console.warn('[Step 8 YouTube] Dad joke comment failed (non-fatal)', commentErr?.message);
+    }
+
     // Captions disabled — all text is already rendered as on-screen overlays
     writeProgressLog('STEP_8_CAPTIONS_DONE', { renderId });
 
