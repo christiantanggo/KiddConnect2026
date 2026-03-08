@@ -9,6 +9,12 @@ let cachedConfig = null;
 let cacheTime = 0;
 const CACHE_MS = 30 * 1000; // 30s
 
+/** Default first thing the AI says when the call is answered. */
+export const DEFAULT_OPENING_GREETING = "Thanks for calling the 24/7 Emergency Plumbing line. I can help connect you with a licensed plumber. What's going on—is it a leak, a clog, or something else?";
+
+/** Default service line name used in the system prompt (e.g. "24/7 Emergency Plumbing"). */
+export const DEFAULT_SERVICE_LINE_NAME = "24/7 Emergency Plumbing";
+
 /** Default intake fields for "what the AI collects". Plumbing-only focus; do not list other trades. */
 export const DEFAULT_INTAKE_FIELDS = [
   { key: 'caller_name', label: "Caller's name", required: false, enabled: true },
@@ -45,6 +51,9 @@ export async function getEmergencyConfig() {
     max_dispatch_attempts: 5,
     notification_email: null,
     intake_fields: [...DEFAULT_INTAKE_FIELDS],
+    opening_greeting: DEFAULT_OPENING_GREETING,
+    service_line_name: DEFAULT_SERVICE_LINE_NAME,
+    custom_instructions: '',
   };
   try {
     const { data, error } = await supabaseClient
@@ -73,6 +82,9 @@ export async function getEmergencyConfig() {
       max_dispatch_attempts: typeof value.max_dispatch_attempts === 'number' ? value.max_dispatch_attempts : 5,
       notification_email: (value.notification_email && String(value.notification_email).trim()) || fromEnv || null,
       intake_fields: intakeFields,
+      opening_greeting: (value.opening_greeting && String(value.opening_greeting).trim()) || DEFAULT_OPENING_GREETING,
+      service_line_name: (value.service_line_name && String(value.service_line_name).trim()) || DEFAULT_SERVICE_LINE_NAME,
+      custom_instructions: (value.custom_instructions && String(value.custom_instructions).trim()) || '',
     };
     cacheTime = now;
     return cachedConfig;

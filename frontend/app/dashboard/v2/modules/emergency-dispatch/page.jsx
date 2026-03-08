@@ -26,9 +26,13 @@ const TABS = [
 const SETTINGS_SUB_TABS = [
   { id: 'service-types', label: 'Services we collect for' },
   { id: 'ai-collects', label: 'What the AI collects' },
+  { id: 'greeting-script', label: 'Greeting & script' },
   { id: 'services', label: 'Emergency Services (Provider Directory)' },
   { id: 'communication', label: 'Communication Settings' },
 ];
+
+const DEFAULT_OPENING_GREETING = "Thanks for calling the 24/7 Emergency Plumbing line. I can help connect you with a licensed plumber. What's going on—is it a leak, a clog, or something else?";
+const DEFAULT_SERVICE_LINE_NAME = '24/7 Emergency Plumbing';
 
 const BUILT_IN_KEYS = new Set(['caller_name', 'callback_phone', 'service_category', 'urgency_level', 'location', 'issue_summary']);
 const DEFAULT_INTAKE_FIELDS = [
@@ -53,6 +57,9 @@ export default function EmergencyDispatchPage() {
     max_dispatch_attempts: 5,
     notification_email: '',
     intake_fields: [...DEFAULT_INTAKE_FIELDS],
+    opening_greeting: DEFAULT_OPENING_GREETING,
+    service_line_name: DEFAULT_SERVICE_LINE_NAME,
+    custom_instructions: '',
   });
   const [analytics, setAnalytics] = useState(null);
   const [configSaving, setConfigSaving] = useState(false);
@@ -90,6 +97,9 @@ export default function EmergencyDispatchPage() {
         intake_fields: Array.isArray(configRes.data?.intake_fields) && configRes.data.intake_fields.length > 0
           ? configRes.data.intake_fields
           : [...DEFAULT_INTAKE_FIELDS],
+        opening_greeting: configRes.data?.opening_greeting ?? DEFAULT_OPENING_GREETING,
+        service_line_name: configRes.data?.service_line_name ?? DEFAULT_SERVICE_LINE_NAME,
+        custom_instructions: configRes.data?.custom_instructions ?? '',
       });
       setRequests(requestsRes.data?.requests ?? []);
       setProviders(providersRes.data?.providers ?? []);
@@ -117,6 +127,9 @@ export default function EmergencyDispatchPage() {
         max_dispatch_attempts: c.max_dispatch_attempts ?? 5,
         notification_email: (c.notification_email && String(c.notification_email).trim()) || null,
         intake_fields: Array.isArray(c.intake_fields) ? c.intake_fields : [...DEFAULT_INTAKE_FIELDS],
+        opening_greeting: (c.opening_greeting && String(c.opening_greeting).trim()) || null,
+        service_line_name: (c.service_line_name && String(c.service_line_name).trim()) || null,
+        custom_instructions: (c.custom_instructions && String(c.custom_instructions).trim()) || null,
       };
       const res = await emergencyNetworkAPI.updateConfig(toSend);
       const data = res.data || {};
@@ -128,6 +141,9 @@ export default function EmergencyDispatchPage() {
         max_dispatch_attempts: configRest.max_dispatch_attempts ?? c.max_dispatch_attempts ?? 5,
         notification_email: configRest.notification_email ?? c.notification_email ?? '',
         intake_fields: Array.isArray(configRest.intake_fields) && configRest.intake_fields.length > 0 ? configRest.intake_fields : (c.intake_fields ?? []),
+        opening_greeting: configRest.opening_greeting ?? c.opening_greeting ?? prev.opening_greeting ?? DEFAULT_OPENING_GREETING,
+        service_line_name: configRest.service_line_name ?? c.service_line_name ?? prev.service_line_name ?? DEFAULT_SERVICE_LINE_NAME,
+        custom_instructions: configRest.custom_instructions ?? c.custom_instructions ?? prev.custom_instructions ?? '',
       }));
       setConfigDirty(false);
       if (link_result) {
@@ -629,6 +645,54 @@ export default function EmergencyDispatchPage() {
               </section>
             );
           })()}
+
+              {settingsSubTab === 'greeting-script' && (
+            <section className="bg-white rounded-xl border border-slate-200 p-6">
+              <h2 className="text-lg font-medium mb-4">Greeting & script</h2>
+              <p className="text-slate-600 text-sm mb-4">Configure how the AI answers the phone. Rebuild the agent after saving for changes to take effect.</p>
+              <div className="space-y-4 max-w-2xl">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Opening greeting</label>
+                  <p className="text-xs text-slate-500 mb-1">First thing the AI says when the caller is connected.</p>
+                  <textarea
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm min-h-[80px]"
+                    placeholder={DEFAULT_OPENING_GREETING}
+                    value={config.opening_greeting ?? ''}
+                    onChange={(e) => { setConfig((c) => ({ ...c, opening_greeting: e.target.value })); setConfigDirty(true); }}
+                    rows={3}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Service line name</label>
+                  <p className="text-xs text-slate-500 mb-1">Used in the AI’s script (e.g. “You are the voice of a [X] dispatch line”).</p>
+                  <input
+                    type="text"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                    placeholder={DEFAULT_SERVICE_LINE_NAME}
+                    value={config.service_line_name ?? ''}
+                    onChange={(e) => { setConfig((c) => ({ ...c, service_line_name: e.target.value })); setConfigDirty(true); }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Custom instructions (optional)</label>
+                  <p className="text-xs text-slate-500 mb-1">Extra rules or phrasing added to the AI’s system prompt.</p>
+                  <textarea
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm min-h-[80px]"
+                    placeholder="e.g. Always confirm the callback number before ending the call."
+                    value={config.custom_instructions ?? ''}
+                    onChange={(e) => { setConfig((c) => ({ ...c, custom_instructions: e.target.value })); setConfigDirty(true); }}
+                    rows={3}
+                  />
+                </div>
+                {configDirty && (
+                  <button type="button" onClick={saveConfig} disabled={configSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
+                    <Save className="w-4 h-4" /> {configSaving ? 'Saving...' : 'Save config'}
+                  </button>
+                )}
+                {configSaveMessage && <p className={`text-sm ${configSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{configSaveMessage}</p>}
+              </div>
+            </section>
+          )}
 
               {settingsSubTab === 'services' && (
             <section className="bg-white rounded-xl border border-slate-200 p-6">
