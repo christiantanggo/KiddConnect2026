@@ -442,8 +442,10 @@ router.post('/requests/:id/reset-dispatch', async (req, res) => {
     if (updateErr) {
       return res.status(500).json({ error: 'Failed to reset status: ' + (updateErr.message || updateErr) });
     }
-    const { logRequestActivity } = await import("../services/emergency-network/activity.js");
-    await logRequestActivity(requestId, 'dispatch_reset', { source: 'manual', changed_by: 'Dashboard' });
+    try {
+      const { logRequestActivity } = await import("../../services/emergency-network/activity.js");
+      await logRequestActivity(requestId, 'dispatch_reset', { source: 'manual', changed_by: 'Dashboard' });
+    } catch (_) { /* activity log optional */ }
     res.json({ success: true, message: 'Dispatch reset. You can tap Call plumber again.' });
   } catch (err) {
     console.error('[EmergencyNetwork] reset-dispatch error:', err?.message || err);
@@ -478,8 +480,10 @@ router.post('/requests/:id/call-provider', async (req, res) => {
       if (updateErr) {
         return res.status(500).json({ error: 'Failed to update status: ' + (updateErr.message || updateErr) });
       }
-      const { logRequestActivity } = await import("../services/emergency-network/activity.js");
-      await logRequestActivity(requestId, 'status_change', { from_status: 'New', to_status: 'Contacting Providers', source: 'manual', changed_by: 'Dashboard' });
+      try {
+        const { logRequestActivity } = await import("../../services/emergency-network/activity.js");
+        await logRequestActivity(requestId, 'status_change', { from_status: 'New', to_status: 'Contacting Providers', source: 'manual', changed_by: 'Dashboard' });
+      } catch (_) { /* activity log optional */ }
     }
     await callNextProvider(requestId);
     res.json({ success: true, message: 'Call to next provider initiated.' });
@@ -507,8 +511,10 @@ router.patch('/requests/:id', express.json(), async (req, res) => {
       }
       const { data, error } = await supabaseClient.from('emergency_service_requests').update(updates).eq('id', id).select().single();
       if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
-      const { logRequestActivity } = await import("../services/emergency-network/activity.js");
-      await logRequestActivity(id, 'status_change', { from_status: current?.status, to_status: status, source: 'manual', changed_by: 'Dashboard' });
+      try {
+        const { logRequestActivity } = await import("../../services/emergency-network/activity.js");
+        await logRequestActivity(id, 'status_change', { from_status: current?.status, to_status: status, source: 'manual', changed_by: 'Dashboard' });
+      } catch (_) { /* activity log optional */ }
       return res.json(data);
     }
     const updates = { updated_at: new Date().toISOString() };
