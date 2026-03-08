@@ -1850,8 +1850,16 @@ export async function createOutboundCall(options) {
   } else {
     payload.assistant = assistant;
   }
-  const response = await getVapiClient().post('/call', payload);
-  return response.data;
+  try {
+    const response = await getVapiClient().post('/call', payload);
+    return response.data;
+  } catch (err) {
+    const status = err.response?.status;
+    const body = err.response?.data;
+    const detail = body != null ? (typeof body === 'string' ? body : JSON.stringify(body)) : err.message;
+    console.error('[VAPI] createOutboundCall failed:', status, detail);
+    throw new Error(`VAPI outbound call failed (${status || 'network'}): ${detail}`);
+  }
 }
 
 /**

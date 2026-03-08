@@ -267,7 +267,8 @@ export async function callNextProvider(requestId) {
     }
     console.log('[EmergencyDispatch] Outbound call placed:', { requestId, providerId: next.provider.id, callId });
   } catch (err) {
-    console.error('[EmergencyDispatch] createOutboundCall failed:', err?.message || err);
+    const vapiDetail = err?.response?.data != null ? JSON.stringify(err.response.data) : '';
+    console.error('[EmergencyDispatch] createOutboundCall failed:', err?.message || err, vapiDetail || '');
     await supabaseClient
       .from('emergency_dispatch_log')
       .update({ result: 'error' })
