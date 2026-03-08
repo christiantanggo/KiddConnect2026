@@ -82,6 +82,7 @@ export default function EmergencyDispatchPage() {
   const [resetDispatchLoadingId, setResetDispatchLoadingId] = useState(null);
   const [selectedRequestId, setSelectedRequestId] = useState(null);
   const [requestDetailLog, setRequestDetailLog] = useState([]);
+  const [requestDetailActivity, setRequestDetailActivity] = useState([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
 
   const handleResetDispatch = async (requestId) => {
@@ -149,17 +150,26 @@ export default function EmergencyDispatchPage() {
 
   useEffect(() => { load(); }, []);
 
-  // When a request is selected for detail view, fetch its dispatch log (provider call-outs, email/SMS)
+  // When a request is selected for detail view, fetch its dispatch log and request activity (resets, status changes)
   useEffect(() => {
     if (!selectedRequestId) {
       setRequestDetailLog([]);
+      setRequestDetailActivity([]);
       return;
     }
     let cancelled = false;
     setLoadingDetail(true);
-    emergencyNetworkAPI.getDispatchLog(selectedRequestId)
-      .then((res) => { if (!cancelled) setRequestDetailLog(res.data?.log ?? []); })
-      .catch(() => { if (!cancelled) setRequestDetailLog([]); })
+    Promise.all([
+      emergencyNetworkAPI.getDispatchLog(selectedRequestId),
+      emergencyNetworkAPI.getRequestActivity(selectedRequestId),
+    ])
+      .then(([logRes, activityRes]) => {
+        if (!cancelled) {
+          setRequestDetailLog(logRes.data?.log ?? []);
+          setRequestDetailActivity(activityRes.data?.activity ?? []);
+        }
+      })
+      .catch(() => { if (!cancelled) setRequestDetailLog([]); setRequestDetailActivity([]); })
       .finally(() => { if (!cancelled) setLoadingDetail(false); });
     return () => { cancelled = true; };
   }, [selectedRequestId]);
@@ -1295,6 +1305,33 @@ export default function EmergencyDispatchPage() {
                                       </span>
                                     )}
                                   </div>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                        {/* Request activity: dispatch resets and status changes (manual vs AI) */}
+                        <div>
+                          <h4 className="text-sm font-semibold text-slate-700 mb-2">Request activity</h4>
+                          {loadingDetail ? null : (requestDetailActivity || []).length === 0 ? (
+                            <p className="text-slate-500 text-sm">No resets or status changes logged yet.</p>
+                          ) : (
+                            <ul className="space-y-2">
+                              {[...(requestDetailActivity || [])].reverse().map((ev) => (
+                                <li key={ev.id} className="p-2.5 rounded-lg border border-slate-200 bg-slate-50/50 text-sm">
+                                  {ev.activity_type === 'dispatch_reset' ? (
+                                    <>
+                                      <span className="font-medium text-slate-800">Dispatch reset</span>
+                                      <span className="text-slate-500 text-xs ml-2">{ev.source === 'ai' ? 'by AI' : 'by staff'}{ev.changed_by ? ` (${ev.changed_by})` : ''}</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span className="font-medium text-slate-800">Status changed</span>
+                                      <span className="text-slate-600"> {ev.from_status || '—'} → {ev.to_status || '—'}</span>
+                                      <span className="text-slate-500 text-xs ml-2">{ev.source === 'ai' ? 'by AI' : 'by staff'}{ev.changed_by ? ` (${ev.changed_by})` : ''}</span>
+                                    </>
+                                  )}
+                                  {ev.created_at && <span className="block text-xs text-slate-500 mt-0.5">{new Date(ev.created_at).toLocaleString()}</span>}
                                 </li>
                               ))}
                             </ul>

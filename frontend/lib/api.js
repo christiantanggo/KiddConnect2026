@@ -486,6 +486,7 @@ export const emergencyNetworkAPI = {
   updateProvider: (id, data) => api.patch(`/v2/emergency-network/providers/${id}`, data, { headers: emergencyNetworkHeaders() }),
   deleteProvider: (id) => api.delete(`/v2/emergency-network/providers/${id}`, { headers: emergencyNetworkHeaders() }),
   getDispatchLog: (requestId) => api.get('/v2/emergency-network/dispatch-log', { params: requestId ? { request_id: requestId } : {}, headers: emergencyNetworkHeaders() }),
+  getRequestActivity: (requestId) => api.get(`/v2/emergency-network/requests/${requestId}/activity`, { headers: emergencyNetworkHeaders() }),
   getAnalytics: () => api.get('/v2/emergency-network/analytics', { headers: emergencyNetworkHeaders() }),
 };
 

@@ -1990,6 +1990,8 @@ async function handleDispatchProviderResponse(functionName, event) {
         updated_at: new Date().toISOString(),
       })
       .eq('id', row.service_request_id);
+    const { logRequestActivity } = await import("../services/emergency-network/activity.js");
+    await logRequestActivity(row.service_request_id, 'status_change', { from_status: 'Contacting Providers', to_status: 'Accepted', source: 'ai' });
     console.log('[VAPI Webhook] Emergency dispatch: provider accepted', row.service_request_id, row.provider_id);
   } else {
     const { callNextProvider } = await import("../services/emergency-network/dispatch.js");

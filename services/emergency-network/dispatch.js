@@ -225,6 +225,8 @@ export async function callNextProvider(requestId) {
         .from('emergency_service_requests')
         .update({ status: 'Needs Manual Assist', updated_at: new Date().toISOString() })
         .eq('id', requestId);
+      const { logRequestActivity } = await import("./activity.js");
+      await logRequestActivity(requestId, 'status_change', { from_status: 'Contacting Providers', to_status: 'Needs Manual Assist', source: 'ai' });
       console.log('[EmergencyDispatch] No eligible provider to call for request', requestId, '— status set to Needs Manual Assist. Add plumbers in Emergency Dispatch → Providers and set is_available.');
     }
     return;

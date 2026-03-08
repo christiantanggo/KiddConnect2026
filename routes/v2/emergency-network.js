@@ -442,6 +442,8 @@ router.post('/requests/:id/reset-dispatch', async (req, res) => {
     if (updateErr) {
       return res.status(500).json({ error: 'Failed to reset status: ' + (updateErr.message || updateErr) });
     }
+    const { logRequestActivity } = await import("../services/emergency-network/activity.js");
+    await logRequestActivity(requestId, 'dispatch_reset', { source: 'manual', changed_by: 'Dashboard' });
     res.json({ success: true, message: 'Dispatch reset. You can tap Call plumber again.' });
   } catch (err) {
     console.error('[EmergencyNetwork] reset-dispatch error:', err?.message || err);
@@ -476,6 +478,8 @@ router.post('/requests/:id/call-provider', async (req, res) => {
       if (updateErr) {
         return res.status(500).json({ error: 'Failed to update status: ' + (updateErr.message || updateErr) });
       }
+      const { logRequestActivity } = await import("../services/emergency-network/activity.js");
+      await logRequestActivity(requestId, 'status_change', { from_status: 'New', to_status: 'Contacting Providers', source: 'manual', changed_by: 'Dashboard' });
     }
     await callNextProvider(requestId);
     res.json({ success: true, message: 'Call to next provider initiated.' });
@@ -493,21 +497,23 @@ router.patch('/requests/:id', express.json(), async (req, res) => {
   try {
     const { id } = req.params;
     const { status, accepted_provider_id } = req.body || {};
-    const updates = { updated_at: new Date().toISOString() };
-    if (status) updates.status = status;
-    if (accepted_provider_id !== undefined) updates.accepted_provider_id = accepted_provider_id;
-    if (status === 'Connected' || status === 'Closed') {
-      updates.connected_at = status === 'Connected' ? new Date().toISOString() : undefined;
-      updates.closed_at = status === 'Closed' ? new Date().toISOString() : undefined;
+    if (status) {
+      const { data: current } = await supabaseClient.from('emergency_service_requests').select('status').eq('id', id).single();
+      const updates = { updated_at: new Date().toISOString(), status };
+      if (accepted_provider_id !== undefined) updates.accepted_provider_id = accepted_provider_id;
+      if (status === 'Connected' || status === 'Closed') {
+        updates.connected_at = status === 'Connected' ? new Date().toISOString() : undefined;
+        updates.closed_at = status === 'Closed' ? new Date().toISOString() : undefined;
+      }
+      const { data, error } = await supabaseClient.from('emergency_service_requests').update(updates).eq('id', id).select().single();
+      if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
+      const { logRequestActivity } = await import("../services/emergency-network/activity.js");
+      await logRequestActivity(id, 'status_change', { from_status: current?.status, to_status: status, source: 'manual', changed_by: 'Dashboard' });
+      return res.json(data);
     }
-
-    const { data, error } = await supabaseClient
-      .from('emergency_service_requests')
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single();
-
+    const updates = { updated_at: new Date().toISOString() };
+    if (accepted_provider_id !== undefined) updates.accepted_provider_id = accepted_provider_id;
+    const { data, error } = await supabaseClient.from('emergency_service_requests').update(updates).eq('id', id).select().single();
     if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
     res.json(data);
   } catch (err) {
@@ -659,6 +665,30 @@ router.get('/dispatch-log', async (req, res) => {
   } catch (err) {
     console.error('[EmergencyNetwork] dispatch-log error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load dispatch log' });
+  }
+});
+
+/**
+ * GET /api/v2/emergency-network/requests/:id/activity
+ * Request-level activity: dispatch resets and status changes (manual vs AI).
+ */
+router.get('/requests/:id/activity', async (req, res) => {
+  try {
+    const { id: requestId } = req.params;
+    const { data, error } = await supabaseClient
+      .from('emergency_request_activity')
+      .select('id, activity_type, from_status, to_status, source, changed_by, created_at')
+      .eq('service_request_id', requestId)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) {
+      if (error.code === '42P01' || error.message?.includes('does not exist')) return res.json({ activity: [] });
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ activity: data || [] });
+  } catch (err) {
+    console.error('[EmergencyNetwork] request activity error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load activity' });
   }
 });
 
