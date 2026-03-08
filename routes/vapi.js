@@ -1249,9 +1249,38 @@ async function handleCallEnd(event) {
         console.warn("[VAPI Webhook] Emergency: no notification_email configured, skipping email");
       }
       console.log("[VAPI Webhook] Emergency request created:", request.id);
+      const { startDispatch } = await import("../services/emergency-network/dispatch.js");
+      startDispatch(request.id).catch((err) =>
+        console.error("[VAPI Webhook] Emergency startDispatch error:", err?.message || err)
+      );
     } catch (err) {
       console.error("[VAPI Webhook] Emergency intake/email error:", err?.message || err);
     }
+    return;
+  }
+
+  // Emergency dispatch outbound call ended (we called a provider)
+  const { supabaseClient } = await import("../config/database.js");
+  const { data: dispatchRow } = await supabaseClient
+    .from('emergency_dispatch_calls')
+    .select('service_request_id, provider_id, dispatch_log_id')
+    .eq('vapi_call_id', callId)
+    .single();
+  if (dispatchRow) {
+    const { data: logRow } = await supabaseClient
+      .from('emergency_dispatch_log')
+      .select('result')
+      .eq('id', dispatchRow.dispatch_log_id)
+      .single();
+    if (logRow && logRow.result === 'pending') {
+      await supabaseClient
+        .from('emergency_dispatch_log')
+        .update({ result: 'no_answer' })
+        .eq('id', dispatchRow.dispatch_log_id);
+    }
+    const { callNextProvider } = await import("../services/emergency-network/dispatch.js");
+    await callNextProvider(dispatchRow.service_request_id);
+    console.log("[VAPI Webhook] Emergency dispatch call ended:", callId, dispatchRow.service_request_id);
     return;
   }
 
@@ -1884,12 +1913,60 @@ async function handleFunctionCall(event) {
     // Handle submit_takeout_order function
     if (functionName === 'submit_takeout_order') {
       await handleSubmitTakeoutOrder(functionArguments, event);
-    } else {
-      console.log(`[VAPI Webhook] ⚠️ Unhandled function: ${functionName}`);
+      return;
     }
+    // Emergency dispatch: provider accepted or declined
+    if (functionName === 'dispatch_accept' || functionName === 'dispatch_decline') {
+      await handleDispatchProviderResponse(functionName, event);
+      return;
+    }
+    console.log(`[VAPI Webhook] ⚠️ Unhandled function: ${functionName}`);
   } catch (error) {
     console.error(`[VAPI Webhook] ❌ Error handling function call:`, error);
     // Don't throw - function calls are non-blocking
+  }
+}
+
+/**
+ * Handle dispatch_accept / dispatch_decline from emergency dispatch outbound call.
+ */
+async function handleDispatchProviderResponse(functionName, event) {
+  const call = event.call || event.message?.call || event.message?.artifact?.call || {};
+  const callId = call.id || call.callId;
+  if (!callId) {
+    console.warn('[VAPI Webhook] dispatch response: no callId');
+    return;
+  }
+  const { supabaseClient } = await import("../config/database.js");
+  const { data: row } = await supabaseClient
+    .from('emergency_dispatch_calls')
+    .select('service_request_id, provider_id, dispatch_log_id')
+    .eq('vapi_call_id', callId)
+    .single();
+  if (!row) {
+    console.warn('[VAPI Webhook] dispatch response: no emergency_dispatch_calls row for call', callId);
+    return;
+  }
+  const result = functionName === 'dispatch_accept' ? 'accepted' : 'declined';
+  await supabaseClient
+    .from('emergency_dispatch_log')
+    .update({ result })
+    .eq('id', row.dispatch_log_id);
+  if (functionName === 'dispatch_accept') {
+    await supabaseClient
+      .from('emergency_service_requests')
+      .update({
+        status: 'Accepted',
+        accepted_provider_id: row.provider_id,
+        connected_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', row.service_request_id);
+    console.log('[VAPI Webhook] Emergency dispatch: provider accepted', row.service_request_id, row.provider_id);
+  } else {
+    const { callNextProvider } = await import("../services/emergency-network/dispatch.js");
+    await callNextProvider(row.service_request_id);
+    console.log('[VAPI Webhook] Emergency dispatch: provider declined, trying next', row.service_request_id);
   }
 }
 

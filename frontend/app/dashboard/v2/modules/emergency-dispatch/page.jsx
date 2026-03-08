@@ -77,6 +77,21 @@ export default function EmergencyDispatchPage() {
   const [configSaveMessage, setConfigSaveMessage] = useState(null);
   const [linkResult, setLinkResult] = useState(null); // { linked: [], notInVapi: [], errors: [] } from last save or link-agent
   const [linkingAgent, setLinkingAgent] = useState(false);
+  const [callProviderLoadingId, setCallProviderLoadingId] = useState(null);
+
+  const handleCallProvider = async (requestId) => {
+    setCallProviderLoadingId(requestId);
+    try {
+      await emergencyNetworkAPI.callProvider(requestId);
+      await load();
+    } catch (e) {
+      console.error('[EmergencyDispatch] callProvider error', e);
+      const msg = e.response?.data?.error || e.message || 'Failed to place call';
+      alert(msg);
+    } finally {
+      setCallProviderLoadingId(null);
+    }
+  };
 
   const load = async () => {
     try {
@@ -871,7 +886,19 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2 max-w-[120px] truncate" title={r.location}>{r.location || '—'}</td>
                           <td className="py-2 pr-2">{r.status}</td>
                           <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
-                          <td className="py-2">
+                          <td className="py-2 flex flex-wrap items-center gap-1">
+                            {['New', 'Contacting Providers'].includes(r.status) && (
+                              <button
+                                type="button"
+                                onClick={() => handleCallProvider(r.id)}
+                                disabled={callProviderLoadingId === r.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
+                                title="Place outbound call to next plumber"
+                              >
+                                {callProviderLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <Phone className="w-3 h-3" />}
+                                Call plumber
+                              </button>
+                            )}
                             <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
                               {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                             </select>
@@ -917,7 +944,19 @@ export default function EmergencyDispatchPage() {
                           <td className="py-2 pr-2">{r.urgency_level}</td>
                           <td className="py-2 pr-2">{r.status}</td>
                           <td className="py-2 pr-2">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
-                          <td className="py-2">
+                          <td className="py-2 flex flex-wrap items-center gap-1">
+                            {['New', 'Contacting Providers'].includes(r.status) && (
+                              <button
+                                type="button"
+                                onClick={() => handleCallProvider(r.id)}
+                                disabled={callProviderLoadingId === r.id}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
+                                title="Place outbound call to next plumber"
+                              >
+                                {callProviderLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <Phone className="w-3 h-3" />}
+                                Call plumber
+                              </button>
+                            )}
                             <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
                               {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                             </select>

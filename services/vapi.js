@@ -1823,6 +1823,38 @@ export async function rebuildAllAssistants() {
 }
 
 /**
+ * Create an outbound phone call via VAPI.
+ * @param {Object} options
+ * @param {string} [options.assistantId] - VAPI assistant ID (use this OR options.assistant)
+ * @param {Object} [options.assistant] - Full assistant config for transient assistant (use this OR options.assistantId)
+ * @param {string} options.phoneNumberId - VAPI phone number ID to call from (caller ID)
+ * @param {string} options.toNumber - Destination number (E.164)
+ * @param {Object} [options.metadata] - Optional metadata (e.g. { type: 'emergency_dispatch', request_id, provider_id })
+ * @returns {Promise<{ id: string }>} Created call with id
+ */
+export async function createOutboundCall(options) {
+  const { assistantId, assistant, phoneNumberId, toNumber, metadata } = options;
+  if (!phoneNumberId || !toNumber) {
+    throw new Error('phoneNumberId and toNumber are required for createOutboundCall');
+  }
+  if (!assistantId && !assistant) {
+    throw new Error('Either assistantId or assistant object is required');
+  }
+  const payload = {
+    phoneNumberId,
+    customer: { number: toNumber.replace(/^(\d{10})$/, '+1$1').replace(/^([^+])/, '+$1') },
+    ...(metadata && Object.keys(metadata).length > 0 ? { metadata } : {}),
+  };
+  if (assistantId) {
+    payload.assistantId = assistantId;
+  } else {
+    payload.assistant = assistant;
+  }
+  const response = await getVapiClient().post('/call', payload);
+  return response.data;
+}
+
+/**
  * Get call summary from VAPI
  * @param {string} callId - VAPI call ID
  * @returns {Promise<Object>} Call summary with transcript and metadata

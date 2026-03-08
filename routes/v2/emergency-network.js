@@ -7,6 +7,7 @@ import { authenticate } from '../../middleware/auth.js';
 import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
 import { supabaseClient } from '../../config/database.js';
 import { createServiceRequest } from '../../services/emergency-network/intake.js';
+import { startDispatch, callNextProvider } from '../../services/emergency-network/dispatch.js';
 import { getEmergencyConfig, invalidateEmergencyConfigCache } from '../../services/emergency-network/config.js';
 import { createEmergencyNetworkAssistant } from '../../services/emergency-network/create-vapi-assistant.js';
 import { getAllVapiPhoneNumbers, checkIfNumberProvisionedInVAPI, linkAssistantToNumber, provisionPhoneNumber, getVapiPhoneNumberId } from '../../services/vapi.js';
@@ -163,6 +164,10 @@ router.post('/request', express.json(), async (req, res) => {
       issue_summary: issue_description?.trim() || null,
       intake_channel: 'form',
     });
+
+    startDispatch(request.id).catch((err) =>
+      console.error('[EmergencyNetwork] startDispatch error:', err?.message || err)
+    );
 
     res.status(201).json({
       success: true,
@@ -405,6 +410,42 @@ router.get('/requests', async (req, res) => {
   } catch (err) {
     console.error('[EmergencyNetwork] requests list error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load requests' });
+  }
+});
+
+/**
+ * POST /api/v2/emergency-network/requests/:id/call-provider
+ * Manually trigger placing an outbound call to the next eligible provider (e.g. plumber).
+ * Use this to test the call flow. Sets status to Contacting Providers if still New, then calls callNextProvider.
+ */
+router.post('/requests/:id/call-provider', async (req, res) => {
+  try {
+    const { id: requestId } = req.params;
+    const { data: request, error: fetchErr } = await supabaseClient
+      .from('emergency_service_requests')
+      .select('id, status')
+      .eq('id', requestId)
+      .single();
+    if (fetchErr || !request) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    if (!['New', 'Contacting Providers'].includes(request.status)) {
+      return res.status(400).json({ error: `Cannot place provider call when status is "${request.status}". Use New or Contacting Providers.` });
+    }
+    if (request.status === 'New') {
+      const { error: updateErr } = await supabaseClient
+        .from('emergency_service_requests')
+        .update({ status: 'Contacting Providers', updated_at: new Date().toISOString() })
+        .eq('id', requestId);
+      if (updateErr) {
+        return res.status(500).json({ error: 'Failed to update status: ' + (updateErr.message || updateErr) });
+      }
+    }
+    await callNextProvider(requestId);
+    res.json({ success: true, message: 'Call to next provider initiated.' });
+  } catch (err) {
+    console.error('[EmergencyNetwork] call-provider error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to place call' });
   }
 });
 
