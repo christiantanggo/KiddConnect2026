@@ -1265,22 +1265,23 @@ router.post('/sources', async (req, res) => {
   } catch (error) {
     const sourceType = (req.body?.type || '').toUpperCase();
     console.error('[POST /api/v2/orbix-network/sources] Error:', error?.code || error?.message, error);
-    // Generator types (Mind Teaser, Dad Joke) often fail with 500 if DB constraint wasn't updated — always return 400 with migration instructions
-    if (sourceType === 'MIND_TEASER_GENERATOR' || sourceType === 'DAD_JOKE_GENERATOR') {
+    // Never return 500 for add source — return 400 with actionable message (constraint = run migration; other = include details)
+    const isGeneratorType = sourceType === 'MIND_TEASER_GENERATOR' || sourceType === 'DAD_JOKE_GENERATOR';
+    const isCheckViolation = error?.code === '23514' || (error?.message && String(error.message).includes('violates check constraint'));
+    if (isGeneratorType || isCheckViolation) {
       return res.status(400).json({
-        error: 'Source type not allowed',
-        message: 'This source type is not enabled in the database. In Supabase SQL Editor run the migration: migrations/ensure_orbix_sources_type_check.sql (or add_mind_teaser_channel_support.sql / add_dad_joke_channel_support.sql). Then try adding the source again.',
+        error: 'Could not add source',
+        message: 'Run the migration in Supabase SQL Editor: open migrations/ensure_orbix_sources_type_check.sql and run its SQL (alters orbix_sources and orbix_stories constraints). Then try again.',
         details: error?.message
       });
     }
-    const isCheckViolation = error?.code === '23514' || error?.message?.includes('violates check constraint');
-    if (isCheckViolation) {
-      return res.status(400).json({
-        error: 'Source type not allowed',
-        message: error?.message || 'This source type is not in the database allowed list. Run migrations/ensure_orbix_sources_type_check.sql on your database.'
-      });
-    }
-    res.status(channelErrorStatus(error)).json({ error: error?.message || 'Failed to add source' });
+    // Any other failure (e.g. channel_id required, invalid channel) — still 400 so UI shows message not generic 500
+    const status = error?.status === 400 ? 400 : 400;
+    return res.status(status).json({
+      error: 'Failed to add source',
+      message: error?.message || 'Check that channel_id is sent and the channel exists. If adding Mind Teaser or Dad Joke, run migrations/ensure_orbix_sources_type_check.sql in Supabase first.',
+      details: error?.message
+    });
   }
 });
 
