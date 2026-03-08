@@ -412,6 +412,30 @@ export default function EmergencyDispatchPage() {
                   <p className="text-3xl font-bold text-slate-800 mt-1">{analytics?.acceptance_rate ?? 0}%</p>
                 </div>
               </div>
+              {/* Needs escalation: declined / no provider accepted — escalate to Tavari */}
+              {(() => {
+                const needsEscalation = (requests || []).filter((r) => r.status === 'Needs Manual Assist');
+                if (needsEscalation.length === 0) return null;
+                return (
+                  <div className="mb-8 p-5 rounded-xl border-2 border-amber-300 bg-amber-50">
+                    <h3 className="text-lg font-bold text-amber-900 mb-1">Needs escalation to Tavari</h3>
+                    <p className="text-sm text-amber-800 mb-4">These calls were declined or could not be placed. A person from Tavari should follow up with the customer.</p>
+                    <div className="space-y-2">
+                      {needsEscalation.map((r) => (
+                        <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-lg bg-white border border-amber-200">
+                          <div>
+                            <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
+                            <p className="text-xs text-slate-600">{r.callback_phone} · {r.service_category} · {r.created_at ? new Date(r.created_at).toLocaleString() : ''}</p>
+                            {r.location && <p className="text-xs text-slate-500">{r.location}</p>}
+                          </div>
+                          <span className="text-xs font-medium px-2 py-1 rounded bg-amber-200 text-amber-900">Declined / needs manual assist</span>
+                        </div>
+                      ))}
+                    </div>
+                    <button type="button" onClick={() => setActiveTab('recent-calls')} className="mt-3 text-sm font-medium text-amber-800 underline">View in Recent calls →</button>
+                  </div>
+                );
+              })()}
               {/* Recent activity: two columns */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
