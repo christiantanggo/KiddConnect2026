@@ -3074,9 +3074,69 @@ function extractEmergencyFromTranscript(transcript, summary, callerNumberFromCal
   // Urgency
   if (/immediate|emergency|urgent|as\s*ap|right\s*away/i.test(lower)) result.urgency_level = "Immediate Emergency";
   else if (/same\s*day|today|this\s*afternoon|this\s*evening/i.test(lower)) result.urgency_level = "Same Day";
-  // Name: "my name is X", "this is X", "call me X"
-  const nameMatch = text.match(/(?:my\s+name\s+is|this\s+is|i'm|i\s+am|call\s+me)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)/i);
-  if (nameMatch && nameMatch[1]) result.caller_name = nameMatch[1].trim();
+  // Name: prefer User lines so we get the caller's name, not the assistant's
+  const nameBlocklist = new Set([
+    "the", "a", "an", "it", "this", "that", "dispatch", "emergency", "line", "service",
+    "assistant", "plumber", "customer", "caller", "yes", "no", "not", "someone", "anyone",
+    "please", "thanks", "thank", "help", "hi", "hello", "okay", "ok", "um", "uh",
+  ]);
+  const isValidName = (s) => {
+    if (!s || typeof s !== "string") return false;
+    const t = s.trim();
+    if (t.length < 2 || t.length > 50) return false;
+    const firstWord = t.split(/\s+/)[0].toLowerCase();
+    if (nameBlocklist.has(firstWord)) return false;
+    if (nameBlocklist.has(t.toLowerCase())) return false;
+    return /^[A-Za-z]+(?:\s+[A-Za-z]+)*$/.test(t);
+  };
+  const namePatternStrs = [
+    "(?:my\\s+name\\s+is|this\\s+is|i'm|i\\s+am|call\\s+me)\\s+([A-Za-z]+(?:\\s+[A-Za-z]+)?)(?:\\s|$|,|\\.)",
+    "(?:name|call\\s+me)\\s+([A-Za-z]+(?:\\s+[A-Za-z]+)?)(?:\\s|$|,|\\.)",
+  ];
+  const lines = (transcript || "").split("\n");
+  const userLines = lines.filter((line) => /^\s*user\s*:/i.test(line));
+  let nameCandidates = [];
+  for (const userLine of userLines) {
+    const userText = userLine.replace(/^\s*user\s*:\s*/i, "").trim();
+    for (const pat of namePatternStrs) {
+      const re = new RegExp(pat, "gi");
+      let match;
+      while ((match = re.exec(userText)) !== null) {
+        const candidate = match[1].trim();
+        if (isValidName(candidate)) nameCandidates.push(candidate);
+      }
+    }
+  }
+  if (nameCandidates.length > 0) {
+    result.caller_name = nameCandidates[nameCandidates.length - 1];
+  } else if (summary) {
+    for (const pat of namePatternStrs) {
+      const re = new RegExp(pat, "gi");
+      let match;
+      while ((match = re.exec(summary)) !== null) {
+        const candidate = match[1].trim();
+        if (isValidName(candidate)) {
+          result.caller_name = candidate;
+          break;
+        }
+      }
+      if (result.caller_name) break;
+    }
+  }
+  if (!result.caller_name) {
+    for (const pat of namePatternStrs) {
+      const re = new RegExp(pat, "gi");
+      let match;
+      while ((match = re.exec(text)) !== null) {
+        const candidate = match[1].trim();
+        if (isValidName(candidate)) {
+          result.caller_name = candidate;
+          break;
+        }
+      }
+      if (result.caller_name) break;
+    }
+  }
   // Phone from text if not from call (e.g. callback number given)
   if (!result.callback_phone) {
     const phoneMatch = text.match(/(?:\+?1?[-.\s]?)?\(?(\d{3})\)?[-.\s]?(\d{3})[-.\s]?(\d{4})\b/);

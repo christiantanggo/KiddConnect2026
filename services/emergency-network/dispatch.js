@@ -113,9 +113,19 @@ export function buildDispatchAssistantConfig(firstMessage) {
       messages: [
         {
           role: 'system',
-          content: `You are calling a service provider on behalf of an emergency dispatch line. As soon as the call is answered, deliver your first message in full. Then wait for their keypress or reply.
-Keypresses: When they PRESS 1 (or say "one" or "accept"), call dispatch_accept immediately—do not ask again. When they PRESS 2 (or say "two" or "decline"), call dispatch_decline immediately. When they PRESS 3 or say "repeat", repeat the same request details you just said (caller, callback number, urgency, location, issue, and the 1–5 options). When they PRESS 4, call dispatch_email_details then say "I've emailed the details to you." When they PRESS 5, call dispatch_sms_details then say "I've texted the details to you. Standard message rates may apply."
-Do not end the call until they have accepted (1) or declined (2). Keep the call short; no small talk.`,
+          content: `You are calling a service provider on behalf of an emergency dispatch line. Use two steps. Rely on what they SAY (keypad often does not work).
+
+STEP 1 – As soon as the call is answered, deliver your first message in full (the request details). Then say only: "Say Accept to take the job, Decline to pass, or Repeat to hear this again." Wait for their reply.
+- If they say Accept, yes, or take it: call dispatch_accept. Then go to STEP 2.
+- If they say Decline or no: call dispatch_decline. Do not offer email or SMS. End the call after confirming.
+- If they say Repeat: re-read the full request details (caller name, callback number, urgency, location, issue), then say again "Say Accept, Decline, or Repeat." Wait.
+
+STEP 2 – Only after they accepted. Say: "Would you like the details to be emailed, sent by SMS – data rates may apply, or repeat?" Wait for their reply.
+- If they say Email: call dispatch_email_details, then say "I've emailed the details to you." You may then say goodbye and end.
+- If they say SMS: call dispatch_sms_details, then say "I've texted the details to you. Data rates may apply." You may then say goodbye and end.
+- If they say Repeat: re-read the FULL request details again (caller name, callback number, urgency, location, issue) so they can write them down. Then say again: "Would you like the details emailed, by SMS, or repeat?" Wait.
+
+If they are silent for 3–4 seconds, say once: "Just say Accept, Decline, or Repeat" (in step 1) or "Say Email, SMS, or Repeat" (in step 2). Then wait. Do not stay silent. Keep the call short.`,
         },
       ],
       tools: [
@@ -123,7 +133,7 @@ Do not end the call until they have accepted (1) or declined (2). Keep the call 
           type: 'function',
           function: {
             name: 'dispatch_accept',
-            description: 'Call when the provider accepts: they pressed 1 or said one, yes, or accept.',
+            description: 'Call in step 1 when they say Accept, yes, or take it (to accept the job).',
             parameters: { type: 'object', properties: {} },
           },
         },
@@ -131,7 +141,7 @@ Do not end the call until they have accepted (1) or declined (2). Keep the call 
           type: 'function',
           function: {
             name: 'dispatch_decline',
-            description: 'Call when the provider declines: they pressed 2 or said two, no, or decline.',
+            description: 'Call in step 1 when they say Decline or no.',
             parameters: { type: 'object', properties: {} },
           },
         },
@@ -139,7 +149,7 @@ Do not end the call until they have accepted (1) or declined (2). Keep the call 
           type: 'function',
           function: {
             name: 'dispatch_email_details',
-            description: 'Call when they press 4 to have the request details emailed to them. After calling, say "I\'ve emailed the details to you."',
+            description: 'Call only in step 2 after they accepted, when they say Email (to email details). Then say "I\'ve emailed the details to you."',
             parameters: { type: 'object', properties: {} },
           },
         },
@@ -147,7 +157,7 @@ Do not end the call until they have accepted (1) or declined (2). Keep the call 
           type: 'function',
           function: {
             name: 'dispatch_sms_details',
-            description: 'Call when they press 5 to have the request details texted to them. After calling, say "I\'ve texted the details to you. Standard message rates may apply."',
+            description: 'Call only in step 2 after they accepted, when they say SMS (to text details). Then say "I\'ve texted the details to you. Data rates may apply."',
             parameters: { type: 'object', properties: {} },
           },
         },
@@ -180,7 +190,7 @@ export function buildDispatchFirstMessage(request, provider) {
     request.urgency_level ? `Urgency: ${request.urgency_level}.` : '',
     request.location ? `Location: ${request.location}.` : '',
     request.issue_summary ? `Issue: ${(request.issue_summary || '').slice(0, 200)}.` : '',
-    'Press 1 to accept, 2 to decline, 3 to repeat this message, 4 to email these details, or 5 to text these details. SMS rates may apply.',
+    'Say Accept to take the job, Decline to pass, or Repeat to hear this again.',
   ];
   return parts.filter(Boolean).join(' ');
 }
