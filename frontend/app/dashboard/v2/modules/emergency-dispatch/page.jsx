@@ -68,6 +68,8 @@ export default function EmergencyDispatchPage() {
   const [availablePhoneNumbers, setAvailablePhoneNumbers] = useState([]);
   const [selectedNumberToAdd, setSelectedNumberToAdd] = useState('');
   const [configSaveMessage, setConfigSaveMessage] = useState(null);
+  const [linkResult, setLinkResult] = useState(null); // { linked: [], notInVapi: [], errors: [] } from last save or link-agent
+  const [linkingAgent, setLinkingAgent] = useState(false);
 
   const load = async () => {
     try {
@@ -107,6 +109,7 @@ export default function EmergencyDispatchPage() {
     try {
       setConfigSaving(true);
       setConfigSaveMessage(null);
+      setLinkResult(null);
       const c = overrides ? { ...config, ...overrides } : config;
       const toSend = {
         emergency_phone_numbers: Array.isArray(c.emergency_phone_numbers) ? c.emergency_phone_numbers : [],
@@ -115,17 +118,68 @@ export default function EmergencyDispatchPage() {
         notification_email: (c.notification_email && String(c.notification_email).trim()) || null,
         intake_fields: Array.isArray(c.intake_fields) ? c.intake_fields : [...DEFAULT_INTAKE_FIELDS],
       };
-      await emergencyNetworkAPI.updateConfig(toSend);
-      setConfig(toSend);
+      const res = await emergencyNetworkAPI.updateConfig(toSend);
+      const data = res.data || {};
+      const { link_result, ...configRest } = data;
+      setConfig((prev) => ({
+        ...prev,
+        emergency_phone_numbers: configRest.emergency_phone_numbers ?? c.emergency_phone_numbers ?? [],
+        emergency_vapi_assistant_id: configRest.emergency_vapi_assistant_id ?? c.emergency_vapi_assistant_id ?? '',
+        max_dispatch_attempts: configRest.max_dispatch_attempts ?? c.max_dispatch_attempts ?? 5,
+        notification_email: configRest.notification_email ?? c.notification_email ?? '',
+        intake_fields: Array.isArray(configRest.intake_fields) && configRest.intake_fields.length > 0 ? configRest.intake_fields : (c.intake_fields ?? []),
+      }));
       setConfigDirty(false);
-      setConfigSaveMessage('Saved');
-      setTimeout(() => setConfigSaveMessage(null), 3000);
+      if (link_result) {
+        setLinkResult(link_result);
+        if (link_result.linked?.length > 0 && !link_result.errors?.length) {
+          setConfigSaveMessage(`Saved. Agent linked to ${link_result.linked.length} number(s).`);
+        } else if (link_result.errors?.length) {
+          setConfigSaveMessage('Saved, but linking had issues. Use "Link to numbers" to retry.');
+        } else if (link_result.notInVapi?.length) {
+          setConfigSaveMessage('Saved. Some numbers are not in VAPI — add them in Telnyx first, then Link to numbers.');
+        } else {
+          setConfigSaveMessage('Saved');
+        }
+      } else {
+        setConfigSaveMessage('Saved');
+      }
+      setTimeout(() => setConfigSaveMessage(null), 5000);
       await load();
     } catch (e) {
       console.error('[EmergencyDispatch] save config error', e);
       setConfigSaveMessage(e.response?.data?.error || e.message || 'Save failed');
     } finally {
       setConfigSaving(false);
+    }
+  };
+
+  const linkAgentToNumbers = async () => {
+    setLinkingAgent(true);
+    setCreateAgentError(null);
+    setLinkResult(null);
+    try {
+      const res = await emergencyNetworkAPI.linkAgent();
+      const d = res.data || {};
+      setLinkResult({ linked: d.linked || [], notInVapi: d.notInVapi || [], errors: d.errors || [] });
+      if (d.linked?.length > 0 && !d.errors?.length) {
+        setCreateAgentError(null);
+        setConfigSaveMessage(`Linked agent to ${d.linked.length} number(s). Calls to these numbers will use the AI agent.`);
+      } else if (d.notInVapi?.length && !d.linked?.length) {
+        setCreateAgentError(`Could not link: ${(d.notInVapi || []).join(', ')} — ensure these numbers are in Telnyx and provisioned to VAPI (or add to Telnyx first, then try again).`);
+      } else if (d.errors?.length) {
+        setCreateAgentError(d.errors.join('; ') || d.message || 'Link failed');
+      } else {
+        setCreateAgentError(d.message || 'No numbers linked. Add emergency phone numbers in Settings and save first.');
+      }
+      setTimeout(() => setConfigSaveMessage(null), 5000);
+      await load();
+    } catch (e) {
+      const errMsg = e.response?.data?.error || e.message || 'Failed to link agent';
+      setCreateAgentError(errMsg);
+      setLinkResult({ linked: [], notInVapi: [], errors: [errMsg] });
+    } finally {
+      setLinkingAgent(false);
     }
   };
 
@@ -165,14 +219,14 @@ export default function EmergencyDispatchPage() {
       // Attach the agent to configured emergency phone number(s) in VAPI
       try {
         const linkRes = await emergencyNetworkAPI.linkAgent();
-        const d = linkRes.data;
+        const d = linkRes.data || {};
+        setLinkResult({ linked: d.linked || [], notInVapi: d.notInVapi || [], errors: d.errors || [] });
         if (d?.linked?.length) {
           setCreateAgentError(null);
-        }
-        if (d?.notInVapi?.length && !d?.linked?.length) {
-          setCreateAgentError(`Agent created. Could not provision/link ${d.notInVapi.join(', ')} — ensure they are in Telnyx and VAPI has a Telnyx credential.`);
+        } else if (d?.notInVapi?.length && !d?.linked?.length) {
+          setCreateAgentError(`Agent created. Could not provision/link ${d.notInVapi.join(', ')} — add numbers in Telnyx first, then go to Settings → Communication and click "Link agent to phone numbers".`);
         } else if (d?.errors?.length && !d?.linked?.length) {
-          setCreateAgentError(`Agent created. Link failed: ${d.errors.join('; ')}`);
+          setCreateAgentError(`Agent created. Link failed: ${d.errors.join('; ')}. Use Settings → Communication → "Link agent to phone numbers" to retry.`);
         }
       } catch (_) {
         // link-agent is best-effort; create succeeded
@@ -643,6 +697,24 @@ export default function EmergencyDispatchPage() {
             <section className="bg-white rounded-xl border border-slate-200 p-6">
               <h2 className="text-lg font-medium mb-4">Communication Settings</h2>
               <div className="space-y-4">
+                {/* Connection status: agent + numbers must be linked in VAPI for calls to work */}
+                {config.emergency_vapi_assistant_id && (config.emergency_phone_numbers || []).length > 0 && (
+                  <div className="p-4 rounded-xl border border-slate-200 bg-slate-50">
+                    <p className="text-sm font-medium text-slate-800 mb-2">Agent ↔ phone number connection</p>
+                    <p className="text-sm text-slate-600 mb-3">For calls to the emergency line to reach the AI agent, the agent must be linked to each number in VAPI. Save config or use the button below to link.</p>
+                    <button type="button" onClick={linkAgentToNumbers} disabled={linkingAgent} className="inline-flex items-center gap-2 px-4 py-2 bg-slate-800 text-white rounded-lg text-sm hover:bg-slate-700 disabled:opacity-60">
+                      {linkingAgent ? <Loader className="w-4 h-4 animate-spin" /> : <Phone className="w-4 h-4" />}
+                      {linkingAgent ? 'Linking…' : 'Link agent to phone numbers'}
+                    </button>
+                    {linkResult && (
+                      <div className="mt-3 text-sm">
+                        {linkResult.linked?.length > 0 && <p className="text-emerald-700">Linked: {linkResult.linked.join(', ')}</p>}
+                        {linkResult.notInVapi?.length > 0 && <p className="text-amber-700">Not in VAPI (add in Telnyx first): {linkResult.notInVapi.join(', ')}</p>}
+                        {linkResult.errors?.length > 0 && <p className="text-red-700">{linkResult.errors.join('; ')}</p>}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm text-slate-600 mb-1">Emergency phone numbers</label>
                   {config.webhook_url && (

@@ -569,13 +569,18 @@ router.get("/webhook/diagnostic", async (req, res) => {
  * Must respond within ~7.5s or the call fails ("could not be reached").
  */
 async function handleAssistantRequest(body, res) {
-  // Number that was CALLED (destination) — may be under different keys depending on VAPI payload
+  // Number that was CALLED (destination) — VAPI sends message.call; may be under different keys
+  const call = body?.message?.call || body?.call;
   const destinationNumber =
     body?.message?.phoneNumber ||
     body?.message?.destinationNumber ||
     body?.message?.destination ||
-    body?.message?.call?.phoneNumber ||
-    body?.message?.call?.destinationNumber ||
+    call?.phoneNumber ||
+    call?.phone_number ||
+    call?.destinationNumber ||
+    call?.destination ||
+    call?.to ||
+    call?.inboundPhoneNumber ||
     body?.call?.phoneNumber ||
     body?.call?.destinationNumber ||
     body?.phoneNumber ||

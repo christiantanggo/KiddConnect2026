@@ -9,7 +9,7 @@ import { supabaseClient } from '../../config/database.js';
 import { createServiceRequest } from '../../services/emergency-network/intake.js';
 import { getEmergencyConfig, invalidateEmergencyConfigCache } from '../../services/emergency-network/config.js';
 import { createEmergencyNetworkAssistant } from '../../services/emergency-network/create-vapi-assistant.js';
-import { getAllVapiPhoneNumbers, checkIfNumberProvisionedInVAPI, linkAssistantToNumber, provisionPhoneNumber } from '../../services/vapi.js';
+import { getAllVapiPhoneNumbers, checkIfNumberProvisionedInVAPI, linkAssistantToNumber, provisionPhoneNumber, getVapiPhoneNumberId } from '../../services/vapi.js';
 
 const router = express.Router();
 
@@ -38,9 +38,10 @@ async function linkEmergencyAssistantToNumbers(assistantId, phoneNumbers) {
           continue;
         }
       }
-      const phoneNumberId = vapiNumber?.id || vapiNumber?.phoneNumberId;
+      const phoneNumberId = getVapiPhoneNumberId(vapiNumber);
       if (!phoneNumberId) {
-        result.errors.push(`${e164}: no VAPI phone number id`);
+        console.warn('[EmergencyNetwork] VAPI number object missing id for', e164, 'keys:', vapiNumber ? Object.keys(vapiNumber) : []);
+        result.errors.push(`${e164}: no VAPI phone number id (number may not be provisioned in VAPI)`);
         continue;
       }
       await linkAssistantToNumber(assistantId, phoneNumberId);
@@ -359,9 +360,10 @@ router.put('/config', express.json(), async (req, res) => {
     const finalConfig = await getEmergencyConfig();
     const assistantId = finalConfig.emergency_vapi_assistant_id || null;
     const numbers = finalConfig.emergency_phone_numbers || [];
+    let linkResult = { linked: [], notInVapi: [], errors: [] };
     if (assistantId && numbers.length > 0) {
       try {
-        const linkResult = await linkEmergencyAssistantToNumbers(assistantId, numbers);
+        linkResult = await linkEmergencyAssistantToNumbers(assistantId, numbers);
         if (linkResult.linked.length) {
           console.log('[EmergencyNetwork] config: linked emergency agent to', linkResult.linked.length, 'number(s) in VAPI');
         }
@@ -373,9 +375,10 @@ router.put('/config', express.json(), async (req, res) => {
         }
       } catch (linkErr) {
         console.warn('[EmergencyNetwork] config: link to numbers failed (non-blocking)', linkErr?.message || linkErr);
+        linkResult.errors.push(linkErr?.message || String(linkErr));
       }
     }
-    res.json(finalConfig);
+    res.json({ ...finalConfig, link_result: linkResult });
   } catch (err) {
     console.error('[EmergencyNetwork] config put error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to update config' });

@@ -1,5 +1,20 @@
 # Deploy to Vercel (frontend) and Railway (backend)
 
+## For agents (quick reference)
+
+**One-line summary:** Deploy by staging the right files, committing, and running `git push origin main` from the repo root; the existing GitHub Actions deploy backend to Railway and frontend to Vercel.
+
+**Steps:**
+
+1. From the **repo root** (use `working_directory` to the project root; do not use `git -C` from elsewhere):
+   - `git add <files to deploy>` (only app code; do not add `.github/workflows` unless the token has `workflow` scope)
+   - `git commit -m "your message"`
+   - `git push origin main`
+2. **Backend:** The push triggers the "Deploy Backend to Railway" workflow when `server.js`, `routes/**`, `services/**`, etc. change. No extra command.
+3. **Frontend:** Either rely on the "Deploy Frontend to Vercel" workflow (runs on push to main), or run from repo root: `cd frontend; npx vercel --prod` (with `working_directory` set to the project root).
+
+---
+
 The app deploys in two places:
 
 | Part | Host | Trigger |
@@ -29,13 +44,13 @@ The app deploys in two places:
 
 1. [railway.app](https://railway.app) → New Project → Deploy from GitHub repo.
 2. Select this repo. Railway will use `railway.json` and `package.json` (build: `npm ci`, start: `npm start` → `start.js` → `server.js`).
-3. In the Railway service (name it **backend** if you use the GitHub Action), add your env vars (e.g. `DATABASE_URL`, `VAPI_API_KEY`, `BACKEND_URL` or `RAILWAY_PUBLIC_DOMAIN`, etc.).
+3. In the Railway service (name it **Tavari-Communications-Agent** to match the GitHub Action), add your env vars (e.g. `DATABASE_URL`, `VAPI_API_KEY`, `BACKEND_URL` or `RAILWAY_PUBLIC_DOMAIN`, etc.).
 4. Deploy. Railway will auto-deploy on push if connected to GitHub.
 
 **If using the GitHub Action** (`.github/workflows/deploy-backend.yml`):
 
 - Add repo secret: `RAILWAY_TOKEN` — from Railway → Account → Tokens (or project settings).
-- The workflow runs `railway up --service backend`, so the Railway project must have a service named **backend**.
+- The workflow runs `railway up --service "Tavari-Communications-Agent"`, so the Railway project must have a service named **Tavari-Communications-Agent**.
 
 ---
 

@@ -416,6 +416,16 @@ export async function checkIfNumberProvisionedInVAPI(phoneNumber) {
 }
 
 /**
+ * Extract VAPI phone number record ID from a VAPI phone number object (list or single response).
+ * @param {Object} vapiNumber - object from GET /phone-number list or POST /phone-number response
+ * @returns {string|null} id suitable for PATCH /phone-number/:id
+ */
+export function getVapiPhoneNumberId(vapiNumber) {
+  if (!vapiNumber || typeof vapiNumber !== 'object') return null;
+  return vapiNumber.id || vapiNumber.phoneNumberId || vapiNumber.phone_number_id || null;
+}
+
+/**
  * Find unassigned phone numbers in Telnyx (numbers not assigned to any business)
  * @param {string} preferredAreaCode - Optional area code to prefer
  * @returns {Promise<Array>} Array of unassigned phone number objects
