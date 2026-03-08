@@ -113,7 +113,7 @@ export function buildDispatchAssistantConfig(firstMessage) {
       messages: [
         {
           role: 'system',
-          content: `You are calling a service provider on behalf of an emergency dispatch line. You will read the request details once, then ask them to press 1 to accept or 2 to decline. When they say "one", "1", "accept", or "I'll take it", call the dispatch_accept function. When they say "two", "2", "decline", "no", or "I can't", call the dispatch_decline function. Keep the call very short. Do not make small talk.`,
+          content: `You are calling a service provider on behalf of an emergency dispatch line. As soon as the call is answered, deliver your first message in full: read the request details, then ask them to press 1 to accept or 2 to decline. Do not end the call until they have accepted or declined. When they say "one", "1", "accept", or "I'll take it", call dispatch_accept. When they say "two", "2", "decline", "no", or "I can't", call dispatch_decline. Keep the call short; no small talk.`,
         },
       ],
       tools: [
@@ -137,6 +137,7 @@ export function buildDispatchAssistantConfig(firstMessage) {
     },
     voice: { provider: 'openai', voiceId: 'alloy' },
     firstMessage,
+    firstMessageMode: 'assistant-speaks-first',
     serverUrl: webhookUrl,
     ...(process.env.VAPI_WEBHOOK_SECRET ? { serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET } : {}),
     serverMessages: ['status-update', 'end-of-call-report', 'function-call', 'hang'],
