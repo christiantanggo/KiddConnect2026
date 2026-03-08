@@ -119,8 +119,8 @@ function safeEvalMath(expr) {
 function validateMathDeterministic(question, answer) {
   const num = parseFloat(String(answer).trim());
   if (Number.isNaN(num) && !/^-?\d+$/.test(String(answer).trim())) return false;
-  // Try to find expression in question (e.g. "What is 2 + 2 × 2?" or "2+2*2 = ?")
-  const match = question.match(/(\d[\d+\-*/().\s]*\d|\d[\d+\-*/().\s]*=)/) || question.match(/(\d[\d+\-*/().\s]+)/);
+  // Try to find expression in question (e.g. "What is 2 + 2 × 2?" or "2+2*2 = ?"). Include × and ÷ so full expression is captured.
+  const match = question.match(/(\d[\d+\-*/().\s×÷]*\d|\d[\d+\-*/().\s×÷]*=)/) || question.match(/(\d[\d+\-*/().\s×÷]+)/);
   const expr = match ? match[1].replace(/=\s*$/, '').replace(/\s+/g, '').replace(/×/g, '*').replace(/÷/g, '/') : null;
   if (!expr) return null; // no expression found — skip deterministic check
   const computed = safeEvalMath(expr);
@@ -459,7 +459,18 @@ export async function generateAndValidateMindTeaser(businessId, channelId, optio
       if (det === false) continue;
 
       const verifier = await runAIVerifier(c.question, c.answer);
-      if (!verifier.pass) continue;
+      if (!verifier.pass) {
+        // When deterministic already passed (e.g. math), accept if AI says the answer is correct
+        const correctNorm = (verifier.correct_answer || '').trim().toLowerCase();
+        const answerNorm = (c.answer || '').trim().toLowerCase();
+        const numericMatch = !Number.isNaN(parseFloat(correctNorm)) && !Number.isNaN(parseFloat(answerNorm))
+          && Math.abs(parseFloat(correctNorm) - parseFloat(answerNorm)) < 1e-6;
+        if (det === true && correctNorm && (correctNorm === answerNorm || numericMatch)) {
+          // Verifier said FAIL but correct_answer matches our answer (e.g. "correct but straightforward")
+        } else {
+          continue;
+        }
+      }
 
       const policy = await checkMindTeaserContentPolicy(c);
       if (!policy.approved) {
