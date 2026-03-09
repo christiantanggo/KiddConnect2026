@@ -1,6 +1,6 @@
 /**
  * YouTube Shorts metadata generation for Orbix Network.
- * Psychology and money categories use dedicated title/description/hashtag rules.
+ * Psychology and evergreen categories use dedicated title/description/hashtag rules.
  */
 import { getDadJokeCta } from './dad-joke-cta.js';
 
@@ -11,15 +11,6 @@ const PSYCHOLOGY_HASHTAGS = [
   '#cognitivebias',
   '#selfawareness',
   '#howthebrainworks'
-];
-
-const MONEY_HASHTAGS = [
-  '#money',
-  '#personalfinance',
-  '#behavioralfinance',
-  '#wealth',
-  '#financialhabits',
-  '#moneymindset'
 ];
 
 const TRIVIA_HASHTAGS = [
@@ -67,18 +58,27 @@ const DAD_JOKE_HASHTAGS = [
   '#comedy'
 ];
 
+const TRICK_QUESTION_HASHTAGS = [
+  '#trickquestion',
+  '#brainteaser',
+  '#shorts',
+  '#canyougetthis',
+  '#mindtrick',
+  '#viral'
+];
+
 const CATEGORY_HASHTAGS = {
   'ai-automation': ['#AI', '#Automation', '#TechNews', '#ArtificialIntelligence'],
   'corporate-collapses': ['#Business', '#Corporate', '#Finance', '#News'],
   'tech-decisions': ['#Tech', '#Technology', '#Innovation', '#TechNews'],
   'laws-rules': ['#Law', '#Policy', '#Regulation', '#News'],
   'money-markets': ['#Finance', '#Markets', '#Economy', '#Money'],
-  'money': MONEY_HASHTAGS,
   'trivia': TRIVIA_HASHTAGS,
   'facts': FACTS_HASHTAGS,
   'riddle': RIDDLE_HASHTAGS,
   'mindteaser': MINDTEASER_HASHTAGS,
-  'dadjoke': DAD_JOKE_HASHTAGS
+  'dadjoke': DAD_JOKE_HASHTAGS,
+  'trickquestion': TRICK_QUESTION_HASHTAGS
 };
 
 /** Remove emojis and common Unicode symbols from a string. */
@@ -150,44 +150,6 @@ function getPsychologyHashtags(seed, count = 5) {
   return out.join(' ');
 }
 
-/** Build 2–4 short sentences for money description; no financial advice or promises; end with soft question. */
-function buildMoneyDescription(script) {
-  const content = script?.content_json
-    ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
-    : {};
-  const whatHappened = (script?.what_happened || content?.what_happened || '').trim();
-  const whyItMatters = (script?.why_it_matters || content?.why_it_matters || '').trim();
-  const whatNext = (script?.what_happens_next || content?.what_happens_next || '').trim();
-
-  const parts = [];
-  if (whatHappened) parts.push(getFirstSentence(whatHappened));
-  if (whyItMatters) parts.push(getFirstSentence(whyItMatters));
-
-  const question = whatNext.trim();
-  if (question && question.endsWith('?') && question.length < 80) {
-    parts.push(question);
-  } else if (parts.length > 0) {
-    parts.push('What do you think?');
-  }
-
-  const joined = parts.filter(Boolean).join('\n\n');
-  return joined.length > 300 ? joined.slice(0, 297).replace(/\s+\S*$/, '') + '…' : joined || (whatHappened ? getFirstSentence(whatHappened, 200) : '');
-}
-
-/** Pick 3–6 money hashtags, rotated by seed. */
-function getMoneyHashtags(seed, count = 5) {
-  const id = typeof seed === 'string' ? seed : String(seed || 0);
-  let hash = 0;
-  for (let i = 0; i < id.length; i++) hash = ((hash << 5) - hash) + id.charCodeAt(i);
-  const start = Math.abs(hash) % MONEY_HASHTAGS.length;
-  const take = Math.min(Math.max(3, count), 6, MONEY_HASHTAGS.length);
-  const out = [];
-  for (let i = 0; i < take; i++) {
-    out.push(MONEY_HASHTAGS[(start + i) % MONEY_HASHTAGS.length]);
-  }
-  return out.join(' ');
-}
-
 /**
  * Build YouTube metadata (title, description, hashtags) for a story/script.
  * Psychology and money categories use short hook title, 2–4 sentence description, and category hashtags.
@@ -203,18 +165,24 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
   const hookText = (script?.hook ?? content?.hook ?? '').trim();
   const question = (content?.question || '').trim();
   const isPsychology = (story?.category || '').toLowerCase() === 'psychology';
-  const isMoney = (story?.category || '').toLowerCase() === 'money';
   const isTrivia = (story?.category || '').toLowerCase() === 'trivia';
   const isFacts = (story?.category || '').toLowerCase() === 'facts';
   const isRiddle = (story?.category || '').toLowerCase() === 'riddle';
   const isMindTeaser = (story?.category || '').toLowerCase() === 'mindteaser';
   const isDadJoke = (story?.category || '').toLowerCase() === 'dadjoke';
+  const isTrickQuestion = (story?.category || '').toLowerCase() === 'trickquestion';
 
   let title;
   let description;
   let hashtags;
 
-  if (isDadJoke) {
+  if (isTrickQuestion) {
+    const questionText = (content?.question_text || '').trim();
+    const answerText = (content?.answer_text || '').trim();
+    title = sanitizeTitleForYouTube(hookText || questionText?.slice(0, 60) || story?.title?.slice(0, 60) || 'Can you get this?');
+    description = (questionText ? `${questionText}\n\n` : '') + (answerText ? `Answer: ${answerText}\n\n` : '') + 'Comment your guess below!';
+    hashtags = TRICK_QUESTION_HASHTAGS.slice(0, 6).join(' ');
+  } else if (isDadJoke) {
     title = sanitizeTitleForYouTube(story?.title || 'Dad Joke');
     const episodeIndex = content?.episode_number ?? 0;
     const cta = getDadJokeCta(episodeIndex);
@@ -247,10 +215,6 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
     title = sanitizeTitleForYouTube(hookText || story?.title || 'Psychology insight');
     description = buildPsychologyDescription(script);
     hashtags = getPsychologyHashtags(renderId || story?.id || script?.id);
-  } else if (isMoney) {
-    title = sanitizeTitleForYouTube(hookText || story?.title || 'Money insight');
-    description = buildMoneyDescription(script);
-    hashtags = getMoneyHashtags(renderId || story?.id || script?.id);
   } else {
     title = hookText || story?.title || 'Orbix Short';
     const descriptionParts = [];

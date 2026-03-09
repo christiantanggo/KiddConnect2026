@@ -293,7 +293,7 @@ export default function OrbixNetworkReviewPage() {
                                     }}
                                     disabled={rewritingStoryId === story.id}
                                     className="px-3 py-1.5 bg-amber-600 text-white text-sm rounded hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-                                    title="Regenerate the script (same as money/psychology/facts)"
+                                    title="Regenerate the script (same as psychology/facts/trick question)"
                                   >
                                     {rewritingStoryId === story.id ? (
                                       <Loader className="w-4 h-4 animate-spin" />
@@ -353,7 +353,7 @@ export default function OrbixNetworkReviewPage() {
                               <div className="space-y-3 bg-gray-50 rounded-lg p-4">
                                 {(() => {
                                   const cat = (story?.category || '').toLowerCase();
-                                  const isShortsNative = cat === 'psychology' || cat === 'money' || cat === 'facts';
+                                  const isShortsNative = cat === 'psychology' || cat === 'trickquestion' || cat === 'facts';
                                   const labelTwist = isShortsNative ? 'Twist' : 'What Happened';
                                   const labelPayoff = isShortsNative ? 'Payoff' : 'Why It Matters';
                                   const labelLoop = isShortsNative ? 'Loop' : 'What Happens Next';

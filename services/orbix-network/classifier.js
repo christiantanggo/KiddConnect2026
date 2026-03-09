@@ -271,7 +271,7 @@ export async function processRawItem(businessId, rawItem) {
       return story;
     } else {
       // Use pre-calculated values (or effectiveScore for evergreen when raw item had no score)
-      const isEvergreen = category === 'psychology' || category === 'money' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke';
+      const isEvergreen = category === 'psychology' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke' || category === 'trickquestion';
       const scoreForThreshold = effectiveScore != null ? effectiveScore : shockScore;
       if (!isEvergreen && scoreForThreshold < threshold) {
         // Mark raw item as discarded
@@ -287,7 +287,7 @@ export async function processRawItem(businessId, rawItem) {
 
       // Create story using pre-calculated values (channel_id from raw item)
       const storyScore = scoreForThreshold ?? shockScore ?? 50;
-      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke') ? 'APPROVED' : 'PENDING';
+      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke' || category === 'trickquestion') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({

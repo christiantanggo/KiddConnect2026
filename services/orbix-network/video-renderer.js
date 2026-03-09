@@ -1333,10 +1333,16 @@ export async function processRenderJob(render) {
       return await processDadJokeRenderJob(render, story, script);
     }
 
+    // Trick question uses separate pipeline (same format as riddle)
+    if ((story?.category || '').toLowerCase() === 'trickquestion') {
+      const { processTrickQuestionRenderJob } = await import('./trick-question-renderer.js');
+      return await processTrickQuestionRenderJob(render, story, script);
+    }
+
     // Psychology + Money: TTS speaks question first then body. Add a short breath pause (0.3s) before voice starts.
     const cat2 = (story?.category || '').toLowerCase();
     const isPsychology = cat2 === 'psychology';
-    const isMoneyChannel = cat2 === 'money';
+    const isMoneyChannel = cat2 === 'money'; // legacy; money channel replaced by trickquestion
     const isConceptFirst = isPsychology || isMoneyChannel;
     let audioResult = await generateAudio(script, story);
     let preGeneratedAudioPath = audioResult.audioPath;

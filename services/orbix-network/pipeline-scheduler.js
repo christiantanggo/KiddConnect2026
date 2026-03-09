@@ -12,7 +12,7 @@ import { processRawItem } from './classifier.js';
 import { supabaseClient } from '../../config/database.js';
 import { selectTemplate, selectBackground } from './video-renderer.js';
 
-const EVERGREEN_CATEGORIES = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+const EVERGREEN_CATEGORIES = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'];
 
 /**
  * For trivia/facts/riddle/mindteaser/dadjoke the script is in the raw item's snippet JSON.
@@ -50,11 +50,12 @@ export async function ensureTriviaScript(businessId, story) {
     } catch (_) { /* snippet not JSON — use as-is */ }
   }
 
-  // Riddles use riddle_text + answer_text; mindteasers use question + answer; dadjoke uses setup + punchline + voice_script.
+  // Riddles use riddle_text + answer_text; mindteasers use question + answer; dadjoke uses setup + punchline; trickquestion uses question_text + answer_text.
   const isRiddle = story.category === 'riddle';
   const isMindTeaser = story.category === 'mindteaser';
   const isDadJoke = story.category === 'dadjoke';
-  if (!voiceScript && !isRiddle && !isMindTeaser && !isDadJoke) {
+  const isTrickQuestion = story.category === 'trickquestion';
+  if (!voiceScript && !isRiddle && !isMindTeaser && !isDadJoke && !isTrickQuestion) {
     console.warn(`[Pipeline Scheduler] No voice_script in snippet for story ${story.id} (${story.category}) — skipping script creation`);
     return null;
   }
@@ -68,6 +69,10 @@ export async function ensureTriviaScript(businessId, story) {
   }
   if (isDadJoke && (!contentJson?.setup || !contentJson?.punchline)) {
     console.warn(`[Pipeline Scheduler] No setup/punchline in snippet for dadjoke story ${story.id} — skipping script creation`);
+    return null;
+  }
+  if (isTrickQuestion && (!contentJson?.question_text || !contentJson?.answer_text)) {
+    console.warn(`[Pipeline Scheduler] No question_text/answer_text in snippet for trickquestion story ${story.id} — skipping script creation`);
     return null;
   }
 
@@ -187,7 +192,7 @@ export async function runAutomatedPipeline(businessId) {
       try {
         // Trivia/facts stories already have their script embedded in the raw item snippet —
         // extract it directly instead of calling the LLM script generator (which requires a raw_item_id).
-        if (story.category === 'trivia' || story.category === 'facts' || story.category === 'riddle' || story.category === 'mindteaser') {
+        if (story.category === 'trivia' || story.category === 'facts' || story.category === 'riddle' || story.category === 'mindteaser' || story.category === 'trickquestion') {
           await ensureTriviaScript(businessId, story);
         } else {
           const { generateAndSaveScript } = await import('./script-generator.js');
@@ -334,7 +339,7 @@ export async function runAutomatedPipeline(businessId) {
           .eq('business_id', businessId);
 
         try {
-          if (newStory.category === 'trivia' || newStory.category === 'facts' || newStory.category === 'riddle' || newStory.category === 'mindteaser') {
+          if (newStory.category === 'trivia' || newStory.category === 'facts' || newStory.category === 'riddle' || newStory.category === 'mindteaser' || newStory.category === 'trickquestion') {
             await ensureTriviaScript(businessId, { ...newStory, raw_item_id: fallbackRaw.id });
           } else {
             await generateAndSaveScript(businessId, newStory);

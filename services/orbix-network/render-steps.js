@@ -400,7 +400,7 @@ export async function step5HookText(renderId, renderJob, script, story, template
     // Psychology + Money: question-as-hook at start for ~2s; no traditional hook. Other categories: traditional hook.
     const storyCategory = (story?.category || '').toLowerCase();
     const isPsychology = storyCategory === 'psychology';
-    const isMoney = storyCategory === 'money';
+    const isMoney = storyCategory === 'money'; // legacy (channel replaced by trickquestion)
     const isConceptFirst = isPsychology || isMoney;
     let hookText;
     let hookDuration;

@@ -39,6 +39,8 @@ export async function scrapeSource(source) {
       return await scrapeMindTeaserSource(source);
     } else if (source.type === 'DAD_JOKE_GENERATOR') {
       return await scrapeDadJokeSource(source);
+    } else if (source.type === 'TRICK_QUESTION_GENERATOR') {
+      return await scrapeTrickQuestionSource(source);
     } else {
       throw new Error(`Unsupported source type: ${source.type}`);
     }
@@ -513,6 +515,59 @@ async function scrapeDadJokeSource(source) {
 }
 
 /**
+ * Generate one trick question via Trick Question Generator (TRICK_QUESTION_GENERATOR source type).
+ */
+async function scrapeTrickQuestionSource(source) {
+  try {
+    const { generateAndValidateTrickQuestion } = await import('./trick-question-generator.js');
+    const businessId = source.business_id;
+    const channelId = source.channel_id;
+    if (!businessId || !channelId) {
+      console.warn('[Orbix Scraper] Trick question source missing business_id or channel_id');
+      return [];
+    }
+    const { count } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('category', 'trickquestion');
+    const episodeNumber = (count || 0) + 1;
+    const tq = await generateAndValidateTrickQuestion(businessId, channelId, { episodeNumber });
+    if (!tq) {
+      console.log('[Orbix Scraper] Trick question generator produced no valid question');
+      return [];
+    }
+    const title = `Trick Question #${String(episodeNumber).padStart(2, '0')}`;
+    const url = `trickquestion://${tq.content_fingerprint}`;
+    const snippet = JSON.stringify({
+      hook: tq.hook,
+      question_text: tq.question_text,
+      answer_text: tq.answer_text,
+      comment_prompt: tq.comment_prompt,
+      voice_script: tq.voice_script,
+      episode_number: tq.episode_number
+    });
+    return [{
+      source_id: source.id,
+      channel_id: channelId,
+      title,
+      snippet,
+      url,
+      published_at: new Date().toISOString(),
+      content_type: 'trickquestion',
+      category: 'trickquestion',
+      shock_score: 70,
+      content_fingerprint: tq.content_fingerprint,
+      factors_json: { source: 'trick_question_generator' }
+    }];
+  } catch (error) {
+    console.error('[Orbix Scraper] Trick question source error:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Extract first paragraph/snippet from text
  */
 function extractSnippet(text) {
@@ -608,12 +663,12 @@ export async function saveRawItem(businessId, item) {
     }
 
     const isEvergreen = item.content_type === 'psychology' || item.category === 'psychology' ||
-      item.content_type === 'money' || item.category === 'money' ||
       item.content_type === 'trivia' || item.category === 'trivia' ||
       item.content_type === 'facts' || item.category === 'facts' ||
       item.content_type === 'riddle' || item.category === 'riddle' ||
       item.content_type === 'mindteaser' || item.category === 'mindteaser' ||
-      item.content_type === 'dadjoke' || item.category === 'dadjoke';
+      item.content_type === 'dadjoke' || item.category === 'dadjoke' ||
+      item.content_type === 'trickquestion' || item.category === 'trickquestion';
     const insertPayload = {
       business_id: businessId,
       channel_id: channelId,
@@ -637,6 +692,7 @@ export async function saveRawItem(businessId, item) {
         item.category === 'riddle' ? { source: 'riddle_generator' } :
         item.category === 'mindteaser' ? { source: 'mindteaser_generator' } :
         item.category === 'dadjoke' ? { source: 'dad_joke_generator' } :
+        item.category === 'trickquestion' ? { source: 'trick_question_generator' } :
         item.category === 'money' ? { source: 'wikipedia_money' } : { source: 'wikipedia_psychology' }
       );
     }
