@@ -2661,13 +2661,19 @@ router.get('/youtube/auth-url', async (req, res) => {
       });
     }
 
-    // Per-channel OAuth (custom client_id for auto, or manual_client_id for manual) uses riddle callback URL for separate quota.
-    // Use the same getRiddleYoutubeRedirectUri() the callback uses so redirect_uri is identical (avoids mismatch errors).
+    // Per-channel OAuth (custom client_id) uses channel-specific callback: riddle vs trickquestion (so each channel can have its own Google OAuth app).
     const hasCustomClient = orbixChannelId && (usage === 'manual' ? channelEntry?.manual_client_id : channelEntry?.client_id);
     let redirectUri;
     if (hasCustomClient) {
-      const { getRiddleYoutubeRedirectUri } = await import('./riddle-youtube-callback.js');
-      redirectUri = getRiddleYoutubeRedirectUri();
+      const { data: tqSource } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1).maybeSingle();
+      const useTrickQuestionCallback = !!tqSource;
+      if (useTrickQuestionCallback) {
+        const { getTrickQuestionYoutubeRedirectUri } = await import('./trickquestion-youtube-callback.js');
+        redirectUri = getTrickQuestionYoutubeRedirectUri();
+      } else {
+        const { getRiddleYoutubeRedirectUri } = await import('./riddle-youtube-callback.js');
+        redirectUri = getRiddleYoutubeRedirectUri();
+      }
     } else {
       const redirectUriRaw = process.env.YOUTUBE_REDIRECT_URI || '';
       redirectUri = redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`;
@@ -2850,7 +2856,9 @@ router.get('/youtube/diagnostic', async (req, res) => {
     if (rawRedirect) {
       result.redirect_uri_value = rawRedirect.startsWith('http') ? rawRedirect : `https://${rawRedirect}`;
       if (channelEntry?.client_id) {
-        result.redirect_uri_value = result.redirect_uri_value.replace(/\/api\/v2\/.*$/, '') + '/api/v2/riddle/youtube/callback';
+        const { data: tqSource } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1).maybeSingle();
+        const callbackPath = tqSource ? '/api/v2/trickquestion/youtube/callback' : '/api/v2/riddle/youtube/callback';
+        result.redirect_uri_value = result.redirect_uri_value.replace(/\/api\/v2\/.*$/, '') + callbackPath;
       }
     }
 

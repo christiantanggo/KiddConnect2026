@@ -444,6 +444,15 @@ try {
     console.warn('⚠️  Riddle YouTube OAuth callback not loaded:', riddleCbErr.message);
   }
 
+  // Trick Question (per-channel) YouTube OAuth callback — for trick question channel with custom OAuth
+  try {
+    const trickQuestionYouTubeCallback = (await import("./routes/v2/trickquestion-youtube-callback.js")).default;
+    app.use("/api/v2/trickquestion", trickQuestionYouTubeCallback);
+    console.log('✅ Trick Question YouTube OAuth callback route loaded (public)');
+  } catch (tqCbErr) {
+    console.warn('⚠️  Trick Question YouTube OAuth callback not loaded:', tqCbErr.message);
+  }
+
   // Load Orbix Network setup routes
   try {
     const v2OrbixNetworkSetupRoutes = (await import("./routes/v2/orbix-network-setup.js")).default;

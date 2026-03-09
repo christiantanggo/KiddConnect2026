@@ -155,8 +155,18 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
       throw err;
     }
-    const raw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
-    const redirectUri = raw.startsWith('http') ? raw : (raw ? `https://${raw}` : (usePerChannel ? DEFAULT_REDIRECT_URI : ''));
+    let raw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
+    let redirectUri = raw.startsWith('http') ? raw : (raw ? `https://${raw}` : (usePerChannel ? DEFAULT_REDIRECT_URI : ''));
+    if (usePerChannel && orbixChannelId) {
+      const { data: tqSource } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1).maybeSingle();
+      if (tqSource) {
+        const { getTrickQuestionYoutubeRedirectUri } = await import('../../routes/v2/trickquestion-youtube-callback.js');
+        redirectUri = getTrickQuestionYoutubeRedirectUri();
+      } else {
+        const { getRiddleYoutubeRedirectUri } = await import('../../routes/v2/riddle-youtube-callback.js');
+        redirectUri = getRiddleYoutubeRedirectUri();
+      }
+    }
     if (!redirectUri) {
       const err = new Error('YouTube OAuth not configured (missing YOUTUBE_REDIRECT_URI). Set it in .env or Railway Environment.');
       err.code = SKIP_YOUTUBE_UPLOAD_CODE;
