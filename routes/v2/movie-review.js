@@ -1407,4 +1407,25 @@ router.post('/projects/:id/upload', async (req, res) => {
   }
 });
 
+router.post('/projects/:id/cancel-upload', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const project = await getProject(req.params.id, businessId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    if (project.status !== 'UPLOADING') {
+      return res.status(400).json({ error: 'Project is not uploading' });
+    }
+    const { data, error } = await supabaseClient
+      .from('movie_review_projects')
+      .update({ status: 'DONE', upload_error: null, updated_at: new Date().toISOString() })
+      .eq('id', project.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ project: data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

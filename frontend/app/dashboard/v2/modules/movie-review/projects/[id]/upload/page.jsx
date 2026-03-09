@@ -75,8 +75,10 @@ export default function MovieReviewUploadPage() {
   const [polishMsg, setPolishMsg] = useState(null);
   const [uploadProgress, setUploadProgress] = useState(0); // 0–95 while uploading
   const [uploadStep, setUploadStep] = useState(0);         // 0=Preparing, 1=Uploading, 2=Processing
+  const [cancellingUpload, setCancellingUpload] = useState(false);
   const pollRef = useRef(null);
   const progressRef = useRef(null);
+  const uploadStartedAtRef = useRef(null);
 
   useEffect(() => {
     loadProject();
@@ -93,7 +95,11 @@ export default function MovieReviewUploadPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setProject(data.project);
-      if (data.project.status === 'UPLOADING') startPolling();
+      if (data.project.status === 'UPLOADING') {
+        // If we just landed on the page, assume it might be stuck — show "Cancel" after a short delay
+        uploadStartedAtRef.current = Date.now() - 180000; // 3 min ago so option shows soon
+        startPolling();
+      }
     } catch (err) {
       setError(err.message);
     } finally {
@@ -133,6 +139,27 @@ export default function MovieReviewUploadPage() {
     if (progressRef.current) {
       clearInterval(progressRef.current);
       progressRef.current = null;
+    }
+  }
+
+  async function cancelUpload() {
+    setCancellingUpload(true);
+    try {
+      const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/cancel-upload`, {
+        method: 'POST',
+        headers: apiHeaders(),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Cancel failed');
+      if (pollRef.current) clearInterval(pollRef.current);
+      pollRef.current = null;
+      stopProgressAnimation();
+      setUploading(false);
+      setProject(data.project);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setCancellingUpload(false);
     }
   }
 
@@ -215,6 +242,7 @@ export default function MovieReviewUploadPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       setProject(p => ({ ...p, status: 'UPLOADING' }));
+      uploadStartedAtRef.current = Date.now();
       startPolling();
     } catch (err) {
       setError(err.message);
@@ -287,6 +315,24 @@ export default function MovieReviewUploadPage() {
                   style={{ width: `${uploadProgress}%`, background: 'linear-gradient(135deg,#e11d48,#9333ea)' }}
                 />
               </div>
+              {uploadStartedAtRef.current && (Date.now() - uploadStartedAtRef.current) > 150000 && (
+                <div className="mt-4 pt-4" style={{ borderTop: '1px solid var(--color-border)' }}>
+                  <p className="text-sm mb-2" style={{ color: 'var(--color-text-muted)' }}>Taking a while? You can cancel and try again.</p>
+                  <button
+                    onClick={cancelUpload}
+                    disabled={cancellingUpload}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold"
+                    style={{
+                      background: 'var(--color-surface)',
+                      border: '1px solid var(--color-border)',
+                      color: 'var(--color-text-main)',
+                      cursor: cancellingUpload ? 'wait' : 'pointer',
+                    }}
+                  >
+                    {cancellingUpload ? <><Loader2 className="w-4 h-4 animate-spin" /> Cancelling…</> : 'Cancel and try again'}
+                  </button>
+                </div>
+              )}
             </div>
           ) : isFailed ? (
             <div className="rounded-2xl p-6 text-center" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
