@@ -489,6 +489,166 @@ export async function sendEmergencyIntakeSMS(config, request) {
 }
 
 /**
+ * Send escalation email when AI has exhausted all providers (Needs Manual Assist).
+ * Same recipient as intake: notification_email (Tavari employee).
+ */
+export async function sendEmergencyEscalationEmail(toEmail, request) {
+  if (!toEmail || !String(toEmail).trim()) {
+    console.warn('[Emergency Escalation Email] No recipient email, skipping');
+    return;
+  }
+  const name = request.caller_name || 'Not provided';
+  const phone = formatPhoneNumber(request.callback_phone) || request.callback_phone || 'Not provided';
+  const serviceType = request.service_category || 'Not provided';
+  const urgency = request.urgency_level || 'Not provided';
+  const location = request.location || 'Not provided';
+  const issue = request.issue_summary || 'Not provided';
+  const subject = `[ESCALATION] Emergency Dispatch: All providers exhausted – ${serviceType} – ${urgency}`;
+  const bodyText = [
+    'Emergency Dispatch – ESCALATION (all providers exhausted)',
+    '',
+    'The AI has tried all available providers. This request needs manual follow-up.',
+    '',
+    `Request ID: ${request.id}`,
+    `Name: ${name}`,
+    `Callback number: ${phone}`,
+    `Service type: ${serviceType}`,
+    `Urgency: ${urgency}`,
+    `Location: ${location}`,
+    `Issue: ${issue}`,
+    '',
+    'Log in to Emergency Dispatch to assign or call the customer.',
+  ].join('\n');
+  const bodyHtml = [
+    '<h2>Emergency Dispatch – ESCALATION</h2>',
+    '<p><strong>The AI has tried all available providers. This request needs manual follow-up.</strong></p>',
+    '<table style="border-collapse:collapse; max-width:560px;">',
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Request ID</td><td style="padding:6px 0;">${escapeHtml(request.id)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Name</td><td style="padding:6px 0;">${escapeHtml(name)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Callback number</td><td style="padding:6px 0;">${escapeHtml(phone)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Service type</td><td style="padding:6px 0;">${escapeHtml(serviceType)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Urgency</td><td style="padding:6px 0;">${escapeHtml(urgency)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Location</td><td style="padding:6px 0;">${escapeHtml(location)}</td></tr>`,
+    `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Issue</td><td style="padding:6px 0;">${escapeHtml(issue)}</td></tr>`,
+    '</table>',
+    '<p>Log in to Emergency Dispatch to assign or call the customer.</p>',
+  ].join('\n');
+  try {
+    await sendEmail(toEmail.trim(), subject, bodyText, bodyHtml, 'Tavari Emergency Dispatch', null);
+    console.log('[Emergency Escalation Email] Sent to', toEmail.trim());
+  } catch (err) {
+    console.error('[Emergency Escalation Email] Failed:', err?.message || err);
+    throw err;
+  }
+}
+
+/**
+ * Send escalation SMS when AI has exhausted all providers (Needs Manual Assist).
+ * Same recipient as intake: notification_sms_number (Tavari employee).
+ */
+export async function sendEmergencyEscalationSMS(config, request) {
+  if (!config.sms_enabled || !config.notification_sms_number) {
+    return;
+  }
+  const numbers = config.emergency_phone_numbers || [];
+  const fromNumber = numbers[0] && String(numbers[0]).trim();
+  if (!fromNumber) {
+    console.warn('[Emergency Escalation SMS] No emergency FROM number configured');
+    return;
+  }
+  if (!TELNYX_API_KEY) {
+    console.warn('[Emergency Escalation SMS] TELNYX_API_KEY not configured');
+    return;
+  }
+  const name = request.caller_name || 'Unknown';
+  const phone = formatPhoneNumber(request.callback_phone) || request.callback_phone || 'N/A';
+  const messageText = addBusinessIdentification(
+    `ESCALATION: All providers exhausted. Request from ${name} (${phone}). Status: Needs Manual Assist. Log in to Emergency Dispatch.`,
+    config.service_line_name || 'Emergency Dispatch'
+  );
+  let fromE164 = fromNumber.replace(/[^0-9+]/g, '');
+  if (!fromE164.startsWith('+')) fromE164 = fromE164.length === 10 ? `+1${fromE164}` : `+${fromE164}`;
+  let toE164 = String(config.notification_sms_number).replace(/[^0-9+]/g, '');
+  if (!toE164.startsWith('+')) toE164 = toE164.length === 10 ? `+1${toE164}` : `+${toE164}`;
+  try {
+    await sendSMSDirect(fromE164, toE164, messageText);
+    console.log('[Emergency Escalation SMS] Sent to', config.notification_sms_number);
+  } catch (err) {
+    console.error('[Emergency Escalation SMS] Failed:', err?.message || err);
+    throw err;
+  }
+}
+
+/** Default message body for customer confirmation SMS when not configured. */
+const DEFAULT_CUSTOMER_SMS_MESSAGE = "Hi {{caller_name}}, we've received your {{service_category}} request ({{urgency_level}}). Location: {{location}}. Issue: {{issue_summary}}. Our dispatch team is looking for a provider and will contact you once someone is assigned.";
+/** Default legal disclaimer when not configured. {{terms_url}} is replaced with config.terms_of_service_url or https://tavarios.com/termsofservice */
+const DEFAULT_CUSTOMER_SMS_LEGAL = "We are a dispatch service only, not the provider. You are responsible for verifying the provider's license, insurance, and terms when they contact you. Terms: {{terms_url}}";
+
+/**
+ * Replace placeholders in a template with request fields. Placeholders: {{caller_name}}, {{service_category}}, {{urgency_level}}, {{location}}, {{issue_summary}}.
+ */
+function replaceCustomerSmsPlaceholders(text, request) {
+  if (!text || typeof text !== 'string') return '';
+  const name = request.caller_name || 'there';
+  const service = request.service_category || 'service';
+  const urgency = request.urgency_level || '';
+  const location = request.location || 'Not provided';
+  const issue = (request.issue_summary || '').slice(0, 200);
+  return text
+    .replace(/\{\{caller_name\}\}/g, name)
+    .replace(/\{\{service_category\}\}/g, service)
+    .replace(/\{\{urgency_level\}\}/g, urgency)
+    .replace(/\{\{location\}\}/g, location)
+    .replace(/\{\{issue_summary\}\}/g, issue);
+}
+
+/**
+ * Send SMS to the customer after phone intake: confirms details, says dispatch is looking, and includes legal disclaimer.
+ * Content is built from config.customer_sms_message and config.customer_sms_legal (with placeholders). If either is empty, defaults are used.
+ * @param {Object} config - Emergency config: emergency_phone_numbers, service_line_name, customer_sms_enabled, customer_sms_message, customer_sms_legal
+ * @param {Object} request - Intake payload: caller_name, callback_phone, service_category, urgency_level, location, issue_summary
+ */
+export async function sendEmergencyCustomerConfirmationSMS(config, request) {
+  if (!config.customer_sms_enabled) return;
+  const numbers = config.emergency_phone_numbers || [];
+  const fromNumber = numbers[0] && String(numbers[0]).trim();
+  if (!fromNumber) {
+    console.warn('[Emergency Customer SMS] No emergency FROM number configured');
+    return;
+  }
+  if (!TELNYX_API_KEY) {
+    console.warn('[Emergency Customer SMS] TELNYX_API_KEY not configured');
+    return;
+  }
+  const toPhone = request.callback_phone;
+  if (!toPhone || !String(toPhone).trim()) {
+    console.warn('[Emergency Customer SMS] No customer callback phone');
+    return;
+  }
+  const messageBody = (config.customer_sms_message && String(config.customer_sms_message).trim())
+    ? replaceCustomerSmsPlaceholders(config.customer_sms_message.trim(), request)
+    : replaceCustomerSmsPlaceholders(DEFAULT_CUSTOMER_SMS_MESSAGE, request);
+  const legalBody = (config.customer_sms_legal && String(config.customer_sms_legal).trim())
+    ? replaceCustomerSmsPlaceholders(config.customer_sms_legal.trim(), request)
+    : replaceCustomerSmsPlaceholders(DEFAULT_CUSTOMER_SMS_LEGAL, request);
+  let fullText = legalBody ? `${messageBody}\n\n${legalBody}` : messageBody;
+  const termsUrl = (config.terms_of_service_url && String(config.terms_of_service_url).trim()) || 'https://tavarios.com/termsofservice';
+  fullText = fullText.replace(/\{\{terms_url\}\}/g, termsUrl);
+  const messageText = addBusinessIdentification(fullText, config.service_line_name || 'Emergency Dispatch');
+  let fromE164 = fromNumber.replace(/[^0-9+]/g, '');
+  if (!fromE164.startsWith('+')) fromE164 = fromE164.length === 10 ? `+1${fromE164}` : `+${fromE164}`;
+  let toE164 = String(toPhone).replace(/[^0-9+]/g, '');
+  if (!toE164.startsWith('+')) toE164 = toE164.length === 10 ? `+1${toE164}` : `+${toE164}`;
+  try {
+    await sendSMSDirect(fromE164, toE164, messageText);
+    console.log('[Emergency Customer SMS] Sent to customer', toE164);
+  } catch (err) {
+    console.error('[Emergency Customer SMS] Failed:', err?.message || err);
+    throw err;
+  }
+}
+
+/**
  * Send usage notification (minutes almost used)
  */
 export async function sendMinutesAlmostUsedNotification(business, minutesUsed, minutesTotal, minutesRemaining, resetDate) {

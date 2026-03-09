@@ -59,7 +59,14 @@ export default function EmergencyDispatchPage() {
     max_dispatch_attempts: 5,
     notification_email: '',
     notification_sms_number: '',
+    email_enabled: true,
     sms_enabled: false,
+    escalation_email_enabled: true,
+    escalation_sms_enabled: true,
+    customer_sms_enabled: false,
+    customer_sms_message: '',
+    customer_sms_legal: '',
+    terms_of_service_url: '',
     intake_fields: [...DEFAULT_INTAKE_FIELDS],
     opening_greeting: DEFAULT_OPENING_GREETING,
     service_line_name: DEFAULT_SERVICE_LINE_NAME,
@@ -84,7 +91,9 @@ export default function EmergencyDispatchPage() {
   const [linkingAgent, setLinkingAgent] = useState(false);
   const [callProviderLoadingId, setCallProviderLoadingId] = useState(null);
   const [resetDispatchLoadingId, setResetDispatchLoadingId] = useState(null);
+  const [assigningRequestId, setAssigningRequestId] = useState(null);
   const [selectedRequestId, setSelectedRequestId] = useState(null);
+  const [recentCallsSubTab, setRecentCallsSubTab] = useState('pending'); // 'pending' | 'dispatched'
   const [requestDetailLog, setRequestDetailLog] = useState([]);
   const [requestDetailActivity, setRequestDetailActivity] = useState([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -134,7 +143,14 @@ export default function EmergencyDispatchPage() {
         max_dispatch_attempts: configRes.data?.max_dispatch_attempts ?? 5,
         notification_email: configRes.data?.notification_email ?? '',
         notification_sms_number: configRes.data?.notification_sms_number ?? '',
+        email_enabled: configRes.data?.email_enabled !== false,
         sms_enabled: configRes.data?.sms_enabled ?? false,
+        escalation_email_enabled: configRes.data?.escalation_email_enabled !== false,
+        escalation_sms_enabled: configRes.data?.escalation_sms_enabled !== false,
+        customer_sms_enabled: configRes.data?.customer_sms_enabled ?? false,
+        customer_sms_message: configRes.data?.customer_sms_message ?? '',
+        customer_sms_legal: configRes.data?.customer_sms_legal ?? '',
+        terms_of_service_url: configRes.data?.terms_of_service_url ?? '',
         intake_fields: Array.isArray(configRes.data?.intake_fields) && configRes.data.intake_fields.length > 0
           ? configRes.data.intake_fields
           : [...DEFAULT_INTAKE_FIELDS],
@@ -208,7 +224,14 @@ export default function EmergencyDispatchPage() {
         max_dispatch_attempts: c.max_dispatch_attempts ?? 5,
         notification_email: (c.notification_email && String(c.notification_email).trim()) || null,
         notification_sms_number: (c.notification_sms_number && String(c.notification_sms_number).trim()) || null,
+        email_enabled: !!c.email_enabled,
         sms_enabled: !!c.sms_enabled,
+        escalation_email_enabled: !!c.escalation_email_enabled,
+        escalation_sms_enabled: !!c.escalation_sms_enabled,
+        customer_sms_enabled: !!c.customer_sms_enabled,
+        customer_sms_message: (c.customer_sms_message && String(c.customer_sms_message).trim()) || null,
+        customer_sms_legal: (c.customer_sms_legal && String(c.customer_sms_legal).trim()) || null,
+        terms_of_service_url: (c.terms_of_service_url && String(c.terms_of_service_url).trim()) || null,
         intake_fields: Array.isArray(c.intake_fields) ? c.intake_fields : [...DEFAULT_INTAKE_FIELDS],
         opening_greeting: (c.opening_greeting && String(c.opening_greeting).trim()) || null,
         service_line_name: (c.service_line_name && String(c.service_line_name).trim()) || null,
@@ -224,7 +247,14 @@ export default function EmergencyDispatchPage() {
         max_dispatch_attempts: configRest.max_dispatch_attempts ?? c.max_dispatch_attempts ?? 5,
         notification_email: configRest.notification_email ?? c.notification_email ?? '',
         notification_sms_number: configRest.notification_sms_number ?? c.notification_sms_number ?? '',
+        email_enabled: configRest.email_enabled ?? c.email_enabled ?? true,
         sms_enabled: configRest.sms_enabled ?? c.sms_enabled ?? false,
+        escalation_email_enabled: configRest.escalation_email_enabled ?? c.escalation_email_enabled ?? true,
+        escalation_sms_enabled: configRest.escalation_sms_enabled ?? c.escalation_sms_enabled ?? true,
+        customer_sms_enabled: configRest.customer_sms_enabled ?? c.customer_sms_enabled ?? false,
+        customer_sms_message: configRest.customer_sms_message ?? c.customer_sms_message ?? '',
+        customer_sms_legal: configRest.customer_sms_legal ?? c.customer_sms_legal ?? '',
+        terms_of_service_url: configRest.terms_of_service_url ?? c.terms_of_service_url ?? '',
         intake_fields: Array.isArray(configRest.intake_fields) && configRest.intake_fields.length > 0 ? configRest.intake_fields : (c.intake_fields ?? []),
         opening_greeting: configRest.opening_greeting ?? c.opening_greeting ?? prev.opening_greeting ?? DEFAULT_OPENING_GREETING,
         service_line_name: configRest.service_line_name ?? c.service_line_name ?? prev.service_line_name ?? DEFAULT_SERVICE_LINE_NAME,
@@ -409,6 +439,27 @@ export default function EmergencyDispatchPage() {
     }
   };
 
+  const assignProvider = async (requestId, providerId) => {
+    const value = providerId && String(providerId).trim() ? providerId : null;
+    setAssigningRequestId(requestId);
+    try {
+      await emergencyNetworkAPI.updateRequest(requestId, { accepted_provider_id: value });
+      await load();
+      if (selectedRequestId === requestId) {
+        try {
+          const res = await emergencyNetworkAPI.getRequestActivity(requestId);
+          setRequestDetailActivity(res.data?.activity ?? []);
+        } catch (_) {}
+      }
+    } catch (e) {
+      console.error('[EmergencyDispatch] assign provider error', e);
+      const msg = e.response?.data?.error || e.message || 'Failed to assign provider';
+      alert(msg);
+    } finally {
+      setAssigningRequestId(null);
+    }
+  };
+
   const deleteProviderById = async (id) => {
     if (!confirm('Remove this provider?')) return;
     try {
@@ -421,6 +472,9 @@ export default function EmergencyDispatchPage() {
 
   const providerById = (id) => providers.find((p) => p.id === id) || null;
   const recentCalls = requests.filter((r) => r.intake_channel === 'phone').slice(0, 50);
+  const isDispatched = (r) => r.accepted_provider_id || ['Accepted', 'Connected', 'Closed'].includes(r.status);
+  const pendingCalls = recentCalls.filter((r) => !isDispatched(r));
+  const dispatchedCalls = recentCalls.filter(isDispatched);
   const recentMessages = requests.filter((r) => r.intake_channel === 'form' || r.intake_channel === 'sms').slice(0, 50);
   const dispatchedRequests = requests.filter(
     (r) => r.accepted_provider_id || ['Accepted', 'Connected', 'Closed'].includes(r.status)
@@ -459,7 +513,7 @@ export default function EmergencyDispatchPage() {
           </div>
           {createAgentError && <p className="text-red-600 text-sm mb-2">Rebuild: {createAgentError}</p>}
           <p className="text-slate-600 mb-4">
-            24/7 Emergency & Priority Service Network. Public page: <a href="/emergency" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">/emergency</a>
+            24/7 Emergency & Priority Service Network. Public pages: <a href="/emergencydispatch" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">/emergencydispatch</a>, <a href="/emergency-plumbing" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">/emergency-plumbing</a>, <a href="/termsofservice" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">/termsofservice</a>
           </p>
 
           {/* Single row of square nav buttons (all pages) — one row, sizes scale with screen */}
@@ -998,17 +1052,52 @@ export default function EmergencyDispatchPage() {
                   </div>
                 </div>
                 <div>
-                  <label className="block text-sm text-slate-600 mb-1">Notification email (phone intake)</label>
-                  <input type="email" className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm" placeholder="email@example.com" value={config.notification_email || ''} onChange={(e) => { setConfig((c) => ({ ...c, notification_email: e.target.value })); setConfigDirty(true); }} />
-                  <p className="text-xs text-slate-500 mt-1">Intake details from phone calls are sent here.</p>
+                  <label className="flex items-center gap-2 text-sm text-slate-600 mb-1">
+                    <input type="checkbox" checked={config.email_enabled !== false} onChange={(e) => { setConfig((c) => ({ ...c, email_enabled: e.target.checked })); setConfigDirty(true); }} className="rounded border-slate-300" />
+                    Send email when a new request comes in
+                  </label>
+                  <input type="email" className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm mt-1" placeholder="email@example.com" value={config.notification_email || ''} onChange={(e) => { setConfig((c) => ({ ...c, notification_email: e.target.value })); setConfigDirty(true); }} />
+                  <p className="text-xs text-slate-500 mt-1">Intake details from phone calls are sent to this address when enabled.</p>
                 </div>
                 <div>
                   <label className="flex items-center gap-2 text-sm text-slate-600 mb-1">
                     <input type="checkbox" checked={config.sms_enabled || false} onChange={(e) => { setConfig((c) => ({ ...c, sms_enabled: e.target.checked })); setConfigDirty(true); }} className="rounded border-slate-300" />
-                    Also send SMS when a new request comes in
+                    Send SMS when a new request comes in
                   </label>
                   <input type="tel" className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm mt-1" placeholder="+15551234567" value={config.notification_sms_number || ''} onChange={(e) => { setConfig((c) => ({ ...c, notification_sms_number: e.target.value })); setConfigDirty(true); }} />
                   <p className="text-xs text-slate-500 mt-1">SMS notifications use your first emergency line number as the sender. Same process as the AI phone agent.</p>
+                </div>
+                <div className="pt-4 border-t border-slate-200">
+                  <p className="text-sm font-medium text-slate-700 mb-2">When escalation is needed (all providers exhausted)</p>
+                  <p className="text-xs text-slate-500 mb-3">Choose how you want to be notified when the AI has tried every provider and the request needs manual follow-up.</p>
+                  <label className="flex items-center gap-2 text-sm text-slate-600 mb-2">
+                    <input type="checkbox" checked={config.escalation_email_enabled !== false} onChange={(e) => { setConfig((c) => ({ ...c, escalation_email_enabled: e.target.checked })); setConfigDirty(true); }} className="rounded border-slate-300" />
+                    Send escalation email (to the address above)
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-600">
+                    <input type="checkbox" checked={config.escalation_sms_enabled !== false} onChange={(e) => { setConfig((c) => ({ ...c, escalation_sms_enabled: e.target.checked })); setConfigDirty(true); }} className="rounded border-slate-300" />
+                    Send escalation SMS (to the number above)
+                  </label>
+                </div>
+                <div className="pt-4 border-t border-slate-200">
+                  <p className="text-sm font-medium text-slate-700 mb-1">SMS to customer after call</p>
+                  <p className="text-xs text-slate-500 mb-3">Send a text to the caller after the AI collects their info: confirm details, say dispatch is looking, and include legal disclaimer. Use {'{{terms_url}}'} in the message or legal to insert the Terms of Service link. Leave message/legal blank to use defaults.</p>
+                  <label className="flex items-center gap-2 text-sm text-slate-600 mb-2">
+                    <input type="checkbox" checked={config.customer_sms_enabled || false} onChange={(e) => { setConfig((c) => ({ ...c, customer_sms_enabled: e.target.checked })); setConfigDirty(true); }} className="rounded border-slate-300" />
+                    Send SMS to customer after phone intake
+                  </label>
+                  <div className="mb-3">
+                    <label className="block text-xs text-slate-600 mb-1">Terms of Service URL (used for {'{{terms_url}}'} in SMS)</label>
+                    <input type="url" className="w-full max-w-2xl rounded border border-slate-300 px-3 py-2 text-sm" placeholder="https://tavarios.com/termsofservice" value={config.terms_of_service_url || ''} onChange={(e) => { setConfig((c) => ({ ...c, terms_of_service_url: e.target.value })); setConfigDirty(true); }} />
+                  </div>
+                  <div className="mb-3">
+                    <label className="block text-xs text-slate-600 mb-1">Message to customer (placeholders: {'{{caller_name}}'}, {'{{service_category}}'}, {'{{urgency_level}}'}, {'{{location}}'}, {'{{issue_summary}}'}, {'{{terms_url}}'})</label>
+                    <textarea rows={3} className="w-full max-w-2xl rounded border border-slate-300 px-3 py-2 text-sm" placeholder="Hi {{caller_name}}, we've received your {{service_category}} request ({{urgency_level}}). Our dispatch team is looking for a provider and will contact you once assigned." value={config.customer_sms_message || ''} onChange={(e) => { setConfig((c) => ({ ...c, customer_sms_message: e.target.value })); setConfigDirty(true); }} />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-600 mb-1">Legal disclaimer (appended to message). Include {'{{terms_url}}'} for the terms link.</label>
+                    <textarea rows={2} className="w-full max-w-2xl rounded border border-slate-300 px-3 py-2 text-sm" placeholder="We are a dispatch service only, not the provider. You are responsible for verifying the provider's license, insurance, and terms when they contact you. Terms: {{terms_url}}" value={config.customer_sms_legal || ''} onChange={(e) => { setConfig((c) => ({ ...c, customer_sms_legal: e.target.value })); setConfigDirty(true); }} />
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm text-slate-600 mb-1">Max dispatch attempts</label>
@@ -1029,70 +1118,116 @@ export default function EmergencyDispatchPage() {
           {/* Recent calls */}
           {activeTab === 'recent-calls' && (
             <section className="bg-white rounded-xl border border-slate-200 p-6">
-              <h2 className="text-lg font-medium mb-4">Recent calls</h2>
+              <h2 className="text-lg font-medium mb-2">Recent calls</h2>
               <p className="text-slate-600 text-sm mb-4">Service requests from phone intake.</p>
+              <div className="flex gap-1 border-b border-slate-200 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setRecentCallsSubTab('pending')}
+                  className={`px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition-colors ${
+                    recentCallsSubTab === 'pending'
+                      ? 'bg-white border-slate-200 -mb-px border-b-white text-slate-800'
+                      : 'bg-slate-50 border-transparent text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Pending {pendingCalls.length > 0 && <span className="ml-1 text-slate-500">({pendingCalls.length})</span>}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRecentCallsSubTab('dispatched')}
+                  className={`px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition-colors ${
+                    recentCallsSubTab === 'dispatched'
+                      ? 'bg-white border-slate-200 -mb-px border-b-white text-slate-800'
+                      : 'bg-slate-50 border-transparent text-slate-600 hover:bg-slate-100'
+                  }`}
+                >
+                  Dispatched {dispatchedCalls.length > 0 && <span className="ml-1 text-slate-500">({dispatchedCalls.length})</span>}
+                </button>
+              </div>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm border-separate" style={{ borderSpacing: '0 6px' }}>
                   <thead>
-                    <tr className="border-b border-slate-200 text-left text-slate-600">
+                    <tr className="text-left text-slate-600">
                       <th className="pb-2 pr-2">Name</th>
                       <th className="pb-2 pr-2">Phone</th>
                       <th className="pb-2 pr-2">Service</th>
                       <th className="pb-2 pr-2">Urgency</th>
                       <th className="pb-2 pr-2">Location</th>
                       <th className="pb-2 pr-2">Status</th>
+                      <th className="pb-2 pr-2">Assigned to</th>
                       <th className="pb-2 pr-2">Created</th>
                       <th className="pb-2">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {recentCalls.length === 0 ? (
-                      <tr><td colSpan={8} className="py-4 text-slate-500 text-center">No phone calls yet</td></tr>
+                    {(recentCallsSubTab === 'pending' ? pendingCalls : dispatchedCalls).length === 0 ? (
+                      <tr><td colSpan={9} className="py-4 text-slate-500 text-center">{recentCallsSubTab === 'pending' ? 'No pending calls' : 'No dispatched calls yet'}</td></tr>
                     ) : (
-                      recentCalls.map((r) => (
-                        <tr
-                          key={r.id}
-                          className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
-                          onClick={() => setSelectedRequestId(r.id)}
-                        >
-                          <td className="py-2 pr-2">{r.caller_name || '—'}</td>
-                          <td className="py-2 pr-2">{r.callback_phone}</td>
-                          <td className="py-2 pr-2">{r.service_category}</td>
-                          <td className="py-2 pr-2">{r.urgency_level}</td>
-                          <td className="py-2 pr-2 max-w-[120px] truncate" title={r.location}>{r.location || '—'}</td>
-                          <td className="py-2 pr-2">{r.status}</td>
-                          <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
-                          <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
-                              <button
-                                type="button"
-                                onClick={() => handleResetDispatch(r.id)}
-                                disabled={resetDispatchLoadingId === r.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-500 text-white text-xs font-medium hover:bg-slate-600 disabled:opacity-60"
-                                title="Clear dispatch attempts so Call plumber can try again"
+                      (recentCallsSubTab === 'pending' ? pendingCalls : dispatchedCalls).map((r) => {
+                        const assignedProvider = r.accepted_provider_id ? providerById(r.accepted_provider_id) : null;
+                        const providersForService = (providers || []).filter((p) => p.trade_type === (r.service_category || 'Other'));
+                        const isHandled = r.accepted_provider_id || ['Accepted', 'Connected', 'Closed'].includes(r.status);
+                        const rowBg = isHandled
+                          ? 'bg-emerald-50/80 hover:bg-emerald-100/80 border-l-4 border-l-emerald-500'
+                          : 'bg-red-50/80 hover:bg-red-100/80 border-l-4 border-l-red-400';
+                        return (
+                          <tr
+                            key={r.id}
+                            className={`border border-slate-200 cursor-pointer ${rowBg}`}
+                            onClick={() => setSelectedRequestId(r.id)}
+                          >
+                            <td className="py-2 pr-2">{r.caller_name || '—'}</td>
+                            <td className="py-2 pr-2">{r.callback_phone}</td>
+                            <td className="py-2 pr-2">{r.service_category}</td>
+                            <td className="py-2 pr-2">{r.urgency_level}</td>
+                            <td className="py-2 pr-2 max-w-[120px] truncate" title={r.location}>{r.location || '—'}</td>
+                            <td className="py-2 pr-2">{r.status}</td>
+                            <td className="py-2 pr-2">{assignedProvider ? assignedProvider.business_name : '—'}</td>
+                            <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
+                            <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleResetDispatch(r.id)}
+                                  disabled={resetDispatchLoadingId === r.id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-500 text-white text-xs font-medium hover:bg-slate-600 disabled:opacity-60"
+                                  title="Clear dispatch attempts so Call plumber can try again"
+                                >
+                                  {resetDispatchLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+                                  Reset dispatch
+                                </button>
+                              )}
+                              {['New', 'Contacting Providers'].includes(r.status) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCallProvider(r.id)}
+                                  disabled={callProviderLoadingId === r.id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
+                                  title="Place outbound call to next plumber"
+                                >
+                                  {callProviderLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <Phone className="w-3 h-3" />}
+                                  Call plumber
+                                </button>
+                              )}
+                              <select
+                                value={r.accepted_provider_id || ''}
+                                onChange={(e) => assignProvider(r.id, e.target.value)}
+                                disabled={assigningRequestId === r.id}
+                                className="rounded border border-slate-300 text-xs py-1 min-w-[100px]"
+                                title="Assign a provider (e.g. after manual escalation)"
                               >
-                                {resetDispatchLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
-                                Reset dispatch
-                              </button>
-                            )}
-                            {['New', 'Contacting Providers'].includes(r.status) && (
-                              <button
-                                type="button"
-                                onClick={() => handleCallProvider(r.id)}
-                                disabled={callProviderLoadingId === r.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
-                                title="Place outbound call to next plumber"
-                              >
-                                {callProviderLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <Phone className="w-3 h-3" />}
-                                Call plumber
-                              </button>
-                            )}
-                            <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
-                              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                            </select>
-                          </td>
-                        </tr>
-                      ))
+                                <option value="">Assign...</option>
+                                {providersForService.map((p) => (
+                                  <option key={p.id} value={p.id}>{p.business_name}</option>
+                                ))}
+                              </select>
+                              <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
+                                {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -1115,58 +1250,76 @@ export default function EmergencyDispatchPage() {
                       <th className="pb-2 pr-2">Service</th>
                       <th className="pb-2 pr-2">Urgency</th>
                       <th className="pb-2 pr-2">Status</th>
+                      <th className="pb-2 pr-2">Assigned to</th>
                       <th className="pb-2 pr-2">Created</th>
                       <th className="pb-2">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {recentMessages.length === 0 ? (
-                      <tr><td colSpan={8} className="py-4 text-slate-500 text-center">No form or SMS requests yet</td></tr>
+                      <tr><td colSpan={9} className="py-4 text-slate-500 text-center">No form or SMS requests yet</td></tr>
                     ) : (
-                      recentMessages.map((r) => (
-                        <tr
-                          key={r.id}
-                          className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
-                          onClick={() => setSelectedRequestId(r.id)}
-                        >
-                          <td className="py-2 pr-2">{r.intake_channel === 'form' ? <Globe className="w-4 h-4 inline" /> : <MessageSquare className="w-4 h-4 inline" />} {r.intake_channel}</td>
-                          <td className="py-2 pr-2">{r.caller_name || '—'}</td>
-                          <td className="py-2 pr-2">{r.callback_phone}</td>
-                          <td className="py-2 pr-2">{r.service_category}</td>
-                          <td className="py-2 pr-2">{r.urgency_level}</td>
-                          <td className="py-2 pr-2">{r.status}</td>
-                          <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
-                          <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                            {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
-                              <button
-                                type="button"
-                                onClick={() => handleResetDispatch(r.id)}
-                                disabled={resetDispatchLoadingId === r.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-500 text-white text-xs font-medium hover:bg-slate-600 disabled:opacity-60"
-                                title="Clear dispatch attempts so Call plumber can try again"
+                      recentMessages.map((r) => {
+                        const assignedProvider = r.accepted_provider_id ? providerById(r.accepted_provider_id) : null;
+                        const providersForService = (providers || []).filter((p) => p.trade_type === (r.service_category || 'Other'));
+                        return (
+                          <tr
+                            key={r.id}
+                            className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
+                            onClick={() => setSelectedRequestId(r.id)}
+                          >
+                            <td className="py-2 pr-2">{r.intake_channel === 'form' ? <Globe className="w-4 h-4 inline" /> : <MessageSquare className="w-4 h-4 inline" />} {r.intake_channel}</td>
+                            <td className="py-2 pr-2">{r.caller_name || '—'}</td>
+                            <td className="py-2 pr-2">{r.callback_phone}</td>
+                            <td className="py-2 pr-2">{r.service_category}</td>
+                            <td className="py-2 pr-2">{r.urgency_level}</td>
+                            <td className="py-2 pr-2">{r.status}</td>
+                            <td className="py-2 pr-2">{assignedProvider ? assignedProvider.business_name : '—'}</td>
+                            <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
+                            <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                              {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleResetDispatch(r.id)}
+                                  disabled={resetDispatchLoadingId === r.id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-500 text-white text-xs font-medium hover:bg-slate-600 disabled:opacity-60"
+                                  title="Clear dispatch attempts so Call plumber can try again"
+                                >
+                                  {resetDispatchLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
+                                  Reset dispatch
+                                </button>
+                              )}
+                              {['New', 'Contacting Providers'].includes(r.status) && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCallProvider(r.id)}
+                                  disabled={callProviderLoadingId === r.id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
+                                  title="Place outbound call to next plumber"
+                                >
+                                  {callProviderLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <Phone className="w-3 h-3" />}
+                                  Call plumber
+                                </button>
+                              )}
+                              <select
+                                value={r.accepted_provider_id || ''}
+                                onChange={(e) => assignProvider(r.id, e.target.value)}
+                                disabled={assigningRequestId === r.id}
+                                className="rounded border border-slate-300 text-xs py-1 min-w-[100px]"
+                                title="Assign a provider (e.g. after manual escalation)"
                               >
-                                {resetDispatchLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
-                                Reset dispatch
-                              </button>
-                            )}
-                            {['New', 'Contacting Providers'].includes(r.status) && (
-                              <button
-                                type="button"
-                                onClick={() => handleCallProvider(r.id)}
-                                disabled={callProviderLoadingId === r.id}
-                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
-                                title="Place outbound call to next plumber"
-                              >
-                                {callProviderLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <Phone className="w-3 h-3" />}
-                                Call plumber
-                              </button>
-                            )}
-                            <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
-                              {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                            </select>
-                          </td>
-                        </tr>
-                      ))
+                                <option value="">Assign...</option>
+                                {providersForService.map((p) => (
+                                  <option key={p.id} value={p.id}>{p.business_name}</option>
+                                ))}
+                              </select>
+                              <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
+                                {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+                              </select>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>

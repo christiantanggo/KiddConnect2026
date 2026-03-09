@@ -8,7 +8,7 @@ import { Business } from "../models/Business.js";
 import { Message } from "../models/Message.js";
 import { getCallSummary, forwardCallToBusiness, getVapiClient } from "../services/vapi.js";
 import { checkMinutesAvailable, recordCallUsage } from "../services/usage.js";
-import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail, sendEmergencyIntakeEmail, sendEmergencyIntakeSMS } from "../services/notifications.js";
+import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail, sendEmergencyIntakeEmail, sendEmergencyIntakeSMS, sendEmergencyCustomerConfirmationSMS } from "../services/notifications.js";
 import { isBusinessOpenAtTime } from "../utils/businessHours.js";
 import { AIAgent } from "../models/AIAgent.js";
 import { Notification } from "../models/v2/Notification.js";
@@ -598,6 +598,17 @@ async function handleAssistantRequest(body, res) {
     console.warn("[VAPI Webhook] assistant-request: no destination number in body — emergency routing requires destination; body keys=%s", Object.keys(body || {}).join(","));
   }
 
+  // Caller number (inbound) — may be present so we can look up recent requests for callback detection
+  const callerNumber =
+    body?.message?.customer?.number ||
+    body?.message?.customer?.phoneNumber ||
+    body?.message?.customer?.phone ||
+    call?.customer?.number ||
+    call?.customer?.phoneNumber ||
+    body?.customer?.number ||
+    body?.customer?.phoneNumber ||
+    null;
+
   // EMERGENCY NETWORK: separate stream — dedicated number(s) route to Emergency assistant only; existing agent untouched
   if (phoneNumber) {
     const { isEmergencyNumber, getEmergencyAssistantId, getEmergencyConfig } = await import("../services/emergency-network/config.js");
@@ -609,8 +620,28 @@ async function handleAssistantRequest(body, res) {
       const vapiClient = getVapiClient();
       try {
         const assistantResponse = await vapiClient.get(`/assistant/${emergencyId}`);
-        const assistant = assistantResponse.data;
+        let assistant = assistantResponse.data;
         if (assistant) {
+          // If we have caller number, look up recent requests (last 7 days) and inject context so AI can ask cancel/update/new
+          if (callerNumber) {
+            const { getRecentRequestsByPhone } = await import("../services/emergency-network/callback-lookup.js");
+            const recentRequests = await getRecentRequestsByPhone(callerNumber, { days: 7 });
+            if (recentRequests.length > 0) {
+              const contextLines = recentRequests.slice(0, 5).map((r) => {
+                const date = r.created_at ? new Date(r.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '';
+                return `- Request ${r.id} (${r.service_category}, status: ${r.status}, ${date})`;
+              });
+              const callerContext = `\n\n[CALLER CONTEXT - use this to decide how to respond]\nThis caller has the following request(s) from the last 7 days:\n${contextLines.join('\n')}\nIf they have at least one request, FIRST ask: "Are you calling to cancel or update that request, or is this a new issue?" Then respond accordingly. If they want to cancel, say we'll note that and they don't need to do anything else. If they want to update, take the updated details. If it's a new issue, proceed to collect information as usual.`;
+              assistant = JSON.parse(JSON.stringify(assistant));
+              if (assistant.model?.messages?.length) {
+                const systemMsg = assistant.model.messages.find((m) => m.role === 'system');
+                if (systemMsg && typeof systemMsg.content === 'string') {
+                  systemMsg.content += callerContext;
+                  console.log("[VAPI Webhook] assistant-request: injected caller context for", recentRequests.length, "recent request(s)");
+                }
+              }
+            }
+          }
           console.log("[VAPI Webhook] assistant-request: emergency number -> returning Emergency Network assistant", emergencyId);
           res.status(200).json({ assistant });
           return { sent: true };
@@ -1256,8 +1287,10 @@ async function handleCallEnd(event) {
       const request = await createServiceRequest(payload);
       const config = await getEmergencyConfig();
       const toEmail = config.notification_email || process.env.EMERGENCY_DISPATCH_NOTIFICATION_EMAIL;
-      if (toEmail) {
+      if (config.email_enabled && toEmail) {
         await sendEmergencyIntakeEmail(toEmail, payload, { transcript, summary });
+      } else if (toEmail && !config.email_enabled) {
+        // email_enabled is off; skip intake email
       } else {
         console.warn("[VAPI Webhook] Emergency: no notification_email configured, skipping email");
       }
@@ -1267,6 +1300,14 @@ async function handleCallEnd(event) {
           console.log("[VAPI Webhook] Emergency: SMS notification sent");
         } catch (smsErr) {
           console.error("[VAPI Webhook] Emergency: SMS notification failed", smsErr?.message || smsErr);
+        }
+      }
+      if (config.customer_sms_enabled) {
+        try {
+          await sendEmergencyCustomerConfirmationSMS(config, { ...payload, id: request.id });
+          console.log("[VAPI Webhook] Emergency: customer confirmation SMS sent");
+        } catch (customerSmsErr) {
+          console.error("[VAPI Webhook] Emergency: customer SMS failed", customerSmsErr?.message || customerSmsErr);
         }
       }
       console.log("[VAPI Webhook] Emergency request created:", request.id);

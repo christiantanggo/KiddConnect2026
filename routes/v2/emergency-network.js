@@ -320,14 +320,21 @@ router.post('/link-agent', async (req, res) => {
  */
 router.put('/config', express.json(), async (req, res) => {
   try {
-    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email, notification_sms_number, sms_enabled, intake_fields, opening_greeting, service_line_name, custom_instructions } = req.body || {};
+    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email, notification_sms_number, email_enabled, sms_enabled, escalation_email_enabled, escalation_sms_enabled, customer_sms_enabled, customer_sms_message, customer_sms_legal, terms_of_service_url, intake_fields, opening_greeting, service_line_name, custom_instructions } = req.body || {};
     const updates = {};
     if (Array.isArray(emergency_phone_numbers)) updates.emergency_phone_numbers = emergency_phone_numbers;
     if (emergency_vapi_assistant_id !== undefined) updates.emergency_vapi_assistant_id = emergency_vapi_assistant_id || null;
     if (typeof max_dispatch_attempts === 'number') updates.max_dispatch_attempts = max_dispatch_attempts;
     if (notification_email !== undefined) updates.notification_email = notification_email ? String(notification_email).trim() || null : null;
     if (notification_sms_number !== undefined) updates.notification_sms_number = notification_sms_number ? String(notification_sms_number).trim() || null : null;
+    if (email_enabled !== undefined) updates.email_enabled = !!email_enabled;
     if (sms_enabled !== undefined) updates.sms_enabled = !!sms_enabled;
+    if (escalation_email_enabled !== undefined) updates.escalation_email_enabled = !!escalation_email_enabled;
+    if (escalation_sms_enabled !== undefined) updates.escalation_sms_enabled = !!escalation_sms_enabled;
+    if (customer_sms_enabled !== undefined) updates.customer_sms_enabled = !!customer_sms_enabled;
+    if (customer_sms_message !== undefined) updates.customer_sms_message = customer_sms_message ? String(customer_sms_message).trim() || null : null;
+    if (customer_sms_legal !== undefined) updates.customer_sms_legal = customer_sms_legal ? String(customer_sms_legal).trim() || null : null;
+    if (terms_of_service_url !== undefined) updates.terms_of_service_url = terms_of_service_url ? String(terms_of_service_url).trim() || null : null;
     if (opening_greeting !== undefined) updates.opening_greeting = opening_greeting ? String(opening_greeting).trim() || null : null;
     if (service_line_name !== undefined) updates.service_line_name = service_line_name ? String(service_line_name).trim() || null : null;
     if (custom_instructions !== undefined) updates.custom_instructions = custom_instructions ? String(custom_instructions).trim() || null : null;

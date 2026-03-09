@@ -9,6 +9,10 @@ import {
   getVapiPhoneNumberId,
   createOutboundCall,
 } from '../vapi.js';
+import {
+  sendEmergencyEscalationEmail,
+  sendEmergencyEscalationSMS,
+} from '../notifications.js';
 
 function normalizeE164(value) {
   if (!value || typeof value !== 'string') return '';
@@ -221,8 +225,8 @@ export async function startDispatch(requestId) {
 export async function callNextProvider(requestId) {
   const next = await getNextProviderToCall(requestId);
   if (!next) {
-    const { data: req } = await supabaseClient.from('emergency_service_requests').select('status').eq('id', requestId).single();
-    if (req && req.status === 'Contacting Providers') {
+    const { data: requestRow } = await supabaseClient.from('emergency_service_requests').select('*').eq('id', requestId).single();
+    if (requestRow && requestRow.status === 'Contacting Providers') {
       await supabaseClient
         .from('emergency_service_requests')
         .update({ status: 'Needs Manual Assist', updated_at: new Date().toISOString() })
@@ -230,6 +234,22 @@ export async function callNextProvider(requestId) {
       const { logRequestActivity } = await import("./activity.js");
       await logRequestActivity(requestId, 'status_change', { from_status: 'Contacting Providers', to_status: 'Needs Manual Assist', source: 'ai' });
       console.log('[EmergencyDispatch] No eligible provider to call for request', requestId, '— status set to Needs Manual Assist. Add plumbers in Emergency Dispatch → Providers and set is_available.');
+
+      const config = await getEmergencyConfig();
+      if (config.escalation_email_enabled && config.notification_email) {
+        try {
+          await sendEmergencyEscalationEmail(config.notification_email, requestRow);
+        } catch (err) {
+          console.error('[EmergencyDispatch] Escalation email failed:', err?.message || err);
+        }
+      }
+      if (config.escalation_sms_enabled && config.notification_sms_number) {
+        try {
+          await sendEmergencyEscalationSMS(config, requestRow);
+        } catch (err) {
+          console.error('[EmergencyDispatch] Escalation SMS failed:', err?.message || err);
+        }
+      }
     }
     return;
   }
