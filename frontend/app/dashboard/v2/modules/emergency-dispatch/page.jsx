@@ -129,6 +129,32 @@ export default function EmergencyDispatchPage() {
   const [websitePageSaving, setWebsitePageSaving] = useState(false);
   const [websitePageSaveMessage, setWebsitePageSaveMessage] = useState(null);
   const [websiteHeroUploading, setWebsiteHeroUploading] = useState(false);
+  const [deleteModal, setDeleteModal] = useState(null); // { request } when open
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+
+  const openDeleteModal = (request) => {
+    setDeleteModal({ request });
+    setDeleteConfirmText('');
+    setDeleteError(null);
+    if (selectedRequestId === request?.id) setSelectedRequestId(null);
+  };
+
+  const handleDeleteRequest = async () => {
+    if (!deleteModal?.request || deleteConfirmText !== 'DELETE') return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await emergencyNetworkAPI.deleteRequest(deleteModal.request.id);
+      setRequests((prev) => prev.filter((r) => r.id !== deleteModal.request.id));
+      setDeleteModal(null);
+    } catch (err) {
+      setDeleteError(err.response?.data?.error || err.message || 'Failed to delete call');
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   const handleResetDispatch = async (requestId) => {
     setResetDispatchLoadingId(requestId);
@@ -1492,6 +1518,14 @@ export default function EmergencyDispatchPage() {
                               <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
                                 {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
                               </select>
+                              <button
+                                type="button"
+                                onClick={() => openDeleteModal(r)}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded bg-red-100 text-red-700 text-xs font-medium hover:bg-red-200"
+                                title="Permanently delete this call"
+                              >
+                                <Trash2 className="w-3 h-3" /> Delete
+                              </button>
                             </td>
                           </tr>
                         );
@@ -1500,6 +1534,48 @@ export default function EmergencyDispatchPage() {
                   </tbody>
                 </table>
               </div>
+
+              {/* Delete call confirmation modal */}
+              {deleteModal?.request && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !deleting && setDeleteModal(null)}>
+                  <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
+                    <h3 className="text-lg font-semibold text-slate-900 mb-2">Delete call?</h3>
+                    <p className="text-slate-600 text-sm mb-4">
+                      This will permanently delete this service request and its dispatch history. This cannot be undone.
+                    </p>
+                    <p className="text-slate-500 text-xs mb-2">
+                      Type <strong>DELETE</strong> to confirm:
+                    </p>
+                    <input
+                      type="text"
+                      value={deleteConfirmText}
+                      onChange={(e) => setDeleteConfirmText(e.target.value)}
+                      className="w-full rounded border border-slate-300 px-3 py-2 text-sm mb-4"
+                      placeholder="DELETE"
+                      autoFocus
+                    />
+                    {deleteError && <p className="text-red-600 text-sm mb-3">{deleteError}</p>}
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => !deleting && setDeleteModal(null)}
+                        disabled={deleting}
+                        className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleDeleteRequest}
+                        disabled={deleting || deleteConfirmText !== 'DELETE'}
+                        className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {deleting ? 'Deleting…' : 'Delete call'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </section>
           )}
 

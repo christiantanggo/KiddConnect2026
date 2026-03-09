@@ -480,6 +480,7 @@ export const emergencyNetworkAPI = {
   updateConfig: (data) => api.put('/v2/emergency-network/config', data, { headers: emergencyNetworkHeaders() }),
   getRequests: () => api.get('/v2/emergency-network/requests', { headers: emergencyNetworkHeaders() }),
   updateRequest: (id, data) => api.patch(`/v2/emergency-network/requests/${id}`, data, { headers: emergencyNetworkHeaders() }),
+  deleteRequest: (requestId) => api.delete(`/v2/emergency-network/requests/${requestId}`, { headers: emergencyNetworkHeaders() }),
   callProvider: (requestId) => api.post(`/v2/emergency-network/requests/${requestId}/call-provider`, {}, { headers: emergencyNetworkHeaders() }),
   resetDispatch: (requestId) => api.post(`/v2/emergency-network/requests/${requestId}/reset-dispatch`, {}, { headers: emergencyNetworkHeaders() }),
   getProviders: () => api.get('/v2/emergency-network/providers', { headers: emergencyNetworkHeaders() }),

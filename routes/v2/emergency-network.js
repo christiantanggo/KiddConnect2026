@@ -695,6 +695,31 @@ router.post('/requests/:id/call-provider', async (req, res) => {
 });
 
 /**
+ * DELETE /api/v2/emergency-network/requests/:id
+ * Permanently delete a service request and its dispatch log, activity, etc. (DB cascades).
+ */
+router.delete('/requests/:id', async (req, res) => {
+  try {
+    const { id: requestId } = req.params;
+    const { data: deleted, error: deleteErr } = await supabaseClient
+      .from('emergency_service_requests')
+      .delete()
+      .eq('id', requestId)
+      .select('id');
+    if (deleteErr) {
+      return res.status(deleteErr.code === 'PGRST116' ? 404 : 500).json({ error: deleteErr.message || 'Failed to delete request' });
+    }
+    if (!deleted || deleted.length === 0) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[EmergencyNetwork] delete request error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to delete request' });
+  }
+});
+
+/**
  * PATCH /api/v2/emergency-network/requests/:id
  * Update request status (e.g. Needs Manual Assist, Closed).
  */
