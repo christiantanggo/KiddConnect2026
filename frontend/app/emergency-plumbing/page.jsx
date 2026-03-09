@@ -49,6 +49,8 @@ export default function EmergencyPlumbingPage() {
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [heroImageError, setHeroImageError] = useState(false);
+  const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Plumbing';
   const heroSubtext = pageContent?.hero_subtext ?? 'Leaks, clogs, no hot water, burst pipes—we connect you with licensed local plumbers. Call or submit the form below.';
   const buttons = Array.isArray(pageContent?.buttons) && pageContent.buttons.length > 0 ? pageContent.buttons : [
@@ -112,12 +114,25 @@ export default function EmergencyPlumbingPage() {
         </div>
       </header>
 
-      <section className="bg-[#1a3a2a] text-white py-12 px-4">
-        <div className="max-w-[900px] mx-auto text-center">
-          <h1 className="text-3xl sm:text-4xl font-bold mb-3">{heroHeader}</h1>
-          <p className="text-lg text-white/90 max-w-xl mx-auto mb-8">
-            {heroSubtext}
-          </p>
+      {/* Hero: image from Website pages (plumbing-main) or solid background — matches admin Settings → Website pages */}
+      <section className="relative min-h-[280px] w-full flex items-center justify-center">
+        <div className="absolute inset-0 z-0 bg-[#1a3a2a]">
+          {heroImage && (
+            <img
+              src={heroImage}
+              alt=""
+              className="w-full h-full object-cover object-center"
+              onError={() => setHeroImageError(true)}
+            />
+          )}
+          {heroImageError && heroImage && (
+            <div className="absolute inset-0 bg-[#1a3a2a]" />
+          )}
+        </div>
+        <div className="absolute inset-0 z-10 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
+        <div className="relative z-20 w-full max-w-[900px] mx-auto px-4 py-12 text-center">
+          <h1 className="text-3xl sm:text-4xl font-bold text-white drop-shadow-sm mb-3">{heroHeader}</h1>
+          <p className="text-lg text-white/90 max-w-xl mx-auto mb-8">{heroSubtext}</p>
           {phone && buttons.length > 0 && (
             <div className="flex flex-wrap gap-3 justify-center">
               {buttons.map((btn, i) => {

@@ -75,8 +75,7 @@ export default function OrbixNetworkStoriesPage() {
       'corporate-collapses': 'Corporate',
       'tech-decisions': 'Tech',
       'laws-rules': 'Laws & Rules',
-      'money-markets': 'Money & Markets',
-      'trickquestion': 'Trick Question'
+      'money-markets': 'Money & Markets'
     };
     
     return (
@@ -204,7 +203,6 @@ export default function OrbixNetworkStoriesPage() {
               <option value="tech-decisions">Tech Decisions</option>
               <option value="laws-rules">Laws & Rules</option>
               <option value="money-markets">Money & Markets</option>
-              <option value="trickquestion">Trick Question</option>
             </select>
             <select
               value={filters.status}

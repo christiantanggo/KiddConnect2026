@@ -190,9 +190,17 @@ function escapeHtml(s) {
 const WEBSITE_HERO_BUCKET = 'website-hero';
 const uploadHero = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB
 
+/** Default content when no row exists (public and dashboard). */
+const DEFAULT_WEBSITE_PAGE = {
+  'emergency-main': { hero_image_url: '', hero_header: 'Need Help Right Now?', hero_subtext: 'Call our 24/7 local emergency network.', buttons: [{ label: 'CALL NOW — AVAILABLE 24/7', url: 'tel' }, { label: 'Text Us', url: 'sms' }, { label: 'Request Help Online', url: '#form' }] },
+  'plumbing-main': { hero_image_url: '', hero_header: '24/7 Emergency Plumbing', hero_subtext: 'Leaks, clogs, no hot water—we connect you with licensed local plumbers.', buttons: [{ label: 'Call now — 24/7', url: 'tel' }, { label: 'Text us', url: 'sms' }, { label: 'Request help online', url: '#form' }] },
+  'terms-of-service': { page_title: 'Terms of Service', page_subtext: 'Emergency Dispatch Service', sections: [{ id: '1', header: '', content: '' }] },
+};
+
 /**
  * GET /api/v2/emergency-network/public/website-page/:key
  * Public (no auth). Returns JSON content for the page (emergency-main | plumbing-main | terms-of-service).
+ * Returns default content when no row exists so customer pages always load.
  */
 router.get('/public/website-page/:key', async (req, res) => {
   const key = req.params.key && String(req.params.key).trim();
@@ -206,7 +214,7 @@ router.get('/public/website-page/:key', async (req, res) => {
       .eq('page_key', key)
       .single();
     if (error || !data) {
-      return res.status(404).json({ error: 'Not found' });
+      return res.json(DEFAULT_WEBSITE_PAGE[key] || {});
     }
     res.json(data.content || {});
   } catch (err) {
@@ -416,7 +424,7 @@ router.get('/website-pages', async (req, res) => {
 
 /**
  * GET /api/v2/emergency-network/website-pages/:key
- * Get one page content by key.
+ * Get one page content by key. Returns default content when no row exists (so UI and upload work before migration).
  */
 router.get('/website-pages/:key', async (req, res) => {
   const key = req.params.key && String(req.params.key).trim();
@@ -429,7 +437,10 @@ router.get('/website-pages/:key', async (req, res) => {
       .select('page_key, content, updated_at')
       .eq('page_key', key)
       .single();
-    if (error || !data) return res.status(404).json({ error: 'Not found' });
+    if (error || !data) {
+      const content = DEFAULT_WEBSITE_PAGE[key] || {};
+      return res.json({ page_key: key, content, updated_at: null });
+    }
     res.json(data);
   } catch (err) {
     console.error('[EmergencyNetwork] website-pages get error:', err?.message || err);
@@ -439,7 +450,7 @@ router.get('/website-pages/:key', async (req, res) => {
 
 /**
  * PUT /api/v2/emergency-network/website-pages/:key
- * Update page content. Body: { content } (full JSON for the page).
+ * Update page content. Body: { content } (full JSON for the page). Upserts so first save works when no row exists.
  */
 router.put('/website-pages/:key', express.json(), async (req, res) => {
   const key = req.params.key && String(req.params.key).trim();
@@ -453,8 +464,7 @@ router.put('/website-pages/:key', express.json(), async (req, res) => {
   try {
     const { data, error } = await supabaseClient
       .from('website_page_content')
-      .update({ content, updated_at: new Date().toISOString() })
-      .eq('page_key', key)
+      .upsert({ page_key: key, content, updated_at: new Date().toISOString() }, { onConflict: 'page_key' })
       .select('page_key, content, updated_at')
       .single();
     if (error) throw error;
@@ -749,8 +759,22 @@ router.patch('/requests/:id', express.json(), async (req, res) => {
     }
     const updates = { updated_at: new Date().toISOString() };
     if (accepted_provider_id !== undefined) updates.accepted_provider_id = accepted_provider_id;
+    // When a provider is assigned, also set status to Accepted so the call shows as dispatched with correct status
+    if (accepted_provider_id) {
+      updates.status = 'Accepted';
+      updates.connected_at = new Date().toISOString();
+    }
+    const { data: current } = await supabaseClient.from('emergency_service_requests').select('status').eq('id', id).single();
     const { data, error } = await supabaseClient.from('emergency_service_requests').update(updates).eq('id', id).select().single();
     if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
+    if (updates.status === 'Accepted' && current?.status !== 'Accepted') {
+      try {
+        const { logRequestActivity } = await import("../../services/emergency-network/activity.js");
+        await logRequestActivity(id, 'status_change', { from_status: current?.status, to_status: 'Accepted', source: 'manual', changed_by: 'Dashboard' });
+      } catch (logErr) {
+        console.error('[EmergencyNetwork] PATCH activity log failed for request', id, logErr?.message || logErr);
+      }
+    }
     res.json(data);
   } catch (err) {
     console.error('[EmergencyNetwork] request patch error:', err?.message || err);

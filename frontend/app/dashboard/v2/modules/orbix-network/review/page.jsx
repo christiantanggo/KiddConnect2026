@@ -353,7 +353,7 @@ export default function OrbixNetworkReviewPage() {
                               <div className="space-y-3 bg-gray-50 rounded-lg p-4">
                                 {(() => {
                                   const cat = (story?.category || '').toLowerCase();
-                                  const isShortsNative = cat === 'psychology' || cat === 'trickquestion' || cat === 'facts';
+                                  const isShortsNative = cat === 'psychology' || cat === 'facts';
                                   const labelTwist = isShortsNative ? 'Twist' : 'What Happened';
                                   const labelPayoff = isShortsNative ? 'Payoff' : 'Why It Matters';
                                   const labelLoop = isShortsNative ? 'Loop' : 'What Happens Next';

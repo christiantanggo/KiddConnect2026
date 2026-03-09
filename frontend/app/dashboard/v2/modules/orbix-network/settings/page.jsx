@@ -730,13 +730,12 @@ function ChannelSettingsTab({ channel }) {
 
   // ── Source handlers ──
   const handleAddSource = async () => {
-    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && sourceForm.type !== 'DAD_JOKE_GENERATOR' && sourceForm.type !== 'TRICK_QUESTION_GENERATOR';
+    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && sourceForm.type !== 'DAD_JOKE_GENERATOR';
     if (needsUrl && !(sourceForm.url || '').trim()) { showError('Source URL is required'); return; }
     const defaultName = sourceForm.type === 'TRIVIA_GENERATOR' ? 'Trivia Generator'
       : sourceForm.type === 'RIDDLE_GENERATOR' ? 'Riddle Generator'
       : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'Mind Teaser Generator'
       : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'Dad Joke Generator'
-      : sourceForm.type === 'TRICK_QUESTION_GENERATOR' ? 'Trick Question Generator'
       : sourceForm.type === 'WIKIDATA_FACTS' ? 'Wikidata Facts'
       : sourceForm.type === 'WIKIPEDIA' ? 'Psychology (Wikipedia)'
       : '';
@@ -1310,7 +1309,6 @@ function ChannelSettingsTab({ channel }) {
                     else if (v === 'RIDDLE_GENERATOR') setSourceForm((f) => ({ ...f, type: 'RIDDLE_GENERATOR', url: 'riddle://generator', category_hint: null }));
                     else if (v === 'MIND_TEASER_GENERATOR') setSourceForm((f) => ({ ...f, type: 'MIND_TEASER_GENERATOR', url: 'mindteaser://generator', category_hint: null }));
                     else if (v === 'DAD_JOKE_GENERATOR') setSourceForm((f) => ({ ...f, type: 'DAD_JOKE_GENERATOR', url: 'dadjoke://generator', category_hint: null }));
-                    else if (v === 'TRICK_QUESTION_GENERATOR') setSourceForm((f) => ({ ...f, type: 'TRICK_QUESTION_GENERATOR', url: 'trickquestion://generator', category_hint: null }));
                     else setSourceForm((f) => ({ ...f, type: v, category_hint: v === 'WIKIPEDIA' ? null : undefined }));
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
@@ -1322,7 +1320,6 @@ function ChannelSettingsTab({ channel }) {
                   <option value="RIDDLE_GENERATOR">Riddle Generator</option>
                   <option value="MIND_TEASER_GENERATOR">Mind Teaser Generator</option>
                   <option value="DAD_JOKE_GENERATOR">Dad Joke Generator</option>
-                  <option value="TRICK_QUESTION_GENERATOR">Trick Question Generator</option>
                   <option value="WIKIDATA_FACTS">Wikidata Facts</option>
                 </select>
               </div>
@@ -1330,15 +1327,14 @@ function ChannelSettingsTab({ channel }) {
                 <label className="block text-xs font-medium text-gray-600 mb-1">URL</label>
                 <input
                   type="text"
-                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator' : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator' : sourceForm.type === 'TRICK_QUESTION_GENERATOR' ? 'trickquestion://generator' : sourceForm.url}
-                  onChange={(e) => !['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR', 'TRICK_QUESTION_GENERATOR'].includes(sourceForm.type) && setSourceForm((f) => ({ ...f, url: e.target.value }))}
-                  readOnly={['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR', 'TRICK_QUESTION_GENERATOR'].includes(sourceForm.type)}
+                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator' : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator' : sourceForm.url}
+                  onChange={(e) => !['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR'].includes(sourceForm.type) && setSourceForm((f) => ({ ...f, url: e.target.value }))}
+                  readOnly={['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR'].includes(sourceForm.type)}
                   placeholder={
                     sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator (auto)' :
                     sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator (auto)' :
                     sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator (auto)' :
                     sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator (auto)' :
-                    sourceForm.type === 'TRICK_QUESTION_GENERATOR' ? 'trickquestion://generator (auto)' :
                     sourceForm.type === 'WIKIPEDIA' ? 'Leave blank for default categories' :
                     'https://example.com/feed.xml'
                   }
@@ -1390,7 +1386,7 @@ function ChannelSettingsTab({ channel }) {
                         {src.enabled ? 'Active' : 'Disabled'}
                       </span>
                     </div>
-                    {src.url && src.url !== 'trivia://generator' && src.url !== 'riddle://generator' && src.url !== 'mindteaser://generator' && src.url !== 'dadjoke://generator' && src.url !== 'trickquestion://generator' && (
+                    {src.url && src.url !== 'trivia://generator' && src.url !== 'riddle://generator' && src.url !== 'mindteaser://generator' && src.url !== 'dadjoke://generator' && (
                       <p className="text-xs text-gray-500 truncate mt-0.5">{src.url}</p>
                     )}
                   </div>

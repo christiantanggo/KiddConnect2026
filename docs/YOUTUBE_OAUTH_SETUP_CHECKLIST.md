@@ -36,12 +36,9 @@ Use this **every time** you add a new YouTube-connected channel (main app or per
     `https://api.tavarios.com/api/v2/orbix-network/youtube/callback`
   - **Per-channel / Riddle (Custom OAuth in app):**  
     `https://api.tavarios.com/api/v2/riddle/youtube/callback`
-  - **Per-channel / Trick Question (Custom OAuth for trick question channel):**  
-    `https://api.tavarios.com/api/v2/trickquestion/youtube/callback`
 - For local dev only, you can also add:  
-  `http://localhost:5001/api/v2/orbix-network/youtube/callback`,  
-  `http://localhost:5001/api/v2/riddle/youtube/callback`, or  
-  `http://localhost:5001/api/v2/trickquestion/youtube/callback` as appropriate.
+  `http://localhost:5001/api/v2/orbix-network/youtube/callback` or  
+  `http://localhost:5001/api/v2/riddle/youtube/callback` as appropriate.
 - Click **Create**. Copy the **Client ID** and **Client secret** (you’ll need them below).
 
 ---
@@ -56,11 +53,10 @@ Use this **every time** you add a new YouTube-connected channel (main app or per
   - `YOUTUBE_REDIRECT_URI` = `https://api.tavarios.com/api/v2/orbix-network/youtube/callback`
 - Redeploy so env is applied.
 
-### 2.2 Per-channel – Custom OAuth in the app
+### 2.2 Per-channel (e.g. Riddle) – Custom OAuth in the app
 
-- **Riddle channel:** In the channel’s Orbix Settings, under **Custom OAuth**, paste the **Client ID** and **Client secret** from the OAuth client that has **`https://api.tavarios.com/api/v2/riddle/youtube/callback`** as its redirect URI.
-- **Trick Question channel:** In the channel’s Orbix Settings, under **Custom OAuth**, paste the **Client ID** and **Client secret** from the OAuth client that has **`https://api.tavarios.com/api/v2/trickquestion/youtube/callback`** as its redirect URI.
-- Save. That Google Cloud project **must** have YouTube Data API v3 enabled and the matching redirect URI in that client (Part 1).
+- In the channel’s Orbix Settings, under **Custom OAuth**, paste the **Client ID** and **Client secret** from the OAuth client that has **`https://api.tavarios.com/api/v2/riddle/youtube/callback`** as its redirect URI.
+- Save. That Google Cloud project **must** have YouTube Data API v3 enabled and the riddle redirect URI in that client (Part 1).
 
 ---
 
@@ -88,7 +84,6 @@ Use this **every time** you add a new YouTube-connected channel (main app or per
 | Channel setup | Redirect URI in Google |
 |---------------|------------------------|
 | No Custom OAuth (uses global env) | `https://api.tavarios.com/api/v2/orbix-network/youtube/callback` |
-| Custom OAuth – Riddle channel | `https://api.tavarios.com/api/v2/riddle/youtube/callback` |
-| Custom OAuth – Trick Question channel | `https://api.tavarios.com/api/v2/trickquestion/youtube/callback` |
+| Custom OAuth (Client ID/Secret in channel settings) | `https://api.tavarios.com/api/v2/riddle/youtube/callback` |
 
 The OAuth client in Google (Client ID/Secret) and the redirect URI must all belong to the **same** client; and that client’s project must have **YouTube Data API v3** enabled.

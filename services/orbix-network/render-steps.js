@@ -397,11 +397,10 @@ export async function step5HookText(renderId, renderJob, script, story, template
       await logStepEvent(renderId, step, 'PROGRESS', 'Retrieved Step 4 video path from database', { path: inputVideoPath });
     }
     
-    // Psychology + Money: question-as-hook at start for ~2s; no traditional hook. Other categories: traditional hook.
+    // Psychology: question-as-hook at start for ~2s; no traditional hook. Other categories: traditional hook.
     const storyCategory = (story?.category || '').toLowerCase();
     const isPsychology = storyCategory === 'psychology';
-    const isMoney = storyCategory === 'money'; // legacy (channel replaced by trickquestion)
-    const isConceptFirst = isPsychology || isMoney;
+    const isConceptFirst = isPsychology;
     let hookText;
     let hookDuration;
     if (isConceptFirst) {
@@ -410,7 +409,7 @@ export async function step5HookText(renderId, renderJob, script, story, template
         : {};
       hookText = (script.what_happens_next || script.cta_line || content.what_happens_next || content.cta_line || script.hook || content.hook || '').trim() || story?.title || 'Breaking News';
       hookDuration = PSYCHOLOGY_QUESTION_HOOK_DURATION;
-      await logStepEvent(renderId, step, 'PROGRESS', `${isPsychology ? 'Psychology' : 'Money'} question-as-hook text`, { hookText: hookText.slice(0, 80) });
+      await logStepEvent(renderId, step, 'PROGRESS', 'Psychology question-as-hook text', { hookText: hookText.slice(0, 80) });
     } else {
       hookText = script.hook;
       if (!hookText && script.content_json) {
@@ -526,13 +525,11 @@ export async function step6Captions(renderId, renderJob, script, story, template
       await logStepEvent(renderId, step, 'PROGRESS', 'Retrieved Step 5 video path from database', { path: inputVideoPath });
     }
     
-    // Generate caption segments (psychology + money: captions start after spoken question; no end question)
+    // Generate caption segments (psychology: captions start after spoken question; no end question)
     await updateStepStatus(renderId, step, 20);
     await logStepEvent(renderId, step, 'PROGRESS', 'Generating caption segments from script');
     const storyCategory = (story?.category || '').toLowerCase();
-    const isPsychologyCategory = storyCategory === 'psychology';
-    const isMoneyCategory = storyCategory === 'money';
-    const isConceptFirstCategory = isPsychologyCategory || isMoneyCategory;
+    const isConceptFirstCategory = storyCategory === 'psychology';
     const captionSegments = generateCaptionSegments(
       script,
       audioDuration,
@@ -591,7 +588,7 @@ export async function step6Captions(renderId, renderJob, script, story, template
       default: hookFontSize = 56; hookY = 340;
     }
     
-    // Hook is already burned in by step 5; step 6 ASS adds captions + (unless psychology/money) end question + "Comment Now"
+    // Hook is already burned in by step 5; step 6 ASS adds captions + (unless psychology) end question + "Comment Now"
     const isFactsCategory = storyCategory === 'facts';
     const endQuestion = isConceptFirstCategory ? null : (script.what_happens_next || '').trim();
     const effectiveTarget = targetDuration != null && targetDuration > audioDuration ? targetDuration : audioDuration + 5;

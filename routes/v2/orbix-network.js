@@ -659,9 +659,9 @@ router.post('/renders/:id/restart', async (req, res) => {
     const storyCategory = (storyForRestart.category || '').toLowerCase();
     const scriptContentType = ['trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'].includes(storyCategory) ? storyCategory : null;
 
-    // Only swap to latest script for psychology/money (rewrite flow). Riddle/trivia/facts/mindteaser/dadjoke use script-from-scrape with content_json; do NOT replace script_id on restart or we can attach a script that lost riddle_text/answer_text etc.
+    // Only swap to latest script for psychology (rewrite flow). Riddle/trivia/facts/mindteaser/dadjoke use script-from-scrape with content_json; do NOT replace script_id on restart or we can attach a script that lost riddle_text/answer_text etc.
     let latestScript = null;
-    if (storyCategory === 'psychology' || storyCategory === 'money') {
+    if (storyCategory === 'psychology') {
       const { data: latestScriptData } = await supabaseClient
         .from('orbix_scripts')
         .select('id')
@@ -2206,7 +2206,7 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
       .eq('business_id', businessId);
   }
 
-  const evergreenCategories = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+  const evergreenCategories = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
   const storyStatus = evergreenCategories.includes(category) ? 'APPROVED' : 'PENDING';
 
   const { data: story, error: storyError } = await supabaseClient
@@ -2661,18 +2661,10 @@ router.get('/youtube/auth-url', async (req, res) => {
       });
     }
 
-    // Per-channel OAuth: use trickquestion callback if this channel has a TQ source and custom OAuth; else riddle for other custom OAuth; else global env.
+    // Per-channel OAuth (custom client_id) uses riddle callback URL for separate quota.
     const hasCustomClient = orbixChannelId && (usage === 'manual' ? channelEntry?.manual_client_id : channelEntry?.client_id);
     let redirectUri;
-    const { data: tqRows, error: tqErr } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1);
-    const useTrickQuestionCallback = hasCustomClient && Array.isArray(tqRows) && tqRows.length > 0;
-    if (orbixChannelId && (tqErr || !Array.isArray(tqRows))) {
-      console.log('[Orbix auth-url] TQ source check orbixChannelId=', orbixChannelId, 'tqRows=', tqRows?.length ?? 0, 'error=', tqErr?.message || null);
-    }
-    if (useTrickQuestionCallback) {
-      const { getTrickQuestionYoutubeRedirectUri } = await import('./trickquestion-youtube-callback.js');
-      redirectUri = getTrickQuestionYoutubeRedirectUri();
-    } else if (hasCustomClient) {
+    if (hasCustomClient) {
       const { getRiddleYoutubeRedirectUri } = await import('./riddle-youtube-callback.js');
       redirectUri = getRiddleYoutubeRedirectUri();
     } else {
@@ -2856,13 +2848,8 @@ router.get('/youtube/diagnostic', async (req, res) => {
     result.redirect_uri_configured = !!rawRedirect;
     if (rawRedirect) {
       result.redirect_uri_value = rawRedirect.startsWith('http') ? rawRedirect : `https://${rawRedirect}`;
-      // Show channel-specific callback: trickquestion if this channel has a TQ source, else riddle (for custom OAuth channels).
-      const { data: tqRows } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1);
-      const useTrickQuestion = Array.isArray(tqRows) && tqRows.length > 0;
-      const useCustomCallback = channelEntry?.client_id || useTrickQuestion;
-      if (useCustomCallback) {
-        const callbackPath = useTrickQuestion ? '/api/v2/trickquestion/youtube/callback' : '/api/v2/riddle/youtube/callback';
-        result.redirect_uri_value = result.redirect_uri_value.replace(/\/api\/v2\/.*$/, '') + callbackPath;
+      if (channelEntry?.client_id) {
+        result.redirect_uri_value = result.redirect_uri_value.replace(/\/api\/v2\/.*$/, '') + '/api/v2/riddle/youtube/callback';
       }
     }
 

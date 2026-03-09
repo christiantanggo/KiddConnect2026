@@ -400,14 +400,13 @@ export async function generateAudio(script, story = null) {
       : {};
     const cat = (story?.category || '').toLowerCase();
     const isPsychology = cat === 'psychology';
-    const isMoney = cat === 'money';
 
     // Psychology + Money: voice speaks question first, then body (concept/behaviour name → "Like when..." → payoff).
     // Speaking the question confirms it's in the video before upload.
     if (isPsychology || isMoney) {
       const question = (script.what_happens_next || '').trim();
       const bodyOnly = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ').trim();
-      if (!bodyOnly) throw new Error(`${isPsychology ? 'Psychology' : 'Money'} script missing what_happened or why_it_matters`);
+      if (!bodyOnly) throw new Error('Psychology script missing what_happened or why_it_matters');
       const fullSpoken = [question, bodyOnly].filter(Boolean).join(' ').trim();
       const audioPath = join(tmpdir(), `orbix-audio-${Date.now()}.mp3`);
       const response = await openai.audio.speech.create({
@@ -1333,17 +1332,10 @@ export async function processRenderJob(render) {
       return await processDadJokeRenderJob(render, story, script);
     }
 
-    // Trick question uses separate pipeline (same format as riddle)
-    if ((story?.category || '').toLowerCase() === 'trickquestion') {
-      const { processTrickQuestionRenderJob } = await import('./trick-question-renderer.js');
-      return await processTrickQuestionRenderJob(render, story, script);
-    }
-
     // Psychology + Money: TTS speaks question first then body. Add a short breath pause (0.3s) before voice starts.
     const cat2 = (story?.category || '').toLowerCase();
     const isPsychology = cat2 === 'psychology';
-    const isMoneyChannel = cat2 === 'money'; // legacy; money channel replaced by trickquestion
-    const isConceptFirst = isPsychology || isMoneyChannel;
+    const isConceptFirst = isPsychology;
     let audioResult = await generateAudio(script, story);
     let preGeneratedAudioPath = audioResult.audioPath;
     let audioDuration = audioResult.duration;
@@ -1353,7 +1345,7 @@ export async function processRenderJob(render) {
       preGeneratedAudioPath = padded.path;
       audioDuration = padded.totalDuration;
     }
-    const isShortsRetention = cat2 === 'psychology' || cat2 === 'money' || cat2 === 'facts';
+    const isShortsRetention = cat2 === 'psychology' || cat2 === 'facts';
     const tailSeconds = isConceptFirst ? 0 : (isShortsRetention ? 3 : 5);
     const maxDuration = isShortsRetention ? 20 : 45;
     const targetDuration = isConceptFirst ? audioDuration : Math.min(audioDuration + tailSeconds, maxDuration);

@@ -58,15 +58,6 @@ const DAD_JOKE_HASHTAGS = [
   '#comedy'
 ];
 
-const TRICK_QUESTION_HASHTAGS = [
-  '#trickquestion',
-  '#brainteaser',
-  '#shorts',
-  '#canyougetthis',
-  '#mindtrick',
-  '#viral'
-];
-
 const CATEGORY_HASHTAGS = {
   'ai-automation': ['#AI', '#Automation', '#TechNews', '#ArtificialIntelligence'],
   'corporate-collapses': ['#Business', '#Corporate', '#Finance', '#News'],
@@ -77,8 +68,7 @@ const CATEGORY_HASHTAGS = {
   'facts': FACTS_HASHTAGS,
   'riddle': RIDDLE_HASHTAGS,
   'mindteaser': MINDTEASER_HASHTAGS,
-  'dadjoke': DAD_JOKE_HASHTAGS,
-  'trickquestion': TRICK_QUESTION_HASHTAGS
+  'dadjoke': DAD_JOKE_HASHTAGS
 };
 
 /** Remove emojis and common Unicode symbols from a string. */
@@ -152,7 +142,7 @@ function getPsychologyHashtags(seed, count = 5) {
 
 /**
  * Build YouTube metadata (title, description, hashtags) for a story/script.
- * Psychology and money categories use short hook title, 2–4 sentence description, and category hashtags.
+ * Psychology category uses short hook title, 2–4 sentence description, and category hashtags.
  * @param {Object} story - orbix_stories row (category, title)
  * @param {Object} script - orbix_scripts row (hook, what_happened, why_it_matters, what_happens_next, content_json)
  * @param {string} [renderId] - Optional render id for hashtag rotation
@@ -170,19 +160,12 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
   const isRiddle = (story?.category || '').toLowerCase() === 'riddle';
   const isMindTeaser = (story?.category || '').toLowerCase() === 'mindteaser';
   const isDadJoke = (story?.category || '').toLowerCase() === 'dadjoke';
-  const isTrickQuestion = (story?.category || '').toLowerCase() === 'trickquestion';
 
   let title;
   let description;
   let hashtags;
 
-  if (isTrickQuestion) {
-    const questionText = (content?.question_text || '').trim();
-    const answerText = (content?.answer_text || '').trim();
-    title = sanitizeTitleForYouTube(hookText || questionText?.slice(0, 60) || story?.title?.slice(0, 60) || 'Can you get this?');
-    description = (questionText ? `${questionText}\n\n` : '') + (answerText ? `Answer: ${answerText}\n\n` : '') + 'Comment your guess below!';
-    hashtags = TRICK_QUESTION_HASHTAGS.slice(0, 6).join(' ');
-  } else if (isDadJoke) {
+  if (isDadJoke) {
     title = sanitizeTitleForYouTube(story?.title || 'Dad Joke');
     const episodeIndex = content?.episode_number ?? 0;
     const cta = getDadJokeCta(episodeIndex);

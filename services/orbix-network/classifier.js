@@ -182,7 +182,7 @@ export async function processRawItem(businessId, rawItem) {
       if (shockScore == null || shockScore === undefined) shockScore = 70;
     }
     const factorsJson = rawItem.factors_json;
-    const evergreenCategories = ['psychology', 'money', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+    const evergreenCategories = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
     const isEvergreenCategory = category && evergreenCategories.includes(category);
     // If category is set and evergreen, we can use pre-calculated path even without shock_score (use default)
     const effectiveScore = (isEvergreenCategory && (shockScore == null || shockScore === undefined)) ? 50 : shockScore;
@@ -224,7 +224,7 @@ export async function processRawItem(businessId, rawItem) {
         .eq('id', rawItem.id);
       
       // Check threshold (evergreen categories always pass — no shock score required)
-      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'money' || classifiedCategory === 'trivia' || classifiedCategory === 'facts' || classifiedCategory === 'riddle' || classifiedCategory === 'mindteaser' || classifiedCategory === 'dadjoke';
+      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'trivia' || classifiedCategory === 'facts' || classifiedCategory === 'riddle' || classifiedCategory === 'mindteaser' || classifiedCategory === 'dadjoke';
       if (!isEvergreen && !shouldProcess(scoreResult, threshold)) {
         // Mark raw item as discarded
         await supabaseClient
@@ -271,7 +271,7 @@ export async function processRawItem(businessId, rawItem) {
       return story;
     } else {
       // Use pre-calculated values (or effectiveScore for evergreen when raw item had no score)
-      const isEvergreen = category === 'psychology' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke' || category === 'trickquestion';
+      const isEvergreen = category === 'psychology' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke';
       const scoreForThreshold = effectiveScore != null ? effectiveScore : shockScore;
       if (!isEvergreen && scoreForThreshold < threshold) {
         // Mark raw item as discarded
@@ -287,7 +287,7 @@ export async function processRawItem(businessId, rawItem) {
 
       // Create story using pre-calculated values (channel_id from raw item)
       const storyScore = scoreForThreshold ?? shockScore ?? 50;
-      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke' || category === 'trickquestion') ? 'APPROVED' : 'PENDING';
+      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({

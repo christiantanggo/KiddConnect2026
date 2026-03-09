@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 
-const DEFAULT_HERO_IMAGE = '/publicemergency-hero.png';
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
 function useEmergencyPhone() {
@@ -54,7 +53,7 @@ export default function EmergencyPage() {
   const pageContent = useWebsitePageContent('emergency-main');
   const formRef = useRef(null);
   const [heroImageError, setHeroImageError] = useState(false);
-  const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || DEFAULT_HERO_IMAGE;
+  const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const heroHeader = pageContent?.hero_header ?? 'Need Help Right Now?';
   const heroSubtext = pageContent?.hero_subtext ?? 'Call our 24/7 local emergency network.';
   const buttons = Array.isArray(pageContent?.buttons) && pageContent.buttons.length > 0 ? pageContent.buttons : [
@@ -128,9 +127,9 @@ export default function EmergencyPage() {
               onError={() => setHeroImageError(true)}
             />
           )}
-          {heroImageError && !heroImage.startsWith('http') && (
+          {heroImageError && heroImage && (
             <div className="absolute inset-0 flex items-center justify-center bg-[#2c2c2c] text-white/70 text-sm text-center px-4">
-              <span>Hero image not found. Use Settings → Website pages to upload an image.</span>
+              <span>Hero image could not be loaded.</span>
             </div>
           )}
         </div>

@@ -668,7 +668,7 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
     e.preventDefault();
     const isWikipedia = formData.type === 'WIKIPEDIA';
     const isFacts = formData.type === 'WIKIDATA_FACTS';
-    const defaultName = isWikipedia ? (formData.category_hint === 'money' ? 'Money (Wikipedia)' : 'Psychology (Wikipedia)') : isFacts ? 'Wikidata Facts' : '';
+    const defaultName = isWikipedia ? 'Psychology (Wikipedia)' : isFacts ? 'Wikidata Facts' : '';
     const name = (formData.name || '').trim() || defaultName;
     const url = (formData.url || '').trim();
     if (!name) {
@@ -742,12 +742,10 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
                 Source Type *
               </label>
               <select
-                value={formData.type === 'WIKIPEDIA' && formData.category_hint === 'money' ? 'WIKIPEDIA_MONEY' : formData.type}
+                value={formData.type}
                 onChange={(e) => {
                   const v = e.target.value;
-                  if (v === 'WIKIPEDIA_MONEY') {
-                    setFormData({ ...formData, type: 'WIKIPEDIA', category_hint: 'money' });
-                  } else if (v === 'WIKIDATA_FACTS') {
+                  if (v === 'WIKIDATA_FACTS') {
                     setFormData({ ...formData, type: 'WIKIDATA_FACTS', url: formData.type === 'WIKIDATA_FACTS' ? formData.url : 'facts://', category_hint: '' });
                   } else {
                     setFormData({ ...formData, type: v, category_hint: v === 'WIKIPEDIA' ? null : '' });
@@ -758,7 +756,6 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
                 <option value="RSS">RSS Feed</option>
                 <option value="HTML">HTML Page</option>
                 <option value="WIKIPEDIA">Wikipedia (Psychology)</option>
-                <option value="WIKIPEDIA_MONEY">Wikipedia (Money)</option>
                 <option value="WIKIDATA_FACTS">Wikidata Facts</option>
               </select>
             </div>
@@ -772,7 +769,7 @@ function SourceConfigurationStep({ sources, loading, onAddSource, onDeleteSource
                 value={formData.url}
                 onChange={(e) => setFormData({ ...formData, url: e.target.value })}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-900 bg-white"
-                placeholder={formData.type === 'WIKIPEDIA' ? (formData.category_hint === 'money' ? 'Uses default money categories' : 'Uses default psychology categories') : formData.type === 'WIKIDATA_FACTS' ? 'Leave blank for random facts, or e.g. Q30' : 'https://example.com/feed.xml'}
+                placeholder={formData.type === 'WIKIPEDIA' ? 'Uses default psychology categories' : formData.type === 'WIKIDATA_FACTS' ? 'Leave blank for random facts, or e.g. Q30' : 'https://example.com/feed.xml'}
                 required={formData.type !== 'WIKIPEDIA' && formData.type !== 'WIKIDATA_FACTS'}
               />
             </div>

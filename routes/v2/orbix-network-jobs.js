@@ -53,12 +53,12 @@ export async function getChannelOrderForBusiness(businessId) {
 const SOURCE_TYPE_TO_CATEGORIES = {
   TRIVIA_GENERATOR: ['trivia'],
   WIKIDATA_FACTS: ['facts'],
-  WIKIPEDIA: ['psychology', 'money'],
+  WIKIPEDIA: ['psychology'],
   RIDDLE_GENERATOR: ['riddle'],
   MIND_TEASER_GENERATOR: ['mindteaser'],
   DAD_JOKE_GENERATOR: ['dadjoke'],
-  RSS: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology', 'money'],
-  HTML: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology', 'money'],
+  RSS: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology'],
+  HTML: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology'],
 };
 
 /**

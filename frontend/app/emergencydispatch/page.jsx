@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
@@ -40,13 +40,16 @@ export default function EmergencyDispatchPage() {
   const { phone, telLink, smsLink } = useEmergencyPhone();
   const pageContent = useWebsitePageContent('emergency-main');
   const [heroImageError, setHeroImageError] = useState(false);
+  const contentRef = useRef(null);
   const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Dispatch';
   const heroSubtext = pageContent?.hero_subtext ?? 'We connect you with licensed local professionals. One call or form—we find someone available and get you help fast.';
   const buttons = Array.isArray(pageContent?.buttons) && pageContent.buttons.length > 0 ? pageContent.buttons : [
     { label: 'Call now — 24/7', url: 'tel' },
     { label: 'Text us', url: 'sms' },
+    { label: 'Request help online', url: '#form' },
   ];
+  const scrollToContent = () => contentRef.current?.scrollIntoView({ behavior: 'smooth' });
 
   return (
     <div className="min-h-screen bg-[#f5f5f5] text-[#1a1a1a] antialiased">
@@ -80,6 +83,18 @@ export default function EmergencyDispatchPage() {
             <div className="flex flex-wrap gap-3 justify-center">
               {buttons.map((btn, i) => {
                 const url = (btn.url || '').trim().toLowerCase();
+                if (url === '#form') {
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={scrollToContent}
+                      className={`inline-flex justify-center py-4 px-8 rounded text-white font-bold text-lg transition-colors ${i === 0 ? 'bg-[#c41e3a] hover:bg-[#a01830] uppercase tracking-wide' : 'border-2 border-white/80 font-semibold hover:bg-white/15'}`}
+                    >
+                      {btn.label || 'Request help online'}
+                    </button>
+                  );
+                }
                 const href = url === 'tel' ? telLink : url === 'sms' ? smsLink : (btn.url || '#');
                 return (
                   <a
@@ -97,7 +112,7 @@ export default function EmergencyDispatchPage() {
         </div>
       </section>
 
-      <section className="py-10 px-4">
+      <section ref={contentRef} className="py-10 px-4">
         <div className="max-w-[900px] mx-auto">
           <h2 className="text-xl font-bold text-[#1a1a1a] mb-6 text-center">Choose your service</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">

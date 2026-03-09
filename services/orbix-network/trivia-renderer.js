@@ -32,7 +32,7 @@ const unlinkAsync = promisify(unlink);
 const DURATION = 11;
 
 /**
- * Process a trivia render job (separate pipeline from news/money/psychology).
+ * Process a trivia render job (separate pipeline from news/psychology).
  */
 export async function processTriviaRenderJob(render, story, script) {
   const renderId = render.id;

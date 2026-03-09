@@ -20,7 +20,10 @@ api.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
-  // Multi-organization features removed - business context handled server-side via user.business_id
+  // Let browser set multipart/form-data with boundary when sending FormData (default Content-Type is application/json)
+  if (typeof FormData !== 'undefined' && config.data instanceof FormData && config.headers) {
+    delete config.headers['Content-Type'];
+  }
   return config;
 });
 

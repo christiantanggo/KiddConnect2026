@@ -39,8 +39,6 @@ export async function scrapeSource(source) {
       return await scrapeMindTeaserSource(source);
     } else if (source.type === 'DAD_JOKE_GENERATOR') {
       return await scrapeDadJokeSource(source);
-    } else if (source.type === 'TRICK_QUESTION_GENERATOR') {
-      return await scrapeTrickQuestionSource(source);
     } else {
       throw new Error(`Unsupported source type: ${source.type}`);
     }
@@ -144,13 +142,6 @@ const WIKI_PSYCHOLOGY_CATEGORIES = [
   'Category:Heuristics',
   'Category:Memory_biases'
 ];
-const WIKI_MONEY_CATEGORIES = [
-  'Category:Behavioral_economics',
-  'Category:Personal_finance',
-  'Category:Investing',
-  'Category:Financial_psychology',
-  'Category:Economic_concepts'
-];
 const WIKI_API = 'https://en.wikipedia.org/w/api.php';
 const WIKI_REST_SUMMARY = 'https://en.wikipedia.org/api/rest_v1/page/summary';
 const WIKI_MIN_SUMMARY_CHARS = 200;
@@ -198,14 +189,13 @@ async function fetchWikiSummary(title) {
 }
 
 /**
- * Scrape Wikipedia categories: psychology or money branch by source.category_hint.
+ * Scrape Wikipedia categories: psychology branch only.
  * Returns raw-item-shaped objects with content_type/category and default shock_score.
  */
 async function scrapeWikipediaSource(source) {
   try {
-    const isMoney = (source.category_hint || '').toLowerCase() === 'money';
-    const defaultCategories = isMoney ? WIKI_MONEY_CATEGORIES : WIKI_PSYCHOLOGY_CATEGORIES;
-    const branch = isMoney ? 'money' : 'psychology';
+    const defaultCategories = WIKI_PSYCHOLOGY_CATEGORIES;
+    const branch = 'psychology';
 
     const urlTrim = (source.url || '').trim();
     const categoryList = (urlTrim && urlTrim.includes('Category:'))
@@ -515,59 +505,6 @@ async function scrapeDadJokeSource(source) {
 }
 
 /**
- * Generate one trick question via Trick Question Generator (TRICK_QUESTION_GENERATOR source type).
- */
-async function scrapeTrickQuestionSource(source) {
-  try {
-    const { generateAndValidateTrickQuestion } = await import('./trick-question-generator.js');
-    const businessId = source.business_id;
-    const channelId = source.channel_id;
-    if (!businessId || !channelId) {
-      console.warn('[Orbix Scraper] Trick question source missing business_id or channel_id');
-      return [];
-    }
-    const { count } = await supabaseClient
-      .from('orbix_raw_items')
-      .select('*', { count: 'exact', head: true })
-      .eq('business_id', businessId)
-      .eq('channel_id', channelId)
-      .eq('category', 'trickquestion');
-    const episodeNumber = (count || 0) + 1;
-    const tq = await generateAndValidateTrickQuestion(businessId, channelId, { episodeNumber });
-    if (!tq) {
-      console.log('[Orbix Scraper] Trick question generator produced no valid question');
-      return [];
-    }
-    const title = `Trick Question #${String(episodeNumber).padStart(2, '0')}`;
-    const url = `trickquestion://${tq.content_fingerprint}`;
-    const snippet = JSON.stringify({
-      hook: tq.hook,
-      question_text: tq.question_text,
-      answer_text: tq.answer_text,
-      comment_prompt: tq.comment_prompt,
-      voice_script: tq.voice_script,
-      episode_number: tq.episode_number
-    });
-    return [{
-      source_id: source.id,
-      channel_id: channelId,
-      title,
-      snippet,
-      url,
-      published_at: new Date().toISOString(),
-      content_type: 'trickquestion',
-      category: 'trickquestion',
-      shock_score: 70,
-      content_fingerprint: tq.content_fingerprint,
-      factors_json: { source: 'trick_question_generator' }
-    }];
-  } catch (error) {
-    console.error('[Orbix Scraper] Trick question source error:', error.message);
-    throw error;
-  }
-}
-
-/**
  * Extract first paragraph/snippet from text
  */
 function extractSnippet(text) {
@@ -667,8 +604,7 @@ export async function saveRawItem(businessId, item) {
       item.content_type === 'facts' || item.category === 'facts' ||
       item.content_type === 'riddle' || item.category === 'riddle' ||
       item.content_type === 'mindteaser' || item.category === 'mindteaser' ||
-      item.content_type === 'dadjoke' || item.category === 'dadjoke' ||
-      item.content_type === 'trickquestion' || item.category === 'trickquestion';
+      item.content_type === 'dadjoke' || item.category === 'dadjoke';
     const insertPayload = {
       business_id: businessId,
       channel_id: channelId,
@@ -691,9 +627,7 @@ export async function saveRawItem(businessId, item) {
         item.category === 'facts' ? { source: 'wikidata_facts' } :
         item.category === 'riddle' ? { source: 'riddle_generator' } :
         item.category === 'mindteaser' ? { source: 'mindteaser_generator' } :
-        item.category === 'dadjoke' ? { source: 'dad_joke_generator' } :
-        item.category === 'trickquestion' ? { source: 'trick_question_generator' } :
-        item.category === 'money' ? { source: 'wikipedia_money' } : { source: 'wikipedia_psychology' }
+        item.category === 'dadjoke' ? { source: 'dad_joke_generator' } : { source: 'wikipedia_psychology' }
       );
     }
     const { data, error } = await supabaseClient

@@ -271,8 +271,7 @@ export default function OrbixNetworkAnalyticsPage() {
                     'corporate-collapses': 'Corporate',
                     'tech-decisions': 'Tech',
                     'laws-rules': 'Laws & Rules',
-                    'money-markets': 'Money & Markets',
-                    'trickquestion': 'Trick Question'
+                    'money-markets': 'Money & Markets'
                   };
                   
                   return (

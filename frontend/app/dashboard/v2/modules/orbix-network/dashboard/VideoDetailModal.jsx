@@ -610,34 +610,6 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   })()}
                 </div>
               )}
-              {item.story_category === 'trickquestion' && item.snippet && (
-                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Trick Question Content</h4>
-                  {(() => {
-                    try {
-                      const t = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
-                      const q = t.question_text ?? t.question;
-                      const a = t.answer_text ?? t.answer;
-                      return (
-                        <div className="space-y-3 text-sm">
-                          {t.hook && <p className="text-gray-600 italic">&quot;{t.hook}&quot;</p>}
-                          <div>
-                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Question</p>
-                            <p className="font-medium text-gray-900">{q}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Answer</p>
-                            <p className="text-green-700 font-semibold">{a}</p>
-                          </div>
-                          {t.comment_prompt && <p className="text-gray-500 text-xs">Comment: {t.comment_prompt}</p>}
-                        </div>
-                      );
-                    } catch {
-                      return <p className="text-gray-500 text-sm">Could not parse trick question content</p>;
-                    }
-                  })()}
-                </div>
-              )}
             </div>
           )}
           
@@ -958,45 +930,6 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                       </div>
                     );
                   }
-                  if (cat === 'trickquestion') {
-                    const cj = script.content_json
-                      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
-                      : {};
-                    const questionText = cj.question_text ?? cj.question;
-                    const answerText = cj.answer_text ?? cj.answer;
-                    return (
-                      <div className="space-y-3">
-                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
-                        {(script.hook || cj.hook) && (
-                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
-                            <p className="text-xs font-semibold text-blue-600 mb-1">1 · Hook <span className="font-normal">(spoken)</span></p>
-                            <p className="text-base text-blue-900 font-medium">{script.hook || cj.hook}</p>
-                          </div>
-                        )}
-                        {questionText && (
-                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
-                            <p className="text-xs font-semibold text-gray-500 mb-1">2 · Question <span className="font-normal">(on screen + spoken)</span></p>
-                            <p className="text-base text-gray-900 font-medium">{questionText}</p>
-                          </div>
-                        )}
-                        <div className="rounded-md bg-yellow-50 border border-yellow-200 p-3 text-center">
-                          <p className="text-xs font-semibold text-yellow-700 mb-1">3 · 3-2-1 Countdown</p>
-                        </div>
-                        {answerText && (
-                          <div className="rounded-md bg-green-50 border border-green-300 p-3">
-                            <p className="text-xs font-semibold text-green-700 mb-1">4 · Answer Flash <span className="font-normal">(0.5s on screen)</span></p>
-                            <p className="text-base text-green-900 font-bold">{answerText}</p>
-                          </div>
-                        )}
-                        {cj.comment_prompt && (
-                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
-                            <p className="text-xs font-semibold text-gray-500 mb-1">5 · End card</p>
-                            <p className="text-base text-gray-900">{cj.comment_prompt}</p>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  }
                   if (isConceptFirst) {
                     // Psychology + Money: show fields in exact video playback order
                     const question = (script.what_happens_next || '').trim();
@@ -1085,12 +1018,12 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
             <div className="grid grid-cols-2 gap-4">
               {(() => {
                 const cat = (item.story_category || '').toLowerCase();
-                const isEvergreen = ['dadjoke', 'trivia', 'facts', 'riddle', 'mindteaser', 'psychology', 'trickquestion'].includes(cat);
+                const isEvergreen = ['dadjoke', 'trivia', 'facts', 'riddle', 'mindteaser', 'psychology'].includes(cat);
                 return (
                   <>
                     <div>
                       <p className="text-sm text-gray-600">{isEvergreen ? 'Score' : 'Shock Score'}</p>
-                      <p className="text-xl font-bold">{isEvergreen && (cat === 'dadjoke' || cat === 'trickquestion') ? '—' : `${item.story_shock_score ?? 0}/100`}</p>
+                      <p className="text-xl font-bold">{isEvergreen && cat === 'dadjoke' ? '—' : `${item.story_shock_score ?? 0}/100`}</p>
                     </div>
                     <div>
                       <p className="text-sm text-gray-600">Status</p>
