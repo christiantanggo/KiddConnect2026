@@ -2024,8 +2024,11 @@ async function handleCallReturned(event) {
  */
 function getToolCallIdFromEvent(event) {
   const msg = event.message || event;
-  const list = msg.toolCallList || msg.tool_call_list;
-  if (Array.isArray(list) && list[0]?.id) return list[0].id;
+  const list = msg.toolCallList || msg.tool_call_list || msg.toolCalls || msg.tool_calls;
+  if (Array.isArray(list) && list[0]) {
+    const id = list[0].id || list[0].toolCallId || list[0].tool_call_id;
+    if (id) return id;
+  }
   const withList = msg.toolWithToolCallList || msg.tool_with_tool_call_list;
   if (Array.isArray(withList) && withList[0]?.toolCall?.id) return withList[0].toolCall.id;
   const fc = event.functionCall || msg.functionCall || msg.function_call;
@@ -2040,14 +2043,23 @@ async function handleFunctionCall(event) {
 
   try {
     // Extract function call data from event
-    // VAPI sends function calls in different formats, handle all of them
+    // VAPI sends function calls in different formats (function-call vs tool-calls with toolCalls/toolCallList)
+    const rawList = event.message?.toolCalls || event.message?.tool_calls
+      || event.message?.toolCallList || event.message?.tool_call_list;
+    const firstTool = Array.isArray(rawList) && rawList[0] ? rawList[0] : null;
     const functionCall = event.functionCall || event.message?.functionCall || event.message?.function_call
-      || event.message?.toolCallList?.[0] || event.message?.toolWithToolCallList?.[0]?.toolCall || event;
-    const functionName = functionCall.name || functionCall.functionName || functionCall.function_name
-      || functionCall.function?.name;
-    const functionArguments = functionCall.arguments || functionCall.args || functionCall.parameters
-      || functionCall.function?.arguments || {};
-    
+      || firstTool || event.message?.toolWithToolCallList?.[0]?.toolCall || event;
+    // Name can be at top level or under .function (OpenAI-style tool_calls)
+    const functionName = functionCall?.name || functionCall?.functionName || functionCall?.function_name
+      || functionCall?.function?.name || (firstTool?.function && (firstTool.function.name || firstTool.function.functionName))
+      || firstTool?.name;
+    let functionArguments = functionCall.arguments || functionCall.args || functionCall.parameters
+      || functionCall.function?.arguments || (firstTool?.function?.arguments);
+    if (typeof functionArguments === 'string') {
+      try { functionArguments = JSON.parse(functionArguments); } catch (_) { functionArguments = {}; }
+    }
+    if (functionArguments == null || typeof functionArguments !== 'object') functionArguments = {};
+
     console.log(`[VAPI Webhook] Function name: ${functionName}, toolCallId: ${toolCallId || 'none'}`);
     console.log(`[VAPI Webhook] Function arguments:`, JSON.stringify(functionArguments, null, 2));
     
@@ -2064,6 +2076,9 @@ async function handleFunctionCall(event) {
       if (toolCallId && resultContent != null) {
         return { results: [{ toolCallId, result: resultContent }] };
       }
+      if (toolCallId) {
+        return { results: [{ toolCallId, result: resultContent || (functionName === 'dispatch_accept' ? "Accepted." : "Declined.") }] };
+      }
       return resultContent != null ? { result: resultContent } : undefined;
     }
     if (functionName === 'dispatch_email_details') {
@@ -2071,6 +2086,9 @@ async function handleFunctionCall(event) {
       resultContent = typeof out === 'object' && out?.result != null ? out.result : out;
       if (toolCallId && resultContent != null) {
         return { results: [{ toolCallId, result: resultContent }] };
+      }
+      if (toolCallId) {
+        return { results: [{ toolCallId, result: (typeof out === 'object' && out?.result != null) ? out.result : "The email could not be sent. Say SMS to get the details by text instead." }] };
       }
       return out;
     }
@@ -2080,9 +2098,16 @@ async function handleFunctionCall(event) {
       if (toolCallId && resultContent != null) {
         return { results: [{ toolCallId, result: resultContent }] };
       }
+      if (toolCallId) {
+        return { results: [{ toolCallId, result: (typeof out === 'object' && out?.result != null) ? out.result : "The text could not be sent. The details were shared at the start of this call." }] };
+      }
       return out;
     }
     console.log(`[VAPI Webhook] ⚠️ Unhandled function: ${functionName}`);
+    // Always return a result when we have toolCallId so VAPI does not show "No result returned"
+    if (toolCallId) {
+      return { results: [{ toolCallId, result: "One moment." }] };
+    }
   } catch (error) {
     console.error(`[VAPI Webhook] ❌ Error handling function call:`, error);
     if (toolCallId) {
