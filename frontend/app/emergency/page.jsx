@@ -3,13 +3,7 @@
 import { useState, useRef, useEffect } from 'react';
 import Link from 'next/link';
 
-/**
- * HERO IMAGE: Must be in frontend/public/. Next.js serves public/* at URL /filename
- * If your file is named "emergency-hero.png" → use '/emergency-hero.png'
- * If your file is named "publicemergency-hero.png" → use '/publicemergency-hero.png'
- */
-const HERO_IMAGE = '/publicemergency-hero.png';
-
+const DEFAULT_HERO_IMAGE = '/publicemergency-hero.png';
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
 function useEmergencyPhone() {
@@ -32,6 +26,17 @@ function useEmergencyPhone() {
   };
 }
 
+function useWebsitePageContent(pageKey) {
+  const [content, setContent] = useState(null);
+  useEffect(() => {
+    fetch(`${API_URL}/api/v2/emergency-network/public/website-page/${pageKey}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => setContent(d && typeof d === 'object' ? d : null))
+      .catch(() => setContent(null));
+  }, [pageKey]);
+  return content;
+}
+
 const SERVICE_DROPDOWN = [
   { value: 'Plumbing', label: 'Plumbing' },
   { value: 'HVAC', label: 'HVAC' },
@@ -46,8 +51,17 @@ const URGENCY_OPTIONS = [
 
 export default function EmergencyPage() {
   const { phone, telLink, smsLink } = useEmergencyPhone();
+  const pageContent = useWebsitePageContent('emergency-main');
   const formRef = useRef(null);
   const [heroImageError, setHeroImageError] = useState(false);
+  const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || DEFAULT_HERO_IMAGE;
+  const heroHeader = pageContent?.hero_header ?? 'Need Help Right Now?';
+  const heroSubtext = pageContent?.hero_subtext ?? 'Call our 24/7 local emergency network.';
+  const buttons = Array.isArray(pageContent?.buttons) && pageContent.buttons.length > 0 ? pageContent.buttons : [
+    { label: 'CALL NOW — AVAILABLE 24/7', url: 'tel' },
+    { label: 'Text Us', url: 'sms' },
+    { label: 'Request Help Online', url: '#form' },
+  ];
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -106,15 +120,17 @@ export default function EmergencyPage() {
       <section className="relative min-h-[85vh] w-full flex items-center justify-center sm:justify-end">
         {/* Background image (fallback bg if image missing or loading) */}
         <div className="absolute inset-0 z-0 bg-[#2c2c2c]">
-          <img
-            src={HERO_IMAGE}
-            alt=""
-            className="w-full h-full object-cover object-top"
-            onError={() => setHeroImageError(true)}
-          />
-          {heroImageError && (
+          {heroImage && (
+            <img
+              src={heroImage}
+              alt=""
+              className="w-full h-full object-cover object-top"
+              onError={() => setHeroImageError(true)}
+            />
+          )}
+          {heroImageError && !heroImage.startsWith('http') && (
             <div className="absolute inset-0 flex items-center justify-center bg-[#2c2c2c] text-white/70 text-sm text-center px-4">
-              <span>Hero image not found. Ensure <strong>publicemergency-hero.png</strong> is in <strong>frontend/public/</strong></span>
+              <span>Hero image not found. Use Settings → Website pages to upload an image.</span>
             </div>
           )}
         </div>
@@ -135,39 +151,64 @@ export default function EmergencyPage() {
         {/* Overlay content — right aligned */}
         <div className="relative z-20 w-full max-w-[900px] mx-auto px-4 py-8 sm:pr-6 sm:pl-4 flex flex-col items-center sm:items-end text-center sm:text-right">
           <h1 className="text-[28px] sm:text-[36px] font-bold leading-tight text-white drop-shadow-sm mb-2">
-            Need Help Right Now?
+            {heroHeader}
           </h1>
           <p className="text-[18px] sm:text-[22px] font-semibold text-white/95 mb-6 max-w-[420px]">
-            Call our 24/7 local emergency network.
+            {heroSubtext}
           </p>
 
-          {/* PRIMARY CTA */}
-          <a
-            href={telLink}
-            className="w-full sm:w-auto min-w-[280px] inline-flex justify-center py-4 px-6 rounded bg-[#c41e3a] hover:bg-[#a01830] text-white font-bold text-[17px] sm:text-[18px] uppercase tracking-wide transition-colors border-2 border-[#c41e3a]"
-          >
-            CALL NOW — AVAILABLE 24/7
-          </a>
-          {phone && (
+          {/* CTAs from config */}
+          {buttons.map((btn, i) => {
+            const url = (btn.url || '').trim().toLowerCase();
+            const isPrimary = i === 0;
+            if (url === '#form') {
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={scrollToForm}
+                  className={isPrimary ? 'w-full sm:w-auto min-w-[280px] inline-flex justify-center py-4 px-6 rounded bg-[#c41e3a] hover:bg-[#a01830] text-white font-bold text-[17px] sm:text-[18px] uppercase tracking-wide transition-colors border-2 border-[#c41e3a]' : 'inline-block py-2.5 px-5 rounded border-2 border-white/80 text-white text-[14px] font-medium hover:bg-white/15 transition-colors'}
+                >
+                  {btn.label || 'Request Help Online'}
+                </button>
+              );
+            }
+            const href = url === 'tel' ? telLink : url === 'sms' ? smsLink : (btn.url || '#');
+            return (
+              <a
+                key={i}
+                href={href}
+                className={isPrimary ? 'w-full sm:w-auto min-w-[280px] inline-flex justify-center py-4 px-6 rounded bg-[#c41e3a] hover:bg-[#a01830] text-white font-bold text-[17px] sm:text-[18px] uppercase tracking-wide transition-colors border-2 border-[#c41e3a]' : 'inline-block py-2.5 px-5 rounded border-2 border-white/80 text-white text-[14px] font-medium hover:bg-white/15 transition-colors'}
+              >
+                {btn.label || (url === 'tel' ? 'Call' : url === 'sms' ? 'Text' : 'Link')}
+              </a>
+            );
+          })}
+          {buttons.length > 0 && phone && (
             <p className="text-white/95 font-semibold text-[16px] mt-2">{phone}</p>
           )}
 
-          {/* SECONDARY CTAs */}
-          <div className="flex flex-wrap gap-3 mt-5 justify-center sm:justify-end">
-            <a
-              href={smsLink}
-              className="inline-block py-2.5 px-5 rounded border-2 border-white/80 text-white text-[14px] font-medium hover:bg-white/15 transition-colors"
-            >
-              Text Us
-            </a>
-            <button
-              type="button"
-              onClick={scrollToForm}
-              className="inline-block py-2.5 px-5 rounded border-2 border-white/80 text-white text-[14px] font-medium hover:bg-white/15 transition-colors"
-            >
-              Request Help Online
-            </button>
-          </div>
+          {/* Secondary buttons row */}
+          {buttons.length > 1 && (
+            <div className="flex flex-wrap gap-3 mt-5 justify-center sm:justify-end">
+              {buttons.slice(1).map((btn, i) => {
+                const url = (btn.url || '').trim().toLowerCase();
+                if (url === '#form') {
+                  return (
+                    <button key={i} type="button" onClick={scrollToForm} className="inline-block py-2.5 px-5 rounded border-2 border-white/80 text-white text-[14px] font-medium hover:bg-white/15 transition-colors">
+                      {btn.label || 'Request Help Online'}
+                    </button>
+                  );
+                }
+                const href = url === 'tel' ? telLink : url === 'sms' ? smsLink : (btn.url || '#');
+                return (
+                  <a key={i} href={href} className="inline-block py-2.5 px-5 rounded border-2 border-white/80 text-white text-[14px] font-medium hover:bg-white/15 transition-colors">
+                    {btn.label || 'Link'}
+                  </a>
+                );
+              })}
+            </div>
+          )}
 
           {/* Trust line */}
           <p className="mt-6 text-[14px] text-white/90 font-medium sm:text-right">

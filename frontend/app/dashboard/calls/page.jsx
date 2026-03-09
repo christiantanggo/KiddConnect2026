@@ -11,6 +11,10 @@ function CallsPage() {
   const router = useRouter();
   const [calls, setCalls] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deleteModal, setDeleteModal] = useState(null);
+  const [deleteConfirmText, setDeleteConfirmText] = useState('');
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
 
   useEffect(() => {
     loadCalls();
@@ -56,6 +60,33 @@ function CallsPage() {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
     return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  const openDeleteModal = (call) => {
+    setDeleteModal({ call });
+    setDeleteConfirmText('');
+    setDeleteError(null);
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteModal(null);
+    setDeleteConfirmText('');
+    setDeleteError(null);
+  };
+
+  const handleDeleteCall = async () => {
+    if (!deleteModal?.call || deleteConfirmText !== 'DELETE') return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await callsAPI.delete(deleteModal.call.id);
+      setCalls((prev) => prev.filter((c) => c.id !== deleteModal.call.id));
+      closeDeleteModal();
+    } catch (err) {
+      setDeleteError(err.response?.data?.error || err.message || 'Failed to delete call');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   if (loading) {
@@ -126,13 +157,20 @@ function CallsPage() {
                             {call.status || 'unknown'}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-3">
                           <Link
                             href={`/dashboard/calls/${call.id}`}
                             className="text-blue-600 hover:text-blue-900"
                           >
                             View
                           </Link>
+                          <button
+                            type="button"
+                            onClick={() => openDeleteModal(call)}
+                            className="text-red-600 hover:text-red-800"
+                          >
+                            Delete
+                          </button>
                         </td>
                       </tr>
                     ))}
@@ -142,6 +180,52 @@ function CallsPage() {
             )}
           </div>
         </main>
+
+        {/* Delete confirmation modal */}
+        {deleteModal && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50"
+            onClick={(e) => e.target === e.currentTarget && closeDeleteModal()}
+          >
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">Delete call?</h3>
+              <p className="text-sm text-gray-600 mb-4">
+                This will permanently delete this call. This cannot be undone.
+              </p>
+              <p className="text-sm text-gray-700 mb-2">
+                Type <strong>DELETE</strong> to confirm:
+              </p>
+              <input
+                type="text"
+                value={deleteConfirmText}
+                onChange={(e) => setDeleteConfirmText(e.target.value)}
+                placeholder="DELETE"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm mb-4 focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                autoFocus
+              />
+              {deleteError && (
+                <p className="text-sm text-red-600 mb-4">{deleteError}</p>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeDeleteModal}
+                  className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeleteCall}
+                  disabled={deleteConfirmText !== 'DELETE' || deleting}
+                  className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md"
+                >
+                  {deleting ? 'Deleting…' : 'Delete call'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </AuthGuard>
   );

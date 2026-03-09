@@ -25,8 +25,28 @@ function useEmergencyPhone() {
   };
 }
 
+function useWebsitePageContent(pageKey) {
+  const [content, setContent] = useState(null);
+  useEffect(() => {
+    fetch(`${API_URL}/api/v2/emergency-network/public/website-page/${pageKey}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => setContent(d && typeof d === 'object' ? d : null))
+      .catch(() => setContent(null));
+  }, [pageKey]);
+  return content;
+}
+
 export default function EmergencyDispatchPage() {
   const { phone, telLink, smsLink } = useEmergencyPhone();
+  const pageContent = useWebsitePageContent('emergency-main');
+  const [heroImageError, setHeroImageError] = useState(false);
+  const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
+  const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Dispatch';
+  const heroSubtext = pageContent?.hero_subtext ?? 'We connect you with licensed local professionals. One call or form—we find someone available and get you help fast.';
+  const buttons = Array.isArray(pageContent?.buttons) && pageContent.buttons.length > 0 ? pageContent.buttons : [
+    { label: 'Call now — 24/7', url: 'tel' },
+    { label: 'Text us', url: 'sms' },
+  ];
 
   return (
     <div className="min-h-screen bg-[#f5f5f5] text-[#1a1a1a] antialiased">
@@ -40,26 +60,37 @@ export default function EmergencyDispatchPage() {
         </div>
       </header>
 
-      <section className="bg-[#2c2c2c] text-white py-12 px-4">
-        <div className="max-w-[900px] mx-auto text-center">
-          <h1 className="text-3xl sm:text-4xl font-bold mb-3">24/7 Emergency Dispatch</h1>
-          <p className="text-lg text-white/90 max-w-xl mx-auto mb-8">
-            We connect you with licensed local professionals. One call or form—we find someone available and get you help fast.
-          </p>
-          {phone && (
+      {/* Hero: image from Website pages (emergency-main) or solid dark background */}
+      <section className="relative min-h-[280px] w-full flex items-center justify-center">
+        <div className="absolute inset-0 z-0 bg-[#2c2c2c]">
+          {heroImage && (
+            <img
+              src={heroImage}
+              alt=""
+              className="w-full h-full object-cover object-center"
+              onError={() => setHeroImageError(true)}
+            />
+          )}
+        </div>
+        <div className="absolute inset-0 z-10 bg-gradient-to-t from-black/50 to-transparent pointer-events-none" />
+        <div className="relative z-20 w-full max-w-[900px] mx-auto px-4 py-12 text-center">
+          <h1 className="text-3xl sm:text-4xl font-bold text-white drop-shadow-sm mb-3">{heroHeader}</h1>
+          <p className="text-lg text-white/90 max-w-xl mx-auto mb-8">{heroSubtext}</p>
+          {phone && buttons.length > 0 && (
             <div className="flex flex-wrap gap-3 justify-center">
-              <a
-                href={telLink}
-                className="inline-flex justify-center py-4 px-8 rounded bg-[#c41e3a] hover:bg-[#a01830] text-white font-bold text-lg uppercase tracking-wide transition-colors"
-              >
-                Call now — 24/7
-              </a>
-              <a
-                href={smsLink}
-                className="inline-flex justify-center py-4 px-8 rounded border-2 border-white/80 text-white font-semibold hover:bg-white/15 transition-colors"
-              >
-                Text us
-              </a>
+              {buttons.map((btn, i) => {
+                const url = (btn.url || '').trim().toLowerCase();
+                const href = url === 'tel' ? telLink : url === 'sms' ? smsLink : (btn.url || '#');
+                return (
+                  <a
+                    key={i}
+                    href={href}
+                    className={`inline-flex justify-center py-4 px-8 rounded text-white font-bold text-lg transition-colors ${i === 0 ? 'bg-[#c41e3a] hover:bg-[#a01830] uppercase tracking-wide' : 'border-2 border-white/80 font-semibold hover:bg-white/15'}`}
+                  >
+                    {btn.label || 'Link'}
+                  </a>
+                );
+              })}
             </div>
           )}
           {phone && <p className="mt-3 text-white/90 font-medium">{phone}</p>}

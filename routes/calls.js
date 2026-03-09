@@ -4,6 +4,7 @@
 import express from 'express';
 import { CallSession } from '../models/CallSession.js';
 import { authenticate } from '../middleware/auth.js';
+import { supabaseClient } from '../config/database.js';
 
 const router = express.Router();
 
@@ -58,6 +59,29 @@ router.get('/:callId', authenticate, async (req, res) => {
   } catch (error) {
     console.error('Get call error:', error);
     res.status(500).json({ error: 'Failed to get call' });
+  }
+});
+
+// Delete call session (with ownership check)
+router.delete('/:callId', authenticate, async (req, res) => {
+  try {
+    const call = await CallSession.findById(req.params.callId);
+    if (!call || call.business_id !== req.businessId) {
+      return res.status(404).json({ error: 'Call not found' });
+    }
+    const { error } = await supabaseClient
+      .from('call_sessions')
+      .delete()
+      .eq('id', req.params.callId)
+      .eq('business_id', req.businessId);
+    if (error) {
+      console.error('Delete call error:', error);
+      return res.status(500).json({ error: 'Failed to delete call' });
+    }
+    res.json({ deleted: true });
+  } catch (error) {
+    console.error('Delete call error:', error);
+    res.status(500).json({ error: 'Failed to delete call' });
   }
 });
 

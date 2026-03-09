@@ -15,6 +15,9 @@ export const DEFAULT_OPENING_GREETING = "Thanks for calling the 24/7 Emergency P
 /** Default service line name used in the system prompt (e.g. "24/7 Emergency Plumbing"). */
 export const DEFAULT_SERVICE_LINE_NAME = "24/7 Emergency Plumbing";
 
+/** Default message spoken when we call the customer back after a provider accepts. Placeholders: {{caller_name}}, {{service_line_name}}, {{business_name}}, {{provider_phone}} */
+export const DEFAULT_CUSTOMER_CALLBACK_MESSAGE = "Hi {{caller_name}}, this is {{service_line_name}}. Good news—we've assigned a plumber to your request. The company is {{business_name}}. You can reach them at {{provider_phone}}. If you have any questions, call us back. Goodbye.";
+
 /** Default intake fields for "what the AI collects". Plumbing-only focus; do not list other trades. */
 export const DEFAULT_INTAKE_FIELDS = [
   { key: 'caller_name', label: "Caller's name", required: false, enabled: true },
@@ -63,6 +66,12 @@ export async function getEmergencyConfig() {
     opening_greeting: DEFAULT_OPENING_GREETING,
     service_line_name: DEFAULT_SERVICE_LINE_NAME,
     custom_instructions: '',
+    billing: {
+      price_basic_cents: 500,
+      price_priority_cents: 750,
+      price_premium_cents: 1000,
+      sms_fee_cents: 50,
+    },
   };
   try {
     const { data, error } = await supabaseClient
@@ -103,6 +112,15 @@ export async function getEmergencyConfig() {
       opening_greeting: (value.opening_greeting && String(value.opening_greeting).trim()) || DEFAULT_OPENING_GREETING,
       service_line_name: (value.service_line_name && String(value.service_line_name).trim()) || DEFAULT_SERVICE_LINE_NAME,
       custom_instructions: (value.custom_instructions && String(value.custom_instructions).trim()) || '',
+      customer_callback_message: (value.customer_callback_message && String(value.customer_callback_message).trim()) || DEFAULT_CUSTOMER_CALLBACK_MESSAGE,
+      billing: (value.billing && typeof value.billing === 'object')
+        ? {
+            price_basic_cents: typeof value.billing.price_basic_cents === 'number' ? value.billing.price_basic_cents : 500,
+            price_priority_cents: typeof value.billing.price_priority_cents === 'number' ? value.billing.price_priority_cents : 750,
+            price_premium_cents: typeof value.billing.price_premium_cents === 'number' ? value.billing.price_premium_cents : 1000,
+            sms_fee_cents: typeof value.billing.sms_fee_cents === 'number' ? value.billing.sms_fee_cents : 50,
+          }
+        : { price_basic_cents: 500, price_priority_cents: 750, price_premium_cents: 1000, sms_fee_cents: 50 },
     };
     cacheTime = now;
     return cachedConfig;

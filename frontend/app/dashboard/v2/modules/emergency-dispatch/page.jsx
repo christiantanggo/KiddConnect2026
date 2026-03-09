@@ -30,10 +30,34 @@ const SETTINGS_SUB_TABS = [
   { id: 'greeting-script', label: 'Greeting & script' },
   { id: 'services', label: 'Emergency Services (Provider Directory)' },
   { id: 'communication', label: 'Communication Settings' },
+  { id: 'website-pages', label: 'Website pages' },
 ];
+
+const WEBSITE_PAGE_OPTIONS = [
+  { value: 'emergency-main', label: 'Emergency Response Main Page' },
+  { value: 'plumbing-main', label: 'Plumbing Main Page' },
+  { value: 'terms-of-service', label: 'Terms of Service' },
+];
+
+const DEFAULT_HERO_PAGE_CONTENT = {
+  hero_image_url: '',
+  hero_header: '',
+  hero_subtext: '',
+  buttons: [{ label: '', url: 'tel' }, { label: '', url: 'sms' }, { label: '', url: '#form' }],
+};
+const DEFAULT_TERMS_PAGE_CONTENT = {
+  page_title: 'Terms of Service',
+  page_subtext: 'Emergency Dispatch Service',
+  sections: [{ id: '1', header: '', content: '' }],
+};
+function getDefaultWebsiteContent(pageKey) {
+  if (pageKey === 'terms-of-service') return { ...DEFAULT_TERMS_PAGE_CONTENT };
+  return { ...DEFAULT_HERO_PAGE_CONTENT };
+}
 
 const DEFAULT_OPENING_GREETING = "Thanks for calling the 24/7 Emergency Plumbing line. I can help connect you with a licensed plumber. What's going on—is it a leak, a clog, or something else?";
 const DEFAULT_SERVICE_LINE_NAME = '24/7 Emergency Plumbing';
+const DEFAULT_CUSTOMER_CALLBACK_MESSAGE = "Hi {{caller_name}}, this is {{service_line_name}}. Good news—we've assigned a plumber to your request. The company is {{business_name}}. You can reach them at {{provider_phone}}. If you have any questions, call us back. Goodbye.";
 
 const BUILT_IN_KEYS = new Set(['caller_name', 'callback_phone', 'service_category', 'urgency_level', 'location', 'issue_summary']);
 const DEFAULT_INTAKE_FIELDS = [
@@ -71,6 +95,7 @@ export default function EmergencyDispatchPage() {
     opening_greeting: DEFAULT_OPENING_GREETING,
     service_line_name: DEFAULT_SERVICE_LINE_NAME,
     custom_instructions: '',
+    customer_callback_message: DEFAULT_CUSTOMER_CALLBACK_MESSAGE,
   });
   const [analytics, setAnalytics] = useState(null);
   const [configSaving, setConfigSaving] = useState(false);
@@ -97,6 +122,13 @@ export default function EmergencyDispatchPage() {
   const [requestDetailLog, setRequestDetailLog] = useState([]);
   const [requestDetailActivity, setRequestDetailActivity] = useState([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  const [websitePageKey, setWebsitePageKey] = useState('emergency-main');
+  const [websitePageContent, setWebsitePageContent] = useState(null);
+  const [websitePageLoading, setWebsitePageLoading] = useState(false);
+  const [websitePageDirty, setWebsitePageDirty] = useState(false);
+  const [websitePageSaving, setWebsitePageSaving] = useState(false);
+  const [websitePageSaveMessage, setWebsitePageSaveMessage] = useState(null);
+  const [websiteHeroUploading, setWebsiteHeroUploading] = useState(false);
 
   const handleResetDispatch = async (requestId) => {
     setResetDispatchLoadingId(requestId);
@@ -157,6 +189,7 @@ export default function EmergencyDispatchPage() {
         opening_greeting: configRes.data?.opening_greeting ?? DEFAULT_OPENING_GREETING,
         service_line_name: configRes.data?.service_line_name ?? DEFAULT_SERVICE_LINE_NAME,
         custom_instructions: configRes.data?.custom_instructions ?? '',
+        customer_callback_message: configRes.data?.customer_callback_message ?? DEFAULT_CUSTOMER_CALLBACK_MESSAGE,
       });
       setRequests(requestsRes.data?.requests ?? []);
       setProviders(providersRes.data?.providers ?? []);
@@ -212,6 +245,59 @@ export default function EmergencyDispatchPage() {
     return () => clearInterval(interval);
   }, [activeTab]);
 
+  useEffect(() => {
+    if (websitePageKey && activeTab === 'settings' && settingsSubTab === 'website-pages') {
+      setWebsitePageLoading(true);
+      setWebsitePageContent(null);
+      emergencyNetworkAPI.getWebsitePage(websitePageKey)
+        .then((res) => {
+          const content = res.data?.content;
+          setWebsitePageContent(content && typeof content === 'object' ? content : getDefaultWebsiteContent(websitePageKey));
+          setWebsitePageDirty(false);
+        })
+        .catch(() => {
+          setWebsitePageContent(getDefaultWebsiteContent(websitePageKey));
+        })
+        .finally(() => setWebsitePageLoading(false));
+    }
+  }, [websitePageKey, activeTab, settingsSubTab]);
+
+  const saveWebsitePage = async () => {
+    const contentToSave = websitePageContent ?? getDefaultWebsiteContent(websitePageKey);
+    if (!websitePageKey || !contentToSave) return;
+    setWebsitePageSaving(true);
+    setWebsitePageSaveMessage(null);
+    try {
+      await emergencyNetworkAPI.updateWebsitePage(websitePageKey, contentToSave);
+      setWebsitePageContent(contentToSave);
+      setWebsitePageDirty(false);
+      setWebsitePageSaveMessage('Saved');
+    } catch (e) {
+      setWebsitePageSaveMessage(e.response?.data?.error || e.message || 'Failed to save');
+    } finally {
+      setWebsitePageSaving(false);
+    }
+  };
+
+  const handleWebsiteHeroUpload = async (pageKey, file) => {
+    if (!file) return;
+    setWebsiteHeroUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await emergencyNetworkAPI.uploadWebsiteHero(formData, pageKey);
+      const url = res.data?.url;
+      if (url && websitePageContent && typeof websitePageContent === 'object') {
+        setWebsitePageContent((c) => ({ ...c, hero_image_url: url }));
+        setWebsitePageDirty(true);
+      }
+    } catch (e) {
+      setWebsitePageSaveMessage(e.response?.data?.error || 'Upload failed');
+    } finally {
+      setWebsiteHeroUploading(false);
+    }
+  };
+
   const saveConfig = async (overrides = null) => {
     try {
       setConfigSaving(true);
@@ -236,6 +322,7 @@ export default function EmergencyDispatchPage() {
         opening_greeting: (c.opening_greeting && String(c.opening_greeting).trim()) || null,
         service_line_name: (c.service_line_name && String(c.service_line_name).trim()) || null,
         custom_instructions: (c.custom_instructions && String(c.custom_instructions).trim()) || null,
+        customer_callback_message: (c.customer_callback_message && String(c.customer_callback_message).trim()) || null,
       };
       const res = await emergencyNetworkAPI.updateConfig(toSend);
       const data = res.data || {};
@@ -259,6 +346,7 @@ export default function EmergencyDispatchPage() {
         opening_greeting: configRest.opening_greeting ?? c.opening_greeting ?? prev.opening_greeting ?? DEFAULT_OPENING_GREETING,
         service_line_name: configRest.service_line_name ?? c.service_line_name ?? prev.service_line_name ?? DEFAULT_SERVICE_LINE_NAME,
         custom_instructions: configRest.custom_instructions ?? c.custom_instructions ?? prev.custom_instructions ?? '',
+        customer_callback_message: configRest.customer_callback_message ?? c.customer_callback_message ?? prev.customer_callback_message ?? DEFAULT_CUSTOMER_CALLBACK_MESSAGE,
       }));
       setConfigDirty(false);
       if (link_result) {
@@ -654,24 +742,26 @@ export default function EmergencyDispatchPage() {
             </>
           )}
 
-          {/* Settings: 4 sub-tabs (Services we collect for, What the AI collects, Provider Directory, Communication Settings) */}
+          {/* Settings: sub-tabs with horizontal scroll so all options are visible */}
           {activeTab === 'settings' && (
             <>
-              <div className="flex flex-wrap gap-1 border-b border-slate-200 mb-6">
-                {SETTINGS_SUB_TABS.map(({ id, label }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setSettingsSubTab(id)}
-                    className={`px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition-colors ${
-                      settingsSubTab === id
-                        ? 'border-emerald-600 text-emerald-700 bg-emerald-50'
-                        : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-                    }`}
-                  >
-                    {label}
-                  </button>
-                ))}
+              <div className="flex gap-1 border-b border-slate-200 mb-6 overflow-x-auto overflow-y-hidden pb-px scrollbar-thin scrollbar-thumb-slate-300 scrollbar-track-transparent">
+                <div className="flex flex-nowrap gap-1 min-w-0">
+                  {SETTINGS_SUB_TABS.map(({ id, label }) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => setSettingsSubTab(id)}
+                      className={`shrink-0 px-4 py-2.5 text-sm font-medium rounded-t-lg border-b-2 -mb-px transition-colors whitespace-nowrap ${
+                        settingsSubTab === id
+                          ? 'border-emerald-600 text-emerald-700 bg-emerald-50'
+                          : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               </div>
 
               {settingsSubTab === 'service-types' && (() => {
@@ -1099,6 +1189,17 @@ export default function EmergencyDispatchPage() {
                     <textarea rows={2} className="w-full max-w-2xl rounded border border-slate-300 px-3 py-2 text-sm" placeholder="We are a dispatch service only, not the provider. You are responsible for verifying the provider's license, insurance, and terms when they contact you. Terms: {{terms_url}}" value={config.customer_sms_legal || ''} onChange={(e) => { setConfig((c) => ({ ...c, customer_sms_legal: e.target.value })); setConfigDirty(true); }} />
                   </div>
                 </div>
+                <div className="pt-4 border-t border-slate-200">
+                  <p className="text-sm font-medium text-slate-700 mb-1">Call back to customer when a provider accepts</p>
+                  <p className="text-xs text-slate-500 mb-3">When a plumber accepts the job, we call the customer back and read this message. Use placeholders: {'{{caller_name}}'}, {'{{service_line_name}}'}, {'{{business_name}}'}, {'{{provider_phone}}'}. Leave blank to use the default message.</p>
+                  <textarea
+                    rows={4}
+                    className="w-full max-w-2xl rounded border border-slate-300 px-3 py-2 text-sm"
+                    placeholder={DEFAULT_CUSTOMER_CALLBACK_MESSAGE}
+                    value={config.customer_callback_message ?? ''}
+                    onChange={(e) => { setConfig((c) => ({ ...c, customer_callback_message: e.target.value })); setConfigDirty(true); }}
+                  />
+                </div>
                 <div>
                   <label className="block text-sm text-slate-600 mb-1">Max dispatch attempts</label>
                   <input type="number" min={1} max={20} className="w-24 rounded border border-slate-300 px-3 py-2 text-sm" value={config.max_dispatch_attempts} onChange={(e) => { setConfig((c) => ({ ...c, max_dispatch_attempts: parseInt(e.target.value, 10) || 5 })); setConfigDirty(true); }} />
@@ -1110,6 +1211,173 @@ export default function EmergencyDispatchPage() {
                   </button>
                 )}
               </div>
+            </section>
+          )}
+
+              {settingsSubTab === 'website-pages' && (
+            <section className="bg-white rounded-xl border border-slate-200 p-6">
+              <h2 className="text-lg font-medium mb-4">Website pages</h2>
+              <p className="text-slate-600 text-sm mb-4">Edit hero and content for the public Emergency Response, Plumbing, and Terms of Service pages.</p>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-slate-700 mb-1">Page</label>
+                <select
+                  className="rounded border border-slate-300 px-3 py-2 text-sm bg-white min-w-[240px]"
+                  value={websitePageKey}
+                  onChange={(e) => { setWebsitePageKey(e.target.value); setWebsitePageSaveMessage(null); }}
+                >
+                  {WEBSITE_PAGE_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </select>
+              </div>
+              {websitePageLoading && <p className="text-slate-500 text-sm">Loading...</p>}
+              {!websitePageLoading && (() => {
+                const displayContent = websitePageContent ?? getDefaultWebsiteContent(websitePageKey);
+                return (
+                <div className="space-y-6 max-w-2xl">
+                  {(websitePageKey === 'emergency-main' || websitePageKey === 'plumbing-main') && (
+                    <>
+                      <div className="p-4 rounded-lg border border-slate-200 bg-slate-50">
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Hero image</label>
+                        <p className="text-xs text-slate-500 mb-2">Upload an image to show behind the hero on this page (and on Emergency Dispatch landing). Leave empty for a solid background.</p>
+                        {displayContent.hero_image_url && (
+                          <div className="mb-3">
+                            <img src={displayContent.hero_image_url} alt="Hero preview" className="max-h-40 rounded border border-slate-200 object-cover" />
+                          </div>
+                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-800 text-white text-sm font-medium cursor-pointer hover:bg-slate-700 disabled:opacity-50">
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/gif,image/webp"
+                              className="sr-only"
+                              disabled={websiteHeroUploading}
+                              onChange={(e) => {
+                                const f = e.target.files?.[0];
+                                if (f) handleWebsiteHeroUpload(websitePageKey, f);
+                                e.target.value = '';
+                              }}
+                            />
+                            {websiteHeroUploading ? 'Uploading...' : (displayContent.hero_image_url ? 'Replace image' : 'Upload hero image')}
+                          </label>
+                          {websiteHeroUploading && <span className="text-sm text-slate-500">Uploading...</span>}
+                        </div>
+                        <p className="text-xs text-amber-700 mt-2">After uploading, click <strong>Save page</strong> below to keep the image.</p>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Hero header</label>
+                        <input
+                          type="text"
+                          className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                          value={displayContent.hero_header ?? ''}
+                          onChange={(e) => { setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), hero_header: e.target.value })); setWebsitePageDirty(true); }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Hero subtext</label>
+                        <textarea
+                          rows={2}
+                          className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                          value={displayContent.hero_subtext ?? ''}
+                          onChange={(e) => { setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), hero_subtext: e.target.value })); setWebsitePageDirty(true); }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Buttons (label + URL)</label>
+                        <p className="text-xs text-slate-500 mb-2">Use <code className="bg-slate-100 px-1 rounded">tel</code> for Call, <code className="bg-slate-100 px-1 rounded">sms</code> for Text, <code className="bg-slate-100 px-1 rounded">#form</code> for scroll-to-form.</p>
+                        {(displayContent.buttons || []).map((btn, i) => (
+                          <div key={i} className="flex gap-2 mb-2">
+                            <input
+                              type="text"
+                              placeholder="Button label"
+                              className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
+                              value={btn.label ?? ''}
+                              onChange={(e) => {
+                                const next = [...(displayContent.buttons || [])];
+                                next[i] = { ...next[i], label: e.target.value };
+                                setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), buttons: next }));
+                                setWebsitePageDirty(true);
+                              }}
+                            />
+                            <input
+                              type="text"
+                              placeholder="URL (tel, sms, #form, or full URL)"
+                              className="flex-1 rounded border border-slate-300 px-3 py-2 text-sm"
+                              value={btn.url ?? ''}
+                              onChange={(e) => {
+                                const next = [...(displayContent.buttons || [])];
+                                next[i] = { ...next[i], url: e.target.value };
+                                setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), buttons: next }));
+                                setWebsitePageDirty(true);
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {websitePageKey === 'terms-of-service' && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Page title</label>
+                        <input
+                          type="text"
+                          className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                          value={displayContent.page_title ?? ''}
+                          onChange={(e) => { setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), page_title: e.target.value })); setWebsitePageDirty(true); }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-1">Page subtext</label>
+                        <input
+                          type="text"
+                          className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                          value={displayContent.page_subtext ?? ''}
+                          onChange={(e) => { setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), page_subtext: e.target.value })); setWebsitePageDirty(true); }}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Sections (header + content)</label>
+                        {(displayContent.sections || []).map((sec, i) => (
+                          <div key={sec.id || i} className="border border-slate-200 rounded-lg p-4 mb-4 bg-slate-50/50">
+                            <input
+                              type="text"
+                              placeholder="Section header"
+                              className="w-full rounded border border-slate-300 px-3 py-2 text-sm mb-2"
+                              value={sec.header ?? ''}
+                              onChange={(e) => {
+                                const next = [...(displayContent.sections || [])];
+                                next[i] = { ...next[i], header: e.target.value };
+                                setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), sections: next }));
+                                setWebsitePageDirty(true);
+                              }}
+                            />
+                            <textarea
+                              rows={4}
+                              placeholder="Section content"
+                              className="w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                              value={sec.content ?? ''}
+                              onChange={(e) => {
+                                const next = [...(displayContent.sections || [])];
+                                next[i] = { ...next[i], content: e.target.value };
+                                setWebsitePageContent((c) => ({ ...(c ?? getDefaultWebsiteContent(websitePageKey)), sections: next }));
+                                setWebsitePageDirty(true);
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                  {websitePageSaveMessage && <p className={`text-sm ${websitePageSaveMessage === 'Saved' ? 'text-emerald-600' : 'text-red-600'}`}>{websitePageSaveMessage}</p>}
+                  {(websitePageDirty || !websitePageContent) && (
+                    <button type="button" onClick={saveWebsitePage} disabled={websitePageSaving} className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm hover:bg-emerald-700 disabled:opacity-60">
+                      <Save className="w-4 h-4" /> {websitePageSaving ? 'Saving...' : 'Save page'}
+                    </button>
+                  )}
+                </div>
+                );
+              })()}
             </section>
           )}
             </>

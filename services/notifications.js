@@ -305,7 +305,7 @@ export async function sendEmergencyIntakeEmail(toEmail, request, options = {}) {
     console.warn('[Emergency Intake Email] No recipient email, skipping');
     return;
   }
-  const { transcript = '', summary = '' } = options;
+  const { transcript = '', summary = '', transcriptViewUrl = null } = options;
   const name = request.caller_name || 'Not provided';
   const phone = formatPhoneNumber(request.callback_phone) || request.callback_phone || 'Not provided';
   const serviceType = request.service_category || 'Not provided';
@@ -327,6 +327,7 @@ export async function sendEmergencyIntakeEmail(toEmail, request, options = {}) {
     '',
     summary ? `Summary: ${summary}` : '',
     transcript ? `Transcript:\n${transcript}` : '',
+    transcriptViewUrl ? `View full transcript: ${transcriptViewUrl}` : '',
   ].filter(Boolean).join('\n');
   const bodyHtmlRows = [
     `<tr><td style="padding:6px 12px 6px 0; vertical-align:top; font-weight:bold;">Name</td><td style="padding:6px 0;">${escapeHtml(name)}</td></tr>`,
@@ -344,6 +345,7 @@ export async function sendEmergencyIntakeEmail(toEmail, request, options = {}) {
     '</table>',
     summary ? `<p><strong>Summary</strong><br><pre style="white-space:pre-wrap; font-family:inherit;">${escapeHtml(summary)}</pre></p>` : '',
     transcript ? `<p><strong>Transcript</strong><br><pre style="white-space:pre-wrap; font-family:inherit; max-height:200px; overflow:auto;">${escapeHtml(transcript)}</pre></p>` : '',
+    transcriptViewUrl ? `<p><a href="${escapeHtml(transcriptViewUrl)}" style="color:#0d9488;">View full transcript</a></p>` : '',
   ].filter(Boolean).join('\n');
   try {
     await sendEmail(toEmail.trim(), subject, bodyText, bodyHtml, 'Tavari Emergency Dispatch', null);

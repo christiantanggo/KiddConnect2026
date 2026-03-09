@@ -2,6 +2,7 @@
  * Emergency Network intake: create service request from form or SMS.
  * Does not touch existing agent.
  */
+import crypto from 'crypto';
 import { supabaseClient } from '../../config/database.js';
 
 const SERVICE_CATEGORIES = ['Plumbing', 'HVAC', 'Gas', 'Other'];
@@ -22,7 +23,7 @@ function clampUrgency(u) {
 
 /**
  * Create a service request (form or SMS intake).
- * @param {Object} params - caller_name, callback_phone, service_category, urgency_level, location, issue_summary, preferred_contact_method, access_notes, intake_channel, custom_intake
+ * @param {Object} params - caller_name, callback_phone, service_category, urgency_level, location, issue_summary, preferred_contact_method, access_notes, intake_channel, custom_intake, intake_transcript (optional; from phone intake — enables transcript link in provider SMS/email)
  */
 export async function createServiceRequest(params) {
   const {
@@ -36,6 +37,7 @@ export async function createServiceRequest(params) {
     access_notes = null,
     intake_channel = 'form',
     custom_intake = null,
+    intake_transcript = null,
   } = params;
 
   if (!callback_phone || !String(callback_phone).trim()) {
@@ -58,11 +60,15 @@ export async function createServiceRequest(params) {
   if (custom_intake && typeof custom_intake === 'object' && Object.keys(custom_intake).length > 0) {
     payload.custom_intake = custom_intake;
   }
+  if (intake_transcript != null && String(intake_transcript).trim()) {
+    payload.intake_transcript = String(intake_transcript).trim().slice(0, 50000);
+    payload.transcript_access_token = crypto.randomBytes(32).toString('hex');
+  }
 
   const { data, error } = await supabaseClient
     .from('emergency_service_requests')
     .insert(payload)
-    .select('id, status, created_at')
+    .select('id, status, created_at, transcript_access_token')
     .single();
 
   if (error) throw error;

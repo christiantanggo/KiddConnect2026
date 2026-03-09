@@ -25,6 +25,17 @@ function useEmergencyPhone() {
   };
 }
 
+function useWebsitePageContent(pageKey) {
+  const [content, setContent] = useState(null);
+  useEffect(() => {
+    fetch(`${API_URL}/api/v2/emergency-network/public/website-page/${pageKey}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => setContent(d && typeof d === 'object' ? d : null))
+      .catch(() => setContent(null));
+  }, [pageKey]);
+  return content;
+}
+
 const URGENCY_OPTIONS = [
   { value: 'Immediate Emergency', label: 'Immediate Emergency' },
   { value: 'Same Day', label: 'Same Day' },
@@ -33,10 +44,18 @@ const URGENCY_OPTIONS = [
 
 export default function EmergencyPlumbingPage() {
   const { phone, telLink, smsLink } = useEmergencyPhone();
+  const pageContent = useWebsitePageContent('plumbing-main');
   const formRef = useRef(null);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Plumbing';
+  const heroSubtext = pageContent?.hero_subtext ?? 'Leaks, clogs, no hot water, burst pipes—we connect you with licensed local plumbers. Call or submit the form below.';
+  const buttons = Array.isArray(pageContent?.buttons) && pageContent.buttons.length > 0 ? pageContent.buttons : [
+    { label: 'Call now — 24/7', url: 'tel' },
+    { label: 'Text us', url: 'sms' },
+    { label: 'Request help online', url: '#form' },
+  ];
   const [form, setForm] = useState({
     name: '',
     phone: '',
@@ -95,31 +114,28 @@ export default function EmergencyPlumbingPage() {
 
       <section className="bg-[#1a3a2a] text-white py-12 px-4">
         <div className="max-w-[900px] mx-auto text-center">
-          <h1 className="text-3xl sm:text-4xl font-bold mb-3">24/7 Emergency Plumbing</h1>
+          <h1 className="text-3xl sm:text-4xl font-bold mb-3">{heroHeader}</h1>
           <p className="text-lg text-white/90 max-w-xl mx-auto mb-8">
-            Leaks, clogs, no hot water, burst pipes—we connect you with licensed local plumbers. Call or submit the form below.
+            {heroSubtext}
           </p>
-          {phone && (
+          {phone && buttons.length > 0 && (
             <div className="flex flex-wrap gap-3 justify-center">
-              <a
-                href={telLink}
-                className="inline-flex justify-center py-4 px-8 rounded bg-[#c41e3a] hover:bg-[#a01830] text-white font-bold text-lg uppercase tracking-wide transition-colors"
-              >
-                Call now — 24/7
-              </a>
-              <a
-                href={smsLink}
-                className="inline-flex justify-center py-4 px-8 rounded border-2 border-white/80 text-white font-semibold hover:bg-white/15 transition-colors"
-              >
-                Text us
-              </a>
-              <button
-                type="button"
-                onClick={scrollToForm}
-                className="inline-flex justify-center py-4 px-8 rounded border-2 border-white/80 text-white font-semibold hover:bg-white/15 transition-colors"
-              >
-                Request help online
-              </button>
+              {buttons.map((btn, i) => {
+                const url = (btn.url || '').trim().toLowerCase();
+                if (url === '#form') {
+                  return (
+                    <button key={i} type="button" onClick={scrollToForm} className="inline-flex justify-center py-4 px-8 rounded border-2 border-white/80 text-white font-semibold hover:bg-white/15 transition-colors">
+                      {btn.label || 'Request help online'}
+                    </button>
+                  );
+                }
+                const href = url === 'tel' ? telLink : url === 'sms' ? smsLink : (btn.url || '#');
+                return (
+                  <a key={i} href={href} className={`inline-flex justify-center py-4 px-8 rounded text-white font-bold text-lg transition-colors ${i === 0 ? 'bg-[#c41e3a] hover:bg-[#a01830] uppercase tracking-wide' : 'border-2 border-white/80 font-semibold hover:bg-white/15'}`}>
+                    {btn.label || 'Link'}
+                  </a>
+                );
+              })}
             </div>
           )}
           {phone && <p className="mt-3 text-white/90 font-medium">{phone}</p>}

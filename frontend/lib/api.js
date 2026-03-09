@@ -137,6 +137,7 @@ export const agentsAPI = {
 export const callsAPI = {
   list: (params) => api.get('/calls', { params }),
   get: (callId) => api.get(`/calls/${callId}`),
+  delete: (callId) => api.delete(`/calls/${callId}`),
 };
 
 // Messages API
@@ -488,6 +489,12 @@ export const emergencyNetworkAPI = {
   getDispatchLog: (requestId) => api.get('/v2/emergency-network/dispatch-log', { params: requestId ? { request_id: requestId } : {}, headers: emergencyNetworkHeaders() }),
   getRequestActivity: (requestId) => api.get(`/v2/emergency-network/requests/${requestId}/activity`, { headers: emergencyNetworkHeaders() }),
   getAnalytics: () => api.get('/v2/emergency-network/analytics', { headers: emergencyNetworkHeaders() }),
+  getWebsitePages: () => api.get('/v2/emergency-network/website-pages', { headers: emergencyNetworkHeaders() }),
+  getWebsitePage: (key) => api.get(`/v2/emergency-network/website-pages/${key}`, { headers: emergencyNetworkHeaders() }),
+  updateWebsitePage: (key, content) => api.put(`/v2/emergency-network/website-pages/${key}`, { content }, { headers: emergencyNetworkHeaders() }),
+  uploadWebsiteHero: (formData, pageKey) => api.post(`/v2/emergency-network/website-pages/upload-hero?page_key=${encodeURIComponent(pageKey)}`, formData, {
+    headers: emergencyNetworkHeaders(),
+  }),
 };
 
 // V2 Settings – business profile (timezone, etc.). Uses same active-business header for consistency.

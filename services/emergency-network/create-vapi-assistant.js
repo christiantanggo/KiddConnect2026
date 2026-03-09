@@ -3,7 +3,7 @@
  * Separate from the existing Tavari onboarding/FAQ agent — does not use vapi-assistant-template.js or createAssistant().
  * System prompt is built from config.intake_fields (what the AI collects).
  */
-import { getVapiClient } from '../vapi.js';
+import { getVapiClient, PHONE_AGENT_MODEL } from '../vapi.js';
 import { getEmergencyConfig, DEFAULT_INTAKE_FIELDS, DEFAULT_OPENING_GREETING, DEFAULT_SERVICE_LINE_NAME } from './config.js';
 
 const ASSISTANT_NAME = 'Emergency Network - Tavari';
@@ -63,7 +63,7 @@ export async function createEmergencyNetworkAssistant() {
     name: ASSISTANT_NAME,
     model: {
       provider: 'openai',
-      model: 'gpt-4o-mini',
+      model: PHONE_AGENT_MODEL,
       temperature: 0.6,
       maxTokens: 500,
       messages: [

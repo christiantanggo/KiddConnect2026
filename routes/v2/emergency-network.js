@@ -3,6 +3,7 @@
  * Separate stream: does not touch existing agent. Dedicated number + form.
  */
 import express from 'express';
+import multer from 'multer';
 import { authenticate } from '../../middleware/auth.js';
 import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
 import { supabaseClient } from '../../config/database.js';
@@ -130,6 +131,87 @@ router.get('/public/phone', async (req, res) => {
   } catch (err) {
     console.error('[EmergencyNetwork] public/phone error:', err?.message || err);
     res.status(500).json({ phone: null });
+  }
+});
+
+/**
+ * GET /api/v2/emergency-network/public/transcript/:token
+ * Public (no auth) view of the intake call transcript. Link is sent to providers via SMS/email after they accept.
+ */
+router.get('/public/transcript/:token', async (req, res) => {
+  const token = req.params.token && String(req.params.token).trim();
+  if (!token) {
+    return res.status(404).send('Not found');
+  }
+  try {
+    const { data: row, error } = await supabaseClient
+      .from('emergency_service_requests')
+      .select('intake_transcript')
+      .eq('transcript_access_token', token)
+      .single();
+    if (error || !row) {
+      return res.status(404).send('Not found');
+    }
+    const transcript = row.intake_transcript || '';
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Call transcript</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; color: #1e293b; }
+    h1 { font-size: 1.25rem; margin-bottom: 16px; }
+    pre { white-space: pre-wrap; word-break: break-word; background: #f8fafc; padding: 16px; border-radius: 8px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h1>Intake call transcript</h1>
+  <pre>${escapeHtml(transcript) || 'No transcript available.'}</pre>
+</body>
+</html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[EmergencyNetwork] public/transcript error:', err?.message || err);
+    res.status(500).send('Something went wrong.');
+  }
+});
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+const WEBSITE_HERO_BUCKET = 'website-hero';
+const uploadHero = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB
+
+/**
+ * GET /api/v2/emergency-network/public/website-page/:key
+ * Public (no auth). Returns JSON content for the page (emergency-main | plumbing-main | terms-of-service).
+ */
+router.get('/public/website-page/:key', async (req, res) => {
+  const key = req.params.key && String(req.params.key).trim();
+  if (!key || !['emergency-main', 'plumbing-main', 'terms-of-service'].includes(key)) {
+    return res.status(404).json({ error: 'Not found' });
+  }
+  try {
+    const { data, error } = await supabaseClient
+      .from('website_page_content')
+      .select('content')
+      .eq('page_key', key)
+      .single();
+    if (error || !data) {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    res.json(data.content || {});
+  } catch (err) {
+    console.error('[EmergencyNetwork] public/website-page error:', err?.message || err);
+    res.status(500).json({ error: 'Failed to load page content' });
   }
 });
 
@@ -315,12 +397,109 @@ router.post('/link-agent', async (req, res) => {
 });
 
 /**
+ * GET /api/v2/emergency-network/website-pages
+ * List all website page content keys and content (for dashboard).
+ */
+router.get('/website-pages', async (req, res) => {
+  try {
+    const { data, error } = await supabaseClient
+      .from('website_page_content')
+      .select('page_key, content, updated_at')
+      .order('page_key');
+    if (error) throw error;
+    res.json({ pages: data || [] });
+  } catch (err) {
+    console.error('[EmergencyNetwork] website-pages list error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load website pages', pages: [] });
+  }
+});
+
+/**
+ * GET /api/v2/emergency-network/website-pages/:key
+ * Get one page content by key.
+ */
+router.get('/website-pages/:key', async (req, res) => {
+  const key = req.params.key && String(req.params.key).trim();
+  if (!key || !['emergency-main', 'plumbing-main', 'terms-of-service'].includes(key)) {
+    return res.status(400).json({ error: 'Invalid page key' });
+  }
+  try {
+    const { data, error } = await supabaseClient
+      .from('website_page_content')
+      .select('page_key, content, updated_at')
+      .eq('page_key', key)
+      .single();
+    if (error || !data) return res.status(404).json({ error: 'Not found' });
+    res.json(data);
+  } catch (err) {
+    console.error('[EmergencyNetwork] website-pages get error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load page' });
+  }
+});
+
+/**
+ * PUT /api/v2/emergency-network/website-pages/:key
+ * Update page content. Body: { content } (full JSON for the page).
+ */
+router.put('/website-pages/:key', express.json(), async (req, res) => {
+  const key = req.params.key && String(req.params.key).trim();
+  if (!key || !['emergency-main', 'plumbing-main', 'terms-of-service'].includes(key)) {
+    return res.status(400).json({ error: 'Invalid page key' });
+  }
+  const content = req.body?.content;
+  if (content === undefined || typeof content !== 'object') {
+    return res.status(400).json({ error: 'Body must include content (object)' });
+  }
+  try {
+    const { data, error } = await supabaseClient
+      .from('website_page_content')
+      .update({ content, updated_at: new Date().toISOString() })
+      .eq('page_key', key)
+      .select('page_key, content, updated_at')
+      .single();
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error('[EmergencyNetwork] website-pages put error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to save page' });
+  }
+});
+
+/**
+ * POST /api/v2/emergency-network/website-pages/upload-hero
+ * Upload hero image. Multipart field: file. Query: page_key (emergency-main | plumbing-main).
+ * Returns { url } (public URL to use in hero_image_url).
+ */
+router.post('/website-pages/upload-hero', uploadHero.single('file'), async (req, res) => {
+  const pageKey = req.query?.page_key && String(req.query.page_key).trim();
+  if (!pageKey || !['emergency-main', 'plumbing-main'].includes(pageKey)) {
+    return res.status(400).json({ error: 'Query page_key required: emergency-main or plumbing-main' });
+  }
+  if (!req.file || !req.file.buffer) {
+    return res.status(400).json({ error: 'No file uploaded. Use multipart field "file".' });
+  }
+  const ext = (req.file.mimetype === 'image/png' ? 'png' : req.file.mimetype === 'image/gif' ? 'gif' : req.file.mimetype === 'image/webp' ? 'webp' : 'jpg');
+  const path = `${pageKey}/${Date.now()}.${ext}`;
+  try {
+    const { error: uploadErr } = await supabaseClient.storage
+      .from(WEBSITE_HERO_BUCKET)
+      .upload(path, req.file.buffer, { contentType: req.file.mimetype, upsert: true });
+    if (uploadErr) throw uploadErr;
+    const { data: urlData } = supabaseClient.storage.from(WEBSITE_HERO_BUCKET).getPublicUrl(path);
+    res.json({ url: urlData?.publicUrl ?? '' });
+  } catch (err) {
+    console.error('[EmergencyNetwork] upload-hero error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Upload failed' });
+  }
+});
+
+/**
  * PUT /api/v2/emergency-network/config
  * Update config (emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts).
  */
 router.put('/config', express.json(), async (req, res) => {
   try {
-    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email, notification_sms_number, email_enabled, sms_enabled, escalation_email_enabled, escalation_sms_enabled, customer_sms_enabled, customer_sms_message, customer_sms_legal, terms_of_service_url, intake_fields, opening_greeting, service_line_name, custom_instructions } = req.body || {};
+    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email, notification_sms_number, email_enabled, sms_enabled, escalation_email_enabled, escalation_sms_enabled, customer_sms_enabled, customer_sms_message, customer_sms_legal, terms_of_service_url, intake_fields, opening_greeting, service_line_name, custom_instructions, customer_callback_message, billing } = req.body || {};
     const updates = {};
     if (Array.isArray(emergency_phone_numbers)) updates.emergency_phone_numbers = emergency_phone_numbers;
     if (emergency_vapi_assistant_id !== undefined) updates.emergency_vapi_assistant_id = emergency_vapi_assistant_id || null;
@@ -338,6 +517,16 @@ router.put('/config', express.json(), async (req, res) => {
     if (opening_greeting !== undefined) updates.opening_greeting = opening_greeting ? String(opening_greeting).trim() || null : null;
     if (service_line_name !== undefined) updates.service_line_name = service_line_name ? String(service_line_name).trim() || null : null;
     if (custom_instructions !== undefined) updates.custom_instructions = custom_instructions ? String(custom_instructions).trim() || null : null;
+    if (customer_callback_message !== undefined) updates.customer_callback_message = customer_callback_message ? String(customer_callback_message).trim() || null : null;
+    if (billing !== undefined && billing !== null && typeof billing === 'object') {
+      updates.billing = {
+        price_basic_cents: typeof billing.price_basic_cents === 'number' ? billing.price_basic_cents : undefined,
+        price_priority_cents: typeof billing.price_priority_cents === 'number' ? billing.price_priority_cents : undefined,
+        price_premium_cents: typeof billing.price_premium_cents === 'number' ? billing.price_premium_cents : undefined,
+        sms_fee_cents: typeof billing.sms_fee_cents === 'number' ? billing.sms_fee_cents : undefined,
+      };
+      Object.keys(updates.billing).forEach((k) => { if (updates.billing[k] === undefined) delete updates.billing[k]; });
+    }
     if (intake_fields !== undefined && Array.isArray(intake_fields)) {
       updates.intake_fields = intake_fields.map((f) => ({
         key: String(f.key || '').trim() || undefined,
@@ -359,6 +548,9 @@ router.put('/config', express.json(), async (req, res) => {
 
     const current = (row?.value || {}) instanceof Object ? row.value : {};
     const newValue = { ...current, ...updates };
+    if (updates.billing) {
+      newValue.billing = { ...(current.billing || {}), ...updates.billing };
+    }
 
     const { error: upsertErr } = await supabaseClient
       .from('emergency_network_config')

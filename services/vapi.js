@@ -39,6 +39,9 @@ export function getVapiClient() {
   return vapiClient;
 }
 
+/** Phone agent LLM model (OpenAI). Override with PHONE_AGENT_MODEL env. gpt-4.1-nano is cheaper than gpt-4o-mini (~33% lower cost). */
+export const PHONE_AGENT_MODEL = process.env.PHONE_AGENT_MODEL || 'gpt-4.1-nano';
+
 /**
  * Create a VAPI assistant for a business
  * @param {Object} businessData - Business information
@@ -90,7 +93,7 @@ export async function createAssistant(businessData) {
       name: businessData.isDemo ? truncatedBusinessName : `${truncatedBusinessName}${suffix}`,
       model: {
         provider: "openai",
-        model: "gpt-4o-mini", // Using mini for lower cost (~80% cheaper than gpt-4o)
+        model: PHONE_AGENT_MODEL,
         temperature: temperature,
         maxTokens: 500, // Increased from 150 to allow function calls (function calls require JSON output with parameters)
         messages: [
@@ -1512,10 +1515,10 @@ export async function rebuildAssistant(businessId) {
     
     const updatePayload = {
       name: `${truncatedBusinessName}${suffix}`,
-      // FORCE model to gpt-4o-mini (cheaper) - this is critical for cost reduction
+      // Use PHONE_AGENT_MODEL (default gpt-4.1-nano for lower cost)
       model: {
         provider: "openai",
-        model: "gpt-4o-mini", // Using mini for lower cost (~80% cheaper than gpt-4o)
+        model: PHONE_AGENT_MODEL,
         temperature: temperature,
         maxTokens: 150,
         messages: [{ role: "system", content: systemPrompt }],
@@ -1698,8 +1701,8 @@ export async function rebuildAssistant(businessId) {
     }, null, 2));
     
     // Check if update actually worked
-    if (updatedAssistant.model?.model !== 'gpt-4o-mini') {
-      console.warn(`[VAPI Rebuild] ⚠️ WARNING: Model is still ${updatedAssistant.model?.model}, expected gpt-4o-mini`);
+    if (updatedAssistant.model?.model !== PHONE_AGENT_MODEL) {
+      console.warn(`[VAPI Rebuild] ⚠️ WARNING: Model is still ${updatedAssistant.model?.model}, expected ${PHONE_AGENT_MODEL}`);
     }
     if (updatedAssistant.voice?.provider !== 'openai') {
       console.warn(`[VAPI Rebuild] ⚠️ WARNING: Voice provider is still ${updatedAssistant.voice?.provider}, expected openai`);

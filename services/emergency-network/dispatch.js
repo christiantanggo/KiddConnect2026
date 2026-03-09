@@ -3,11 +3,12 @@
  * Selects eligible providers, places outbound VAPI calls, and records results via webhook.
  */
 import { supabaseClient } from '../../config/database.js';
-import { getEmergencyConfig } from './config.js';
+import { getEmergencyConfig, DEFAULT_CUSTOMER_CALLBACK_MESSAGE } from './config.js';
 import {
   checkIfNumberProvisionedInVAPI,
   getVapiPhoneNumberId,
   createOutboundCall,
+  PHONE_AGENT_MODEL,
 } from '../vapi.js';
 import {
   sendEmergencyEscalationEmail,
@@ -111,7 +112,7 @@ export function buildDispatchAssistantConfig(firstMessage) {
   return {
     model: {
       provider: 'openai',
-      model: 'gpt-4o-mini',
+      model: PHONE_AGENT_MODEL,
       temperature: 0.3,
       maxTokens: 400,
       messages: [
@@ -193,6 +194,101 @@ If they are silent for 4–5 seconds, say once: "Just say Accept, Decline, or Re
     },
     voicemailMessage: 'This is the emergency dispatch line. You have a new service request. Please call back or check your messages for details.',
   };
+}
+
+/**
+ * Substitute placeholders in the customer callback message template.
+ * Placeholders: {{caller_name}}, {{service_line_name}}, {{business_name}}, {{provider_phone}}
+ */
+function substituteCallbackPlaceholders(template, vars) {
+  if (!template || typeof template !== 'string') return '';
+  return template
+    .replace(/\{\{caller_name\}\}/g, String(vars.caller_name ?? '').trim() || '')
+    .replace(/\{\{service_line_name\}\}/g, String(vars.service_line_name ?? '').trim() || 'the emergency plumbing line')
+    .replace(/\{\{business_name\}\}/g, String(vars.business_name ?? '').trim() || 'your assigned plumber')
+    .replace(/\{\{provider_phone\}\}/g, String(vars.provider_phone ?? '').trim() || '');
+}
+
+/**
+ * Build the transient assistant config for outbound callback to the customer after a provider accepts.
+ * @param {string} message - Full message to speak (placeholders already substituted by caller).
+ */
+export function buildCustomerCallbackAssistantConfig(message) {
+  const finalMessage = (message && String(message).trim()) || "We've assigned a plumber to your request. Goodbye.";
+  return {
+    model: {
+      provider: 'openai',
+      model: PHONE_AGENT_MODEL,
+      temperature: 0.2,
+      maxTokens: 100,
+      messages: [
+        {
+          role: 'system',
+          content: 'You are an automated callback. Say exactly the first message you were given. Do not ask questions or wait for a response. After saying it, say "Goodbye." and the call is over.',
+        },
+      ],
+    },
+    voice: { provider: 'openai', voiceId: 'alloy' },
+    firstMessage: finalMessage,
+    firstMessageMode: 'assistant-speaks-first',
+    transcriber: {
+      provider: 'deepgram',
+      model: 'nova-2',
+      language: 'en-US',
+      smartFormat: true,
+      endpointing: 500,
+    },
+  };
+}
+
+/**
+ * Place an outbound call to the customer to tell them the assigned company name and provider phone.
+ * Called after a provider accepts the job. Does not throw; logs errors so accept flow still succeeds.
+ * @param {Object} request - emergency_service_requests row (callback_phone, caller_name)
+ * @param {Object} provider - emergency_providers row (business_name, phone)
+ */
+export async function placeCustomerCallbackCall(request, provider) {
+  const callbackPhone = normalizeE164(request.callback_phone);
+  if (!callbackPhone) {
+    console.warn('[EmergencyDispatch] placeCustomerCallbackCall: no callback_phone for request', request.id);
+    return;
+  }
+  const providerPhone = normalizeE164(provider.phone);
+  if (!providerPhone) {
+    console.warn('[EmergencyDispatch] placeCustomerCallbackCall: provider has no phone', provider.id);
+    return;
+  }
+  const phoneNumberId = await getEmergencyOutboundPhoneNumberId();
+  if (!phoneNumberId) {
+    console.warn('[EmergencyDispatch] placeCustomerCallbackCall: no emergency outbound number in VAPI');
+    return;
+  }
+  const config = await getEmergencyConfig();
+  const serviceLineName = (config.service_line_name && String(config.service_line_name).trim()) || 'the emergency plumbing line';
+  const template = (config.customer_callback_message && String(config.customer_callback_message).trim()) || DEFAULT_CUSTOMER_CALLBACK_MESSAGE;
+  const message = substituteCallbackPlaceholders(template, {
+    caller_name: request.caller_name ?? '',
+    service_line_name: serviceLineName,
+    business_name: provider.business_name ?? 'your assigned plumber',
+    provider_phone: providerPhone,
+  });
+  const assistant = buildCustomerCallbackAssistantConfig(message);
+  try {
+    const call = await createOutboundCall({
+      assistant,
+      phoneNumberId,
+      toNumber: callbackPhone,
+      metadata: {
+        type: 'emergency_customer_callback',
+        request_id: request.id,
+        provider_id: provider.id,
+      },
+    });
+    console.log('[EmergencyDispatch] Customer callback placed:', { requestId: request.id, callId: call?.id });
+  } catch (err) {
+    const detail = err?.response?.data != null ? JSON.stringify(err.response.data) : err?.message;
+    console.error('[EmergencyDispatch] placeCustomerCallbackCall failed:', err?.message || err, detail || '');
+  }
 }
 
 /**

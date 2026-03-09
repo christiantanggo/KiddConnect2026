@@ -1329,6 +1329,7 @@ async function handleCallEnd(event) {
 
     try {
       const { createServiceRequest } = await import("../services/emergency-network/intake.js");
+      const fullTranscript = [transcript, summary].filter(Boolean).join("\n\n").trim() || null;
       const payload = {
         caller_name: extracted.caller_name || null,
         callback_phone: extracted.callback_phone,
@@ -1337,6 +1338,7 @@ async function handleCallEnd(event) {
         location: extracted.location || null,
         issue_summary: extracted.issue_summary || (summary || transcript).slice(0, 2000) || null,
         intake_channel: "phone",
+        intake_transcript: fullTranscript || undefined,
       };
       const request = await createServiceRequest(payload);
       const config = await getEmergencyConfig();
@@ -2165,6 +2167,36 @@ async function handleDispatchProviderResponse(functionName, event) {
     const { logRequestActivity } = await import("../services/emergency-network/activity.js");
     await logRequestActivity(row.service_request_id, 'status_change', { from_status: 'Contacting Providers', to_status: 'Accepted', source: 'ai' });
     console.log('[VAPI Webhook] Emergency dispatch: provider accepted', row.service_request_id, row.provider_id);
+    // Create billing charge for this accepted lead (tier + SMS fee added later if they request SMS)
+    try {
+      const { data: prov } = await supabaseClient.from('emergency_providers').select('priority_tier').eq('id', row.provider_id).single();
+      const { createChargeOnAccept } = await import("../services/emergency-network/billing.js");
+      await createChargeOnAccept({
+        provider_id: row.provider_id,
+        service_request_id: row.service_request_id,
+        dispatch_log_id: row.dispatch_log_id,
+        priority_tier: prov?.priority_tier || 'basic',
+      });
+    } catch (billingErr) {
+      console.error('[VAPI Webhook] Billing charge create failed (non-blocking):', billingErr?.message || billingErr);
+    }
+    // Call the customer back to tell them the assigned company name and provider phone
+    const { data: requestRow } = await supabaseClient
+      .from('emergency_service_requests')
+      .select('id, callback_phone, caller_name')
+      .eq('id', row.service_request_id)
+      .single();
+    const { data: providerRow } = await supabaseClient
+      .from('emergency_providers')
+      .select('id, business_name, phone')
+      .eq('id', row.provider_id)
+      .single();
+    if (requestRow && providerRow) {
+      const { placeCustomerCallbackCall } = await import("../services/emergency-network/dispatch.js");
+      placeCustomerCallbackCall(requestRow, providerRow).catch((err) => {
+        console.error('[VAPI Webhook] Customer callback failed:', err?.message || err);
+      });
+    }
     return "Job accepted. Would you like the details emailed, sent by SMS, or repeat?";
   } else {
     const { callNextProvider } = await import("../services/emergency-network/dispatch.js");
@@ -2220,8 +2252,16 @@ async function handleDispatchEmailDetails(event) {
     return { result: "There is no email on file for your business. Add your email in the provider directory, or say SMS to get the details by text." };
   }
   try {
+    const baseUrl = (() => {
+      let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.tavarios.com';
+      if (u && !u.startsWith('http')) u = `https://${u}`;
+      return u;
+    })();
+    const transcriptViewUrl = request.transcript_access_token
+      ? `${baseUrl}/api/v2/emergency-network/public/transcript/${request.transcript_access_token}`
+      : null;
     const { sendEmergencyIntakeEmail } = await import("../services/notifications.js");
-    await sendEmergencyIntakeEmail(email, request);
+    await sendEmergencyIntakeEmail(email, request, { transcriptViewUrl });
     console.log('[VAPI Webhook] Emergency dispatch: emailed details to provider', provider.id);
     if (dispatch_log_id) {
       const { supabaseClient } = await import("../config/database.js");
@@ -2264,6 +2304,14 @@ async function handleDispatchSmsDetails(event) {
   }
   const fromE164 = fromDigits.length === 10 ? `+1${fromDigits}` : fromDigits.length === 11 && fromDigits.startsWith('1') ? `+${fromDigits}` : `+${fromDigits}`;
   const toE164 = toNumber.length === 10 ? `+1${toNumber}` : toNumber.startsWith('+') ? toNumber : `+${toNumber}`;
+  const baseUrl = (() => {
+    let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.tavarios.com';
+    if (u && !u.startsWith('http')) u = `https://${u}`;
+    return u;
+  })();
+  const transcriptLink = request.transcript_access_token
+    ? `${baseUrl}/api/v2/emergency-network/public/transcript/${request.transcript_access_token}`
+    : '';
   const lines = [
     'Emergency service request:',
     request.caller_name ? `Caller: ${request.caller_name}` : '',
@@ -2271,6 +2319,7 @@ async function handleDispatchSmsDetails(event) {
     request.urgency_level ? `Urgency: ${request.urgency_level}` : '',
     request.location ? `Location: ${request.location}` : '',
     request.issue_summary ? `Issue: ${(request.issue_summary || '').slice(0, 120)}` : '',
+    transcriptLink ? `Transcript: ${transcriptLink}` : '',
   ].filter(Boolean);
   const messageText = lines.join('\n');
   try {
@@ -2283,6 +2332,12 @@ async function handleDispatchSmsDetails(event) {
         .from('emergency_dispatch_log')
         .update({ sms_sent_at: new Date().toISOString() })
         .eq('id', dispatch_log_id);
+      try {
+        const { updateChargeWhenSmsSent } = await import("../services/emergency-network/billing.js");
+        await updateChargeWhenSmsSent(dispatch_log_id);
+      } catch (billingErr) {
+        console.error('[VAPI Webhook] Billing SMS fee update failed (non-blocking):', billingErr?.message || billingErr);
+      }
     }
     return { result: "I've texted the details to you. Data rates may apply." };
   } catch (err) {
@@ -3290,67 +3345,84 @@ function extractEmergencyFromTranscript(transcript, summary, callerNumberFromCal
   // Urgency
   if (/immediate|emergency|urgent|as\s*ap|right\s*away/i.test(lower)) result.urgency_level = "Immediate Emergency";
   else if (/same\s*day|today|this\s*afternoon|this\s*evening/i.test(lower)) result.urgency_level = "Same Day";
-  // Name: prefer User lines so we get the caller's name, not the assistant's
+  // Name: prefer summary phrasing ("X contacted...") then user lines with "my name is X", avoid verb phrases like "having a"
   const nameBlocklist = new Set([
     "the", "a", "an", "it", "this", "that", "dispatch", "emergency", "line", "service",
     "assistant", "plumber", "customer", "caller", "yes", "no", "not", "someone", "anyone",
     "please", "thanks", "thank", "help", "hi", "hello", "okay", "ok", "um", "uh",
+    "having", "getting", "calling", "needing", "needed", "reporting", "looking", "wanting",
+    "needing", "calling", "trying", "saying", "asking", "telling", "knowing", "thinking",
   ]);
   const isValidName = (s) => {
     if (!s || typeof s !== "string") return false;
     const t = s.trim();
     if (t.length < 2 || t.length > 50) return false;
-    const firstWord = t.split(/\s+/)[0].toLowerCase();
-    if (nameBlocklist.has(firstWord)) return false;
+    const words = t.split(/\s+/).map((w) => w.toLowerCase());
+    if (words.some((w) => nameBlocklist.has(w))) return false;
     if (nameBlocklist.has(t.toLowerCase())) return false;
     return /^[A-Za-z]+(?:\s+[A-Za-z]+)*$/.test(t);
   };
-  const namePatternStrs = [
-    "(?:my\\s+name\\s+is|this\\s+is|i'm|i\\s+am|call\\s+me)\\s+([A-Za-z]+(?:\\s+[A-Za-z]+)?)(?:\\s|$|,|\\.)",
-    "(?:name|call\\s+me)\\s+([A-Za-z]+(?:\\s+[A-Za-z]+)?)(?:\\s|$|,|\\.)",
-  ];
-  const lines = (transcript || "").split("\n");
-  const userLines = lines.filter((line) => /^\s*user\s*:/i.test(line));
-  let nameCandidates = [];
-  for (const userLine of userLines) {
-    const userText = userLine.replace(/^\s*user\s*:\s*/i, "").trim();
-    for (const pat of namePatternStrs) {
-      const re = new RegExp(pat, "gi");
-      let match;
-      while ((match = re.exec(userText)) !== null) {
-        const candidate = match[1].trim();
-        if (isValidName(candidate)) nameCandidates.push(candidate);
-      }
+  // 1) Prefer name from summary when it says "X contacted/reported/called..." (VAPI often phrases it this way)
+  if (summary) {
+    const summaryNameMatch = summary.match(/^([A-Za-z]+)\s+(?:contacted|reported|called|reached|provided)/i);
+    if (summaryNameMatch && isValidName(summaryNameMatch[1])) {
+      result.caller_name = summaryNameMatch[1].trim();
     }
   }
-  if (nameCandidates.length > 0) {
-    result.caller_name = nameCandidates[nameCandidates.length - 1];
-  } else if (summary) {
-    for (const pat of namePatternStrs) {
-      const re = new RegExp(pat, "gi");
-      let match;
-      while ((match = re.exec(summary)) !== null) {
-        const candidate = match[1].trim();
-        if (isValidName(candidate)) {
-          result.caller_name = candidate;
-          break;
-        }
+  const namePatternStrs = [
+    "(?:my\\s+name\\s+is|this\\s+is|call\\s+me)\\s+([A-Za-z]+(?:\\s+[A-Za-z]+)?)(?:\\s|$|,|\\.)",
+    "(?:i'm|i\\s+am)\\s+([A-Za-z]+)(?:\\s|$|,|\\.)",
+    "(?:name|call\\s+me)\\s+([A-Za-z]+(?:\\s+[A-Za-z]+)?)(?:\\s|$|,|\\.)",
+  ];
+  if (!result.caller_name) {
+    const lines = (transcript || "").split("\n");
+    const userLines = lines.filter((line) => /^\s*user\s*:/i.test(line));
+    const nameCandidates = [];
+    for (const userLine of userLines) {
+      const userText = userLine.replace(/^\s*user\s*:\s*/i, "").trim();
+      for (const pat of namePatternStrs) {
+        try {
+          const re = new RegExp(pat, "gi");
+          let match;
+          while ((match = re.exec(userText)) !== null) {
+            const candidate = match[1].trim();
+            if (isValidName(candidate)) nameCandidates.push(candidate);
+          }
+        } catch (_) {}
       }
-      if (result.caller_name) break;
+    }
+    if (nameCandidates.length > 0) result.caller_name = nameCandidates[nameCandidates.length - 1];
+  }
+  if (!result.caller_name && summary) {
+    for (const pat of namePatternStrs) {
+      try {
+        const re = new RegExp(pat, "gi");
+        let match;
+        while ((match = re.exec(summary)) !== null) {
+          const candidate = match[1].trim();
+          if (isValidName(candidate)) {
+            result.caller_name = candidate;
+            break;
+          }
+        }
+        if (result.caller_name) break;
+      } catch (_) {}
     }
   }
   if (!result.caller_name) {
     for (const pat of namePatternStrs) {
-      const re = new RegExp(pat, "gi");
-      let match;
-      while ((match = re.exec(text)) !== null) {
-        const candidate = match[1].trim();
-        if (isValidName(candidate)) {
-          result.caller_name = candidate;
-          break;
+      try {
+        const re = new RegExp(pat, "gi");
+        let match;
+        while ((match = re.exec(text)) !== null) {
+          const candidate = match[1].trim();
+          if (isValidName(candidate)) {
+            result.caller_name = candidate;
+            break;
+          }
         }
-      }
-      if (result.caller_name) break;
+        if (result.caller_name) break;
+      } catch (_) {}
     }
   }
   // Phone from text if not from call (e.g. callback number given)
