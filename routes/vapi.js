@@ -891,6 +891,14 @@ async function handleCallStart(event) {
       console.log(`[VAPI Webhook] 🎧 Demo assistant call-start - skipping CallSession creation (will handle in call-end)`);
       return; // Demo calls don't need CallSession tracking
     }
+
+    // Emergency Network: assistant is not in businesses table; skip business lookup (handled in end-of-call)
+    const { getEmergencyAssistantId } = await import("../services/emergency-network/config.js");
+    const emergencyAssistantId = await getEmergencyAssistantId();
+    if (assistantId && emergencyAssistantId && assistantId === emergencyAssistantId) {
+      console.log(`[VAPI Webhook] Emergency Network call-start - skipping CallSession (no business row; will process in end-of-call-report)`);
+      return;
+    }
     
     // Find business by assistant ID
     console.log(`[VAPI Webhook] Looking up business for assistant: ${assistantId}`);
@@ -1161,6 +1169,12 @@ async function handleCallEnd(event) {
     duration = Math.floor((typeof event.message.artifact.durationMs === 'number' 
       ? event.message.artifact.durationMs 
       : parseInt(event.message.artifact.durationMs) || 0) / 1000);
+  } else if (event.message?.call?.durationSeconds !== undefined && event.message?.call?.durationSeconds !== null) {
+    duration = typeof event.message.call.durationSeconds === 'number' ? event.message.call.durationSeconds : parseInt(event.message.call.durationSeconds) || 0;
+  } else if (event.message?.call?.duration !== undefined && event.message?.call?.duration !== null) {
+    duration = typeof event.message.call.duration === 'number' ? event.message.call.duration : parseInt(event.message.call.duration) || 0;
+  } else if (event.message?.durationSeconds !== undefined && event.message?.durationSeconds !== null) {
+    duration = typeof event.message.durationSeconds === 'number' ? event.message.durationSeconds : parseInt(event.message.durationSeconds) || 0;
   }
   
   console.log(`[VAPI Webhook] Extracted duration: ${duration} seconds`);
@@ -1274,25 +1288,38 @@ async function handleCallEnd(event) {
       extracted.callback_phone = callerNumberFromCall || "Unknown";
     }
 
-    // Guard: only create request and dispatch if call was long enough and we have meaningful intake (prevents calling plumbers when caller hung up before giving info)
+    // Guard: only create request and dispatch if we have meaningful intake (prevents calling plumbers when caller hung up before giving info).
+    // When the AI clearly collected details (strong intake: issue_summary present), we allow even if webhook duration is 0 (VAPI sometimes omits it).
     const MIN_DURATION_SECONDS = 30;
     const MIN_INTAKE_LENGTH = 80;
+    const MIN_ISSUE_SUMMARY_LENGTH = 20; // strong signal that AI collected real info
     let emergencyDuration = duration;
     if (emergencyDuration === 0 && callId) {
       try {
         const { getCallData } = await import("../services/vapi.js");
         const callData = await getCallData(callId);
         emergencyDuration = callData?.durationSeconds ?? callData?.duration ?? 0;
+        // VAPI GET /call does not return duration; compute from startedAt/endedAt (e.g. 2 min call)
+        if (emergencyDuration === 0 && callData?.startedAt && callData?.endedAt) {
+          const start = new Date(callData.startedAt).getTime();
+          const end = new Date(callData.endedAt).getTime();
+          if (!isNaN(start) && !isNaN(end) && end > start) {
+            emergencyDuration = Math.floor((end - start) / 1000);
+            console.log(`[VAPI Webhook] Emergency: duration from API timestamps: ${emergencyDuration}s`);
+          }
+        }
       } catch (_) {}
     }
     const hasMeaningfulIntake = (extracted.issue_summary && String(extracted.issue_summary).trim().length > 0) ||
       (String(transcript || "").length + String(summary || "").length >= MIN_INTAKE_LENGTH);
-    if (emergencyDuration < MIN_DURATION_SECONDS) {
-      console.log(`[VAPI Webhook] Emergency: skipping request — call too short (${emergencyDuration}s < ${MIN_DURATION_SECONDS}s)`);
-      return;
-    }
+    const hasStrongIntake = extracted.issue_summary && String(extracted.issue_summary).trim().length >= MIN_ISSUE_SUMMARY_LENGTH;
     if (!hasMeaningfulIntake) {
       console.log(`[VAPI Webhook] Emergency: skipping request — no meaningful intake (no issue summary and transcript/summary < ${MIN_INTAKE_LENGTH} chars)`);
+      return;
+    }
+    // Only enforce minimum duration when we don't have strong intake (avoids skipping real calls when VAPI sends duration 0)
+    if (emergencyDuration < MIN_DURATION_SECONDS && !hasStrongIntake) {
+      console.log(`[VAPI Webhook] Emergency: skipping request — call too short (${emergencyDuration}s < ${MIN_DURATION_SECONDS}s) and no strong issue summary`);
       return;
     }
 
