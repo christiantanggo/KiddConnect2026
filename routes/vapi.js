@@ -718,7 +718,7 @@ router.post("/webhook", async (req, res) => {
   // VAPI may send either event type; tool-calls uses message.toolCallList and requires { results: [{ toolCallId, result }] }.
   if (eventType === 'function-call' || eventType === 'tool-calls') {
     try {
-      const result = await handleFunctionCall(req.body.message || req.body);
+      const result = await handleFunctionCall(req.body);
       return res.status(200).json(result != null && typeof result === 'object' ? result : { received: true });
     } catch (e) {
       console.error('[VAPI Webhook] function/tool-call error', e);
@@ -809,7 +809,7 @@ router.post("/webhook", async (req, res) => {
         case "function-call":
         case "tool-calls":
           console.log(`[VAPI Webhook ${webhookId}] ⚙️ Processing ${eventTypeFromEvent} event`);
-          await handleFunctionCall(event.message || event);
+          await handleFunctionCall(event);
           break;
         case "hang":
           console.log(`[VAPI Webhook ${webhookId}] 📞 Processing hang event (call ended)`);
@@ -2035,7 +2035,8 @@ function getToolCallIdFromEvent(event) {
     const id = list[0].id || list[0].toolCallId || list[0].tool_call_id;
     if (id) return id;
   }
-  const withList = msg.toolWithToolCallList || msg.tool_with_tool_call_list;
+  const withList = msg.toolWithToolCallList || msg.tool_with_tool_call_list
+    || msg.artifact?.toolWithToolCallList || msg.artifact?.tool_with_tool_call_list;
   if (Array.isArray(withList) && withList[0]?.toolCall?.id) return withList[0].toolCall.id;
   const fc = event.functionCall || msg.functionCall || msg.function_call;
   if (fc?.id) return fc.id;
@@ -2044,17 +2045,19 @@ function getToolCallIdFromEvent(event) {
 
 async function handleFunctionCall(event) {
   console.log(`[VAPI Webhook] ⚙️ Processing function-call event`);
-  console.log(`[VAPI Webhook] Function call event:`, JSON.stringify(event, null, 2));
   const toolCallId = getToolCallIdFromEvent(event);
 
   try {
     // Extract function call data from event
-    // VAPI sends function calls in different formats (function-call vs tool-calls with toolCalls/toolCallList)
-    const rawList = event.message?.toolCalls || event.message?.tool_calls
-      || event.message?.toolCallList || event.message?.tool_call_list;
-    const firstTool = Array.isArray(rawList) && rawList[0] ? rawList[0] : null;
-    const functionCall = event.functionCall || event.message?.functionCall || event.message?.function_call
-      || firstTool || event.message?.toolWithToolCallList?.[0]?.toolCall || event;
+    // VAPI sends function calls in different formats (function-call vs tool-calls with toolCalls/toolCallList or message.artifact.toolWithToolCallList)
+    const msg = event.message || event;
+    const rawList = msg.toolCalls || msg.tool_calls || msg.toolCallList || msg.tool_call_list;
+    const artifactList = msg.artifact?.toolWithToolCallList || msg.artifact?.tool_with_tool_call_list;
+    const firstFromList = Array.isArray(rawList) && rawList[0] ? rawList[0] : null;
+    const firstFromArtifact = Array.isArray(artifactList) && artifactList[0]?.toolCall ? artifactList[0].toolCall : null;
+    const firstTool = firstFromList || firstFromArtifact;
+    const functionCall = event.functionCall || msg.functionCall || msg.function_call
+      || firstTool || msg.toolWithToolCallList?.[0]?.toolCall || msg.artifact?.toolWithToolCallList?.[0]?.toolCall || event;
     // Name can be at top level or under .function (OpenAI-style tool_calls)
     const functionName = functionCall?.name || functionCall?.functionName || functionCall?.function_name
       || functionCall?.function?.name || (firstTool?.function && (firstTool.function.name || firstTool.function.functionName))
@@ -2128,8 +2131,8 @@ async function handleFunctionCall(event) {
  * Returns a short phrase for the assistant to speak so VAPI can continue the conversation (STEP 2 or goodbye).
  */
 async function handleDispatchProviderResponse(functionName, event) {
-  const call = event.call || event.message?.call || event.message?.artifact?.call || {};
-  const callId = call.id || call.callId;
+  const call = event.call || event.message?.call || event.message?.artifact?.call || event.artifact?.call || {};
+  const callId = call.id || call.callId || event.artifact?.call?.id;
   if (!callId) {
     console.warn('[VAPI Webhook] dispatch response: no callId');
     return "I couldn't find this call. Say Accept to take the job or Decline to pass.";
@@ -2203,8 +2206,8 @@ async function getDispatchCallContext(callId) {
  * Returns { result: string } for the assistant to speak (e.g. "no email on file").
  */
 async function handleDispatchEmailDetails(event) {
-  const call = event.call || event.message?.call || event.message?.artifact?.call || {};
-  const callId = call.id || call.callId;
+  const call = event.call || event.message?.call || event.message?.artifact?.call || event.artifact?.call || {};
+  const callId = call.id || call.callId || event.artifact?.call?.id;
   const ctx = await getDispatchCallContext(callId);
   if (!ctx) {
     console.warn('[VAPI Webhook] dispatch_email_details: no dispatch context for call', callId);
@@ -2239,8 +2242,8 @@ async function handleDispatchEmailDetails(event) {
  * Returns { result: string } for the assistant to speak.
  */
 async function handleDispatchSmsDetails(event) {
-  const call = event.call || event.message?.call || event.message?.artifact?.call || {};
-  const callId = call.id || call.callId;
+  const call = event.call || event.message?.call || event.message?.artifact?.call || event.artifact?.call || {};
+  const callId = call.id || call.callId || event.artifact?.call?.id;
   const ctx = await getDispatchCallContext(callId);
   if (!ctx) {
     console.warn('[VAPI Webhook] dispatch_sms_details: no dispatch context for call', callId);
