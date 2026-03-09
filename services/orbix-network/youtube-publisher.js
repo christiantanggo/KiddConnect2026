@@ -158,8 +158,8 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
     let raw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
     let redirectUri = raw.startsWith('http') ? raw : (raw ? `https://${raw}` : (usePerChannel ? DEFAULT_REDIRECT_URI : ''));
     if (usePerChannel && orbixChannelId) {
-      const { data: tqSource } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1).maybeSingle();
-      if (tqSource) {
+      const { data: tqRows } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1);
+      if (Array.isArray(tqRows) && tqRows.length > 0) {
         const { getTrickQuestionYoutubeRedirectUri } = await import('../../routes/v2/trickquestion-youtube-callback.js');
         redirectUri = getTrickQuestionYoutubeRedirectUri();
       } else {

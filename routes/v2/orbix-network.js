@@ -2661,19 +2661,20 @@ router.get('/youtube/auth-url', async (req, res) => {
       });
     }
 
-    // Per-channel OAuth (custom client_id) uses channel-specific callback: riddle vs trickquestion (so each channel can have its own Google OAuth app).
+    // Per-channel OAuth: use trickquestion callback if this channel has a TQ source and custom OAuth; else riddle for other custom OAuth; else global env.
     const hasCustomClient = orbixChannelId && (usage === 'manual' ? channelEntry?.manual_client_id : channelEntry?.client_id);
     let redirectUri;
-    if (hasCustomClient) {
-      const { data: tqSource } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1).maybeSingle();
-      const useTrickQuestionCallback = !!tqSource;
-      if (useTrickQuestionCallback) {
-        const { getTrickQuestionYoutubeRedirectUri } = await import('./trickquestion-youtube-callback.js');
-        redirectUri = getTrickQuestionYoutubeRedirectUri();
-      } else {
-        const { getRiddleYoutubeRedirectUri } = await import('./riddle-youtube-callback.js');
-        redirectUri = getRiddleYoutubeRedirectUri();
-      }
+    const { data: tqRows, error: tqErr } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1);
+    const useTrickQuestionCallback = hasCustomClient && Array.isArray(tqRows) && tqRows.length > 0;
+    if (orbixChannelId && (tqErr || !Array.isArray(tqRows))) {
+      console.log('[Orbix auth-url] TQ source check orbixChannelId=', orbixChannelId, 'tqRows=', tqRows?.length ?? 0, 'error=', tqErr?.message || null);
+    }
+    if (useTrickQuestionCallback) {
+      const { getTrickQuestionYoutubeRedirectUri } = await import('./trickquestion-youtube-callback.js');
+      redirectUri = getTrickQuestionYoutubeRedirectUri();
+    } else if (hasCustomClient) {
+      const { getRiddleYoutubeRedirectUri } = await import('./riddle-youtube-callback.js');
+      redirectUri = getRiddleYoutubeRedirectUri();
     } else {
       const redirectUriRaw = process.env.YOUTUBE_REDIRECT_URI || '';
       redirectUri = redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`;
@@ -2855,9 +2856,12 @@ router.get('/youtube/diagnostic', async (req, res) => {
     result.redirect_uri_configured = !!rawRedirect;
     if (rawRedirect) {
       result.redirect_uri_value = rawRedirect.startsWith('http') ? rawRedirect : `https://${rawRedirect}`;
-      if (channelEntry?.client_id) {
-        const { data: tqSource } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1).maybeSingle();
-        const callbackPath = tqSource ? '/api/v2/trickquestion/youtube/callback' : '/api/v2/riddle/youtube/callback';
+      // Show channel-specific callback: trickquestion if this channel has a TQ source, else riddle (for custom OAuth channels).
+      const { data: tqRows } = await supabaseClient.from('orbix_sources').select('id').eq('channel_id', orbixChannelId).eq('type', 'TRICK_QUESTION_GENERATOR').limit(1);
+      const useTrickQuestion = Array.isArray(tqRows) && tqRows.length > 0;
+      const useCustomCallback = channelEntry?.client_id || useTrickQuestion;
+      if (useCustomCallback) {
+        const callbackPath = useTrickQuestion ? '/api/v2/trickquestion/youtube/callback' : '/api/v2/riddle/youtube/callback';
         result.redirect_uri_value = result.redirect_uri_value.replace(/\/api\/v2\/.*$/, '') + callbackPath;
       }
     }
