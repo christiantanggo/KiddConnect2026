@@ -73,12 +73,18 @@ export default function MovieReviewUploadPage() {
   const [savingMeta, setSavingMeta] = useState(false);
   const [polishing, setPolishing] = useState(false);
   const [polishMsg, setPolishMsg] = useState(null);
+  const [uploadProgress, setUploadProgress] = useState(0); // 0–95 while uploading
+  const [uploadStep, setUploadStep] = useState(0);         // 0=Preparing, 1=Uploading, 2=Processing
   const pollRef = useRef(null);
+  const progressRef = useRef(null);
 
   useEffect(() => {
     loadProject();
     loadYtStatus();
-    return () => clearInterval(pollRef.current);
+    return () => {
+      clearInterval(pollRef.current);
+      if (progressRef.current) clearInterval(progressRef.current);
+    };
   }, [projectId]);
 
   async function loadProject() {
@@ -103,14 +109,49 @@ export default function MovieReviewUploadPage() {
     } catch (_) {}
   }
 
+  const UPLOAD_STEPS = ['Preparing…', 'Uploading to YouTube…', 'Processing…'];
+
+  function startProgressAnimation() {
+    setUploadProgress(0);
+    setUploadStep(0);
+    if (progressRef.current) clearInterval(progressRef.current);
+    let step = 0;
+    let percent = 0;
+    progressRef.current = setInterval(() => {
+      step = Math.min(2, step + 1);
+      percent = Math.min(95, percent + 25);
+      setUploadStep(step);
+      setUploadProgress(percent);
+      if (percent >= 95 && progressRef.current) {
+        clearInterval(progressRef.current);
+        progressRef.current = null;
+      }
+    }, 12000);
+  }
+
+  function stopProgressAnimation() {
+    if (progressRef.current) {
+      clearInterval(progressRef.current);
+      progressRef.current = null;
+    }
+  }
+
   function startPolling() {
     clearInterval(pollRef.current);
+    startProgressAnimation();
     pollRef.current = setInterval(async () => {
       try {
         const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}`, { headers: apiHeaders() });
         const data = await res.json();
-        setProject(data.project);
-        if (data.project.status !== 'UPLOADING') clearInterval(pollRef.current);
+        const proj = data.project;
+        setProject(proj);
+        if (proj.status !== 'UPLOADING') {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+          stopProgressAnimation();
+          if (proj.status === 'PUBLISHED') setUploadProgress(100);
+          if (proj.status === 'FAILED') setUploading(false);
+        }
       } catch (_) {}
     }, 3000);
   }
@@ -183,9 +224,11 @@ export default function MovieReviewUploadPage() {
 
   const isPublished = project?.status === 'PUBLISHED';
   const isUploading = project?.status === 'UPLOADING';
+  const isFailed = project?.status === 'FAILED';
   const youtubeUrl = project?.youtube_video_id
     ? `https://www.youtube.com/shorts/${project.youtube_video_id}`
     : null;
+  const uploadErrorMessage = project?.upload_error || 'Upload failed. Please try again.';
 
   if (loading) {
     return <AuthGuard><V2AppShell><div className="flex items-center justify-center py-20"><Loader2 className="w-8 h-8 animate-spin" style={{ color: '#9333ea' }} /></div></V2AppShell></AuthGuard>;
@@ -236,8 +279,25 @@ export default function MovieReviewUploadPage() {
           ) : isUploading ? (
             <div className="rounded-2xl p-6 text-center" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
               <Loader2 className="w-12 h-12 mx-auto mb-3 animate-spin" style={{ color: '#9333ea' }} />
-              <h2 className="text-lg font-bold" style={{ color: 'var(--color-text-main)' }}>Uploading to YouTube…</h2>
-              <p className="text-sm mt-2" style={{ color: 'var(--color-text-muted)' }}>This may take a minute</p>
+              <h2 className="text-lg font-bold" style={{ color: 'var(--color-text-main)' }}>{UPLOAD_STEPS[uploadStep]}</h2>
+              <p className="text-sm mt-2 mb-4" style={{ color: 'var(--color-text-muted)' }}>{uploadProgress}%</p>
+              <div className="w-full rounded-full h-2 overflow-hidden" style={{ background: 'var(--color-border)' }}>
+                <div
+                  className="h-full rounded-full transition-all duration-500"
+                  style={{ width: `${uploadProgress}%`, background: 'linear-gradient(135deg,#e11d48,#9333ea)' }}
+                />
+              </div>
+            </div>
+          ) : isFailed ? (
+            <div className="rounded-2xl p-6 text-center" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <XCircle className="w-14 h-14 mx-auto mb-3" style={{ color: '#dc2626' }} />
+              <h2 className="text-lg font-bold mb-2" style={{ color: 'var(--color-text-main)' }}>Upload failed</h2>
+              <p className="text-sm mb-4 px-2" style={{ color: 'var(--color-text-muted)' }}>{uploadErrorMessage}</p>
+              <button onClick={uploadToYouTube}
+                className="inline-flex items-center gap-2 px-5 py-3 rounded-xl font-bold text-white"
+                style={{ background: 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+                <Upload className="w-4 h-4" /> Try again
+              </button>
             </div>
           ) : (
             <div className="space-y-4">

@@ -1392,7 +1392,7 @@ router.post('/projects/:id/upload', async (req, res) => {
 
     await supabaseClient
       .from('movie_review_projects')
-      .update({ status: 'UPLOADING', updated_at: new Date().toISOString() })
+      .update({ status: 'UPLOADING', upload_error: null, updated_at: new Date().toISOString() })
       .eq('id', project.id);
 
     import('../../services/movie-review/publisher.js').then(({ publishMovieReview }) => {
