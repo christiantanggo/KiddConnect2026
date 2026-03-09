@@ -1273,6 +1273,29 @@ async function handleCallEnd(event) {
       console.warn("[VAPI Webhook] Emergency: no callback phone (inbound or extracted), using placeholder");
       extracted.callback_phone = callerNumberFromCall || "Unknown";
     }
+
+    // Guard: only create request and dispatch if call was long enough and we have meaningful intake (prevents calling plumbers when caller hung up before giving info)
+    const MIN_DURATION_SECONDS = 30;
+    const MIN_INTAKE_LENGTH = 80;
+    let emergencyDuration = duration;
+    if (emergencyDuration === 0 && callId) {
+      try {
+        const { getCallData } = await import("../services/vapi.js");
+        const callData = await getCallData(callId);
+        emergencyDuration = callData?.durationSeconds ?? callData?.duration ?? 0;
+      } catch (_) {}
+    }
+    const hasMeaningfulIntake = (extracted.issue_summary && String(extracted.issue_summary).trim().length > 0) ||
+      (String(transcript || "").length + String(summary || "").length >= MIN_INTAKE_LENGTH);
+    if (emergencyDuration < MIN_DURATION_SECONDS) {
+      console.log(`[VAPI Webhook] Emergency: skipping request — call too short (${emergencyDuration}s < ${MIN_DURATION_SECONDS}s)`);
+      return;
+    }
+    if (!hasMeaningfulIntake) {
+      console.log(`[VAPI Webhook] Emergency: skipping request — no meaningful intake (no issue summary and transcript/summary < ${MIN_INTAKE_LENGTH} chars)`);
+      return;
+    }
+
     try {
       const { createServiceRequest } = await import("../services/emergency-network/intake.js");
       const payload = {
