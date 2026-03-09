@@ -58,6 +58,8 @@ export default function EmergencyDispatchPage() {
     emergency_vapi_assistant_id: '',
     max_dispatch_attempts: 5,
     notification_email: '',
+    notification_sms_number: '',
+    sms_enabled: false,
     intake_fields: [...DEFAULT_INTAKE_FIELDS],
     opening_greeting: DEFAULT_OPENING_GREETING,
     service_line_name: DEFAULT_SERVICE_LINE_NAME,
@@ -131,6 +133,8 @@ export default function EmergencyDispatchPage() {
         emergency_vapi_assistant_id: configRes.data?.emergency_vapi_assistant_id ?? '',
         max_dispatch_attempts: configRes.data?.max_dispatch_attempts ?? 5,
         notification_email: configRes.data?.notification_email ?? '',
+        notification_sms_number: configRes.data?.notification_sms_number ?? '',
+        sms_enabled: configRes.data?.sms_enabled ?? false,
         intake_fields: Array.isArray(configRes.data?.intake_fields) && configRes.data.intake_fields.length > 0
           ? configRes.data.intake_fields
           : [...DEFAULT_INTAKE_FIELDS],
@@ -203,6 +207,8 @@ export default function EmergencyDispatchPage() {
         emergency_vapi_assistant_id: c.emergency_vapi_assistant_id || null,
         max_dispatch_attempts: c.max_dispatch_attempts ?? 5,
         notification_email: (c.notification_email && String(c.notification_email).trim()) || null,
+        notification_sms_number: (c.notification_sms_number && String(c.notification_sms_number).trim()) || null,
+        sms_enabled: !!c.sms_enabled,
         intake_fields: Array.isArray(c.intake_fields) ? c.intake_fields : [...DEFAULT_INTAKE_FIELDS],
         opening_greeting: (c.opening_greeting && String(c.opening_greeting).trim()) || null,
         service_line_name: (c.service_line_name && String(c.service_line_name).trim()) || null,
@@ -217,6 +223,8 @@ export default function EmergencyDispatchPage() {
         emergency_vapi_assistant_id: configRest.emergency_vapi_assistant_id ?? c.emergency_vapi_assistant_id ?? '',
         max_dispatch_attempts: configRest.max_dispatch_attempts ?? c.max_dispatch_attempts ?? 5,
         notification_email: configRest.notification_email ?? c.notification_email ?? '',
+        notification_sms_number: configRest.notification_sms_number ?? c.notification_sms_number ?? '',
+        sms_enabled: configRest.sms_enabled ?? c.sms_enabled ?? false,
         intake_fields: Array.isArray(configRest.intake_fields) && configRest.intake_fields.length > 0 ? configRest.intake_fields : (c.intake_fields ?? []),
         opening_greeting: configRest.opening_greeting ?? c.opening_greeting ?? prev.opening_greeting ?? DEFAULT_OPENING_GREETING,
         service_line_name: configRest.service_line_name ?? c.service_line_name ?? prev.service_line_name ?? DEFAULT_SERVICE_LINE_NAME,
@@ -995,6 +1003,14 @@ export default function EmergencyDispatchPage() {
                   <p className="text-xs text-slate-500 mt-1">Intake details from phone calls are sent here.</p>
                 </div>
                 <div>
+                  <label className="flex items-center gap-2 text-sm text-slate-600 mb-1">
+                    <input type="checkbox" checked={config.sms_enabled || false} onChange={(e) => { setConfig((c) => ({ ...c, sms_enabled: e.target.checked })); setConfigDirty(true); }} className="rounded border-slate-300" />
+                    Also send SMS when a new request comes in
+                  </label>
+                  <input type="tel" className="w-full max-w-md rounded border border-slate-300 px-3 py-2 text-sm mt-1" placeholder="+15551234567" value={config.notification_sms_number || ''} onChange={(e) => { setConfig((c) => ({ ...c, notification_sms_number: e.target.value })); setConfigDirty(true); }} />
+                  <p className="text-xs text-slate-500 mt-1">SMS notifications use your first emergency line number as the sender. Same process as the AI phone agent.</p>
+                </div>
+                <div>
                   <label className="block text-sm text-slate-600 mb-1">Max dispatch attempts</label>
                   <input type="number" min={1} max={20} className="w-24 rounded border border-slate-300 px-3 py-2 text-sm" value={config.max_dispatch_attempts} onChange={(e) => { setConfig((c) => ({ ...c, max_dispatch_attempts: parseInt(e.target.value, 10) || 5 })); setConfigDirty(true); }} />
                 </div>
@@ -1292,12 +1308,17 @@ export default function EmergencyDispatchPage() {
                             <p className="text-slate-500">No provider call-outs yet.</p>
                           ) : (
                             <ul className="space-y-3">
-                              {activity.map((entry) => (
-                                <li key={entry.id} className="p-3 rounded-lg border border-slate-200 bg-slate-50/50 text-sm">
+                              {activity.map((entry) => {
+                                const didNotAnswer = entry.result === 'no_answer';
+                                return (
+                                <li
+                                  key={entry.id}
+                                  className={`p-3 rounded-lg border text-sm ${didNotAnswer ? 'border-red-300 bg-red-50' : 'border-slate-200 bg-slate-50/50'}`}
+                                >
                                   <div className="flex flex-wrap items-center gap-2 font-medium text-slate-800">
-                                    <PhoneCall className="w-4 h-4 text-slate-500" />
+                                    <PhoneCall className={`w-4 h-4 ${didNotAnswer ? 'text-red-500' : 'text-slate-500'}`} />
                                     {entry.provider_business_name || entry.emergency_providers?.business_name || 'Provider'}
-                                    <span className="px-1.5 py-0.5 rounded text-xs font-medium bg-slate-200 text-slate-700">
+                                    <span className={`px-1.5 py-0.5 rounded text-xs font-medium ${didNotAnswer ? 'bg-red-200 text-red-800' : 'bg-slate-200 text-slate-700'}`}>
                                       {resultLabel(entry.result)}
                                     </span>
                                     {entry.attempted_at && (
@@ -1319,7 +1340,8 @@ export default function EmergencyDispatchPage() {
                                     )}
                                   </div>
                                 </li>
-                              ))}
+                                );
+                              })}
                             </ul>
                           )}
                         </div>

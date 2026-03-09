@@ -8,7 +8,7 @@ import { Business } from "../models/Business.js";
 import { Message } from "../models/Message.js";
 import { getCallSummary, forwardCallToBusiness, getVapiClient } from "../services/vapi.js";
 import { checkMinutesAvailable, recordCallUsage } from "../services/usage.js";
-import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail, sendEmergencyIntakeEmail } from "../services/notifications.js";
+import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail, sendEmergencyIntakeEmail, sendEmergencyIntakeSMS } from "../services/notifications.js";
 import { isBusinessOpenAtTime } from "../utils/businessHours.js";
 import { AIAgent } from "../models/AIAgent.js";
 import { Notification } from "../models/v2/Notification.js";
@@ -683,13 +683,14 @@ router.post("/webhook", async (req, res) => {
     }
   }
 
-  // function-call: handle synchronously so we can return a result for the assistant to speak (e.g. "no email on file")
-  if (eventType === 'function-call') {
+  // function-call or tool-calls: handle synchronously so we can return a result for the assistant (e.g. dispatch_accept result).
+  // VAPI may send either event type; tool-calls uses message.toolCallList and requires { results: [{ toolCallId, result }] }.
+  if (eventType === 'function-call' || eventType === 'tool-calls') {
     try {
       const result = await handleFunctionCall(req.body.message || req.body);
       return res.status(200).json(result != null && typeof result === 'object' ? result : { received: true });
     } catch (e) {
-      console.error('[VAPI Webhook] function-call error', e);
+      console.error('[VAPI Webhook] function/tool-call error', e);
       return res.status(200).json({ received: true });
     }
   }
@@ -775,7 +776,8 @@ router.post("/webhook", async (req, res) => {
           await handleCallReturned(event.message || event);
           break;
         case "function-call":
-          console.log(`[VAPI Webhook ${webhookId}] ⚙️ Processing function-call event`);
+        case "tool-calls":
+          console.log(`[VAPI Webhook ${webhookId}] ⚙️ Processing ${eventTypeFromEvent} event`);
           await handleFunctionCall(event.message || event);
           break;
         case "hang":
@@ -1258,6 +1260,14 @@ async function handleCallEnd(event) {
         await sendEmergencyIntakeEmail(toEmail, payload, { transcript, summary });
       } else {
         console.warn("[VAPI Webhook] Emergency: no notification_email configured, skipping email");
+      }
+      if (config.sms_enabled && config.notification_sms_number) {
+        try {
+          await sendEmergencyIntakeSMS(config, payload);
+          console.log("[VAPI Webhook] Emergency: SMS notification sent");
+        } catch (smsErr) {
+          console.error("[VAPI Webhook] Emergency: SMS notification failed", smsErr?.message || smsErr);
+        }
       }
       console.log("[VAPI Webhook] Emergency request created:", request.id);
       const { startDispatch } = await import("../services/emergency-network/dispatch.js");
@@ -1917,53 +1927,90 @@ async function handleCallReturned(event) {
  * Handle function calls from VAPI assistant
  * This handles the submit_takeout_order function call
  */
+/**
+ * Extract toolCallId from VAPI event (required for correct tool response format).
+ * VAPI expects response: { results: [ { toolCallId: "<id>", result: "<string>" } ] }
+ */
+function getToolCallIdFromEvent(event) {
+  const msg = event.message || event;
+  const list = msg.toolCallList || msg.tool_call_list;
+  if (Array.isArray(list) && list[0]?.id) return list[0].id;
+  const withList = msg.toolWithToolCallList || msg.tool_with_tool_call_list;
+  if (Array.isArray(withList) && withList[0]?.toolCall?.id) return withList[0].toolCall.id;
+  const fc = event.functionCall || msg.functionCall || msg.function_call;
+  if (fc?.id) return fc.id;
+  return null;
+}
+
 async function handleFunctionCall(event) {
   console.log(`[VAPI Webhook] ⚙️ Processing function-call event`);
   console.log(`[VAPI Webhook] Function call event:`, JSON.stringify(event, null, 2));
-  
+  const toolCallId = getToolCallIdFromEvent(event);
+
   try {
     // Extract function call data from event
     // VAPI sends function calls in different formats, handle all of them
-    const functionCall = event.functionCall || event.message?.functionCall || event.message?.function_call || event;
-    const functionName = functionCall.name || functionCall.functionName || functionCall.function_name;
-    const functionArguments = functionCall.arguments || functionCall.args || functionCall.parameters || {};
+    const functionCall = event.functionCall || event.message?.functionCall || event.message?.function_call
+      || event.message?.toolCallList?.[0] || event.message?.toolWithToolCallList?.[0]?.toolCall || event;
+    const functionName = functionCall.name || functionCall.functionName || functionCall.function_name
+      || functionCall.function?.name;
+    const functionArguments = functionCall.arguments || functionCall.args || functionCall.parameters
+      || functionCall.function?.arguments || {};
     
-    console.log(`[VAPI Webhook] Function name: ${functionName}`);
+    console.log(`[VAPI Webhook] Function name: ${functionName}, toolCallId: ${toolCallId || 'none'}`);
     console.log(`[VAPI Webhook] Function arguments:`, JSON.stringify(functionArguments, null, 2));
     
+    let resultContent = null;
+
     // Handle submit_takeout_order function
     if (functionName === 'submit_takeout_order') {
       await handleSubmitTakeoutOrder(functionArguments, event);
-      return;
+      return toolCallId ? { results: [{ toolCallId, result: 'Order received.' }] } : undefined;
     }
     // Emergency dispatch: provider accepted or declined
     if (functionName === 'dispatch_accept' || functionName === 'dispatch_decline') {
-      await handleDispatchProviderResponse(functionName, event);
-      return;
+      resultContent = await handleDispatchProviderResponse(functionName, event);
+      if (toolCallId && resultContent != null) {
+        return { results: [{ toolCallId, result: resultContent }] };
+      }
+      return resultContent != null ? { result: resultContent } : undefined;
     }
     if (functionName === 'dispatch_email_details') {
-      return await handleDispatchEmailDetails(event);
+      const out = await handleDispatchEmailDetails(event);
+      resultContent = typeof out === 'object' && out?.result != null ? out.result : out;
+      if (toolCallId && resultContent != null) {
+        return { results: [{ toolCallId, result: resultContent }] };
+      }
+      return out;
     }
     if (functionName === 'dispatch_sms_details') {
-      return await handleDispatchSmsDetails(event);
+      const out = await handleDispatchSmsDetails(event);
+      resultContent = typeof out === 'object' && out?.result != null ? out.result : out;
+      if (toolCallId && resultContent != null) {
+        return { results: [{ toolCallId, result: resultContent }] };
+      }
+      return out;
     }
     console.log(`[VAPI Webhook] ⚠️ Unhandled function: ${functionName}`);
   } catch (error) {
     console.error(`[VAPI Webhook] ❌ Error handling function call:`, error);
-    // Don't throw - function calls are non-blocking
+    if (toolCallId) {
+      return { results: [{ toolCallId, result: "Something went wrong. Please say Accept or Decline again." }] };
+    }
   }
   return undefined;
 }
 
 /**
  * Handle dispatch_accept / dispatch_decline from emergency dispatch outbound call.
+ * Returns a short phrase for the assistant to speak so VAPI can continue the conversation (STEP 2 or goodbye).
  */
 async function handleDispatchProviderResponse(functionName, event) {
   const call = event.call || event.message?.call || event.message?.artifact?.call || {};
   const callId = call.id || call.callId;
   if (!callId) {
     console.warn('[VAPI Webhook] dispatch response: no callId');
-    return;
+    return "I couldn't find this call. Say Accept to take the job or Decline to pass.";
   }
   const { supabaseClient } = await import("../config/database.js");
   const { data: row } = await supabaseClient
@@ -1973,7 +2020,7 @@ async function handleDispatchProviderResponse(functionName, event) {
     .single();
   if (!row) {
     console.warn('[VAPI Webhook] dispatch response: no emergency_dispatch_calls row for call', callId);
-    return;
+    return "I couldn't find this call. Say Accept to take the job or Decline to pass.";
   }
   const result = functionName === 'dispatch_accept' ? 'accepted' : 'declined';
   await supabaseClient
@@ -1993,10 +2040,12 @@ async function handleDispatchProviderResponse(functionName, event) {
     const { logRequestActivity } = await import("../services/emergency-network/activity.js");
     await logRequestActivity(row.service_request_id, 'status_change', { from_status: 'Contacting Providers', to_status: 'Accepted', source: 'ai' });
     console.log('[VAPI Webhook] Emergency dispatch: provider accepted', row.service_request_id, row.provider_id);
+    return "Job accepted. Would you like the details emailed, sent by SMS, or repeat?";
   } else {
     const { callNextProvider } = await import("../services/emergency-network/dispatch.js");
     await callNextProvider(row.service_request_id);
     console.log('[VAPI Webhook] Emergency dispatch: provider declined, trying next', row.service_request_id);
+    return "You declined. We'll try the next provider. Thanks.";
   }
 }
 

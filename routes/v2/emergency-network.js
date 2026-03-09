@@ -320,12 +320,14 @@ router.post('/link-agent', async (req, res) => {
  */
 router.put('/config', express.json(), async (req, res) => {
   try {
-    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email, intake_fields, opening_greeting, service_line_name, custom_instructions } = req.body || {};
+    const { emergency_phone_numbers, emergency_vapi_assistant_id, max_dispatch_attempts, notification_email, notification_sms_number, sms_enabled, intake_fields, opening_greeting, service_line_name, custom_instructions } = req.body || {};
     const updates = {};
     if (Array.isArray(emergency_phone_numbers)) updates.emergency_phone_numbers = emergency_phone_numbers;
     if (emergency_vapi_assistant_id !== undefined) updates.emergency_vapi_assistant_id = emergency_vapi_assistant_id || null;
     if (typeof max_dispatch_attempts === 'number') updates.max_dispatch_attempts = max_dispatch_attempts;
     if (notification_email !== undefined) updates.notification_email = notification_email ? String(notification_email).trim() || null : null;
+    if (notification_sms_number !== undefined) updates.notification_sms_number = notification_sms_number ? String(notification_sms_number).trim() || null : null;
+    if (sms_enabled !== undefined) updates.sms_enabled = !!sms_enabled;
     if (opening_greeting !== undefined) updates.opening_greeting = opening_greeting ? String(opening_greeting).trim() || null : null;
     if (service_line_name !== undefined) updates.service_line_name = service_line_name ? String(service_line_name).trim() || null : null;
     if (custom_instructions !== undefined) updates.custom_instructions = custom_instructions ? String(custom_instructions).trim() || null : null;

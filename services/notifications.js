@@ -448,6 +448,47 @@ export async function sendSMSNotification(business, callSession, summary, messag
 }
 
 /**
+ * Send SMS notification for new emergency dispatch intake (same idea as sendSMSNotification for AI phone agent).
+ * Used when someone calls the Emergency Network line and the AI creates a service request.
+ * @param {Object} config - Emergency config: emergency_phone_numbers, notification_sms_number, sms_enabled, service_line_name
+ * @param {Object} request - Intake payload: caller_name, callback_phone, service_category, urgency_level, location, issue_summary
+ */
+export async function sendEmergencyIntakeSMS(config, request) {
+  if (!config.sms_enabled || !config.notification_sms_number) {
+    return;
+  }
+  const numbers = config.emergency_phone_numbers || [];
+  const fromNumber = numbers[0] && String(numbers[0]).trim();
+  if (!fromNumber) {
+    console.warn('[Emergency Intake SMS] No emergency FROM number configured');
+    return;
+  }
+  if (!TELNYX_API_KEY) {
+    console.warn('[Emergency Intake SMS] TELNYX_API_KEY not configured');
+    return;
+  }
+  const name = request.caller_name || 'Unknown';
+  const phone = formatPhoneNumber(request.callback_phone) || request.callback_phone || 'N/A';
+  const service = request.service_category || 'Service';
+  const urgency = request.urgency_level || '';
+  const messageText = addBusinessIdentification(
+    `New emergency request from ${name} (${phone}). ${service}${urgency ? ` – ${urgency}` : ''}. See dashboard for details.`,
+    config.service_line_name || 'Emergency Dispatch'
+  );
+  let fromE164 = fromNumber.replace(/[^0-9+]/g, '');
+  if (!fromE164.startsWith('+')) fromE164 = fromE164.length === 10 ? `+1${fromE164}` : `+${fromE164}`;
+  let toE164 = String(config.notification_sms_number).replace(/[^0-9+]/g, '');
+  if (!toE164.startsWith('+')) toE164 = toE164.length === 10 ? `+1${toE164}` : `+${toE164}`;
+  try {
+    await sendSMSDirect(fromE164, toE164, messageText);
+    console.log('[Emergency Intake SMS] Sent to', config.notification_sms_number);
+  } catch (err) {
+    console.error('[Emergency Intake SMS] Failed:', err?.message || err);
+    throw err;
+  }
+}
+
+/**
  * Send usage notification (minutes almost used)
  */
 export async function sendMinutesAlmostUsedNotification(business, minutesUsed, minutesTotal, minutesRemaining, resetDate) {
