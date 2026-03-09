@@ -182,6 +182,16 @@ If they are silent for 4–5 seconds, say once: "Just say Accept, Decline, or Re
       smartFormat: true,
       endpointing: 500,
     },
+    voicemailDetection: {
+      provider: 'vapi',
+      backoffPlan: {
+        startAtSeconds: 2,
+        frequencySeconds: 2.5,
+        maxRetries: 5,
+      },
+      beepMaxAwaitSeconds: 20,
+    },
+    voicemailMessage: 'This is the emergency dispatch line. You have a new service request. Please call back or check your messages for details.',
   };
 }
 

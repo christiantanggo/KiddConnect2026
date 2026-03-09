@@ -1430,7 +1430,7 @@ export default function EmergencyDispatchPage() {
           {selectedRequestId && (() => {
             const req = requests.find((r) => r.id === selectedRequestId);
             const activity = [...(requestDetailLog || [])].reverse(); // chronological: first call first
-            const resultLabel = (r) => ({ accepted: 'Accepted', declined: 'Declined', no_answer: 'No answer', error: 'Error', pending: 'Pending' })[r] || r;
+            const resultLabel = (r) => ({ accepted: 'Accepted', declined: 'Declined', no_answer: 'No answer', voicemail: 'Voicemail', error: 'Error', pending: 'Pending' })[r] || r;
             return (
               <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => setSelectedRequestId(null)}>
                 <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
@@ -1462,7 +1462,7 @@ export default function EmergencyDispatchPage() {
                           ) : (
                             <ul className="space-y-3">
                               {activity.map((entry) => {
-                                const didNotAnswer = entry.result === 'no_answer';
+                                const didNotAnswer = entry.result === 'no_answer' || entry.result === 'voicemail';
                                 return (
                                 <li
                                   key={entry.id}

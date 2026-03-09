@@ -1177,8 +1177,12 @@ async function handleCallEnd(event) {
     duration = typeof event.message.durationSeconds === 'number' ? event.message.durationSeconds : parseInt(event.message.durationSeconds) || 0;
   }
   
+  // Extract endedReason (e.g. 'voicemail' when VAPI voicemail detection ended the call)
+  const endedReason = call.endedReason ?? event.message?.artifact?.endedReason ?? event.message?.call?.endedReason ?? null;
+
   console.log(`[VAPI Webhook] Extracted duration: ${duration} seconds`);
   console.log(`[VAPI Webhook] Call ID: ${callId}`);
+  if (endedReason) console.log(`[VAPI Webhook] Ended reason: ${endedReason}`);
   console.log(`[VAPI Webhook] Call object structure:`, {
     hasCall: !!event.call,
     hasMessageCall: !!event.message?.call,
@@ -1385,10 +1389,12 @@ async function handleCallEnd(event) {
       .eq('id', dispatchRow.dispatch_log_id)
       .single();
     if (logRow && logRow.result === 'pending') {
+      const dispatchResult = endedReason === 'voicemail' ? 'voicemail' : 'no_answer';
       await supabaseClient
         .from('emergency_dispatch_log')
-        .update({ result: 'no_answer' })
+        .update({ result: dispatchResult })
         .eq('id', dispatchRow.dispatch_log_id);
+      console.log("[VAPI Webhook] Emergency dispatch attempt result:", dispatchResult, endedReason ? `(endedReason: ${endedReason})` : '');
     }
     // Only call next provider if they didn't accept or decline (no_answer/hang up). If they accepted, request is already 'Accepted'; if they declined, we already called next in function-call handler.
     const { data: req } = await supabaseClient
