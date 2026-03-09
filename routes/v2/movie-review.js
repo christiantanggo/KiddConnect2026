@@ -1384,9 +1384,10 @@ router.get('/projects/:id/render-status', async (req, res) => {
 // ─── YouTube Upload ───────────────────────────────────────────────────────────
 
 router.post('/projects/:id/upload', async (req, res) => {
+  const projectId = req.params.id;
+  const businessId = req.active_business_id;
   try {
-    const businessId = req.active_business_id;
-    const project = await getProject(req.params.id, businessId);
+    const project = await getProject(projectId, businessId);
     if (!project) return res.status(404).json({ error: 'Project not found' });
     if (!project.render_url) return res.status(400).json({ error: 'Render the video first' });
 
@@ -1395,13 +1396,24 @@ router.post('/projects/:id/upload', async (req, res) => {
       .update({ status: 'UPLOADING', upload_error: null, updated_at: new Date().toISOString() })
       .eq('id', project.id);
 
-    import('../../services/movie-review/publisher.js').then(({ publishMovieReview }) => {
-      publishMovieReview(project, businessId).catch(err => {
-        console.error('[MovieReview Publisher] Upload failed:', err.message);
-      });
-    });
+    const { publishMovieReview } = await import('../../services/movie-review/publisher.js');
+    await publishMovieReview(project, businessId);
 
-    res.json({ status: 'UPLOADING' });
+    const updated = await getProject(projectId, businessId);
+    res.json({ project: updated });
+  } catch (err) {
+    const updated = await getProject(projectId, businessId).catch(() => null);
+    if (updated) res.json({ project: updated });
+    else res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/projects/:id/upload-status', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const project = await getProject(req.params.id, businessId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+    res.json({ project, publish: null });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

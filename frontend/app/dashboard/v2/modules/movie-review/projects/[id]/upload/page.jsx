@@ -168,7 +168,7 @@ export default function MovieReviewUploadPage() {
     startProgressAnimation();
     pollRef.current = setInterval(async () => {
       try {
-        const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}`, { headers: apiHeaders() });
+        const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/upload-status`, { headers: apiHeaders() });
         const data = await res.json();
         const proj = data.project;
         setProject(proj);
@@ -234,18 +234,21 @@ export default function MovieReviewUploadPage() {
       return;
     }
     await saveMeta();
-    setUploading(true); setError(null);
+    setUploading(true);
+    setError(null);
     try {
       const res = await fetch(`${API_URL}/api/v2/movie-review/projects/${projectId}/upload`, {
-        method: 'POST', headers: apiHeaders(),
+        method: 'POST',
+        headers: apiHeaders(),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setProject(p => ({ ...p, status: 'UPLOADING' }));
-      uploadStartedAtRef.current = Date.now();
-      startPolling();
+      if (data.project) {
+        setProject(data.project);
+      }
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
     } catch (err) {
       setError(err.message);
+    } finally {
       setUploading(false);
     }
   }

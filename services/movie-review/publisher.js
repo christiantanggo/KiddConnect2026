@@ -52,15 +52,13 @@ function buildOAuth2Client(businessId, slot, redirectUri, slotKey) {
 }
 
 async function getYouTubeClient(businessId) {
-  const raw = process.env.YOUTUBE_REDIRECT_URI || '';
-  const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
   const ms = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
   const settings = ms?.settings || {};
   const yt = settings.youtube || {};
   const ytManual = settings.youtube_manual || {};
 
-  // Prefer main (auto) connection, then fall back to manual
-  const useManual = !yt?.access_token && ytManual?.manual_access_token;
+  // Same as Kid Quiz: use manual slot when manual OAuth is configured and connected
+  const useManual = !!(ytManual.manual_client_id && ytManual.manual_access_token);
   const slot = useManual
     ? {
         clientId: (ytManual.manual_client_id || '').trim() || process.env.YOUTUBE_CLIENT_ID,
@@ -84,6 +82,10 @@ async function getYouTubeClient(businessId) {
     throw new Error('YouTube OAuth not configured. Add Client ID and Secret in Settings → Upload OAuth app, or set YOUTUBE_CLIENT_ID/SECRET on the server.');
   }
 
+  // Movie Review shares the orbix-network callback URL (same as auth-url route)
+  const raw = process.env.YOUTUBE_REDIRECT_URI || '';
+  const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
+
   return buildOAuth2Client(
     businessId,
     slot,
@@ -94,15 +96,18 @@ async function getYouTubeClient(businessId) {
 
 export async function publishMovieReview(project, businessId) {
   const projectId = project.id;
-  console.log(`[MovieReview Publisher] Starting projectId=${projectId}`);
+  console.log('[MovieReview Publisher] Starting projectId=%s businessId=%s', projectId, businessId);
 
   try {
     if (!project.render_url) throw new Error('No render URL. Render the video first.');
 
-    // Download video
-    const resp = await fetch(project.render_url.split('?')[0]);
-    if (!resp.ok) throw new Error(`Failed to download render: ${resp.status}`);
-    const buf = Buffer.from(await resp.arrayBuffer());
+    // Download video (same as Kid Quiz: timeout so we don't hang forever)
+    const renderUrl = project.render_url.split('?')[0];
+    console.log('[MovieReview Publisher] Downloading render projectId=%s url=%s', projectId, renderUrl);
+    const axios = (await import('axios')).default;
+    const resp = await axios.get(renderUrl, { responseType: 'arraybuffer', timeout: 60000 });
+    const buf = Buffer.from(resp.data);
+    console.log('[MovieReview Publisher] Downloaded %s bytes projectId=%s', buf.length, projectId);
 
     const { writeFile, unlink } = await import('fs');
     const { promisify } = await import('util');
@@ -114,9 +119,12 @@ export async function publishMovieReview(project, businessId) {
 
     const tmpPath = join(tmpdir(), `mr-upload-${randomUUID()}.mp4`);
     await writeAsync(tmpPath, buf);
+    console.log('[MovieReview Publisher] Wrote temp file projectId=%s', projectId);
 
+    console.log('[MovieReview Publisher] Getting YouTube client projectId=%s', projectId);
     const oauth2Client = await getYouTubeClient(businessId);
     const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+    console.log('[MovieReview Publisher] YouTube client ready, inserting video projectId=%s', projectId);
 
     const title = (project.yt_title || project.movie_title || 'Movie Review').slice(0, 100);
     const description = (project.yt_description || `${project.movie_title} review`).slice(0, 5000);
@@ -162,19 +170,23 @@ export async function publishMovieReview(project, businessId) {
     return { videoId, youtubeUrl };
   } catch (err) {
     const isInvalidClient = (err.message || '').toLowerCase().includes('invalid_client');
-    console.error(`[MovieReview Publisher] FAILED projectId=${projectId}:`, err.message);
+    console.error('[MovieReview Publisher] FAILED projectId=%s:', projectId, err.message);
+    console.error('[MovieReview Publisher] Stack:', err.stack);
     if (isInvalidClient) {
       console.error('[MovieReview Publisher] invalid_client usually means the OAuth Client ID/Secret or redirect URI do not match the app that was used when you connected YouTube. In Movie Review Settings, either use the same Upload OAuth app (and same YOUTUBE_REDIRECT_URI on the server) or disconnect and reconnect YouTube.');
     }
     const userMessage = (err.message || 'Upload failed').slice(0, 500);
-    await supabaseClient
+    const baseUpdate = { status: 'FAILED', updated_at: new Date().toISOString() };
+    const { error: updateErr } = await supabaseClient
       .from('movie_review_projects')
-      .update({
-        status: 'FAILED',
-        upload_error: userMessage,
-        updated_at: new Date().toISOString(),
-      })
+      .update({ ...baseUpdate, upload_error: userMessage })
       .eq('id', projectId);
+    if (updateErr) {
+      await supabaseClient
+        .from('movie_review_projects')
+        .update(baseUpdate)
+        .eq('id', projectId);
+    }
     throw err;
   }
 }
