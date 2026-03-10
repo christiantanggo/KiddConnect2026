@@ -610,6 +610,31 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   })()}
                 </div>
               )}
+              {item.story_category === 'trickquestion' && item.snippet && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Trick Question Content</h4>
+                  {(() => {
+                    try {
+                      const t = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      return (
+                        <div className="space-y-3 text-sm">
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Question</p>
+                            <p className="font-medium text-gray-900">{t.setup}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-green-700 uppercase mb-1">Answer</p>
+                            <p className="font-semibold text-green-900">{t.punchline}</p>
+                          </div>
+                          {t.hook && <p className="text-gray-500 text-xs">{t.hook}</p>}
+                        </div>
+                      );
+                    } catch {
+                      return <p className="text-gray-500 text-sm">Could not parse trick question content</p>;
+                    }
+                  })()}
+                </div>
+              )}
             </div>
           )}
           
@@ -794,7 +819,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
           {details?.orbix_scripts && details.orbix_scripts.length > 0 && item.story_id && (
             <div>
               <div className="flex items-center justify-between gap-2 mb-3">
-                <h3 className="text-lg font-semibold">{(item.story_category || '').toLowerCase() === 'dadjoke' ? 'Joke' : 'Story Script'}</h3>
+                <h3 className="text-lg font-semibold">{(item.story_category || '').toLowerCase() === 'dadjoke' ? 'Joke' : (item.story_category || '').toLowerCase() === 'trickquestion' ? 'Trick Question' : 'Story Script'}</h3>
                 {!isRawItem && (
                   <button
                     onClick={handleGenerateScript}
@@ -919,6 +944,40 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                           <div className="rounded-md bg-green-50 border border-green-300 p-3">
                             <p className="text-xs font-semibold text-green-700 mb-1">3 · Punchline <span className="font-normal">(on screen)</span></p>
                             <p className="text-base text-green-900 font-bold">{punchline}</p>
+                          </div>
+                        )}
+                        {endCta && (
+                          <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 mb-1">4 · End card</p>
+                            <p className="text-base text-gray-900">{endCta}</p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  }
+                  if (cat === 'trickquestion') {
+                    const cj = script.content_json
+                      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                      : {};
+                    const setup = cj.setup || script.what_happened || '';
+                    const answer = cj.punchline || script.why_it_matters || '';
+                    const endCta = script.cta_line || cj.hook || '';
+                    return (
+                      <div className="space-y-3">
+                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
+                        {setup && (
+                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
+                            <p className="text-xs font-semibold text-blue-600 mb-1">1 · Question <span className="font-normal">(on screen + TTS)</span></p>
+                            <p className="text-base text-blue-900 font-medium">{setup}</p>
+                          </div>
+                        )}
+                        <div className="rounded-md bg-yellow-50 border border-yellow-200 p-3 text-center">
+                          <p className="text-xs font-semibold text-yellow-700 mb-1">2 · 3-2-1 Countdown</p>
+                        </div>
+                        {answer && (
+                          <div className="rounded-md bg-green-50 border border-green-300 p-3">
+                            <p className="text-xs font-semibold text-green-700 mb-1">3 · Answer <span className="font-normal">(on screen)</span></p>
+                            <p className="text-base text-green-900 font-bold">{answer}</p>
                           </div>
                         )}
                         {endCta && (

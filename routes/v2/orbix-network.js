@@ -1462,15 +1462,89 @@ router.post('/stories/:id/generate-script', async (req, res) => {
       shock_score: story.shock_score
     });
 
-    // Riddle/trivia/facts/mindteaser/dadjoke scripts come from the pipeline (raw item snippet). generateAndSaveScript has no riddle branch and would replace the riddle with an explainer — do not allow.
-    const scriptFromPipeline = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke', 'trickquestion'].includes((story.category || '').toLowerCase());
+    const category = (story.category || '').toLowerCase();
+
+    // Trick question: regenerate new Q&A, update raw item, recreate script from snippet
+    if (category === 'trickquestion') {
+      if (!story.raw_item_id) return res.status(400).json({ error: 'Story has no raw item' });
+      const { data: rawItem } = await supabaseClient.from('orbix_raw_items').select('id, snippet').eq('id', story.raw_item_id).single();
+      if (!rawItem) return res.status(400).json({ error: 'Raw item not found' });
+      let episodeNumber = 1;
+      try {
+        const parsed = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+        if (parsed?.episode_number != null) episodeNumber = Number(parsed.episode_number) || 1;
+      } catch (_) {}
+      const { generateAndValidateTrickQuestion } = await import('../../services/orbix-network/trick-question-generator.js');
+      const item = await generateAndValidateTrickQuestion(businessId, channelId, { episodeNumber });
+      if (!item) return res.status(500).json({ error: 'Failed to generate new trick question' });
+      const snippet = JSON.stringify({
+        hook: item.hook,
+        setup: item.setup,
+        punchline: item.punchline,
+        voice_script: item.voice_script,
+        episode_number: item.episode_number
+      });
+      const url = `trickquestion://${item.content_fingerprint}`;
+      const { error: updateRawErr } = await supabaseClient.from('orbix_raw_items').update({
+        snippet,
+        url,
+        content_fingerprint: item.content_fingerprint,
+        updated_at: new Date().toISOString()
+      }).eq('id', story.raw_item_id).eq('business_id', businessId);
+      if (updateRawErr) return res.status(500).json({ error: 'Failed to update raw item', details: updateRawErr.message });
+      const { error: delErr } = await supabaseClient.from('orbix_scripts').delete().eq('story_id', storyId).eq('business_id', businessId);
+      if (delErr) return res.status(500).json({ error: 'Failed to remove old script', details: delErr.message });
+      const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
+      const script = await ensureTriviaScript(businessId, story);
+      if (!script) return res.status(500).json({ error: 'Failed to create script from new content' });
+      return res.json({ success: true, script, message: 'Trick question rewritten successfully', duration: Date.now() - startTime });
+    }
+
+    // Dad joke: regenerate new setup/punchline, update raw item, recreate script from snippet
+    if (category === 'dadjoke') {
+      if (!story.raw_item_id) return res.status(400).json({ error: 'Story has no raw item' });
+      const { data: rawItem } = await supabaseClient.from('orbix_raw_items').select('id, snippet').eq('id', story.raw_item_id).single();
+      if (!rawItem) return res.status(400).json({ error: 'Raw item not found' });
+      let episodeNumber = 1;
+      try {
+        const parsed = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+        if (parsed?.episode_number != null) episodeNumber = Number(parsed.episode_number) || 1;
+      } catch (_) {}
+      const { generateAndValidateDadJoke } = await import('../../services/orbix-network/dad-joke-generator.js');
+      const joke = await generateAndValidateDadJoke(businessId, channelId, { episodeNumber });
+      if (!joke) return res.status(500).json({ error: 'Failed to generate new dad joke' });
+      const snippet = JSON.stringify({
+        hook: joke.hook,
+        setup: joke.setup,
+        punchline: joke.punchline,
+        voice_script: joke.voice_script,
+        episode_number: joke.episode_number
+      });
+      const url = `dadjoke://${joke.content_fingerprint}`;
+      const { error: updateRawErr } = await supabaseClient.from('orbix_raw_items').update({
+        snippet,
+        url,
+        content_fingerprint: joke.content_fingerprint,
+        updated_at: new Date().toISOString()
+      }).eq('id', story.raw_item_id).eq('business_id', businessId);
+      if (updateRawErr) return res.status(500).json({ error: 'Failed to update raw item', details: updateRawErr.message });
+      const { error: delErr } = await supabaseClient.from('orbix_scripts').delete().eq('story_id', storyId).eq('business_id', businessId);
+      if (delErr) return res.status(500).json({ error: 'Failed to remove old script', details: delErr.message });
+      const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
+      const script = await ensureTriviaScript(businessId, story);
+      if (!script) return res.status(500).json({ error: 'Failed to create script from new content' });
+      return res.json({ success: true, script, message: 'Dad joke rewritten successfully', duration: Date.now() - startTime });
+    }
+
+    // Riddle/trivia/facts/mindteaser: script comes from pipeline only; do not allow rewrite (would replace with explainer)
+    const scriptFromPipeline = ['riddle', 'trivia', 'facts', 'mindteaser'].includes(category);
     if (scriptFromPipeline) {
       return res.status(400).json({
         error: 'Script cannot be rewritten for this content type',
-        message: 'Riddles, trivia, facts, mind teasers and dad jokes use the script created from the pipeline. Rewriting would replace it with an explainer. Use the existing script or re-run the pipeline for a new item.'
+        message: 'Riddles, trivia, facts and mind teasers use the script from the pipeline. Use the existing script or re-run the pipeline for a new item.'
       });
     }
-    
+
     // If script already exists, delete it so we can regenerate (Rewrite flow)
     console.log(`[Generate Script API] Step 2: Checking for existing script...`);
     const { data: existingScript, error: scriptCheckError } = await supabaseClient
