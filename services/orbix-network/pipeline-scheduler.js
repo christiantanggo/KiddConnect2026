@@ -71,6 +71,10 @@ export async function ensureTriviaScript(businessId, story) {
     console.warn(`[Pipeline Scheduler] No setup/punchline in snippet for dadjoke story ${story.id} — skipping script creation`);
     return null;
   }
+  if (isTrickQuestion && (!contentJson?.setup || !contentJson?.punchline)) {
+    console.warn(`[Pipeline Scheduler] No setup/punchline in snippet for trickquestion story ${story.id} — skipping script creation`);
+    return null;
+  }
 
   const { data: script, error } = await supabaseClient
     .from('orbix_scripts')

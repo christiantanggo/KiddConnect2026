@@ -181,6 +181,11 @@ export async function processRawItem(businessId, rawItem) {
       category = 'dadjoke';
       if (shockScore == null || shockScore === undefined) shockScore = 70;
     }
+    const isTrickQuestionBySource = (rawItem.content_type === 'trickquestion') || (rawItem.url && String(rawItem.url).startsWith('trickquestion://'));
+    if (isTrickQuestionBySource && !category) {
+      category = 'trickquestion';
+      if (shockScore == null || shockScore === undefined) shockScore = 70;
+    }
     const factorsJson = rawItem.factors_json;
     const evergreenCategories = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'];
     const isEvergreenCategory = category && evergreenCategories.includes(category);
@@ -224,7 +229,7 @@ export async function processRawItem(businessId, rawItem) {
         .eq('id', rawItem.id);
       
       // Check threshold (evergreen categories always pass — no shock score required)
-      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'trivia' || classifiedCategory === 'facts' || classifiedCategory === 'riddle' || classifiedCategory === 'mindteaser' || classifiedCategory === 'dadjoke';
+      const isEvergreen = classifiedCategory === 'psychology' || classifiedCategory === 'trivia' || classifiedCategory === 'facts' || classifiedCategory === 'riddle' || classifiedCategory === 'mindteaser' || classifiedCategory === 'dadjoke' || classifiedCategory === 'trickquestion';
       if (!isEvergreen && !shouldProcess(scoreResult, threshold)) {
         // Mark raw item as discarded
         await supabaseClient
@@ -271,7 +276,7 @@ export async function processRawItem(businessId, rawItem) {
       return story;
     } else {
       // Use pre-calculated values (or effectiveScore for evergreen when raw item had no score)
-      const isEvergreen = category === 'psychology' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke';
+      const isEvergreen = category === 'psychology' || category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke' || category === 'trickquestion';
       const scoreForThreshold = effectiveScore != null ? effectiveScore : shockScore;
       if (!isEvergreen && scoreForThreshold < threshold) {
         // Mark raw item as discarded

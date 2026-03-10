@@ -602,7 +602,7 @@ router.post('/renders/:id/restart', async (req, res) => {
           if (!story) return res.status(404).json({ error: 'Story not found' });
 
           const storyCat = (story.category || '').toLowerCase();
-          const contentType = ['trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'].includes(storyCat) ? storyCat : null;
+          const contentType = ['trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'].includes(storyCat) ? storyCat : null;
           let scriptQuery = supabaseClient
             .from('orbix_scripts')
             .select('id')
@@ -657,7 +657,7 @@ router.post('/renders/:id/restart', async (req, res) => {
       return res.status(404).json({ error: 'Story not found for this render' });
     }
     const storyCategory = (storyForRestart.category || '').toLowerCase();
-    const scriptContentType = ['trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'].includes(storyCategory) ? storyCategory : null;
+    const scriptContentType = ['trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'].includes(storyCategory) ? storyCategory : null;
 
     // Only swap to latest script for psychology (rewrite flow). Riddle/trivia/facts/mindteaser/dadjoke use script-from-scrape with content_json; do NOT replace script_id on restart or we can attach a script that lost riddle_text/answer_text etc.
     let latestScript = null;
@@ -1276,6 +1276,8 @@ router.post('/sources', async (req, res) => {
           ? 'mindteaser://generator'
           : (type.toUpperCase() === 'DAD_JOKE_GENERATOR')
             ? 'dadjoke://generator'
+            : (type.toUpperCase() === 'TRICK_QUESTION_GENERATOR')
+              ? 'trickquestion://generator'
           : (type.toUpperCase() === 'WIKIDATA_FACTS')
           ? (url && url.trim()) || 'facts://'
           : (type.toUpperCase() === 'WIKIPEDIA' && !url)
@@ -1461,7 +1463,7 @@ router.post('/stories/:id/generate-script', async (req, res) => {
     });
 
     // Riddle/trivia/facts/mindteaser/dadjoke scripts come from the pipeline (raw item snippet). generateAndSaveScript has no riddle branch and would replace the riddle with an explainer — do not allow.
-    const scriptFromPipeline = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story.category || '').toLowerCase());
+    const scriptFromPipeline = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke', 'trickquestion'].includes((story.category || '').toLowerCase());
     if (scriptFromPipeline) {
       return res.status(400).json({
         error: 'Script cannot be rewritten for this content type',
@@ -1697,7 +1699,7 @@ router.post('/stories/:id/force-render', async (req, res) => {
       try {
         const { generateAndSaveScript } = await import('../../services/orbix-network/script-generator.js');
         const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
-        const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story.category || '').toLowerCase());
+        const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke', 'trickquestion'].includes((story.category || '').toLowerCase());
         const newScript = usePipelineScript
           ? await ensureTriviaScript(businessId, story)
           : await generateAndSaveScript(businessId, story);
@@ -2128,7 +2130,7 @@ router.post('/raw-items/:id/force-process', async (req, res) => {
     
     // Riddle/trivia/facts/mindteaser/dadjoke: script from raw item. Others: LLM script.
     try {
-      const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story.category || '').toLowerCase());
+      const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke', 'trickquestion'].includes((story.category || '').toLowerCase());
       if (usePipelineScript) {
         await ensureTriviaScript(businessId, story);
       } else {
@@ -2186,6 +2188,12 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
     shockScore = shockScore ?? 70;
     factorsJson = factorsJson || { source: 'dad_joke_generator' };
   }
+  const isTrickQuestionByUrl = rawItem.url && String(rawItem.url).startsWith('trickquestion://');
+  if (isTrickQuestionByUrl && !category) {
+    category = 'trickquestion';
+    shockScore = shockScore ?? 70;
+    factorsJson = factorsJson || { source: 'trick_question_generator' };
+  }
 
   if (!category || shockScore == null) {
     const classified = await classifyStory(rawItem);
@@ -2206,7 +2214,7 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
       .eq('business_id', businessId);
   }
 
-  const evergreenCategories = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+  const evergreenCategories = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'];
   const storyStatus = evergreenCategories.includes(category) ? 'APPROVED' : 'PENDING';
 
   const { data: story, error: storyError } = await supabaseClient
@@ -2233,7 +2241,7 @@ async function allowOneRawItemAsStory(businessId, targetChannelId, rawItemId) {
     .eq('business_id', businessId);
 
   try {
-    const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((category || '').toLowerCase());
+    const usePipelineScript = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke', 'trickquestion'].includes((category || '').toLowerCase());
     if (usePipelineScript) {
       await ensureTriviaScript(businessId, story);
     } else {

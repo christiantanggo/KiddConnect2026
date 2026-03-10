@@ -39,6 +39,8 @@ export async function scrapeSource(source) {
       return await scrapeMindTeaserSource(source);
     } else if (source.type === 'DAD_JOKE_GENERATOR') {
       return await scrapeDadJokeSource(source);
+    } else if (source.type === 'TRICK_QUESTION_GENERATOR') {
+      return await scrapeTrickQuestionSource(source);
     } else {
       throw new Error(`Unsupported source type: ${source.type}`);
     }
@@ -656,7 +658,8 @@ export async function saveRawItem(businessId, item) {
       item.content_type === 'facts' || item.category === 'facts' ||
       item.content_type === 'riddle' || item.category === 'riddle' ||
       item.content_type === 'mindteaser' || item.category === 'mindteaser' ||
-      item.content_type === 'dadjoke' || item.category === 'dadjoke';
+      item.content_type === 'dadjoke' || item.category === 'dadjoke' ||
+      item.content_type === 'trickquestion' || item.category === 'trickquestion';
     const insertPayload = {
       business_id: businessId,
       channel_id: channelId,
@@ -671,15 +674,17 @@ export async function saveRawItem(businessId, item) {
     if (item.content_fingerprint) {
       insertPayload.content_fingerprint = item.content_fingerprint;
     }
-    if (isEvergreen && item.category && (item.shock_score != null || item.category === 'dadjoke')) {
+    const evergreenWithDefaultScore = item.category === 'dadjoke' || item.category === 'trickquestion';
+    if (isEvergreen && item.category && (item.shock_score != null || evergreenWithDefaultScore)) {
       insertPayload.category = item.category;
-      insertPayload.shock_score = item.shock_score ?? (item.category === 'dadjoke' ? 70 : null);
+      insertPayload.shock_score = item.shock_score ?? (evergreenWithDefaultScore ? 70 : null);
       insertPayload.factors_json = item.factors_json || (
         item.category === 'trivia' ? { source: 'trivia_generator' } :
         item.category === 'facts' ? { source: 'wikidata_facts' } :
         item.category === 'riddle' ? { source: 'riddle_generator' } :
         item.category === 'mindteaser' ? { source: 'mindteaser_generator' } :
-        item.category === 'dadjoke' ? { source: 'dad_joke_generator' } : { source: 'wikipedia_psychology' }
+        item.category === 'dadjoke' ? { source: 'dad_joke_generator' } :
+        item.category === 'trickquestion' ? { source: 'trick_question_generator' } : { source: 'wikipedia_psychology' }
       );
     }
     const { data, error } = await supabaseClient

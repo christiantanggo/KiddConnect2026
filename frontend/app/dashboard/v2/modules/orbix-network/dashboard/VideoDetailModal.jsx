@@ -931,13 +931,13 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                     );
                   }
                   if (isConceptFirst) {
-                    // Psychology + Money: show fields in exact video playback order
+                    // Psychology: show fields in exact video playback order
                     const question = (script.what_happens_next || '').trim();
                     const bodyLines = (script.what_happened || '').split('\n').map(l => l.trim()).filter(Boolean);
                     const conceptName = bodyLines[0] || '';
                     const likeWhen = bodyLines[1] || '';
                     const payoff = (script.why_it_matters || '').trim();
-                    const label2 = isPsychology ? 'Concept Name' : 'Behaviour Name';
+                    const label2 = 'Concept Name';
                     return (
                       <div className="space-y-3">
                         <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>

@@ -137,7 +137,6 @@ function isQuestion(text) {
 /**
  * Validate Shorts-native script.
  * Psychology uses a separate, lighter validation (concept-first format: question → name → "Like when..." → payoff).
- * Money uses full word-count + banned-word check.
  * @param {{ hook?: string, what_happened?: string, why_it_matters?: string, what_happens_next?: string }} scriptData
  * @param {string} [topic] - 'psychology' | other
  * @returns {{ compliant: boolean, reason?: string }}
@@ -342,8 +341,46 @@ export async function generateScript(story, rawItem) {
   const isTrivia = story.category === 'trivia';
   const isFacts = story.category === 'facts';
   const isDadJoke = story.category === 'dadjoke';
+  const isTrickQuestion = story.category === 'trickquestion';
 
   try {
+    // Trick question: same shape as dad joke (setup + punchline after countdown)
+    if (isTrickQuestion && rawItem?.snippet) {
+      let item;
+      try {
+        item = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
+      } catch {
+        console.error('[Script Generator] Trick question snippet is not valid JSON');
+        throw new Error('Trick question snippet must be valid JSON');
+      }
+      const setup = (item.setup || '').trim();
+      const punchline = (item.punchline || '').trim();
+      const voice_script = (item.voice_script || setup).trim();
+      const { getTrickQuestionCta } = await import('./trick-question-cta.js');
+      const endCta = (item.hook || getTrickQuestionCta(item.episode_number ?? 0)).trim();
+      if (!setup || !punchline) {
+        throw new Error('Trick question snippet missing setup or punchline');
+      }
+      const script = {
+        hook: '',
+        what_happened: setup,
+        why_it_matters: punchline,
+        what_happens_next: '',
+        cta_line: endCta,
+        duration_target_seconds: 10,
+        content_type: 'trickquestion',
+        content_json: {
+          setup,
+          punchline,
+          voice_script,
+          hook: endCta,
+          episode_number: item.episode_number
+        }
+      };
+      console.log('[Script Generator] Trick question script from snippet (same pipeline as dad joke)');
+      return script;
+    }
+
     // Dad joke: use actual setup + punchline from raw item (no LLM — these are real jokes, not a story about jokes)
     if (isDadJoke && rawItem?.snippet) {
       let joke;
@@ -796,7 +833,7 @@ export async function generateAndSaveScript(businessId, story) {
   console.log(`[Script Generator] Story ID: ${story.id}, Business ID: ${businessId}`);
 
   // Riddle/trivia/facts/mindteaser/dadjoke must use ensureTriviaScript (script from raw item snippet). This generator has no riddle branch and would produce an explainer.
-  const pipelineOnly = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke'].includes((story?.category || '').toLowerCase());
+  const pipelineOnly = ['riddle', 'trivia', 'facts', 'mindteaser', 'dadjoke', 'trickquestion'].includes((story?.category || '').toLowerCase());
   if (pipelineOnly) {
     throw new Error(`Script for ${story?.category || 'this content type'} must be created via ensureTriviaScript (pipeline), not generateAndSaveScript. Use the pipeline or ensureTriviaScript.`);
   }

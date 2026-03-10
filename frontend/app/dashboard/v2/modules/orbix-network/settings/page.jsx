@@ -547,7 +547,7 @@ function ChannelSettingsTab({ channel }) {
       const enableUrl = searchParams.get('enable_url') || 'https://console.developers.google.com/apis/library/youtube.googleapis.com';
       showError('YouTube Data API v3 is not enabled for this Google Cloud project. Open: ' + enableUrl + ' → Enable, then try Connect again.');
     } else if (err === 'youtube_oauth_failed' || err === 'youtube_oauth_error') {
-      showError('YouTube connection failed: callback received no authorization code. Check backend logs for "[Riddle YouTube Callback] received query" to see what the server got — the code may be stripped by a proxy or Google may be redirecting to a different URL.');
+      showError('YouTube connection failed: callback received no authorization code. Check backend logs for "YouTube Callback received query" to see what the server got — the code may be stripped by a proxy or Google may be redirecting to a different URL.');
     } else if (err === 'invalid_state') {
       showError('Invalid state returned from Google. Try "Clear YouTube and reconnect".');
     } else if (err === 'youtube_not_configured') {
@@ -730,12 +730,13 @@ function ChannelSettingsTab({ channel }) {
 
   // ── Source handlers ──
   const handleAddSource = async () => {
-    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && sourceForm.type !== 'DAD_JOKE_GENERATOR';
+    const needsUrl = sourceForm.type !== 'WIKIPEDIA' && sourceForm.type !== 'TRIVIA_GENERATOR' && sourceForm.type !== 'WIKIDATA_FACTS' && sourceForm.type !== 'RIDDLE_GENERATOR' && sourceForm.type !== 'MIND_TEASER_GENERATOR' && sourceForm.type !== 'DAD_JOKE_GENERATOR' && sourceForm.type !== 'TRICK_QUESTION_GENERATOR';
     if (needsUrl && !(sourceForm.url || '').trim()) { showError('Source URL is required'); return; }
     const defaultName = sourceForm.type === 'TRIVIA_GENERATOR' ? 'Trivia Generator'
       : sourceForm.type === 'RIDDLE_GENERATOR' ? 'Riddle Generator'
       : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'Mind Teaser Generator'
       : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'Dad Joke Generator'
+      : sourceForm.type === 'TRICK_QUESTION_GENERATOR' ? 'Trick Question Generator'
       : sourceForm.type === 'WIKIDATA_FACTS' ? 'Wikidata Facts'
       : sourceForm.type === 'WIKIPEDIA' ? 'Psychology (Wikipedia)'
       : '';
@@ -896,10 +897,11 @@ function ChannelSettingsTab({ channel }) {
             {customOauth && (
               <>
                 <p className="text-xs text-green-700 font-medium">Custom OAuth app is set for this channel — uploads use that project&apos;s quota.</p>
-                <p className="text-xs text-amber-700">If you see <strong>Error 400: redirect_uri_mismatch</strong> when connecting, add the URI below in Google Cloud Console → APIs &amp; Services → Credentials → [this OAuth client] → Authorized redirect URIs.</p>
+                <p className="text-xs text-amber-700">If you see <strong>Error 400: redirect_uri_mismatch</strong> when connecting, add the URI below in Google Cloud. <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="font-medium text-blue-600 hover:underline">Edit OAuth in Google Cloud</a></p>
                 {ytRedirectUri ? (
                   <div className="p-3 bg-white border border-amber-300 rounded-lg">
                     <p className="text-xs font-medium text-slate-700 mb-1">Redirect URI — add this exact value in Google Cloud:</p>
+                    <p className="text-xs text-slate-500 mb-1">Same URI for all Orbix channels with Custom OAuth (Riddle, Trick Question, etc.). The path may say &quot;riddle&quot; — that is correct.</p>
                     <code className="block text-xs text-slate-900 break-all select-all p-2 bg-slate-50 border border-slate-200 rounded">{ytRedirectUri}</code>
                     <button type="button" onClick={() => { navigator.clipboard?.writeText(ytRedirectUri); success('Copied'); }} className="mt-2 text-xs text-blue-600 hover:underline font-medium">Copy</button>
                   </div>
@@ -1015,7 +1017,7 @@ function ChannelSettingsTab({ channel }) {
                 </div>
               )}
               <p className="text-xs text-amber-700 mb-3">
-                First time? In Google Cloud for this OAuth client: enable <strong>YouTube Data API v3</strong> (Library), set OAuth consent to Production, and add the exact redirect URI in Credentials. Full steps: <a href="https://github.com/christiantanggo/Tavari-Communications-Agent/blob/main/docs/YOUTUBE_OAUTH_SETUP_CHECKLIST.md" target="_blank" rel="noopener noreferrer" className="underline font-medium">YOUTUBE_OAUTH_SETUP_CHECKLIST.md</a>
+                First time? In Google Cloud for this OAuth client: enable <strong>YouTube Data API v3</strong> (Library), set OAuth consent to Production, and add the exact redirect URI in Credentials. <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 font-medium text-blue-600 hover:underline">Edit OAuth in Google Cloud →</a> Full steps: <a href="https://github.com/christiantanggo/Tavari-Communications-Agent/blob/main/docs/YOUTUBE_OAUTH_SETUP_CHECKLIST.md" target="_blank" rel="noopener noreferrer" className="underline font-medium">YOUTUBE_OAUTH_SETUP_CHECKLIST.md</a>
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <button
@@ -1054,7 +1056,8 @@ function ChannelSettingsTab({ channel }) {
               {ytRedirectUri && (
                 <div className="mt-3 p-3 bg-slate-100 rounded-lg">
                   <p className="text-xs font-medium text-slate-700 mb-1">Add this exact URI in Google Cloud → APIs &amp; Services → Credentials → [your OAuth 2.0 Client] → Authorized redirect URIs:</p>
-                  <code className="block text-xs text-slate-900 break-all select-all p-2 bg-white border border-slate-200 rounded">{ytRedirectUri}</code>
+                  <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-xs font-medium text-blue-600 hover:underline">Edit OAuth in Google Cloud</a>
+                  <code className="block text-xs text-slate-900 break-all select-all p-2 bg-white border border-slate-200 rounded mt-1">{ytRedirectUri}</code>
                   <button
                     type="button"
                     onClick={() => { navigator.clipboard?.writeText(ytRedirectUri); success('Copied to clipboard'); }}
@@ -1309,6 +1312,7 @@ function ChannelSettingsTab({ channel }) {
                     else if (v === 'RIDDLE_GENERATOR') setSourceForm((f) => ({ ...f, type: 'RIDDLE_GENERATOR', url: 'riddle://generator', category_hint: null }));
                     else if (v === 'MIND_TEASER_GENERATOR') setSourceForm((f) => ({ ...f, type: 'MIND_TEASER_GENERATOR', url: 'mindteaser://generator', category_hint: null }));
                     else if (v === 'DAD_JOKE_GENERATOR') setSourceForm((f) => ({ ...f, type: 'DAD_JOKE_GENERATOR', url: 'dadjoke://generator', category_hint: null }));
+                    else if (v === 'TRICK_QUESTION_GENERATOR') setSourceForm((f) => ({ ...f, type: 'TRICK_QUESTION_GENERATOR', url: 'trickquestion://generator', category_hint: null }));
                     else setSourceForm((f) => ({ ...f, type: v, category_hint: v === 'WIKIPEDIA' ? null : undefined }));
                   }}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm text-gray-900 bg-white"
@@ -1320,6 +1324,7 @@ function ChannelSettingsTab({ channel }) {
                   <option value="RIDDLE_GENERATOR">Riddle Generator</option>
                   <option value="MIND_TEASER_GENERATOR">Mind Teaser Generator</option>
                   <option value="DAD_JOKE_GENERATOR">Dad Joke Generator</option>
+                  <option value="TRICK_QUESTION_GENERATOR">Trick Question Generator</option>
                   <option value="WIKIDATA_FACTS">Wikidata Facts</option>
                 </select>
               </div>
@@ -1327,14 +1332,15 @@ function ChannelSettingsTab({ channel }) {
                 <label className="block text-xs font-medium text-gray-600 mb-1">URL</label>
                 <input
                   type="text"
-                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator' : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator' : sourceForm.url}
-                  onChange={(e) => !['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR'].includes(sourceForm.type) && setSourceForm((f) => ({ ...f, url: e.target.value }))}
-                  readOnly={['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR'].includes(sourceForm.type)}
+                  value={sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator' : sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator' : sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator' : sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator' : sourceForm.type === 'TRICK_QUESTION_GENERATOR' ? 'trickquestion://generator' : sourceForm.url}
+                  onChange={(e) => !['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR', 'TRICK_QUESTION_GENERATOR'].includes(sourceForm.type) && setSourceForm((f) => ({ ...f, url: e.target.value }))}
+                  readOnly={['TRIVIA_GENERATOR', 'RIDDLE_GENERATOR', 'MIND_TEASER_GENERATOR', 'DAD_JOKE_GENERATOR', 'TRICK_QUESTION_GENERATOR'].includes(sourceForm.type)}
                   placeholder={
                     sourceForm.type === 'TRIVIA_GENERATOR' ? 'trivia://generator (auto)' :
                     sourceForm.type === 'RIDDLE_GENERATOR' ? 'riddle://generator (auto)' :
                     sourceForm.type === 'MIND_TEASER_GENERATOR' ? 'mindteaser://generator (auto)' :
                     sourceForm.type === 'DAD_JOKE_GENERATOR' ? 'dadjoke://generator (auto)' :
+                    sourceForm.type === 'TRICK_QUESTION_GENERATOR' ? 'trickquestion://generator (auto)' :
                     sourceForm.type === 'WIKIPEDIA' ? 'Leave blank for default categories' :
                     'https://example.com/feed.xml'
                   }
@@ -1386,7 +1392,7 @@ function ChannelSettingsTab({ channel }) {
                         {src.enabled ? 'Active' : 'Disabled'}
                       </span>
                     </div>
-                    {src.url && src.url !== 'trivia://generator' && src.url !== 'riddle://generator' && src.url !== 'mindteaser://generator' && src.url !== 'dadjoke://generator' && (
+                    {src.url && src.url !== 'trivia://generator' && src.url !== 'riddle://generator' && src.url !== 'mindteaser://generator' && src.url !== 'dadjoke://generator' && src.url !== 'trickquestion://generator' && (
                       <p className="text-xs text-gray-500 truncate mt-0.5">{src.url}</p>
                     )}
                   </div>

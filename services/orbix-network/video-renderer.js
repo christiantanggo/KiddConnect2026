@@ -401,9 +401,8 @@ export async function generateAudio(script, story = null) {
     const cat = (story?.category || '').toLowerCase();
     const isPsychology = cat === 'psychology';
 
-    // Psychology + Money: voice speaks question first, then body (concept/behaviour name → "Like when..." → payoff).
-    // Speaking the question confirms it's in the video before upload.
-    if (isPsychology || isMoney) {
+    // Psychology: voice speaks question first, then body (concept name → "Like when..." → payoff).
+    if (isPsychology) {
       const question = (script.what_happens_next || '').trim();
       const bodyOnly = [script.what_happened, script.why_it_matters].filter(Boolean).join(' ').trim();
       if (!bodyOnly) throw new Error('Psychology script missing what_happened or why_it_matters');
