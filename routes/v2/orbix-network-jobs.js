@@ -57,6 +57,7 @@ const SOURCE_TYPE_TO_CATEGORIES = {
   RIDDLE_GENERATOR: ['riddle'],
   MIND_TEASER_GENERATOR: ['mindteaser'],
   DAD_JOKE_GENERATOR: ['dadjoke'],
+  TRICK_QUESTION_GENERATOR: ['trickquestion'],
   RSS: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology'],
   HTML: ['ai-automation', 'corporate-collapses', 'tech-decisions', 'laws-rules', 'money-markets', 'psychology'],
 };

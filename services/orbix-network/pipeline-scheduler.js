@@ -12,7 +12,7 @@ import { processRawItem } from './classifier.js';
 import { supabaseClient } from '../../config/database.js';
 import { selectTemplate, selectBackground } from './video-renderer.js';
 
-const EVERGREEN_CATEGORIES = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+const EVERGREEN_CATEGORIES = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'];
 
 /**
  * For trivia/facts/riddle/mindteaser/dadjoke the script is in the raw item's snippet JSON.
@@ -50,11 +50,12 @@ export async function ensureTriviaScript(businessId, story) {
     } catch (_) { /* snippet not JSON — use as-is */ }
   }
 
-  // Riddles use riddle_text + answer_text; mindteasers use question + answer; dadjoke uses setup + punchline.
+  // Riddles use riddle_text + answer_text; mindteasers use question + answer; dadjoke/trickquestion use setup + punchline.
   const isRiddle = story.category === 'riddle';
   const isMindTeaser = story.category === 'mindteaser';
   const isDadJoke = story.category === 'dadjoke';
-  if (!voiceScript && !isRiddle && !isMindTeaser && !isDadJoke) {
+  const isTrickQuestion = story.category === 'trickquestion';
+  if (!voiceScript && !isRiddle && !isMindTeaser && !isDadJoke && !isTrickQuestion) {
     console.warn(`[Pipeline Scheduler] No voice_script in snippet for story ${story.id} (${story.category}) — skipping script creation`);
     return null;
   }
@@ -235,7 +236,7 @@ export async function runAutomatedPipeline(businessId) {
       .select('*')
       .eq('business_id', businessId)
       .eq('status', 'APPROVED')
-      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.trivia,category.eq.facts,category.eq.riddle,category.eq.mindteaser`)
+      .or(`shock_score.gte.${threshold},category.eq.psychology,category.eq.trivia,category.eq.facts,category.eq.riddle,category.eq.mindteaser,category.eq.dadjoke,category.eq.trickquestion`)
       .order('shock_score', { ascending: false });
     
     if (storiesError1) throw storiesError1;

@@ -3,6 +3,7 @@
  * Psychology and evergreen categories use dedicated title/description/hashtag rules.
  */
 import { getDadJokeCta } from './dad-joke-cta.js';
+import { getTrickQuestionCta } from './trick-question-cta.js';
 
 const PSYCHOLOGY_HASHTAGS = [
   '#psychology',
@@ -68,7 +69,8 @@ const CATEGORY_HASHTAGS = {
   'facts': FACTS_HASHTAGS,
   'riddle': RIDDLE_HASHTAGS,
   'mindteaser': MINDTEASER_HASHTAGS,
-  'dadjoke': DAD_JOKE_HASHTAGS
+  'dadjoke': DAD_JOKE_HASHTAGS,
+  'trickquestion': TRICK_QUESTION_HASHTAGS
 };
 
 /** Remove emojis and common Unicode symbols from a string. */
@@ -171,6 +173,12 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
     const cta = getDadJokeCta(episodeIndex);
     description = 'Clean humor. Family friendly. ' + cta;
     hashtags = DAD_JOKE_HASHTAGS.slice(0, 6).join(' ');
+  } else if (isTrickQuestion) {
+    title = sanitizeTitleForYouTube(story?.title || 'Trick Question');
+    const episodeIndex = content?.episode_number ?? 0;
+    const cta = getTrickQuestionCta(episodeIndex);
+    description = 'Trick questions and surprising answers. ' + cta;
+    hashtags = TRICK_QUESTION_HASHTAGS.slice(0, 6).join(' ');
   } else if (isMindTeaser) {
     const questionText = (content?.question || '').trim();
     const answerText = (content?.answer || '').trim();

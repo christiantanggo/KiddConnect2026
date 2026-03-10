@@ -1332,6 +1332,12 @@ export async function processRenderJob(render) {
       return await processDadJokeRenderJob(render, story, script);
     }
 
+    // Trick question uses same timeline as dad joke (setup + countdown + reveal)
+    if ((story?.category || '').toLowerCase() === 'trickquestion') {
+      const { processTrickQuestionRenderJob } = await import('./trickquestion-renderer.js');
+      return await processTrickQuestionRenderJob(render, story, script);
+    }
+
     // Psychology + Money: TTS speaks question first then body. Add a short breath pause (0.3s) before voice starts.
     const cat2 = (story?.category || '').toLowerCase();
     const isPsychology = cat2 === 'psychology';

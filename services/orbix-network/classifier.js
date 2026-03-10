@@ -182,7 +182,7 @@ export async function processRawItem(businessId, rawItem) {
       if (shockScore == null || shockScore === undefined) shockScore = 70;
     }
     const factorsJson = rawItem.factors_json;
-    const evergreenCategories = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke'];
+    const evergreenCategories = ['psychology', 'trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'];
     const isEvergreenCategory = category && evergreenCategories.includes(category);
     // If category is set and evergreen, we can use pre-calculated path even without shock_score (use default)
     const effectiveScore = (isEvergreenCategory && (shockScore == null || shockScore === undefined)) ? 50 : shockScore;
@@ -244,7 +244,7 @@ export async function processRawItem(businessId, rawItem) {
       
       // Create story (channel_id from raw item for multi-channel support)
       // Trivia, facts, riddle, mindteaser, dadjoke are auto-approved; others start as PENDING
-      const storyStatus = (finalCategory === 'trivia' || finalCategory === 'facts' || finalCategory === 'riddle' || finalCategory === 'mindteaser' || finalCategory === 'dadjoke') ? 'APPROVED' : 'PENDING';
+      const storyStatus = (finalCategory === 'trivia' || finalCategory === 'facts' || finalCategory === 'riddle' || finalCategory === 'mindteaser' || finalCategory === 'dadjoke' || finalCategory === 'trickquestion') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({
@@ -287,7 +287,7 @@ export async function processRawItem(businessId, rawItem) {
 
       // Create story using pre-calculated values (channel_id from raw item)
       const storyScore = scoreForThreshold ?? shockScore ?? 50;
-      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke') ? 'APPROVED' : 'PENDING';
+      const storyStatus = (category === 'trivia' || category === 'facts' || category === 'riddle' || category === 'mindteaser' || category === 'dadjoke' || category === 'trickquestion') ? 'APPROVED' : 'PENDING';
       const { data: story, error } = await supabaseClient
         .from('orbix_stories')
         .insert({

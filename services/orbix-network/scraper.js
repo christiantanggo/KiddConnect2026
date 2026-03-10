@@ -505,6 +505,58 @@ async function scrapeDadJokeSource(source) {
 }
 
 /**
+ * Generate one trick question via TRICK_QUESTION_GENERATOR (same raw-item shape as dad joke).
+ */
+async function scrapeTrickQuestionSource(source) {
+  try {
+    const { generateAndValidateTrickQuestion } = await import('./trick-question-generator.js');
+    const businessId = source.business_id;
+    const channelId = source.channel_id;
+    if (!businessId || !channelId) {
+      console.warn('[Orbix Scraper] Trick question source missing business_id or channel_id');
+      return [];
+    }
+    const { count } = await supabaseClient
+      .from('orbix_raw_items')
+      .select('*', { count: 'exact', head: true })
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .eq('category', 'trickquestion');
+    const episodeNumber = (count || 0) + 1;
+    const item = await generateAndValidateTrickQuestion(businessId, channelId, { episodeNumber });
+    if (!item) {
+      console.log('[Orbix Scraper] Trick question generator produced no valid item');
+      return [];
+    }
+    const title = `Trick Question #${String(episodeNumber).padStart(2, '0')}`;
+    const url = `trickquestion://${item.content_fingerprint}`;
+    const snippet = JSON.stringify({
+      hook: item.hook,
+      setup: item.setup,
+      punchline: item.punchline,
+      voice_script: item.voice_script,
+      episode_number: item.episode_number
+    });
+    return [{
+      source_id: source.id,
+      channel_id: channelId,
+      title,
+      snippet,
+      url,
+      published_at: new Date().toISOString(),
+      content_type: 'trickquestion',
+      category: 'trickquestion',
+      shock_score: 70,
+      content_fingerprint: item.content_fingerprint,
+      factors_json: { source: 'trick_question_generator' }
+    }];
+  } catch (error) {
+    console.error('[Orbix Scraper] Trick question source error:', error.message);
+    throw error;
+  }
+}
+
+/**
  * Extract first paragraph/snippet from text
  */
 function extractSnippet(text) {
