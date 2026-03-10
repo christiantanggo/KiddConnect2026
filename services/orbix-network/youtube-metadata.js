@@ -3,7 +3,19 @@
  * Psychology and evergreen categories use dedicated title/description/hashtag rules.
  */
 import { getDadJokeCta } from './dad-joke-cta.js';
-import { getTrickQuestionCta } from './trick-question-cta.js';
+
+// Inlined so youtube-metadata loads even if trick-question-cta.js is missing on deploy (avoids breaking other channels).
+const TRICK_QUESTION_CTA_OPTIONS = [
+  'Did you fall for it? Comment below',
+  'How many got this wrong? 1–10',
+  'Did you guess before the reveal?',
+  'Trick questions every week — follow for more',
+];
+function getTrickQuestionCta(index) {
+  const i = Number(index);
+  const idx = (isNaN(i) || i < 0 ? 0 : Math.floor(i)) % TRICK_QUESTION_CTA_OPTIONS.length;
+  return TRICK_QUESTION_CTA_OPTIONS[idx];
+}
 
 const PSYCHOLOGY_HASHTAGS = [
   '#psychology',
@@ -57,6 +69,15 @@ const DAD_JOKE_HASHTAGS = [
   '#cleanhumor',
   '#dadjoke',
   '#comedy'
+];
+
+const TRICK_QUESTION_HASHTAGS = [
+  '#trickquestion',
+  '#brainteaser',
+  '#shorts',
+  '#riddle',
+  '#thinkaboutit',
+  '#puzzle'
 ];
 
 const CATEGORY_HASHTAGS = {
@@ -162,6 +183,7 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
   const isRiddle = (story?.category || '').toLowerCase() === 'riddle';
   const isMindTeaser = (story?.category || '').toLowerCase() === 'mindteaser';
   const isDadJoke = (story?.category || '').toLowerCase() === 'dadjoke';
+  const isTrickQuestion = (story?.category || '').toLowerCase() === 'trickquestion';
 
   let title;
   let description;
