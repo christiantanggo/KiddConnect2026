@@ -71,9 +71,35 @@ export async function ensureTriviaScript(businessId, story) {
     console.warn(`[Pipeline Scheduler] No setup/punchline in snippet for dadjoke story ${story.id} — skipping script creation`);
     return null;
   }
-  if (isTrickQuestion && (!contentJson?.setup || !contentJson?.punchline)) {
-    console.warn(`[Pipeline Scheduler] No setup/punchline in snippet for trickquestion story ${story.id} — skipping script creation`);
-    return null;
+  // Trick question: accept new format (setup/punchline) OR old format (question/answer or question/answer_text) so existing scraped items work
+  let trickContent = contentJson;
+  if (isTrickQuestion) {
+    const hasNew = contentJson?.setup && contentJson?.punchline;
+    const hasOld = contentJson?.question && (contentJson?.answer || contentJson?.answer_text);
+    if (!hasNew && hasOld) {
+      trickContent = {
+        ...(contentJson || {}),
+        setup: (contentJson.question || '').trim(),
+        punchline: (contentJson.answer || contentJson.answer_text || '').trim(),
+        voice_script: (contentJson.voice_script || contentJson.question || '').trim(),
+      };
+      contentJson = trickContent;
+      voiceScript = voiceScript || trickContent.voice_script || trickContent.setup;
+    } else if (!hasNew && !hasOld) {
+      console.warn(`[Pipeline Scheduler] No setup/punchline or question/answer in snippet for trickquestion story ${story.id} — skipping script creation`);
+      return null;
+    }
+  }
+
+  // For dad joke and trick question: store setup + punchline in what_happened/why_it_matters so UI and API always have Question + Answer (like trivia).
+  let whatHappened = voiceScript;
+  let whyItMatters = '';
+  if (isDadJoke && contentJson?.setup != null && contentJson?.punchline != null) {
+    whatHappened = (contentJson.setup || '').trim();
+    whyItMatters = (contentJson.punchline || '').trim();
+  } else if (isTrickQuestion && contentJson?.setup != null && contentJson?.punchline != null) {
+    whatHappened = (contentJson.setup || '').trim();
+    whyItMatters = (contentJson.punchline || '').trim();
   }
 
   const { data: script, error } = await supabaseClient
@@ -82,8 +108,8 @@ export async function ensureTriviaScript(businessId, story) {
       business_id: businessId,
       story_id: story.id,
       hook: hook || '',
-      what_happened: voiceScript,
-      why_it_matters: '',
+      what_happened: whatHappened || '',
+      why_it_matters: whyItMatters,
       what_happens_next: '',
       cta_line: '',
       duration_target_seconds: 35,

@@ -357,6 +357,35 @@ export default function OrbixNetworkReviewPage() {
                                   const labelTwist = isShortsNative ? 'Twist' : 'What Happened';
                                   const labelPayoff = isShortsNative ? 'Payoff' : 'Why It Matters';
                                   const labelLoop = isShortsNative ? 'Loop' : 'What Happens Next';
+                                  let cj = {};
+                                  try {
+                                    cj = script?.content_json
+                                      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                                      : {};
+                                  } catch (_) { /* ignore */ }
+                                  // Trick question: show Question then Answer, same as trivia channel
+                                  if (cat === 'trickquestion') {
+                                    const question = cj.setup ?? script?.what_happened ?? '';
+                                    const answer = cj.punchline ?? script?.why_it_matters ?? '';
+                                    return (
+                                      <>
+                                        <div>
+                                          <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Question</p>
+                                          <p className="text-gray-900 font-medium">{question || '—'}</p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs font-semibold text-green-700 uppercase mb-1">Answer</p>
+                                          <p className="text-green-900 font-semibold">{answer || '—'}</p>
+                                        </div>
+                                        {(script?.hook || cj?.hook) && (
+                                          <div>
+                                            <p className="text-sm font-medium text-gray-700 mb-1">Hook:</p>
+                                            <p className="text-gray-600">{script.hook || cj.hook}</p>
+                                          </div>
+                                        )}
+                                      </>
+                                    );
+                                  }
                                   return (
                                     <>
                                       {script.hook && (

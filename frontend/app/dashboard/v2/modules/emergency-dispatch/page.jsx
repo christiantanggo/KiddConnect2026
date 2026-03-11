@@ -308,15 +308,22 @@ export default function EmergencyDispatchPage() {
   const handleWebsiteHeroUpload = async (pageKey, file) => {
     if (!file) return;
     setWebsiteHeroUploading(true);
+    setWebsitePageSaveMessage(null);
     try {
       const formData = new FormData();
       formData.append('file', file);
       const res = await emergencyNetworkAPI.uploadWebsiteHero(formData, pageKey);
       const url = res.data?.url;
-      if (url && websitePageContent && typeof websitePageContent === 'object') {
-        setWebsitePageContent((c) => ({ ...c, hero_image_url: url }));
-        setWebsitePageDirty(true);
+      if (!url) {
+        setWebsitePageSaveMessage('Upload did not return a URL');
+        return;
       }
+      const currentContent = websitePageContent ?? getDefaultWebsiteContent(pageKey);
+      const newContent = { ...currentContent, hero_image_url: url };
+      setWebsitePageContent(newContent);
+      setWebsitePageDirty(false);
+      await emergencyNetworkAPI.updateWebsitePage(pageKey, newContent);
+      setWebsitePageSaveMessage('Hero image saved. It will appear on the public page shortly.');
     } catch (e) {
       setWebsitePageSaveMessage(e.response?.data?.error || 'Upload failed');
     } finally {
@@ -1288,7 +1295,7 @@ export default function EmergencyDispatchPage() {
                           </label>
                           {websiteHeroUploading && <span className="text-sm text-slate-500">Uploading...</span>}
                         </div>
-                        <p className="text-xs text-amber-700 mt-2">After uploading, click <strong>Save page</strong> below to keep the image.</p>
+                        <p className="text-xs text-slate-500 mt-2">The hero image is saved automatically when you upload. It will appear on the public Emergency Dispatch and Emergency Response pages.</p>
                       </div>
                       <div>
                         <label className="block text-sm font-medium text-slate-700 mb-1">Hero header</label>

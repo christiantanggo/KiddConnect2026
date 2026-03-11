@@ -70,9 +70,10 @@ async function logStepEvent(renderId, step, event, message, data = null) {
 }
 
 /**
- * Update render step status
+ * Update render step status in DB (so pipeline UI progress bar updates).
+ * Exported for use by category-specific renderers (dadjoke, trivia, etc.).
  */
-async function updateStepStatus(renderId, step, progress, error = null) {
+export async function updateStepStatus(renderId, step, progress, error = null) {
   const updateData = {
     render_step: step,
     step_progress: progress,

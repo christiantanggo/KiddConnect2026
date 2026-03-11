@@ -117,7 +117,7 @@ export function handleAPIError(error, router = null) {
     case 500:
     default:
       return {
-        message: data.message || 'An unexpected error occurred. Please try again later.',
+        message: data.error || data.message || 'An unexpected error occurred. Please try again later.',
         redirect: null,
         code: code || 'SERVER_ERROR'
       };

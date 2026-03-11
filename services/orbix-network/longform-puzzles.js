@@ -102,12 +102,12 @@ export async function getPuzzleExplanation(puzzleId) {
 }
 
 /**
- * List long-form videos for a channel.
+ * List long-form videos for a channel (puzzle and dad joke).
  */
 export async function listLongformVideos(businessId, channelId) {
   let q = supabaseClient
     .from('orbix_longform_videos')
-    .select('id, title, subtitle, hook_text, thumbnail_path, video_path, render_status, total_puzzles, duration_seconds, created_at')
+    .select('id, title, subtitle, hook_text, thumbnail_path, video_path, render_status, total_puzzles, duration_seconds, longform_type, generated_background_url, created_at')
     .eq('business_id', businessId)
     .order('created_at', { ascending: false });
   if (channelId) q = q.eq('channel_id', channelId);
@@ -117,7 +117,7 @@ export async function listLongformVideos(businessId, channelId) {
 }
 
 /**
- * Get one long-form video with its puzzle links and puzzle details.
+ * Get one long-form video with its puzzle links (puzzle type) or dad joke script (dadjoke type).
  */
 export async function getLongformVideoById(videoId, businessId, channelId = null) {
   let q = supabaseClient
@@ -128,6 +128,21 @@ export async function getLongformVideoById(videoId, businessId, channelId = null
   if (channelId) q = q.eq('channel_id', channelId);
   const { data: video, error: videoErr } = await q.single();
   if (videoErr || !video) throw videoErr || new Error('Long-form video not found');
+
+  const longformType = (video.longform_type || 'puzzle').toLowerCase();
+
+  if (longformType === 'dadjoke') {
+    const { data: dadjokeRow } = await supabaseClient
+      .from('orbix_longform_dadjoke_data')
+      .select('story_id, script_json, generated_at')
+      .eq('longform_video_id', videoId)
+      .maybeSingle();
+    return {
+      ...video,
+      puzzles: [],
+      dadjoke_data: dadjokeRow ? { story_id: dadjokeRow.story_id, script_json: dadjokeRow.script_json || {}, generated_at: dadjokeRow.generated_at } : null,
+    };
+  }
 
   const { data: links } = await supabaseClient
     .from('orbix_longform_video_puzzles')

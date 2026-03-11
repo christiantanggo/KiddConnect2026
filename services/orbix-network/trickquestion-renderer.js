@@ -19,6 +19,7 @@ import {
 } from './video-renderer.js';
 import { buildYouTubeMetadata } from './youtube-metadata.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
+import { updateStepStatus } from './render-steps.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
@@ -152,20 +153,25 @@ export async function processTrickQuestionRenderJob(render, story, script) {
 
   writeProgressLog('TRICKQUESTION_RENDER_START', { renderId });
   setCurrentRender(renderId, 'TRICKQUESTION_RENDER');
+  await updateStepStatus(renderId, 'TRICKQUESTION_RENDER', 0);
 
-  const content = script?.content_json
-    ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
-    : {};
+  // Same content source as dad joke: content_json first, then script columns (what_happened = question/setup, why_it_matters = answer/punchline)
+  let content = {};
+  try {
+    content = script?.content_json
+      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+      : {};
+  } catch (_) { /* ignore */ }
   const { getTrickQuestionCta } = await import('./trick-question-cta.js');
   const episodeIndex = content?.episode_number ?? 0;
   const defaultCta = getTrickQuestionCta(episodeIndex);
-  const setup = stripEmoji((content?.setup || '').trim().slice(0, 200));
-  const punchline = stripEmoji((content?.punchline || '').trim().slice(0, 100));
-  const voice_script = stripEmoji((content?.voice_script || setup).trim().slice(0, 300));
-  const hook = stripEmoji((content?.hook || defaultCta).trim());
+  const setup = stripEmoji((content?.setup || script?.what_happened || '').trim().slice(0, 200));
+  const punchline = stripEmoji((content?.punchline || script?.why_it_matters || '').trim().slice(0, 100));
+  const voice_script = stripEmoji((content?.voice_script || setup || '').trim().slice(0, 300));
+  const hook = stripEmoji((content?.hook || script?.cta_line || defaultCta).trim());
 
   if (!setup || !punchline) {
-    throw new Error(`Trick question render missing content: setup="${setup}" punchline="${punchline}"`);
+    throw new Error(`Trick question render missing content: setup="${setup}" punchline="${punchline}". Use Rewrite to generate new question + answer.`);
   }
 
   const backgroundStoragePath = render.background_storage_path ?? null;
@@ -192,6 +198,7 @@ export async function processTrickQuestionRenderJob(render, story, script) {
     await fs.promises.writeFile(bgPath, imgResp.data);
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
+    await updateStepStatus(renderId, 'TRICKQUESTION_RENDER', 40);
 
     assPath = await generateTrickQuestionASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd, episode_number: episodeIndex });
     simpleAssPath = join(tmpdir(), `trickquestion-ass-${renderId}-${Date.now()}.ass`);
@@ -225,6 +232,7 @@ export async function processTrickQuestionRenderJob(render, story, script) {
         { timeout: 60000 }
       );
     }
+    await updateStepStatus(renderId, 'TRICKQUESTION_RENDER', 80);
 
     const { title, description, hashtags } = buildYouTubeMetadata(story, script, renderId);
     await supabaseClient.from('orbix_renders').update({

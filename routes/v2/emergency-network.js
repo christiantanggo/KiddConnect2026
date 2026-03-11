@@ -216,7 +216,16 @@ router.get('/public/website-page/:key', async (req, res) => {
     if (error || !data) {
       return res.json(DEFAULT_WEBSITE_PAGE[key] || {});
     }
-    res.json(data.content || {});
+    let content = data.content;
+    if (typeof content === 'string') {
+      try {
+        content = JSON.parse(content);
+      } catch (_) {
+        content = {};
+      }
+    }
+    res.set('Cache-Control', 'public, max-age=60'); // allow short cache; updates (e.g. hero image) show within a minute
+    res.json(content && typeof content === 'object' ? content : {});
   } catch (err) {
     console.error('[EmergencyNetwork] public/website-page error:', err?.message || err);
     res.status(500).json({ error: 'Failed to load page content' });

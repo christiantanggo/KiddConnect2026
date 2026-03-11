@@ -28,9 +28,13 @@ function useEmergencyPhone() {
 function useWebsitePageContent(pageKey) {
   const [content, setContent] = useState(null);
   useEffect(() => {
-    fetch(`${API_URL}/api/v2/emergency-network/public/website-page/${pageKey}`)
+    fetch(`${API_URL}/api/v2/emergency-network/public/website-page/${pageKey}`, { cache: 'no-store' })
       .then((r) => r.ok ? r.json() : null)
-      .then((d) => setContent(d && typeof d === 'object' ? d : null))
+      .then((d) => {
+        const raw = d && typeof d === 'object' ? d : null;
+        const contentObj = raw && raw.content !== undefined ? raw.content : raw;
+        setContent(contentObj && typeof contentObj === 'object' ? contentObj : null);
+      })
       .catch(() => setContent(null));
   }, [pageKey]);
   return content;

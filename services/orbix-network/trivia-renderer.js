@@ -22,6 +22,7 @@ import {
 } from './video-renderer.js';
 import { buildYouTubeMetadata } from './youtube-metadata.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
+import { updateStepStatus } from './render-steps.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
 const execAsync = promisify(exec);
@@ -46,6 +47,7 @@ export async function processTriviaRenderJob(render, story, script) {
 
   writeProgressLog('TRIVIA_RENDER_START', { renderId });
   setCurrentRender(renderId, 'TRIVIA_RENDER');
+  await updateStepStatus(renderId, 'TRIVIA_RENDER', 0);
 
   const content = script?.content_json
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
@@ -148,6 +150,7 @@ export async function processTriviaRenderJob(render, story, script) {
 
     try { await unlinkAsync(assFilePath); } catch (_) {}
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
+    await updateStepStatus(renderId, 'TRIVIA_RENDER', 50);
 
     // 5. Generate trivia TTS: question starts at 1s (hook enabled) or 0s (hook disabled)
     const audioResult = await generateTriviaAudio(
@@ -184,6 +187,7 @@ export async function processTriviaRenderJob(render, story, script) {
         { timeout: 60000 }
       );
     }
+    await updateStepStatus(renderId, 'TRIVIA_RENDER', 90);
 
     // 7. Metadata
     const { title, description, hashtags } = buildYouTubeMetadata(story, script, renderId);

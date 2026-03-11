@@ -255,23 +255,24 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     const segment3Path = join(tmpdir(), `orbix-segment3-${Date.now()}.mp4`);
     const segment4Path = join(tmpdir(), `orbix-segment4-${Date.now()}.mp4`);
     
+    const segmentTimeoutMs = duration > 120 ? 10 * 60 * 1000 : 2 * 60 * 1000;
     console.log(`[Orbix Video Renderer] Applying 4-segment A-B-A-B motion (segment=${segmentDuration.toFixed(1)}s each, total=${duration}s)...`);
     
     // Segment 1: Zoom in
     const segment1Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment1Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment1Path}"`;
-    await execAsync(segment1Command, { timeout: 2 * 60 * 1000 });
+    await execAsync(segment1Command, { timeout: segmentTimeoutMs });
     
     // Segment 2: Pan right-to-left, upper angle
     const segment2Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment2Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment2Path}"`;
-    await execAsync(segment2Command, { timeout: 2 * 60 * 1000 });
+    await execAsync(segment2Command, { timeout: segmentTimeoutMs });
     
     // Segment 3: Zoom out
     const segment3Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment3Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment3Path}"`;
-    await execAsync(segment3Command, { timeout: 2 * 60 * 1000 });
+    await execAsync(segment3Command, { timeout: segmentTimeoutMs });
     
     // Segment 4: Pan left-to-right, lower angle
     const segment4Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment4Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment4Path}"`;
-    await execAsync(segment4Command, { timeout: 2 * 60 * 1000 });
+    await execAsync(segment4Command, { timeout: segmentTimeoutMs });
     
     const concatListPath = join(tmpdir(), `orbix-concat-${Date.now()}.txt`);
     const fs = (await import('fs')).default;
@@ -284,7 +285,7 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     
     // Use concat demuxer to join segments, then trim to exact duration
     const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatListPath}" -c copy -t ${duration} -y "${videoPath}"`;
-    await execAsync(concatCommand, { timeout: 2 * 60 * 1000 });
+    await execAsync(concatCommand, { timeout: segmentTimeoutMs });
     
     // Cleanup temporary segment files
     try {
@@ -373,6 +374,171 @@ export async function uploadRenderToStorage(businessId, renderId, localPath) {
     }
   }
   return null;
+}
+
+/**
+ * Upload long-form video to Supabase Storage (dad joke long-form only).
+ * Path: businessId/longform/longformVideoId.mp4
+ * @param {string} businessId - Business ID
+ * @param {string} longformVideoId - orbix_longform_videos.id
+ * @param {string} localPath - Path to the rendered .mp4 file
+ * @returns {Promise<string|null>} Public URL or null on failure
+ */
+export async function uploadLongformVideoToStorage(businessId, longformVideoId, localPath) {
+  const fs = await import('fs');
+  const maxAttempts = 3;
+  const delayMs = 1500;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const buffer = await fs.default.promises.readFile(localPath);
+      const remotePath = `${businessId}/longform/${longformVideoId}.mp4`;
+      const { data, error } = await supabaseClient.storage
+        .from(RENDERS_BUCKET)
+        .upload(remotePath, buffer, { contentType: 'video/mp4', upsert: true });
+      if (error) {
+        console.error(`[Orbix Video Renderer] Longform upload attempt ${attempt}/${maxAttempts} failed:`, error.message);
+        if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
+        continue;
+      }
+      const { data: urlData } = supabaseClient.storage.from(RENDERS_BUCKET).getPublicUrl(data.path);
+      const baseUrl = urlData?.publicUrl ?? null;
+      const url = baseUrl ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}v=${Date.now()}` : null;
+      if (url) return url;
+    } catch (error) {
+      console.error(`[Orbix Video Renderer] Longform upload attempt ${attempt}/${maxAttempts} error:`, error?.message || error);
+      if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
+    }
+  }
+  return null;
+}
+
+/** OpenAI TTS max characters per request. */
+const TTS_MAX_CHARS = 4000;
+
+/**
+ * Split text into chunks of at most TTS_MAX_CHARS, breaking at sentence boundaries when possible.
+ */
+function chunkTextForTTS(text) {
+  if (!text || typeof text !== 'string') return [];
+  const trimmed = text.trim();
+  if (!trimmed.length) return [];
+  const chunks = [];
+  let rest = trimmed;
+  while (rest.length > 0) {
+    if (rest.length <= TTS_MAX_CHARS) {
+      chunks.push(rest);
+      break;
+    }
+    const slice = rest.slice(0, TTS_MAX_CHARS);
+    const lastSentence = slice.match(/[^.!?]*[.!?]\s*$/);
+    const breakAt = lastSentence ? slice.lastIndexOf(lastSentence[0].trim()) + lastSentence[0].trim().length : TTS_MAX_CHARS;
+    const chunk = (breakAt > 0 ? slice.slice(0, breakAt) : slice).trim();
+    if (chunk) chunks.push(chunk);
+    rest = (breakAt > 0 ? rest.slice(breakAt) : rest.slice(TTS_MAX_CHARS)).replace(/^\s+/, '');
+  }
+  return chunks;
+}
+
+/** Pause duration in seconds for [beat] in long-form scripts (0.6–1.2s). */
+const LONGFORM_BEAT_PAUSE_SEC = 0.9;
+
+/**
+ * Generate long-form narration audio using OpenAI TTS.
+ * - Splits on [beat] and inserts ~0.9s silence between segments (comedic timing).
+ * - Each segment may be long; chunks at 4000 chars for TTS limit, then concatenates.
+ * @param {string} fullScriptText - Full narration text (may contain [beat] markers)
+ * @returns {Promise<{audioPath: string, duration: number}>}
+ */
+export async function generateLongformTTS(fullScriptText) {
+  const OpenAI = (await import('openai')).default;
+  const fs = (await import('fs')).default;
+
+  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const text = (fullScriptText || '').trim();
+  if (!text) throw new Error('No script text for long-form TTS');
+
+  const tmpDir = tmpdir();
+  const ts = Date.now();
+
+  // Split by [beat] so we can insert silence between parts
+  const segments = text.split(/\s*\[beat\]\s*/gi).map((s) => s.trim()).filter(Boolean);
+  if (segments.length === 0) throw new Error('No script content after splitting on [beat]');
+
+  const segmentAudioPaths = [];
+  const toCleanup = [];
+
+  try {
+    for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+      const segmentText = segments[segIdx];
+      const chunks = chunkTextForTTS(segmentText);
+      if (chunks.length === 0) continue;
+      const chunkPaths = [];
+      for (let c = 0; c < chunks.length; c++) {
+        const partPath = join(tmpDir, `orbix-lf-tts-${ts}-s${segIdx}-c${c}.mp3`);
+        const response = await openai.audio.speech.create({
+          model: 'tts-1',
+          voice: 'alloy',
+          input: chunks[c],
+        });
+        await fs.promises.writeFile(partPath, Buffer.from(await response.arrayBuffer()));
+        chunkPaths.push(partPath);
+        toCleanup.push(partPath);
+      }
+      if (chunkPaths.length === 1) {
+        segmentAudioPaths.push(chunkPaths[0]);
+      } else {
+        const segPath = join(tmpDir, `orbix-lf-seg-${ts}-${segIdx}.mp3`);
+        const listPath = join(tmpDir, `orbix-lf-list-${ts}-${segIdx}.txt`);
+        await fs.promises.writeFile(listPath, chunkPaths.map((p) => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'), 'utf8');
+        await execAsync(
+          `ffmpeg -f concat -safe 0 -i "${listPath}" -c copy -y "${segPath}"`,
+          { timeout: 120000 }
+        );
+        try { await unlinkAsync(listPath); } catch (_) {}
+        segmentAudioPaths.push(segPath);
+        toCleanup.push(segPath);
+      }
+    }
+
+    if (segmentAudioPaths.length === 0) throw new Error('No TTS segments generated');
+
+    // Build concat list: seg0, silence, seg1, silence, ... segN
+    const silencePath = join(tmpDir, `orbix-lf-silence-${ts}.mp3`);
+    await execAsync(
+      `ffmpeg -f lavfi -i anullsrc=r=24000:cl=mono -t ${LONGFORM_BEAT_PAUSE_SEC} -q:a 9 -acodec libmp3lame -y "${silencePath}"`,
+      { timeout: 10000 }
+    );
+    toCleanup.push(silencePath);
+
+    const concatLines = [];
+    for (let i = 0; i < segmentAudioPaths.length; i++) {
+      concatLines.push(`file '${segmentAudioPaths[i].replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
+      if (i < segmentAudioPaths.length - 1) {
+        concatLines.push(`file '${silencePath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
+      }
+    }
+    const concatListPath = join(tmpDir, `orbix-lf-concat-${ts}.txt`);
+    await fs.promises.writeFile(concatListPath, concatLines.join('\n'), 'utf8');
+    toCleanup.push(concatListPath);
+
+    const outPath = join(tmpDir, `orbix-longform-tts-full-${ts}.mp3`);
+    await execAsync(
+      `ffmpeg -f concat -safe 0 -i "${concatListPath}" -c copy -y "${outPath}"`,
+      { timeout: 300000 }
+    );
+
+    const { duration } = await execAsync(
+      `ffprobe -i "${outPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+      { timeout: 10000 }
+    ).then((r) => ({ duration: parseFloat(r.stdout.trim()) })).catch(() => ({ duration: 0 }));
+
+    return { audioPath: outPath, duration: duration || 0 };
+  } finally {
+    for (const p of toCleanup) {
+      try { await unlinkAsync(p); } catch (_) {}
+    }
+  }
 }
 
 /**

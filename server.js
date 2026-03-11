@@ -169,7 +169,7 @@ app.use((req, res, next) => {
 
 // Body parsing - EXCLUDE webhook endpoints that need raw body
 // Stripe webhooks need raw body for signature verification
-const jsonParser = express.json({ limit: "10mb" });
+const jsonParser = express.json({ limit: "10mb", strict: false });
 const urlencodedParser = express.urlencoded({ extended: true });
 
 app.use((req, res, next) => {

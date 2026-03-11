@@ -1022,7 +1022,16 @@ router.get('/publishes', async (req, res) => {
 
     let query = supabaseClient
       .from('orbix_publishes')
-      .select('*')
+      .select(`
+        *,
+        orbix_renders (
+          id,
+          orbix_stories (
+            id,
+            category
+          )
+        )
+      `)
       .eq('business_id', businessId)
       .in('render_id', renderIds)
       .order('created_at', { ascending: false })
@@ -1467,16 +1476,29 @@ router.post('/stories/:id/generate-script', async (req, res) => {
     // Trick question: regenerate new Q&A, update raw item, recreate script from snippet
     if (category === 'trickquestion') {
       if (!story.raw_item_id) return res.status(400).json({ error: 'Story has no raw item' });
-      const { data: rawItem } = await supabaseClient.from('orbix_raw_items').select('id, snippet').eq('id', story.raw_item_id).single();
-      if (!rawItem) return res.status(400).json({ error: 'Raw item not found' });
+      const { data: rawItem } = await supabaseClient.from('orbix_raw_items').select('id, snippet').eq('id', story.raw_item_id).eq('business_id', businessId).single();
+      if (!rawItem) {
+        console.error('[Generate Script API] Trick question: raw item not found for story', storyId);
+        return res.status(400).json({ error: 'Raw item not found' });
+      }
       let episodeNumber = 1;
       try {
         const parsed = typeof rawItem.snippet === 'string' ? JSON.parse(rawItem.snippet) : rawItem.snippet;
         if (parsed?.episode_number != null) episodeNumber = Number(parsed.episode_number) || 1;
       } catch (_) {}
-      const { generateAndValidateTrickQuestion } = await import('../../services/orbix-network/trick-question-generator.js');
-      const item = await generateAndValidateTrickQuestion(businessId, channelId, { episodeNumber });
-      if (!item) return res.status(500).json({ error: 'Failed to generate new trick question' });
+      console.log('[Generate Script API] Trick question: generating new Q&A (episode', episodeNumber, ')...');
+      let item;
+      try {
+        const { generateAndValidateTrickQuestion } = await import('../../services/orbix-network/trick-question-generator.js');
+        item = await generateAndValidateTrickQuestion(businessId, channelId, { episodeNumber });
+      } catch (genErr) {
+        console.error('[Generate Script API] Trick question: generateAndValidateTrickQuestion threw:', genErr?.message);
+        return res.status(500).json({ error: 'Failed to generate new trick question', message: genErr?.message });
+      }
+      if (!item) {
+        console.error('[Generate Script API] Trick question: generateAndValidateTrickQuestion returned null (all attempts failed or duplicates)');
+        return res.status(500).json({ error: 'Failed to generate new trick question. Try again (e.g. OpenAI may be busy or all attempts were duplicates).' });
+      }
       const snippet = JSON.stringify({
         hook: item.hook,
         setup: item.setup,
@@ -1491,12 +1513,22 @@ router.post('/stories/:id/generate-script', async (req, res) => {
         content_fingerprint: item.content_fingerprint,
         updated_at: new Date().toISOString()
       }).eq('id', story.raw_item_id).eq('business_id', businessId);
-      if (updateRawErr) return res.status(500).json({ error: 'Failed to update raw item', details: updateRawErr.message });
+      if (updateRawErr) {
+        console.error('[Generate Script API] Trick question: failed to update raw item:', updateRawErr.message);
+        return res.status(500).json({ error: 'Failed to update raw item', details: updateRawErr.message });
+      }
       const { error: delErr } = await supabaseClient.from('orbix_scripts').delete().eq('story_id', storyId).eq('business_id', businessId);
-      if (delErr) return res.status(500).json({ error: 'Failed to remove old script', details: delErr.message });
+      if (delErr) {
+        console.error('[Generate Script API] Trick question: failed to delete old script:', delErr.message);
+        return res.status(500).json({ error: 'Failed to remove old script', details: delErr.message });
+      }
       const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
       const script = await ensureTriviaScript(businessId, story);
-      if (!script) return res.status(500).json({ error: 'Failed to create script from new content' });
+      if (!script) {
+        console.error('[Generate Script API] Trick question: ensureTriviaScript returned null');
+        return res.status(500).json({ error: 'Failed to create script from new content. Raw item may not have been updated yet.' });
+      }
+      console.log('[Generate Script API] Trick question: rewrite success, script', script.id);
       return res.json({ success: true, script, message: 'Trick question rewritten successfully', duration: Date.now() - startTime });
     }
 
@@ -2570,17 +2602,18 @@ router.get('/pipeline', async (req, res) => {
     ].filter(id => id !== null))];
     
     let rawItemTitlesMap = {};
+    let rawItemSnippetMap = {};
     if (allRawItemIds.length > 0) {
       const { data: rawItems, error: rawItemsError } = await supabaseClient
         .from('orbix_raw_items')
-        .select('id, title')
+        .select('id, title, snippet')
         .in('id', allRawItemIds);
       
       if (!rawItemsError && rawItems) {
-        rawItemTitlesMap = rawItems.reduce((acc, item) => {
-          acc[item.id] = item.title;
-          return acc;
-        }, {});
+        for (const item of rawItems) {
+          rawItemTitlesMap[item.id] = item.title;
+          rawItemSnippetMap[item.id] = item.snippet ?? null;
+        }
       }
     }
     
@@ -2597,9 +2630,16 @@ router.get('/pipeline', async (req, res) => {
       return render;
     };
 
-    // Transform pending stories to pipeline format (Step 2)
+    // Use latest render per story (Supabase nested relation order is undefined)
+    const getLatestRender = (story) => {
+      const list = Array.isArray(story?.orbix_renders) ? [...story.orbix_renders] : [];
+      list.sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      return list[0] || null;
+    };
+
+    // Transform pending stories to pipeline format (Step 2). Include snippet so modal can show story content (trick question, dad joke, etc.) while waiting for render.
     const pendingStoriesPipeline = (pendingStories || []).map(story => {
-      const render = sanitizeRenderForDisplay(story.orbix_renders && story.orbix_renders.length > 0 ? story.orbix_renders[0] : null);
+      const render = sanitizeRenderForDisplay(getLatestRender(story));
       const script = story.orbix_scripts && story.orbix_scripts.length > 0 ? story.orbix_scripts[0] : null;
       const title = (story.title && String(story.title).trim()) ? String(story.title).trim() : (story.raw_item_id ? (rawItemTitlesMap[story.raw_item_id] || 'Untitled') : 'Untitled');
       return {
@@ -2610,6 +2650,7 @@ router.get('/pipeline', async (req, res) => {
         story_category: story.category,
         story_shock_score: story.shock_score,
         story_created_at: story.created_at,
+        snippet: story.raw_item_id ? (rawItemSnippetMap[story.raw_item_id] ?? null) : null,
         script_id: script?.id || null,
         render_id: render?.id || null,
         render_status: render?.render_status || null,
@@ -2625,7 +2666,7 @@ router.get('/pipeline', async (req, res) => {
 
     // Transform active stories to pipeline format (Steps 3-7)
     const activeStoriesPipeline = (activeStories || []).map(story => {
-      const render = sanitizeRenderForDisplay(story.orbix_renders && story.orbix_renders.length > 0 ? story.orbix_renders[0] : null);
+      const render = sanitizeRenderForDisplay(getLatestRender(story));
       const storyTitle = (story.title && String(story.title).trim()) ? String(story.title).trim() : (story.raw_item_id ? (rawItemTitlesMap[story.raw_item_id] || 'Untitled') : 'Untitled');
       return {
         raw_item_id: story.raw_item_id || null,
@@ -2635,6 +2676,7 @@ router.get('/pipeline', async (req, res) => {
         story_category: story.category,
         story_shock_score: story.shock_score,
         story_created_at: story.created_at,
+        snippet: story.raw_item_id ? (rawItemSnippetMap[story.raw_item_id] ?? null) : null,
         render_id: render?.id || null,
         render_status: render?.render_status || null,
         render_step: render?.render_step || null,

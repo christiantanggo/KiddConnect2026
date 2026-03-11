@@ -27,6 +27,7 @@ import {
 } from './video-renderer.js';
 import { buildYouTubeMetadata } from './youtube-metadata.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
+import { updateStepStatus } from './render-steps.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
 const execAsync = promisify(exec);
@@ -167,6 +168,7 @@ export async function processDadJokeRenderJob(render, story, script) {
 
   writeProgressLog('DADJOKE_RENDER_START', { renderId });
   setCurrentRender(renderId, 'DADJOKE_RENDER');
+  await updateStepStatus(renderId, 'DADJOKE_RENDER', 0);
 
   const content = script?.content_json
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
@@ -208,6 +210,7 @@ export async function processDadJokeRenderJob(render, story, script) {
     await fs.promises.writeFile(bgPath, imgResp.data);
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
+    await updateStepStatus(renderId, 'DADJOKE_RENDER', 40);
 
     assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd, episode_number: episodeIndex });
     simpleAssPath = join(tmpdir(), `dadjoke-ass-${renderId}-${Date.now()}.ass`);
@@ -242,6 +245,7 @@ export async function processDadJokeRenderJob(render, story, script) {
         { timeout: 60000 }
       );
     }
+    await updateStepStatus(renderId, 'DADJOKE_RENDER', 80);
 
     const { title, description, hashtags } = buildYouTubeMetadata(story, script, renderId);
     await supabaseClient.from('orbix_renders').update({

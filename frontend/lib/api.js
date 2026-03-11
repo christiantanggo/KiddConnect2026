@@ -467,6 +467,17 @@ export const orbixNetworkAPI = {
   getLongformVideos: (params) => api.get('/v2/orbix-network/longform/videos', { params }),
   getLongformVideo: (id, params) => api.get(`/v2/orbix-network/longform/videos/${id}`, { params }),
   createLongformVideo: (data) => api.post('/v2/orbix-network/longform/videos', data),
+  // Dad Jokes long-form only (channel must have Dad Joke Generator source)
+  getLongformDadjokeJokes: (params) => api.get('/v2/orbix-network/longform/dadjoke/jokes', { params }),
+  generateLongformDadjokeScript: (data) => api.post('/v2/orbix-network/longform/dadjoke/generate-script', data, { timeout: 180000 }),
+  createLongformDadjokeVideo: (data) => api.post('/v2/orbix-network/longform/dadjoke/videos', data),
+  generateLongformDadjokeBackground: (id, params) => api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/generate-background`, {}, { params, timeout: 300000 }),
+  uploadLongformDadjokeSegmentImage: (id, formData, params) =>
+    api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/segment-image`, formData, { params, timeout: 60000 }),
+  startLongformDadjokeRender: (id, params) =>
+    api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/start-render`, {}, { params, timeout: 15000 }),
+  resetLongformDadjokeRender: (id, params) =>
+    api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/reset-render`, {}, { params }),
 };
 
 // Emergency Network API (v2). Requires X-Active-Business-Id for admin routes.

@@ -171,7 +171,11 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
       const duration = Date.now() - startTime;
       console.log(`[Modal] API call completed in ${duration}ms:`, response.data);
       
-      success('Script generated successfully');
+      const isTrickQuestion = (item.story_category || '').toLowerCase() === 'trickquestion';
+      const isDadJoke = (item.story_category || '').toLowerCase() === 'dadjoke';
+      if (isTrickQuestion) success('Trick question updated to new format. Question and answer are ready.');
+      else if (isDadJoke) success('New joke generated. Setup and punchline updated.');
+      else success('Script generated successfully');
       
       // Reload details to show updated script status
       console.log('[Modal] Reloading story details...');
@@ -473,6 +477,105 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
               <Loader className="w-8 h-8 animate-spin text-blue-600" />
             </div>
           )}
+          {/* Story content (question/answer, script) when item is a story — so content is visible while waiting for render */}
+          {!isRawItem && item.story_id && (item.snippet || details?.orbix_scripts?.length > 0) && (
+            <div className="space-y-4">
+              {item.story_category === 'trickquestion' && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Trick Question Content</h4>
+                  {(() => {
+                    try {
+                      let setup = '';
+                      let punchline = '';
+                      let hook = '';
+                      if (item.snippet) {
+                        const t = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                        setup = t.setup || '';
+                        punchline = t.punchline || '';
+                        hook = t.hook || '';
+                      }
+                      if ((!setup || !punchline) && details?.orbix_scripts?.length > 0) {
+                        const scripts = [...(details.orbix_scripts || [])].sort((a, b) =>
+                          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+                        );
+                        const script = scripts[0];
+                        if (script) {
+                          const cj = script.content_json
+                            ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                            : {};
+                          if (!setup) setup = (cj.setup || script.what_happened || '').trim();
+                          if (!punchline) punchline = (cj.punchline || script.why_it_matters || '').trim();
+                          if (!hook) hook = (script.cta_line || cj.hook || '').trim();
+                        }
+                      }
+                      return (
+                        <div className="space-y-3 text-sm">
+                          {(!setup && !punchline) ? (
+                            <p className="text-gray-500 text-sm">Tap <strong>Rewrite</strong> (in Story Script below) to generate a new question and answer.</p>
+                          ) : (
+                            <>
+                              <div>
+                                <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Question</p>
+                                <p className="font-medium text-gray-900">{setup || '—'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs font-semibold text-green-700 uppercase mb-1">Answer</p>
+                                <p className="font-semibold text-green-900">{punchline || '—'}</p>
+                              </div>
+                              {hook && <p className="text-gray-500 text-xs">{hook}</p>}
+                            </>
+                          )}
+                        </div>
+                      );
+                    } catch {
+                      return <p className="text-gray-500 text-sm">Could not parse content.</p>;
+                    }
+                  })()}
+                </div>
+              )}
+              {item.story_category === 'dadjoke' && (item.snippet || (details?.orbix_scripts?.length > 0)) && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Dad Joke</h4>
+                  {(() => {
+                    try {
+                      let setup = '';
+                      let punchline = '';
+                      if (item.snippet) {
+                        const d = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                        setup = d.setup || '';
+                        punchline = d.punchline || '';
+                      }
+                      if ((!setup || !punchline) && details?.orbix_scripts?.length > 0) {
+                        const scripts = [...(details.orbix_scripts || [])].sort((a, b) =>
+                          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+                        );
+                        const script = scripts[0];
+                        if (script) {
+                          const cj = script.content_json ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json) : {};
+                          if (!setup) setup = (cj.setup || script.what_happened || '').trim();
+                          if (!punchline) punchline = (cj.punchline || script.why_it_matters || '').trim();
+                        }
+                      }
+                      return (
+                        <div className="space-y-3 text-sm">
+                          <div>
+                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Setup</p>
+                            <p className="font-medium text-gray-900">{setup || '—'}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs font-semibold text-amber-700 uppercase mb-1">Punchline</p>
+                            <p className="font-semibold text-amber-900">{punchline || '—'}</p>
+                          </div>
+                        </div>
+                      );
+                    } catch {
+                      return <p className="text-gray-500 text-sm">Could not parse content.</p>;
+                    }
+                  })()}
+                </div>
+              )}
+            </div>
+          )}
           {/* Raw Item Info */}
           {isRawItem && (
             <div className="space-y-4">
@@ -610,23 +713,71 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   })()}
                 </div>
               )}
-              {item.story_category === 'trickquestion' && item.snippet && (
+              {item.story_category === 'trickquestion' && (item.snippet || (details?.orbix_scripts?.length > 0) || (item.story_id && !isRawItem)) && (
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
-                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Trick Question Content</h4>
+                  <div className="flex items-center justify-between gap-2 mb-3">
+                    <h4 className="text-sm font-semibold text-gray-800">Trick Question Content</h4>
+                    {item.story_id && !isRawItem && (
+                      <button
+                        type="button"
+                        onClick={handleGenerateScript}
+                        disabled={loading}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 bg-amber-600 text-white text-xs font-medium rounded hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                        title="Generate new question + answer in the new format and update script"
+                      >
+                        {loading ? (
+                          <Loader className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <>
+                            <RefreshCw className="w-3.5 h-3.5" />
+                            Rewrite
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
                   {(() => {
                     try {
-                      const t = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      let setup = '';
+                      let punchline = '';
+                      let hook = '';
+                      if (item.snippet) {
+                        const t = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                        setup = t.setup || '';
+                        punchline = t.punchline || '';
+                        hook = t.hook || '';
+                      }
+                      if ((!setup || !punchline) && details?.orbix_scripts?.length > 0) {
+                        const scripts = [...(details.orbix_scripts || [])].sort((a, b) =>
+                          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+                        );
+                        const script = scripts[0];
+                        if (script) {
+                          const cj = script.content_json
+                            ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                            : {};
+                          if (!setup) setup = (cj.setup || script.what_happened || '').trim();
+                          if (!punchline) punchline = (cj.punchline || script.why_it_matters || '').trim();
+                          if (!hook) hook = (script.cta_line || cj.hook || '').trim();
+                        }
+                      }
                       return (
                         <div className="space-y-3 text-sm">
-                          <div>
-                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Question</p>
-                            <p className="font-medium text-gray-900">{t.setup}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs font-semibold text-green-700 uppercase mb-1">Answer</p>
-                            <p className="font-semibold text-green-900">{t.punchline}</p>
-                          </div>
-                          {t.hook && <p className="text-gray-500 text-xs">{t.hook}</p>}
+                          {(!setup && !punchline) ? (
+                            <p className="text-gray-500 text-sm">Tap <strong>Rewrite</strong> above to generate a new question and answer in the new format.</p>
+                          ) : (
+                            <>
+                              <div>
+                                <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Question</p>
+                                <p className="font-medium text-gray-900">{setup || '—'}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs font-semibold text-green-700 uppercase mb-1">Answer</p>
+                                <p className="font-semibold text-green-900">{punchline || '—'}</p>
+                              </div>
+                              {hook && <p className="text-gray-500 text-xs">{hook}</p>}
+                            </>
+                          )}
                         </div>
                       );
                     } catch {
@@ -956,36 +1107,35 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                     );
                   }
                   if (cat === 'trickquestion') {
-                    const cj = script.content_json
-                      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
-                      : {};
-                    const setup = cj.setup || script.what_happened || '';
-                    const answer = cj.punchline || script.why_it_matters || '';
-                    const endCta = script.cta_line || cj.hook || '';
+                    let cj = {};
+                    try {
+                      cj = script.content_json
+                        ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                        : {};
+                    } catch (_) { /* ignore */ }
+                    const setup = (cj.setup || script.what_happened || '').trim();
+                    const answer = (cj.punchline || script.why_it_matters || '').trim();
+                    const endCta = (script.cta_line || cj.hook || '').trim();
                     return (
                       <div className="space-y-3">
                         <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
-                        {setup && (
-                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
-                            <p className="text-xs font-semibold text-blue-600 mb-1">1 · Question <span className="font-normal">(on screen + TTS)</span></p>
-                            <p className="text-base text-blue-900 font-medium">{setup}</p>
-                          </div>
-                        )}
+                        <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
+                          <p className="text-xs font-semibold text-blue-600 mb-1">1 · Question <span className="font-normal">(on screen + TTS)</span></p>
+                          <p className="text-base text-blue-900 font-medium">{setup || '—'}</p>
+                        </div>
                         <div className="rounded-md bg-yellow-50 border border-yellow-200 p-3 text-center">
                           <p className="text-xs font-semibold text-yellow-700 mb-1">2 · 3-2-1 Countdown</p>
                         </div>
-                        {answer && (
-                          <div className="rounded-md bg-green-50 border border-green-300 p-3">
-                            <p className="text-xs font-semibold text-green-700 mb-1">3 · Answer <span className="font-normal">(on screen)</span></p>
-                            <p className="text-base text-green-900 font-bold">{answer}</p>
-                          </div>
-                        )}
-                        {endCta && (
+                        <div className="rounded-md bg-green-50 border border-green-300 p-3">
+                          <p className="text-xs font-semibold text-green-700 mb-1">3 · Answer <span className="font-normal">(on screen)</span></p>
+                          <p className="text-base text-green-900 font-bold">{answer || '—'}</p>
+                        </div>
+                        {endCta ? (
                           <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
                             <p className="text-xs font-semibold text-gray-500 mb-1">4 · End card</p>
                             <p className="text-base text-gray-900">{endCta}</p>
                           </div>
-                        )}
+                        ) : null}
                       </div>
                     );
                   }

@@ -69,7 +69,10 @@ export default function V2DashboardHeader({ onMobileMenuToggle, mobileMenuOpen }
         }, 60000);
       }
     } catch (err) {
-      console.error('[V2DashboardHeader] Error loading unread count:', err);
+      // Network errors (e.g. Failed to fetch when API is down or CORS) are common; avoid noisy logs
+      if (process.env.NODE_ENV === 'development' && err?.name !== 'TypeError') {
+        console.warn('[V2DashboardHeader] Unread count:', err?.message || err);
+      }
     } finally {
       isLoadingRef.current = false;
     }
