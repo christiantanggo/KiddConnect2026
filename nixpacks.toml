@@ -1,4 +1,7 @@
-# Force Node 20 for Nixpacks/Railway (avoids Node 18 deprecation warnings from Supabase/AWS SDK)
-# If Railway still builds with Node 18, set NIXPACKS_NODE_VERSION=20 in the service Variables.
+# Railway builds the Node backend only. Supabase Edge Functions (Deno) are deployed by Supabase.
+# Force Node provider so Nixpacks doesn't use Deno (triggered by supabase/functions/* importing deno.land).
+providers = ["node"]
+
+# Force Node 20 (avoids Node 18 deprecation warnings from Supabase/AWS SDK).
 [variables]
 NIXPACKS_NODE_VERSION = "20"
