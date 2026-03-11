@@ -1,9 +1,4 @@
-[phases.setup]
-nixPkgs = ["nodejs-18_x", "ffmpeg"]
-
-[phases.build]
-cmds = ["npm ci"]
-
-[start]
-cmd = "npm start"
-
+# Force Node 20 for Nixpacks/Railway (avoids Node 18 deprecation warnings from Supabase/AWS SDK)
+# If Railway still builds with Node 18, set NIXPACKS_NODE_VERSION=20 in the service Variables.
+[variables]
+NIXPACKS_NODE_VERSION = "20"
