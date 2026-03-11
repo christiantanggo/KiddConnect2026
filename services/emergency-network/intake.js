@@ -68,11 +68,14 @@ export async function createServiceRequest(params) {
   const { data, error } = await supabaseClient
     .from('emergency_service_requests')
     .insert(payload)
-    .select('id, status, created_at, transcript_access_token')
+    .select('id, status, created_at')
     .single();
 
   if (error) throw error;
-  return data;
+  // Return transcript_access_token from payload when set (column may not exist if migration not run)
+  return payload.transcript_access_token
+    ? { ...data, transcript_access_token: payload.transcript_access_token }
+    : data;
 }
 
 /**
