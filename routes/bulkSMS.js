@@ -1268,11 +1268,32 @@ router.post('/webhook', express.json(), async (req, res) => {
         const formattedToNumber = formatPhoneNumberE164(toNumber);
         const formattedFromNumber = formatPhoneNumberE164(fromNumber);
         const { isEmergencyNumber } = await import('../services/emergency-network/config.js');
-        if (await isEmergencyNumber(formattedToNumber)) {
+        const isEmergency = await isEmergencyNumber(formattedToNumber);
+        console.log('[BulkSMS Webhook] Emergency check: to=', formattedToNumber, 'isEmergencyNumber=', isEmergency);
+        if (isEmergency) {
           try {
             const { createServiceRequestFromSms } = await import('../services/emergency-network/intake.js');
-            await createServiceRequestFromSms(formattedFromNumber, rawText);
-            console.log('[BulkSMS Webhook] Emergency Network: service request created from SMS from', formattedFromNumber);
+            const { startDispatch } = await import('../services/emergency-network/dispatch.js');
+            const { getEmergencyConfig } = await import('../services/emergency-network/config.js');
+            const request = await createServiceRequestFromSms(formattedFromNumber, rawText);
+            startDispatch(request.id).catch((err) =>
+              console.error('[BulkSMS Webhook] Emergency Network startDispatch error:', err?.message || err)
+            );
+            console.log('[BulkSMS Webhook] Emergency Network: service request created from SMS from', formattedFromNumber, 'dispatch started');
+            const config = await getEmergencyConfig();
+            const serviceName = (config.service_line_name && config.service_line_name.trim()) || 'Emergency Dispatch';
+            const replyMessage = `${serviceName}: Thanks for your message. We're contacting available providers now. You may receive a call shortly.`;
+            try {
+              await sendSMSDirect(formattedToNumber, formattedFromNumber, replyMessage, true);
+              console.log('[BulkSMS Webhook] Emergency Network: confirmation SMS sent to', formattedFromNumber);
+            } catch (smsErr) {
+              const status = smsErr.response?.status;
+              const data = smsErr.response?.data;
+              console.error('[BulkSMS Webhook] Emergency Network: failed to send confirmation SMS. Status:', status, 'Error:', smsErr?.message || smsErr, 'Response:', data ? JSON.stringify(data) : 'none');
+              if (!process.env.TELNYX_API_KEY) {
+                console.error('[BulkSMS Webhook] TELNYX_API_KEY is not set — set it in env to send reply SMS.');
+              }
+            }
           } catch (err) {
             console.error('[BulkSMS Webhook] Emergency Network intake error:', err?.message || err);
           }
