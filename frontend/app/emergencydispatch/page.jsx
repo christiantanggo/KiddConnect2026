@@ -254,6 +254,13 @@ export default function EmergencyDispatchPage() {
               <button type="button" onClick={() => setChatOpen(false)} className="p-1 rounded hover:bg-slate-200 text-slate-600" aria-label="Close">✕</button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[200px] max-h-[50vh]">
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                  <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
               {chatLoading && (
                 <div className="flex justify-start">
                   <div className="rounded-lg px-3 py-2.5 bg-slate-100 text-slate-800 text-sm" aria-label="Typing">
@@ -265,13 +272,6 @@ export default function EmergencyDispatchPage() {
                   </div>
                 </div>
               )}
-              {chatMessages.map((msg, i) => (
-                <div key={i} className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
-                  <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
-                    {msg.content}
-                  </div>
-                </div>
-              ))}
               <div ref={chatEndRef} />
             </div>
             <form onSubmit={sendChatMessage} className="p-4 border-t border-slate-200">
