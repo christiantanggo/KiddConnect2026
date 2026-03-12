@@ -114,7 +114,7 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
       )}
 
     <aside
-      className="fixed left-0 bottom-0 overflow-y-auto border-r z-40 transition-transform duration-300"
+      className="fixed left-0 bottom-0 border-r z-40 transition-transform duration-300 flex flex-col"
       style={{
         width: 'var(--sidebar-width)',
         backgroundColor: 'var(--color-surface)',
@@ -132,7 +132,7 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
           aside[data-mobile-open="true"]  { transform: translateX(0); }
         }
       `}</style>
-      <nav className="p-6 space-y-1">
+      <nav className="p-6 space-y-1 flex-1 overflow-y-auto">
         {/* Tavari AI Dashboard Button */}
         <div className="mb-6">
           <Link
@@ -266,6 +266,12 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
           </div>
         )}
       </nav>
+      <div
+        className="px-4 py-3 text-xs border-t"
+        style={{ color: 'var(--color-text-muted)', borderColor: 'var(--color-border)' }}
+      >
+        Deployed March 12 2026 V1
+      </div>
     </aside>
     </>
   );

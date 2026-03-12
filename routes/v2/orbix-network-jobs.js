@@ -579,12 +579,15 @@ export async function runRenderJob() {
         
         for (const story of approvedStories) {
           try {
-            // Get script for this story
+            // Use latest script so edited trivia/riddle/etc. is used (same as processRenderJob)
             const { data: script, error: scriptError } = await supabaseClient
               .from('orbix_scripts')
               .select('*')
               .eq('story_id', story.id)
-              .single();
+              .eq('business_id', businessId)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle();
             
             if (scriptError || !script) {
               console.error(`[Orbix Jobs] No script found for story ${story.id}`);

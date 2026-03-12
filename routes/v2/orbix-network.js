@@ -659,9 +659,10 @@ router.post('/renders/:id/restart', async (req, res) => {
     const storyCategory = (storyForRestart.category || '').toLowerCase();
     const scriptContentType = ['trivia', 'facts', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion'].includes(storyCategory) ? storyCategory : null;
 
-    // Only swap to latest script for psychology (rewrite flow). Riddle/trivia/facts/mindteaser/dadjoke use script-from-scrape with content_json; do NOT replace script_id on restart or we can attach a script that lost riddle_text/answer_text etc.
+    // Use latest script on restart so edits (e.g. trivia question/answer) are used; psychology already did this for rewrite flow.
     let latestScript = null;
-    if (storyCategory === 'psychology') {
+    const useLatestOnRestart = ['psychology', 'trivia', 'riddle', 'facts', 'mindteaser', 'dadjoke', 'trickquestion'].includes(storyCategory);
+    if (useLatestOnRestart) {
       const { data: latestScriptData } = await supabaseClient
         .from('orbix_scripts')
         .select('id')
@@ -1662,19 +1663,22 @@ router.post('/stories/:id/start-render', async (req, res) => {
       shock_score: story.shock_score
     });
     
-    // Check if script exists
+    // Use latest script so edited trivia/riddle/etc. is used (same as processRenderJob)
     const { data: script, error: scriptError } = await supabaseClient
       .from('orbix_scripts')
       .select('id')
       .eq('story_id', storyId)
-      .single();
+      .eq('business_id', businessId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
     
     if (scriptError || !script) {
       console.error(`[Start Render API] ERROR: Script not found for story:`, scriptError);
       return res.status(400).json({ error: 'Script not found for this story. Please generate a script first.' });
     }
     
-    console.log(`[Start Render API] ✓ Script found:`, script.id);
+    console.log(`[Start Render API] ✓ Script found (latest):`, script.id);
     
     // Check if render already exists
     const { data: existingRender, error: renderCheckError } = await supabaseClient
