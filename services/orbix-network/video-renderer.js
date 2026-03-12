@@ -296,7 +296,7 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     
   } catch (error) {
     if (error.code === 'ENOENT' || (error.message && (error.message.includes('not recognized') || error.message.includes('not found')))) {
-      throw new Error(`FFmpeg could not be run at: ${ffmpegPath}\n\nIf using the bundled binary, run: npm install\nOtherwise set FFMPEG_PATH in .env to your ffmpeg executable.`);
+      throw new Error(`FFmpeg could not be run at: ${ffmpegPath}. If using the bundled binary run: npm install. Otherwise set FFMPEG_PATH in .env. [v:2026-03-12]`);
     }
     console.error('[Orbix Video Renderer] Error applying motion to image:', error);
     throw error;
