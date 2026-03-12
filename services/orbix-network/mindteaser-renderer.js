@@ -18,7 +18,6 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
-import { ffmpegPath, ffprobePath } from './ffmpeg-path.js';
 import {
   getBackgroundImageUrl,
   prepareMusicTrack,
@@ -66,7 +65,7 @@ async function generateMindTeaserAudio(questionText, answerText, totalDuration) 
   const getDur = async (p) => {
     try {
       const r = await execAsync(
-        `"${ffprobePath}" -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        `ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
         { timeout: 5000 }
       );
       return parseFloat(r.stdout.trim()) || 0;
@@ -91,18 +90,18 @@ async function generateMindTeaserAudio(questionText, answerText, totalDuration) 
     const actualTotal = answerStart + Math.max(ANSWER_FLASH_DURATION, aDur);
     const padTotal = Math.max(totalDuration || actualTotal, actualTotal);
 
-    // pad_len in samples (TTS 24kHz); older FFmpeg lacks pad_dur
-    const toPadSamples = (sec) => Math.max(240, Math.round((Math.max(0, sec)) * 24000));
-    const padQ = toPadSamples(padTotal - qDur);
-    const padA = toPadSamples(padTotal - answerStart - aDur);
+    // FFmpeg apad rejects scientific notation and near-zero; use fixed decimal and minimum 0.01
+    const toPadDur = (sec) => Math.max(0.01, Number((Math.max(0, sec)).toFixed(3)));
+    const padQ = toPadDur(padTotal - qDur);
+    const padA = toPadDur(padTotal - answerStart - aDur);
 
     const filter = [
-      `[0:a]apad=pad_len=${padQ}[q]`,
-      `[1:a]adelay=${Math.round(answerStart * 1000)}|${Math.round(answerStart * 1000)},apad=pad_len=${padA}[a]`,
+      `[0:a]apad=pad_dur=${padQ}[q]`,
+      `[1:a]adelay=${Math.round(answerStart * 1000)}|${Math.round(answerStart * 1000)},apad=pad_dur=${padA}[a]`,
       `[q][a]amix=inputs=2:duration=first:dropout_transition=0[aout]`
     ].join(';');
     await execAsync(
-      `"${ffmpegPath}" -i "${qPath}" -i "${aPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${padTotal} -y "${outPath}"`,
+      `ffmpeg -i "${qPath}" -i "${aPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${padTotal} -y "${outPath}"`,
       { timeout: 60000 }
     );
 
@@ -288,7 +287,7 @@ export async function processMindTeaserRenderJob(render, story, script) {
       `[v1]ass='${escapedAssPath}'[vout]`
     ].join(';');
     await execAsync(
-      `"${ffmpegPath}" -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${totalDuration} -pix_fmt yuv420p -y "${baseVideoPath}"`,
+      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${totalDuration} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
     );
 
@@ -304,12 +303,12 @@ export async function processMindTeaserRenderJob(render, story, script) {
 
     if (musicPath) {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }
