@@ -73,3 +73,8 @@ body {
   animation: slide-in 0.3s ease-out;
 }
 
+@keyframes typing {
+  0%, 60%, 100% { opacity: 0.35; }
+  30% { opacity: 1; }
+}
+

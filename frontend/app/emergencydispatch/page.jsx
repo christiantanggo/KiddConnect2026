@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const CHAT_REPLY_DELAY_MS = 1100;
 
 async function chatIntake(sessionId, message) {
   const res = await fetch(`${API_URL}/api/v2/emergency-network/public/intake/chat`, {
@@ -66,6 +67,7 @@ export default function EmergencyDispatchPage() {
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef(null);
   const chatInputRef = useRef(null);
+  const chatDelayTimerRef = useRef(null);
   const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Dispatch';
   const heroSubtext = pageContent?.hero_subtext ?? 'We connect you with licensed local professionals. One call or form—we find someone available and get you help fast.';
@@ -76,19 +78,27 @@ export default function EmergencyDispatchPage() {
   ];
   const scrollToContent = () => contentRef.current?.scrollIntoView({ behavior: 'smooth' });
 
+  const applyReplyAfterDelay = (reply, sessionId) => {
+    if (chatDelayTimerRef.current) clearTimeout(chatDelayTimerRef.current);
+    chatDelayTimerRef.current = setTimeout(() => {
+      chatDelayTimerRef.current = null;
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: reply || '' }]);
+      if (sessionId != null) setChatSessionId(sessionId);
+      setChatLoading(false);
+    }, CHAT_REPLY_DELAY_MS);
+  };
+
   const openChat = () => {
     setChatOpen(true);
     if (chatMessages.length === 0) {
       setChatLoading(true);
       chatIntake(null)
         .then((data) => {
-          setChatMessages([{ role: 'assistant', content: data.reply || '' }]);
-          setChatSessionId(data.session_id || null);
+          applyReplyAfterDelay(data.reply || '', data.session_id || null);
         })
         .catch(() => {
-          setChatMessages([{ role: 'assistant', content: 'Sorry, we couldn\'t load the form. Please try again or call us.' }]);
-        })
-        .finally(() => setChatLoading(false));
+          applyReplyAfterDelay('Sorry, we couldn\'t load the form. Please try again or call us.', null);
+        });
     }
   };
 
@@ -101,18 +111,23 @@ export default function EmergencyDispatchPage() {
     setChatLoading(true);
     chatIntake(chatSessionId, text)
       .then((data) => {
-        setChatMessages((prev) => [...prev, { role: 'assistant', content: data.reply || '' }]);
-        if (data.session_id) setChatSessionId(data.session_id);
+        applyReplyAfterDelay(data.reply || '', data.session_id ?? chatSessionId);
       })
       .catch(() => {
-        setChatMessages((prev) => [...prev, { role: 'assistant', content: 'Something went wrong. Please try again or call us.' }]);
-      })
-      .finally(() => setChatLoading(false));
+        applyReplyAfterDelay('Something went wrong. Please try again or call us.', chatSessionId);
+      });
   };
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
+
+  useEffect(() => {
+    if (!chatOpen && chatDelayTimerRef.current) {
+      clearTimeout(chatDelayTimerRef.current);
+      chatDelayTimerRef.current = null;
+    }
+  }, [chatOpen]);
 
   useEffect(() => {
     if (chatOpen && !chatLoading) {
@@ -239,7 +254,17 @@ export default function EmergencyDispatchPage() {
               <button type="button" onClick={() => setChatOpen(false)} className="p-1 rounded hover:bg-slate-200 text-slate-600" aria-label="Close">✕</button>
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[200px] max-h-[50vh]">
-              {chatLoading && chatMessages.length === 0 && <p className="text-slate-500 text-sm">Loading…</p>}
+              {chatLoading && (
+                <div className="flex justify-start">
+                  <div className="rounded-lg px-3 py-2.5 bg-slate-100 text-slate-800 text-sm" aria-label="Typing">
+                    <span className="inline-flex gap-1">
+                      <span className="w-2 h-2 rounded-full bg-slate-400" style={{ animation: 'typing 1.4s ease-in-out infinite', animationDelay: '0ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-slate-400" style={{ animation: 'typing 1.4s ease-in-out infinite', animationDelay: '200ms' }} />
+                      <span className="w-2 h-2 rounded-full bg-slate-400" style={{ animation: 'typing 1.4s ease-in-out infinite', animationDelay: '400ms' }} />
+                    </span>
+                  </div>
+                </div>
+              )}
               {chatMessages.map((msg, i) => (
                 <div key={i} className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
                   <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
