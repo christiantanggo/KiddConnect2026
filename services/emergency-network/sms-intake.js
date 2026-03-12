@@ -286,13 +286,47 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
 
 const WEB_PREFIX = 'web:';
 
+/** Web chat asks one question at a time; no SMS is sent (SMS only for provider/customer details when requested). */
+const WEB_CHAT_STEPS = ['name', 'address', 'service_type', 'urgency', 'issue', 'phone'];
+
+function mapServiceType(text) {
+  const lower = (text || '').toLowerCase();
+  if (/plumb|pipe|drain|leak|water\s*heater|toilet|faucet|burst\s*pipe/i.test(lower)) return 'Plumbing';
+  if (/hvac|heat|furnace|ac\s*unit|air\s*cond|no\s*heat|no\s*ac/i.test(lower)) return 'HVAC';
+  if (/\bgas\b|gas\s*line|gas\s*leak|smell\s*gas/i.test(lower)) return 'Gas';
+  return 'Other';
+}
+
+function mapUrgency(text) {
+  const lower = (text || '').toLowerCase();
+  if (/emergency|urgent|asap|immediate|right\s*away|now\s*please/i.test(lower)) return 'Immediate Emergency';
+  if (/same\s*day|today|this\s*afternoon|this\s*evening/i.test(lower)) return 'Same Day';
+  if (/schedule|later|tomorrow|next\s*week/i.test(lower)) return 'Schedule';
+  return 'Immediate Emergency';
+}
+
+function getNextWebQuestion(serviceName, step, _data) {
+  switch (step) {
+    case 'name':
+      return `Thanks for contacting ${serviceName}! What is your name?`;
+    case 'address':
+      return 'What is your service address?';
+    case 'service_type':
+      return 'What service do you need? (Plumbing / HVAC / Gas / Other)';
+    case 'urgency':
+      return 'What is the urgency? (Immediate / Same day / Schedule for later)';
+    case 'issue':
+      return 'Please describe the issue.';
+    case 'phone':
+      return 'What is the best phone number to reach you?';
+    default:
+      return `Thanks for contacting ${serviceName}! What is your name?`;
+  }
+}
+
 /**
- * Web chat intake: same conversation flow as SMS (prompt, parse, follow-up if missing, then create request + dispatch).
- * Does NOT send any SMS. SMS is only used elsewhere: (1) texting details to a trades professional when they request it,
- * (2) texting details to the customer when they request it on the callback call.
- * @param {string} sessionId - Client-provided session id (e.g. uuid)
- * @param {string} messageText - User's message
- * @returns { Promise<{ reply: string, requestId?: string }> }
+ * Web chat intake: one question at a time (name → address → service → urgency → issue → phone), then create request + dispatch.
+ * Does NOT send any SMS.
  */
 export async function handleWebIntake(sessionId, messageText) {
   const sid = String(sessionId || '').trim();
@@ -307,42 +341,60 @@ export async function handleWebIntake(sessionId, messageText) {
   const session = await getSession(fromPhone, toPhone);
 
   if (!rawText) {
-    if (!session || session.step !== 'awaiting_details' && session.step !== 'awaiting_more') {
-      await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
+    const step = session?.step && WEB_CHAT_STEPS.includes(session.step) ? session.step : 'name';
+    const data = session?.data && typeof session.data === 'object' ? session.data : {};
+    if (!session || !WEB_CHAT_STEPS.includes(session.step)) {
+      await upsertSession(fromPhone, toPhone, 'name', data);
     }
-    return { reply: getInitialPrompt(serviceName, true) };
+    return { reply: getNextWebQuestion(serviceName, step, data) };
   }
 
-  if (!session || session.step !== 'awaiting_details' && session.step !== 'awaiting_more') {
-    await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
-    return { reply: getInitialPrompt(serviceName, true) };
+  const step = session?.step && WEB_CHAT_STEPS.includes(session.step) ? session.step : 'name';
+  const data = session?.data && typeof session.data === 'object' ? { ...session.data } : {};
+
+  if (step === 'name') {
+    data.caller_name = rawText.slice(0, 100).trim() || null;
+    await upsertSession(fromPhone, toPhone, 'address', data);
+    return { reply: 'What is your service address?' };
   }
 
-  const callbackPhone = extractPhoneFromMessage(rawText) || fromPhone;
-  const parsed = parseSingleMessage(rawText, callbackPhone);
+  if (step === 'address') {
+    data.location = rawText.slice(0, 500).trim() || null;
+    await upsertSession(fromPhone, toPhone, 'service_type', data);
+    return { reply: 'What service do you need? (Plumbing / HVAC / Gas / Other)' };
+  }
 
-  if (session.step === 'awaiting_details') {
-    const missing = getMissingItems(parsed, rawText, true);
-    if (missing.length > 0) {
-      const followUp = buildFollowUpMessage(serviceName, missing);
-      if (followUp) {
-        await upsertSession(fromPhone, toPhone, 'awaiting_more', parsed);
-        return { reply: followUp };
-      }
-    }
-    const effectivePhone = parsed.callback_phone.startsWith(WEB_PREFIX) ? null : parsed.callback_phone;
-    if (!effectivePhone) {
-      await deleteSession(fromPhone, toPhone);
-      return { reply: `${serviceName}: We need your callback phone number to reach you. Please send your details again and include your phone number.` };
+  if (step === 'service_type') {
+    data.service_category = mapServiceType(rawText);
+    await upsertSession(fromPhone, toPhone, 'urgency', data);
+    return { reply: 'What is the urgency? (Immediate / Same day / Schedule for later)' };
+  }
+
+  if (step === 'urgency') {
+    data.urgency_level = mapUrgency(rawText);
+    await upsertSession(fromPhone, toPhone, 'issue', data);
+    return { reply: 'Please describe the issue.' };
+  }
+
+  if (step === 'issue') {
+    data.issue_summary = rawText.slice(0, 2000).trim() || 'See request';
+    await upsertSession(fromPhone, toPhone, 'phone', data);
+    return { reply: 'What is the best phone number to reach you?' };
+  }
+
+  if (step === 'phone') {
+    const callbackPhone = extractPhoneFromMessage(rawText);
+    if (!callbackPhone) {
+      return { reply: 'We need a valid phone number to reach you. Please enter it (e.g. (519) 872-2736).' };
     }
     await deleteSession(fromPhone, toPhone);
     const request = await createServiceRequest({
-      caller_name: parsed.caller_name || null,
-      callback_phone: effectivePhone,
-      service_category: parsed.service_category,
-      urgency_level: parsed.urgency_level,
-      location: parsed.location || null,
-      issue_summary: parsed.issue_summary || 'See request',
+      caller_name: data.caller_name || null,
+      callback_phone: callbackPhone,
+      service_category: data.service_category || 'Other',
+      urgency_level: data.urgency_level || 'Immediate Emergency',
+      location: data.location || null,
+      issue_summary: data.issue_summary || 'See request',
       intake_channel: 'web',
     });
     startDispatch(request.id).catch((err) =>
@@ -351,31 +403,6 @@ export async function handleWebIntake(sessionId, messageText) {
     return { reply: `${serviceName}: Thanks. We're contacting providers now. You may get a call or text shortly.`, requestId: request.id };
   }
 
-  const first = session.data || {};
-  const second = parseSingleMessage(rawText, callbackPhone);
-  const merged = {
-    caller_name: second.caller_name || first.caller_name || null,
-    callback_phone: second.callback_phone.startsWith(WEB_PREFIX) ? (first.callback_phone?.startsWith(WEB_PREFIX) ? null : first.callback_phone) : second.callback_phone,
-    service_category: second.service_category !== 'Other' ? second.service_category : (first.service_category || 'Other'),
-    urgency_level: first.urgency_level || second.urgency_level || 'Immediate Emergency',
-    location: second.location || first.location || null,
-    issue_summary: rawText.length >= 10 ? issueSummaryOnly(rawText, second) : (first.issue_summary || second.issue_summary || 'See request'),
-  };
-  await deleteSession(fromPhone, toPhone);
-  if (!merged.callback_phone) {
-    return { reply: `${serviceName}: We need your callback phone number to reach you. Please start over and include your phone number.` };
-  }
-  const request = await createServiceRequest({
-    caller_name: merged.caller_name || null,
-    callback_phone: merged.callback_phone,
-    service_category: merged.service_category,
-    urgency_level: merged.urgency_level,
-    location: merged.location || null,
-    issue_summary: merged.issue_summary || 'See request',
-    intake_channel: 'web',
-  });
-  startDispatch(request.id).catch((err) =>
-    console.error('[Emergency Web Intake] startDispatch error:', err?.message || err)
-  );
-  return { reply: `${serviceName}: Thanks. We're contacting providers now. You may get a call or text shortly.`, requestId: request.id };
+  await upsertSession(fromPhone, toPhone, 'name', {});
+  return { reply: getNextWebQuestion(serviceName, 'name', {}) };
 }
