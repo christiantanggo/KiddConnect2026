@@ -4,7 +4,7 @@
  * 2s ending total (0.5s answer flash + 1.5s loop line) for max retention loop.
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { unlink } from 'fs';
 import { join } from 'path';
@@ -26,7 +26,7 @@ import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progre
 import { updateStepStatus } from './render-steps.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const unlinkAsync = promisify(unlink);
 
 // Timing constants (11s total)
@@ -136,16 +136,24 @@ export async function processTriviaRenderJob(render, story, script) {
 
     const simpleAssPath = join(tmpdir(), `trivia-ass-${renderId}-${Date.now()}.ass`);
     await fs.promises.copyFile(assFilePath, simpleAssPath);
-    const simpleAssPathEscaped = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+    // Use path as-is for execFile (no shell); ass filter accepts path in single quotes
+    const assPathForFilter = simpleAssPath.replace(/\\/g, '/');
+    const filterComplex = [
+      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill[v1]`,
+      `[v1]ass='${assPathForFilter}'[vout]`
+    ].join(';');
 
     // 4. 40% black overlay + ASS overlays (progress bar is drawn entirely in the ASS file)
     baseVideoPath = join(tmpdir(), `trivia-base-${renderId}-${Date.now()}.mp4`);
-    const filterComplex = [
-      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill[v1]`,
-      `[v1]ass='${simpleAssPathEscaped}'[vout]`
-    ].join(';');
-    await execAsync(
-      `"${ffmpegPath}" -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
+    await execFileAsync(
+      ffmpegPath,
+      [
+        '-i', motionPath,
+        '-filter_complex', filterComplex,
+        '-map', '[vout]', '-map', '0:a?',
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-c:a', 'copy',
+        '-t', String(DURATION), '-pix_fmt', 'yuv420p', '-y', baseVideoPath
+      ],
       { timeout: 120000 }
     );
 
@@ -175,16 +183,29 @@ export async function processTriviaRenderJob(render, story, script) {
       musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
     }
 
+    const padLen = Math.round(padDur * 24000);
     if (musicPath) {
       // Voice +25% (1.5625), music -25% (0.1875 → 0.140625)
-      await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+      await execFileAsync(
+        ffmpegPath,
+        [
+          '-i', baseVideoPath, '-i', audioPath, '-i', musicPath,
+          '-filter_complex', `[1:a]apad=pad_len=${padLen},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]`,
+          '-map', '0:v', '-map', '[a]',
+          '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-t', String(DURATION), '-y', finalVideoPath
+        ],
         { timeout: 60000 }
       );
     } else {
       // Voice only: +25% volume
-      await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)},volume=1.5625[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+      await execFileAsync(
+        ffmpegPath,
+        [
+          '-i', baseVideoPath, '-i', audioPath,
+          '-filter_complex', `[1:a]apad=pad_len=${padLen},volume=1.5625[a]`,
+          '-map', '0:v', '-map', '[a]',
+          '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-t', String(DURATION), '-y', finalVideoPath
+        ],
         { timeout: 60000 }
       );
     }

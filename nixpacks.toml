@@ -2,9 +2,9 @@
 # Force Node provider so Nixpacks doesn't use Deno (triggered by supabase/functions/* importing deno.land).
 providers = ["node"]
 
-# Orbix video renders need FFmpeg in the container. Install in image so "ffmpeg" is on PATH.
+# Orbix video renders: FFmpeg + libass (ASS subtitles). libass needs fontconfig + fonts or text won't render.
 [phases.setup]
-nixPkgs = ["...", "ffmpeg"]
+nixPkgs = ["...", "ffmpeg", "fontconfig", "dejavu_fonts"]
 
 # Force Node 20 (avoids Node 18 deprecation warnings from Supabase/AWS SDK).
 [variables]
