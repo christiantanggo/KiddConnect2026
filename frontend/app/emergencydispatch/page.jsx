@@ -68,6 +68,7 @@ export default function EmergencyDispatchPage() {
   const chatEndRef = useRef(null);
   const chatInputRef = useRef(null);
   const chatDelayTimerRef = useRef(null);
+  const chatOverlayRef = useRef(null);
   const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Dispatch';
   const heroSubtext = pageContent?.hero_subtext ?? 'We connect you with licensed local professionals. One call or form—we find someone available and get you help fast.';
@@ -92,14 +93,20 @@ export default function EmergencyDispatchPage() {
     setChatOpen(true);
     if (chatMessages.length === 0) {
       setChatLoading(true);
-      chatIntake(null)
+      const sessionId = chatSessionId || null;
+      chatIntake(sessionId)
         .then((data) => {
-          applyReplyAfterDelay(data.reply || '', data.session_id || null);
+          applyReplyAfterDelay(data.reply || '', data.session_id ?? sessionId);
         })
         .catch(() => {
           applyReplyAfterDelay('Sorry, we couldn\'t load the form. Please try again or call us.', null);
         });
     }
+  };
+
+  const closeChat = (e) => {
+    if (e && e.target !== chatOverlayRef.current) return;
+    setChatOpen(false);
   };
 
   const sendChatMessage = (e) => {
@@ -168,12 +175,13 @@ export default function EmergencyDispatchPage() {
             <div className="flex flex-wrap gap-3 justify-center">
               {buttons.map((btn, i) => {
                 const url = (btn.url || '').trim().toLowerCase();
-                if (url === '#form') {
+                const isChatButton = url === '#form' || url.endsWith('#form');
+                if (isChatButton) {
                   return (
                     <button
                       key={i}
                       type="button"
-                      onClick={openChat}
+                      onClick={(e) => { e.preventDefault(); openChat(); }}
                       className={`inline-flex justify-center py-4 px-8 rounded text-white font-bold text-lg transition-colors ${i === 0 ? 'bg-[#c41e3a] hover:bg-[#a01830] uppercase tracking-wide' : 'border-2 border-white/80 font-semibold hover:bg-white/15'}`}
                     >
                       {btn.label || 'Request help online'}
@@ -247,7 +255,14 @@ export default function EmergencyDispatchPage() {
 
       {/* Chat panel: same flow as SMS intake — no SMS sent; dispatch only */}
       {chatOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40" onClick={() => setChatOpen(false)}>
+        <div
+          ref={chatOverlayRef}
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40"
+          onClick={closeChat}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Request help chat"
+        >
           <div className="w-full max-h-[90vh] sm:max-w-md sm:rounded-xl bg-white shadow-xl flex flex-col border border-slate-200" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50">
               <span className="font-semibold text-[#1a1a1a]">Request help online</span>
