@@ -16,6 +16,7 @@ import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { supabaseClient } from '../../config/database.js';
+import { ffmpegPath } from './ffmpeg-path.js';
 import { 
   selectTemplate, 
   selectBackground, 
@@ -182,7 +183,7 @@ export async function step3Background(renderId, renderJob, script, story, target
     const step3OutputPath = join(tmpdir(), `orbix-step3-${renderId}-${Date.now()}.mp4`);
     // Just copy the motion video - it's already 1080x1920 with motion applied
     // Use -c copy to avoid re-encoding, but trim to desired duration
-    const ffmpegCommand = `ffmpeg -i "${backgroundVideoPath}" -c:v copy -t ${durationSeconds} -y "${step3OutputPath}"`;
+    const ffmpegCommand = `"${ffmpegPath}" -i "${backgroundVideoPath}" -c:v copy -t ${durationSeconds} -y "${step3OutputPath}"`;
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
     await logStepEvent(renderId, step, 'PROGRESS', 'Executing FFmpeg command', { 
@@ -304,10 +305,10 @@ export async function step4Voice(renderId, renderJob, script, story, step3VideoP
     
     if (musicPath) {
       // Pad voice to targetDuration, then mix with music; output length = targetDuration
-      ffmpegCommand = `ffmpeg -i "${step3VideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_dur=${padDur}[v];[v][2:a]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
+      ffmpegCommand = `"${ffmpegPath}" -i "${step3VideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_dur=${padDur}[v];[v][2:a]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
     } else {
       // Voice only: pad to targetDuration, output length = targetDuration
-      ffmpegCommand = `ffmpeg -i "${step3VideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
+      ffmpegCommand = `"${ffmpegPath}" -i "${step3VideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
     }
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
@@ -444,7 +445,7 @@ export async function step5HookText(renderId, renderJob, script, story, template
     
     const step5OutputPath = join(tmpdir(), `orbix-step5-${renderId}-${Date.now()}.mp4`);
     const step5Vf = `ass='${simpleAssPathEscaped}'`;
-    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "${step5Vf}" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p -movflags +faststart "${step5OutputPath}"`;
+    const ffmpegCommand = `"${ffmpegPath}" -i "${inputVideoPath}" -vf "${step5Vf}" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p -movflags +faststart "${step5OutputPath}"`;
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
     await logStepEvent(renderId, step, 'PROGRESS', 'Executing FFmpeg command', {
@@ -634,7 +635,7 @@ export async function step6Captions(renderId, renderJob, script, story, template
     await logStepEvent(renderId, step, 'PROGRESS', 'Rendering captions overlay');
     
     const step6OutputPath = join(tmpdir(), `orbix-step6-${renderId}-${Date.now()}.mp4`);
-    const ffmpegCommand = `ffmpeg -i "${inputVideoPath}" -vf "ass='${simpleAssPathEscaped}'" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p -movflags +faststart "${step6OutputPath}"`;
+    const ffmpegCommand = `"${ffmpegPath}" -i "${inputVideoPath}" -vf "ass='${simpleAssPathEscaped}'" -c:v libx264 -preset medium -crf 23 -c:a copy -pix_fmt yuv420p -movflags +faststart "${step6OutputPath}"`;
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });
     await logStepEvent(renderId, step, 'PROGRESS', 'Executing FFmpeg command', { 

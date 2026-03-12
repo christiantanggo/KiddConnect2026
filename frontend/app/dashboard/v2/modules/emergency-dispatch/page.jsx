@@ -18,10 +18,9 @@ const TIER_OPTIONS = ['premium', 'priority', 'basic'];
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'settings', label: 'Settings', icon: Settings },
-  { id: 'recent-calls', label: 'Recent calls', icon: PhoneCall },
-  { id: 'recent-messages', label: 'Recent messages', icon: Mail },
+  { id: 'communication', label: 'Communication', icon: MessageSquare },
   { id: 'dispatched', label: 'Dispatched', icon: Truck },
+  { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
 const SETTINGS_SUB_TABS = [
@@ -118,7 +117,7 @@ export default function EmergencyDispatchPage() {
   const [resetDispatchLoadingId, setResetDispatchLoadingId] = useState(null);
   const [assigningRequestId, setAssigningRequestId] = useState(null);
   const [selectedRequestId, setSelectedRequestId] = useState(null);
-  const [recentCallsSubTab, setRecentCallsSubTab] = useState('pending'); // 'pending' | 'dispatched'
+  const [communicationSubTab, setCommunicationSubTab] = useState('pending'); // 'pending' | 'dispatched'
   const [requestDetailLog, setRequestDetailLog] = useState([]);
   const [requestDetailActivity, setRequestDetailActivity] = useState([]);
   const [loadingDetail, setLoadingDetail] = useState(false);
@@ -257,7 +256,7 @@ export default function EmergencyDispatchPage() {
 
   // Refetch requests (and dispatch log) periodically when viewing dashboard or recent calls so status updates (e.g. Accepted) appear without manual refresh
   useEffect(() => {
-    if (!['dashboard', 'recent-calls', 'recent-messages', 'dispatched'].includes(activeTab)) return;
+    if (!['dashboard', 'communication', 'dispatched'].includes(activeTab)) return;
     const interval = setInterval(async () => {
       try {
         const [requestsRes, dispatchLogRes] = await Promise.all([
@@ -592,14 +591,25 @@ export default function EmergencyDispatchPage() {
   };
 
   const providerById = (id) => providers.find((p) => p.id === id) || null;
-  const recentCalls = requests.filter((r) => r.intake_channel === 'phone').slice(0, 50);
   const isDispatched = (r) => r.accepted_provider_id || ['Accepted', 'Connected', 'Closed'].includes(r.status);
-  const pendingCalls = recentCalls.filter((r) => !isDispatched(r));
-  const dispatchedCalls = recentCalls.filter(isDispatched);
-  const recentMessages = requests.filter((r) => r.intake_channel === 'form' || r.intake_channel === 'sms').slice(0, 50);
+  const pendingRequests = requests.filter((r) => !isDispatched(r)).slice(0, 100);
   const dispatchedRequests = requests.filter(
     (r) => r.accepted_provider_id || ['Accepted', 'Connected', 'Closed'].includes(r.status)
   );
+
+  // Use analytics from API when present and non-empty; otherwise derive from requests so cards are never stuck at zero
+  const todayStr = new Date().toISOString().slice(0, 10);
+  const derivedAnalytics = {
+    requests_today: requests.filter((r) => r.created_at && String(r.created_at).startsWith(todayStr)).length,
+    total_requests: requests.length,
+    acceptance_rate: requests.length
+      ? Math.round(
+          (requests.filter((r) => ['Accepted', 'Connected', 'Closed'].includes(r.status)).length / requests.length) * 100
+        )
+      : 0,
+  };
+  const displayAnalytics =
+    analytics && (analytics.total_requests > 0 || requests.length === 0) ? analytics : derivedAnalytics;
 
   if (loading && requests.length === 0) {
     return (
@@ -678,15 +688,15 @@ export default function EmergencyDispatchPage() {
                 )}
                 <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm border-l-4 border-l-emerald-500">
                   <h3 className="text-sm font-semibold text-slate-500">Requests today</h3>
-                  <p className="text-3xl font-bold text-slate-800 mt-1">{analytics?.requests_today ?? 0}</p>
+                  <p className="text-3xl font-bold text-slate-800 mt-1">{displayAnalytics.requests_today}</p>
                 </div>
                 <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm border-l-4 border-l-emerald-500">
                   <h3 className="text-sm font-semibold text-slate-500">Total requests</h3>
-                  <p className="text-3xl font-bold text-slate-800 mt-1">{analytics?.total_requests ?? 0}</p>
+                  <p className="text-3xl font-bold text-slate-800 mt-1">{displayAnalytics.total_requests}</p>
                 </div>
                 <div className="p-5 rounded-xl border border-slate-200 bg-white shadow-sm border-l-4 border-l-emerald-500">
                   <h3 className="text-sm font-semibold text-slate-500">Acceptance rate</h3>
-                  <p className="text-3xl font-bold text-slate-800 mt-1">{analytics?.acceptance_rate ?? 0}%</p>
+                  <p className="text-3xl font-bold text-slate-800 mt-1">{displayAnalytics.acceptance_rate}%</p>
                 </div>
               </div>
               {/* Needs escalation: declined / no provider accepted — escalate to Tavari */}
@@ -709,22 +719,25 @@ export default function EmergencyDispatchPage() {
                         </div>
                       ))}
                     </div>
-                    <button type="button" onClick={() => setActiveTab('recent-calls')} className="mt-3 text-sm font-medium text-amber-800 underline">View in Recent calls →</button>
+                    <button type="button" onClick={() => setActiveTab('communication')} className="mt-3 text-sm font-medium text-amber-800 underline">View in Communication →</button>
                   </div>
                 );
               })()}
-              {/* Recent activity: two columns */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-slate-800">Recent calls</h3>
-                    <button type="button" onClick={() => setActiveTab('recent-calls')} className="text-sm font-medium text-emerald-600 hover:underline">View all →</button>
-                  </div>
-                  {recentCalls.length === 0 ? (
-                    <p className="text-center py-6 text-slate-500">No phone calls yet</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {recentCalls.slice(0, 5).map((r) => (
+              {/* Recent activity: all communication in one place */}
+              <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-bold text-slate-800">Communication</h3>
+                  <button type="button" onClick={() => setActiveTab('communication')} className="text-sm font-medium text-emerald-600 hover:underline">View all →</button>
+                </div>
+                <p className="text-slate-600 text-sm mb-4">All requests from phone, SMS, form, and web in one place.</p>
+                {requests.length === 0 ? (
+                  <p className="text-center py-6 text-slate-500">No requests yet</p>
+                ) : (
+                  <div className="space-y-2">
+                    {[...requests]
+                      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+                      .slice(0, 10)
+                      .map((r) => (
                         <div
                           key={r.id}
                           role="button"
@@ -735,42 +748,13 @@ export default function EmergencyDispatchPage() {
                         >
                           <div>
                             <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
-                            <p className="text-xs text-slate-500">{formatDate(r.created_at)} · {r.service_category}</p>
+                            <p className="text-xs text-slate-500">{formatDate(r.created_at)} · {r.intake_channel || 'phone'} · {r.service_category}</p>
                           </div>
                           <span className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700">{r.status}</span>
                         </div>
                       ))}
-                    </div>
-                  )}
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-white shadow-sm p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-slate-800">Recent messages</h3>
-                    <button type="button" onClick={() => setActiveTab('recent-messages')} className="text-sm font-medium text-emerald-600 hover:underline">View all →</button>
                   </div>
-                  {recentMessages.length === 0 ? (
-                    <p className="text-center py-6 text-slate-500">No form or SMS requests yet</p>
-                  ) : (
-                    <div className="space-y-2">
-                      {recentMessages.slice(0, 5).map((r) => (
-                        <div
-                          key={r.id}
-                          role="button"
-                          tabIndex={0}
-                          onClick={() => setSelectedRequestId(r.id)}
-                          onKeyDown={(e) => e.key === 'Enter' && setSelectedRequestId(r.id)}
-                          className="flex items-center justify-between p-3 rounded-lg bg-slate-50 hover:bg-slate-100 cursor-pointer"
-                        >
-                          <div>
-                            <p className="text-sm font-medium text-slate-800">{r.caller_name || r.callback_phone}</p>
-                            <p className="text-xs text-slate-500">{formatDate(r.created_at)} · {r.intake_channel}</p>
-                          </div>
-                          <span className="text-xs px-2 py-1 rounded bg-slate-200 text-slate-700">{r.status}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                )}
               </div>
             </>
           )}
@@ -1416,39 +1400,40 @@ export default function EmergencyDispatchPage() {
             </>
           )}
 
-          {/* Recent calls */}
-          {activeTab === 'recent-calls' && (
+          {/* Communication: all channels with Pending / Dispatched sub-tabs */}
+          {activeTab === 'communication' && (
             <section className="bg-white rounded-xl border border-slate-200 p-6">
-              <h2 className="text-lg font-medium mb-2">Recent calls</h2>
-              <p className="text-slate-600 text-sm mb-4">Service requests from phone intake.</p>
+              <h2 className="text-lg font-medium mb-2">Communication</h2>
+              <p className="text-slate-600 text-sm mb-4">All requests from phone, SMS, form, and web. One place to see pending and dispatched.</p>
               <div className="flex gap-1 border-b border-slate-200 mb-4">
                 <button
                   type="button"
-                  onClick={() => setRecentCallsSubTab('pending')}
+                  onClick={() => setCommunicationSubTab('pending')}
                   className={`px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition-colors ${
-                    recentCallsSubTab === 'pending'
+                    communicationSubTab === 'pending'
                       ? 'bg-white border-slate-200 -mb-px border-b-white text-slate-800'
                       : 'bg-slate-50 border-transparent text-slate-600 hover:bg-slate-100'
                   }`}
                 >
-                  Pending {pendingCalls.length > 0 && <span className="ml-1 text-slate-500">({pendingCalls.length})</span>}
+                  Pending {pendingRequests.length > 0 && <span className="ml-1 text-slate-500">({pendingRequests.length})</span>}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setRecentCallsSubTab('dispatched')}
+                  onClick={() => setCommunicationSubTab('dispatched')}
                   className={`px-4 py-2 text-sm font-medium rounded-t-lg border border-b-0 transition-colors ${
-                    recentCallsSubTab === 'dispatched'
+                    communicationSubTab === 'dispatched'
                       ? 'bg-white border-slate-200 -mb-px border-b-white text-slate-800'
                       : 'bg-slate-50 border-transparent text-slate-600 hover:bg-slate-100'
                   }`}
                 >
-                  Dispatched {dispatchedCalls.length > 0 && <span className="ml-1 text-slate-500">({dispatchedCalls.length})</span>}
+                  Dispatched {dispatchedRequests.length > 0 && <span className="ml-1 text-slate-500">({dispatchedRequests.length})</span>}
                 </button>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm border-separate" style={{ borderSpacing: '0 6px' }}>
                   <thead>
                     <tr className="text-left text-slate-600">
+                      <th className="pb-2 pr-2">Channel</th>
                       <th className="pb-2 pr-2">Name</th>
                       <th className="pb-2 pr-2">Phone</th>
                       <th className="pb-2 pr-2">Service</th>
@@ -1461,22 +1446,25 @@ export default function EmergencyDispatchPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(recentCallsSubTab === 'pending' ? pendingCalls : dispatchedCalls).length === 0 ? (
-                      <tr><td colSpan={9} className="py-4 text-slate-500 text-center">{recentCallsSubTab === 'pending' ? 'No pending calls' : 'No dispatched calls yet'}</td></tr>
+                    {(communicationSubTab === 'pending' ? pendingRequests : dispatchedRequests).length === 0 ? (
+                      <tr><td colSpan={10} className="py-4 text-slate-500 text-center">{communicationSubTab === 'pending' ? 'No pending requests' : 'No dispatched requests yet'}</td></tr>
                     ) : (
-                      (recentCallsSubTab === 'pending' ? pendingCalls : dispatchedCalls).map((r) => {
+                      (communicationSubTab === 'pending' ? pendingRequests : dispatchedRequests).map((r) => {
                         const assignedProvider = r.accepted_provider_id ? providerById(r.accepted_provider_id) : null;
                         const providersForService = (providers || []).filter((p) => p.trade_type === (r.service_category || 'Other'));
                         const isHandled = r.accepted_provider_id || ['Accepted', 'Connected', 'Closed'].includes(r.status);
                         const rowBg = isHandled
                           ? 'bg-emerald-50/80 hover:bg-emerald-100/80 border-l-4 border-l-emerald-500'
                           : 'bg-red-50/80 hover:bg-red-100/80 border-l-4 border-l-red-400';
+                        const channelLabel = r.intake_channel || 'phone';
+                        const channelIcon = channelLabel === 'phone' ? <PhoneCall className="w-4 h-4 inline" /> : channelLabel === 'form' ? <Globe className="w-4 h-4 inline" /> : channelLabel === 'web' ? <Globe className="w-4 h-4 inline" /> : <MessageSquare className="w-4 h-4 inline" />;
                         return (
                           <tr
                             key={r.id}
                             className={`border border-slate-200 cursor-pointer ${rowBg}`}
                             onClick={() => setSelectedRequestId(r.id)}
                           >
+                            <td className="py-2 pr-2">{channelIcon} {channelLabel}</td>
                             <td className="py-2 pr-2">{r.caller_name || '—'}</td>
                             <td className="py-2 pr-2">{r.callback_phone}</td>
                             <td className="py-2 pr-2">{r.service_category}</td>
@@ -1529,7 +1517,7 @@ export default function EmergencyDispatchPage() {
                                 type="button"
                                 onClick={() => openDeleteModal(r)}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded bg-red-100 text-red-700 text-xs font-medium hover:bg-red-200"
-                                title="Permanently delete this call"
+                                title="Permanently delete this request"
                               >
                                 <Trash2 className="w-3 h-3" /> Delete
                               </button>
@@ -1542,11 +1530,11 @@ export default function EmergencyDispatchPage() {
                 </table>
               </div>
 
-              {/* Delete call confirmation modal */}
+              {/* Delete request confirmation modal */}
               {deleteModal?.request && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" onClick={() => !deleting && setDeleteModal(null)}>
                   <div className="bg-white rounded-xl shadow-lg max-w-md w-full p-6" onClick={(e) => e.stopPropagation()}>
-                    <h3 className="text-lg font-semibold text-slate-900 mb-2">Delete call?</h3>
+                    <h3 className="text-lg font-semibold text-slate-900 mb-2">Delete request?</h3>
                     <p className="text-slate-600 text-sm mb-4">
                       This will permanently delete this service request and its dispatch history. This cannot be undone.
                     </p>
@@ -1577,104 +1565,12 @@ export default function EmergencyDispatchPage() {
                         disabled={deleting || deleteConfirmText !== 'DELETE'}
                         className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
                       >
-                        {deleting ? 'Deleting…' : 'Delete call'}
+                        {deleting ? 'Deleting…' : 'Delete request'}
                       </button>
                     </div>
                   </div>
                 </div>
               )}
-            </section>
-          )}
-
-          {/* Recent messages */}
-          {activeTab === 'recent-messages' && (
-            <section className="bg-white rounded-xl border border-slate-200 p-6">
-              <h2 className="text-lg font-medium mb-4">Recent messages</h2>
-              <p className="text-slate-600 text-sm mb-4">Service requests from form or SMS.</p>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-left text-slate-600">
-                      <th className="pb-2 pr-2">Channel</th>
-                      <th className="pb-2 pr-2">Name</th>
-                      <th className="pb-2 pr-2">Phone</th>
-                      <th className="pb-2 pr-2">Service</th>
-                      <th className="pb-2 pr-2">Urgency</th>
-                      <th className="pb-2 pr-2">Status</th>
-                      <th className="pb-2 pr-2">Assigned to</th>
-                      <th className="pb-2 pr-2">Created</th>
-                      <th className="pb-2">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recentMessages.length === 0 ? (
-                      <tr><td colSpan={9} className="py-4 text-slate-500 text-center">No form or SMS requests yet</td></tr>
-                    ) : (
-                      recentMessages.map((r) => {
-                        const assignedProvider = r.accepted_provider_id ? providerById(r.accepted_provider_id) : null;
-                        const providersForService = (providers || []).filter((p) => p.trade_type === (r.service_category || 'Other'));
-                        return (
-                          <tr
-                            key={r.id}
-                            className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer"
-                            onClick={() => setSelectedRequestId(r.id)}
-                          >
-                            <td className="py-2 pr-2">{r.intake_channel === 'form' ? <Globe className="w-4 h-4 inline" /> : <MessageSquare className="w-4 h-4 inline" />} {r.intake_channel}</td>
-                            <td className="py-2 pr-2">{r.caller_name || '—'}</td>
-                            <td className="py-2 pr-2">{r.callback_phone}</td>
-                            <td className="py-2 pr-2">{r.service_category}</td>
-                            <td className="py-2 pr-2">{r.urgency_level}</td>
-                            <td className="py-2 pr-2">{r.status}</td>
-                            <td className="py-2 pr-2">{assignedProvider ? assignedProvider.business_name : '—'}</td>
-                            <td className="py-2 pr-2">{formatDate(r.created_at)}</td>
-                            <td className="py-2 flex flex-wrap items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                              {['New', 'Contacting Providers', 'Needs Manual Assist'].includes(r.status) && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleResetDispatch(r.id)}
-                                  disabled={resetDispatchLoadingId === r.id}
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-slate-500 text-white text-xs font-medium hover:bg-slate-600 disabled:opacity-60"
-                                  title="Clear dispatch attempts so Call plumber can try again"
-                                >
-                                  {resetDispatchLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />}
-                                  Reset dispatch
-                                </button>
-                              )}
-                              {['New', 'Contacting Providers'].includes(r.status) && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleCallProvider(r.id)}
-                                  disabled={callProviderLoadingId === r.id}
-                                  className="inline-flex items-center gap-1 px-2 py-1 rounded bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 disabled:opacity-60"
-                                  title="Place outbound call to next plumber"
-                                >
-                                  {callProviderLoadingId === r.id ? <Loader className="w-3 h-3 animate-spin" /> : <Phone className="w-3 h-3" />}
-                                  Call plumber
-                                </button>
-                              )}
-                              <select
-                                value={r.accepted_provider_id || ''}
-                                onChange={(e) => assignProvider(r.id, e.target.value)}
-                                disabled={assigningRequestId === r.id}
-                                className="rounded border border-slate-300 text-xs py-1 min-w-[100px]"
-                                title="Assign a provider (e.g. after manual escalation)"
-                              >
-                                <option value="">Assign...</option>
-                                {providersForService.map((p) => (
-                                  <option key={p.id} value={p.id}>{p.business_name}</option>
-                                ))}
-                              </select>
-                              <select value={r.status} onChange={(e) => updateRequestStatus(r.id, e.target.value)} className="rounded border border-slate-300 text-xs py-1">
-                                {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
-                              </select>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
             </section>
           )}
 
@@ -1760,19 +1656,19 @@ export default function EmergencyDispatchPage() {
           )}
 
           {/* Analytics (show on Settings when visible) */}
-          {analytics && activeTab === 'settings' && (
+          {activeTab === 'settings' && (
             <section className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">
               <div className="bg-white rounded-xl border border-slate-200 p-4">
                 <p className="text-sm text-slate-500">Requests today</p>
-                <p className="text-2xl font-semibold">{analytics.requests_today ?? 0}</p>
+                <p className="text-2xl font-semibold">{displayAnalytics.requests_today}</p>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 p-4">
                 <p className="text-sm text-slate-500">Total requests</p>
-                <p className="text-2xl font-semibold">{analytics.total_requests ?? 0}</p>
+                <p className="text-2xl font-semibold">{displayAnalytics.total_requests}</p>
               </div>
               <div className="bg-white rounded-xl border border-slate-200 p-4">
                 <p className="text-sm text-slate-500">Acceptance rate</p>
-                <p className="text-2xl font-semibold">{analytics.acceptance_rate ?? 0}%</p>
+                <p className="text-2xl font-semibold">{displayAnalytics.acceptance_rate}%</p>
               </div>
             </section>
           )}

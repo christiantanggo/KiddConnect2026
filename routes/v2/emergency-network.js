@@ -1000,12 +1000,16 @@ router.get('/requests/:id/activity', async (req, res) => {
 router.get('/analytics', async (req, res) => {
   try {
     const today = new Date().toISOString().slice(0, 10);
-    const { data: requests } = await supabaseClient
+    const { data: requests, error } = await supabaseClient
       .from('emergency_service_requests')
       .select('id, status, created_at, connected_at');
+    if (error) {
+      console.error('[EmergencyNetwork] analytics query error:', error.message);
+      return res.status(500).json({ error: error.message || 'Failed to load analytics' });
+    }
     const list = requests || [];
-    const todayCount = list.filter((r) => r.created_at && r.created_at.startsWith(today)).length;
-    const accepted = list.filter((r) => r.status === 'Accepted' || r.status === 'Connected').length;
+    const todayCount = list.filter((r) => r.created_at && String(r.created_at).startsWith(today)).length;
+    const accepted = list.filter((r) => r.status === 'Accepted' || r.status === 'Connected' || r.status === 'Closed').length;
     const total = list.length;
     res.json({
       requests_today: todayCount,

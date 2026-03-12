@@ -18,6 +18,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
+import { ffmpegPath, ffprobePath } from './ffmpeg-path.js';
 import {
   getBackgroundImageUrl,
   prepareMusicTrack,
@@ -65,7 +66,7 @@ async function generateMindTeaserAudio(questionText, answerText, totalDuration) 
   const getDur = async (p) => {
     try {
       const r = await execAsync(
-        `ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        `"${ffprobePath}" -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
         { timeout: 5000 }
       );
       return parseFloat(r.stdout.trim()) || 0;
@@ -101,7 +102,7 @@ async function generateMindTeaserAudio(questionText, answerText, totalDuration) 
       `[q][a]amix=inputs=2:duration=first:dropout_transition=0[aout]`
     ].join(';');
     await execAsync(
-      `ffmpeg -i "${qPath}" -i "${aPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${padTotal} -y "${outPath}"`,
+      `"${ffmpegPath}" -i "${qPath}" -i "${aPath}" -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${padTotal} -y "${outPath}"`,
       { timeout: 60000 }
     );
 
@@ -287,7 +288,7 @@ export async function processMindTeaserRenderJob(render, story, script) {
       `[v1]ass='${escapedAssPath}'[vout]`
     ].join(';');
     await execAsync(
-      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${totalDuration} -pix_fmt yuv420p -y "${baseVideoPath}"`,
+      `"${ffmpegPath}" -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${totalDuration} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
     );
 
@@ -303,12 +304,12 @@ export async function processMindTeaserRenderJob(render, story, script) {
 
     if (musicPath) {
       await execAsync(
-        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       await execAsync(
-        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -map 0:v -map 1:a -c:v copy -c:a aac -b:a 192k -t ${totalDuration} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }
