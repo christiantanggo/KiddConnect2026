@@ -9,6 +9,7 @@ import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { supabaseClient } from '../../config/database.js';
+import { ffmpegPath } from './ffmpeg-path.js';
 import {
   getBackgroundImageUrl,
   getRandomMusicTrack,
@@ -208,7 +209,7 @@ export async function processTrickQuestionRenderJob(render, story, script) {
     baseVideoPath = join(tmpdir(), `trickquestion-base-${renderId}-${Date.now()}.mp4`);
     const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.22:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
     await execAsync(
-      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
+      `"${ffmpegPath}" -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
     );
     try { await unlinkAsync(assPath); } catch (_) {}
@@ -223,12 +224,12 @@ export async function processTrickQuestionRenderJob(render, story, script) {
     const voiceTrim = `[1:a]atrim=0:${DURATION},asetpts=PTS-STARTPTS,volume=1.5625`;
     if (musicPath) {
       await execAsync(
-        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceTrim}[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceTrim}[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       await execAsync(
-        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "${voiceTrim}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "${voiceTrim}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }
