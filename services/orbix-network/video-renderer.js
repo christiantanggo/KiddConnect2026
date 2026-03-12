@@ -1273,9 +1273,11 @@ export async function processRenderJob(render) {
     }
 
     let script;
-    const isPsychologyStory = (story?.category || '').toLowerCase() === 'psychology';
-    // Psychology: use latest script for this story so a rewrite → restart uses the new question-as-hook
-    if (isPsychologyStory) {
+    const cat = (story?.category || '').toLowerCase();
+    const isPsychologyStory = cat === 'psychology';
+    // Evergreen (trivia, riddle, etc.): use latest script so edits (e.g. trivia question/answer) are used in the render
+    const useLatestScript = isPsychologyStory || ['trivia', 'riddle', 'mindteaser', 'dadjoke', 'trickquestion', 'facts'].includes(cat);
+    if (useLatestScript) {
       const { data: latestScript, error: latestErr } = await supabaseClient
         .from('orbix_scripts')
         .select('*')

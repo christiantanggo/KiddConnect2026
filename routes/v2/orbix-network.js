@@ -2073,6 +2073,135 @@ router.post('/stories/:id/script/edit-hook', async (req, res) => {
 });
 
 /**
+ * POST /api/v2/orbix-network/stories/:id/script/edit-trivia
+ * Edit trivia question and/or answers so incorrectly scraped trivia can still be used.
+ * Body: { question?, option_a?, option_b?, option_c?, correct_answer?, hook?, category? }
+ */
+router.post('/stories/:id/script/edit-trivia', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { id: storyId } = req.params;
+    const { question, option_a, option_b, option_c, correct_answer, hook, category } = req.body;
+
+    const { data: story, error: storyError } = await supabaseClient
+      .from('orbix_stories')
+      .select('id, raw_item_id')
+      .eq('id', storyId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+    if (storyError || !story) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+
+    let script = null;
+    // Use latest script so edits apply to the script the render will use (video-renderer loads latest for trivia)
+    const { data: existingScript, error: scriptError } = await supabaseClient
+      .from('orbix_scripts')
+      .select('id, content_json')
+      .eq('story_id', storyId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (scriptError) {
+      return res.status(500).json({ error: 'Failed to load script' });
+    }
+    if (existingScript) {
+      script = existingScript;
+    } else {
+      // No script yet (e.g. force-process didn't create one for this trivia). Create one from raw item snippet or request body.
+      const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
+      const storyForEnsure = { id: story.id, category: 'trivia', raw_item_id: story.raw_item_id };
+      const created = await ensureTriviaScript(businessId, storyForEnsure);
+      if (created) {
+        script = { id: created.id, content_json: created.content_json };
+      }
+      if (!script) {
+        // Still no script: create minimal script from request body so user can fix trivia
+        const initialContent = {
+          question: question != null ? String(question).trim().slice(0, 500) : '',
+          option_a: option_a != null ? String(option_a).trim().slice(0, 200) : '',
+          option_b: option_b != null ? String(option_b).trim().slice(0, 200) : '',
+          option_c: option_c != null ? String(option_c).trim().slice(0, 200) : '',
+          correct_answer: correct_answer != null && ['A', 'B', 'C'].includes(String(correct_answer).toUpperCase().charAt(0)) ? String(correct_answer).toUpperCase().charAt(0) : 'A',
+          hook: hook != null ? String(hook).trim().slice(0, 200) : '',
+          category: category != null ? String(category).trim().slice(0, 50) : ''
+        };
+        const { data: inserted, error: insertErr } = await supabaseClient
+          .from('orbix_scripts')
+          .insert({
+            business_id: businessId,
+            story_id: storyId,
+            hook: initialContent.hook || '',
+            what_happened: '',
+            why_it_matters: '',
+            what_happens_next: '',
+            cta_line: '',
+            duration_target_seconds: 35,
+            content_type: 'trivia',
+            content_json: initialContent
+          })
+          .select('id, content_json')
+          .single();
+        if (insertErr) throw insertErr;
+        script = inserted;
+      }
+    }
+
+    const content = typeof script.content_json === 'string' ? JSON.parse(script.content_json) : { ...(script.content_json || {}) };
+    if (question !== undefined && question !== null) content.question = String(question).trim().slice(0, 500);
+    if (option_a !== undefined && option_a !== null) content.option_a = String(option_a).trim().slice(0, 200);
+    if (option_b !== undefined && option_b !== null) content.option_b = String(option_b).trim().slice(0, 200);
+    if (option_c !== undefined && option_c !== null) content.option_c = String(option_c).trim().slice(0, 200);
+    if (correct_answer !== undefined && correct_answer !== null) {
+      const letter = String(correct_answer).toUpperCase().charAt(0);
+      content.correct_answer = ['A', 'B', 'C'].includes(letter) ? letter : content.correct_answer || 'A';
+    }
+    if (hook !== undefined && hook !== null) content.hook = String(hook).trim().slice(0, 200);
+    if (category !== undefined && category !== null) content.category = String(category).trim().slice(0, 50);
+
+    const { error: updateError } = await supabaseClient
+      .from('orbix_scripts')
+      .update({ content_json: content })
+      .eq('id', script.id)
+      .eq('story_id', storyId);
+    if (updateError) throw updateError;
+
+    if (story.raw_item_id) {
+      const { data: rawRow } = await supabaseClient
+        .from('orbix_raw_items')
+        .select('snippet')
+        .eq('id', story.raw_item_id)
+        .eq('business_id', businessId)
+        .maybeSingle();
+      if (rawRow?.snippet) {
+        try {
+          const rawSnippet = typeof rawRow.snippet === 'string' ? JSON.parse(rawRow.snippet) : { ...rawRow.snippet };
+          if (question !== undefined && question !== null) rawSnippet.question = content.question;
+          if (option_a !== undefined && option_a !== null) rawSnippet.option_a = content.option_a;
+          if (option_b !== undefined && option_b !== null) rawSnippet.option_b = content.option_b;
+          if (option_c !== undefined && option_c !== null) rawSnippet.option_c = content.option_c;
+          if (correct_answer !== undefined && correct_answer !== null) rawSnippet.correct_answer = content.correct_answer;
+          if (hook !== undefined && hook !== null) rawSnippet.hook = content.hook;
+          if (category !== undefined && category !== null) rawSnippet.category = content.category;
+          await supabaseClient
+            .from('orbix_raw_items')
+            .update({ snippet: rawSnippet })
+            .eq('id', story.raw_item_id)
+            .eq('business_id', businessId);
+        } catch (_) { /* ignore raw item update errors */ }
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/stories/:id/script/edit-trivia] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to edit trivia' });
+  }
+});
+
+/**
  * POST /api/v2/orbix-network/raw-items/:id/force-score
  * Run classifier + shock scorer on a raw item and save score (no story created).
  * Use when background scoring never ran or failed.

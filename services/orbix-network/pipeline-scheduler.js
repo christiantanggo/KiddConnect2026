@@ -50,13 +50,19 @@ export async function ensureTriviaScript(businessId, story) {
     } catch (_) { /* snippet not JSON — use as-is */ }
   }
 
-  // Riddles use riddle_text + answer_text; mindteasers use question + answer; dadjoke/trickquestion use setup + punchline.
+  // Riddles use riddle_text + answer_text; mindteasers use question + answer; dadjoke/trickquestion use setup + punchline; trivia uses question + option_a/b/c.
   const isRiddle = story.category === 'riddle';
   const isMindTeaser = story.category === 'mindteaser';
   const isDadJoke = story.category === 'dadjoke';
   const isTrickQuestion = story.category === 'trickquestion';
-  if (!voiceScript && !isRiddle && !isMindTeaser && !isDadJoke && !isTrickQuestion) {
+  const isTrivia = story.category === 'trivia';
+  const triviaHasContent = isTrivia && contentJson?.question;
+  if (!voiceScript && !isRiddle && !isMindTeaser && !isDadJoke && !isTrickQuestion && !triviaHasContent) {
     console.warn(`[Pipeline Scheduler] No voice_script in snippet for story ${story.id} (${story.category}) — skipping script creation`);
+    return null;
+  }
+  if (isTrivia && !contentJson?.question) {
+    console.warn(`[Pipeline Scheduler] No question in snippet for trivia story ${story.id} — skipping script creation`);
     return null;
   }
   if (isRiddle && !contentJson?.riddle_text) {

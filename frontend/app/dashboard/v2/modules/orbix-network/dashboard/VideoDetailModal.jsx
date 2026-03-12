@@ -17,6 +17,10 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
   /** After upload completes: { uploads_last_24h, remaining, limit } to show in modal */
   const [uploadSuccessModal, setUploadSuccessModal] = useState(null);
   const uploadPollRef = useRef(null);
+  /** Trivia edit: when true show form; form values for question, option_a, option_b, option_c, correct_answer */
+  const [editingTrivia, setEditingTrivia] = useState(false);
+  const [triviaEdit, setTriviaEdit] = useState({ question: '', option_a: '', option_b: '', option_c: '', correct_answer: 'A' });
+  const [savingTrivia, setSavingTrivia] = useState(false);
 
   // Check if this is a raw item (has raw_item_id but no story_id)
   const isRawItem = item.raw_item_id && !item.story_id;
@@ -25,6 +29,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
     if (isOpen && item) {
       setDetails(null);
       setLogs([]);
+      setEditingTrivia(false);
       loadDetails();
     }
   }, [isOpen, item]);
@@ -574,6 +579,91 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   })()}
                 </div>
               )}
+              {/* Trivia story: show content + Edit so you can fix wrong answers even when no script was created yet */}
+              {item.story_category === 'trivia' && (item.snippet || details?.orbix_scripts?.length > 0 || editingTrivia) && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Trivia Content</h4>
+                  {(() => {
+                    const fromScript = details?.orbix_scripts?.length > 0
+                      ? (details.orbix_scripts[0].content_json
+                          ? (typeof details.orbix_scripts[0].content_json === 'string' ? JSON.parse(details.orbix_scripts[0].content_json) : details.orbix_scripts[0].content_json)
+                          : {})
+                      : null;
+                    let fromSnippet = null;
+                    if (item.snippet) {
+                      try {
+                        fromSnippet = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      } catch (_) { /* ignore */ }
+                    }
+                    const cj = fromScript || fromSnippet || {};
+                    const display = editingTrivia ? triviaEdit : { question: cj.question ?? '', option_a: cj.option_a ?? '', option_b: cj.option_b ?? '', option_c: cj.option_c ?? '', correct_answer: (cj.correct_answer || 'A').toUpperCase().charAt(0) };
+                    const handleSaveTriviaStandalone = async () => {
+                      if (!item.story_id) return;
+                      setSavingTrivia(true);
+                      try {
+                        await orbixNetworkAPI.editTriviaContent(item.story_id, {
+                          question: triviaEdit.question,
+                          option_a: triviaEdit.option_a,
+                          option_b: triviaEdit.option_b,
+                          option_c: triviaEdit.option_c,
+                          correct_answer: triviaEdit.correct_answer
+                        }, apiParams());
+                        success('Trivia updated');
+                        setEditingTrivia(false);
+                        await loadDetails();
+                      } catch (err) {
+                        showErrorToast(err?.response?.data?.error || err?.message || 'Failed to save trivia');
+                      } finally {
+                        setSavingTrivia(false);
+                      }
+                    };
+                    if (editingTrivia) {
+                      return (
+                        <div className="space-y-3">
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Question</span>
+                            <input type="text" value={triviaEdit.question} onChange={(e) => setTriviaEdit((p) => ({ ...p, question: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={500} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Option A</span>
+                            <input type="text" value={triviaEdit.option_a} onChange={(e) => setTriviaEdit((p) => ({ ...p, option_a: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={200} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Option B</span>
+                            <input type="text" value={triviaEdit.option_b} onChange={(e) => setTriviaEdit((p) => ({ ...p, option_b: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={200} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Option C</span>
+                            <input type="text" value={triviaEdit.option_c} onChange={(e) => setTriviaEdit((p) => ({ ...p, option_c: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={200} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Correct answer</span>
+                            <select value={triviaEdit.correct_answer} onChange={(e) => setTriviaEdit((p) => ({ ...p, correct_answer: e.target.value }))} className="rounded border border-gray-300 px-2 py-1.5 text-sm">
+                              <option value="A">A</option><option value="B">B</option><option value="C">C</option>
+                            </select>
+                          </label>
+                          <div className="flex gap-2 pt-1">
+                            <button type="button" onClick={handleSaveTriviaStandalone} disabled={savingTrivia} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50">{savingTrivia ? 'Saving...' : 'Save'}</button>
+                            <button type="button" onClick={() => setEditingTrivia(false)} className="px-3 py-1.5 border border-gray-300 text-sm rounded hover:bg-gray-100">Cancel</button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-2 text-sm">
+                        {display.question && <p className="font-medium text-gray-900">{display.question}</p>}
+                        <ul className="space-y-1 text-gray-700">
+                          {display.option_a && <li>A) {display.option_a}</li>}
+                          {display.option_b && <li>B) {display.option_b}</li>}
+                          {display.option_c && <li>C) {display.option_c}</li>}
+                        </ul>
+                        <p className="text-green-700 font-medium pt-1">Correct: {display.correct_answer}</p>
+                        <button type="button" onClick={() => { setTriviaEdit({ question: (cj.question ?? '').toString(), option_a: (cj.option_a ?? '').toString(), option_b: (cj.option_b ?? '').toString(), option_c: (cj.option_c ?? '').toString(), correct_answer: ((cj.correct_answer || 'A').toUpperCase().charAt(0)) }); setEditingTrivia(true); }} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">Edit trivia</button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
             </div>
           )}
           {/* Raw Item Info */}
@@ -1037,6 +1127,157 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                           </div>
                         )}
                         {cj.category && <p className="text-gray-400 text-xs">Category: {cj.category}</p>}
+                      </div>
+                    );
+                  }
+                  if (cat === 'trivia') {
+                    const cj = script.content_json
+                      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+                      : {};
+                    const display = editingTrivia ? triviaEdit : {
+                      question: cj.question ?? '',
+                      option_a: cj.option_a ?? '',
+                      option_b: cj.option_b ?? '',
+                      option_c: cj.option_c ?? '',
+                      correct_answer: (cj.correct_answer || 'A').toUpperCase().charAt(0)
+                    };
+                    const handleSaveTrivia = async () => {
+                      if (!item.story_id) return;
+                      setSavingTrivia(true);
+                      try {
+                        await orbixNetworkAPI.editTriviaContent(item.story_id, {
+                          question: triviaEdit.question,
+                          option_a: triviaEdit.option_a,
+                          option_b: triviaEdit.option_b,
+                          option_c: triviaEdit.option_c,
+                          correct_answer: triviaEdit.correct_answer
+                        }, apiParams());
+                        success('Trivia updated');
+                        setEditingTrivia(false);
+                        await loadDetails();
+                      } catch (err) {
+                        showErrorToast(err?.response?.data?.error || err?.message || 'Failed to save trivia');
+                      } finally {
+                        setSavingTrivia(false);
+                      }
+                    };
+                    return (
+                      <div className="space-y-3">
+                        <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Video plays in this order ↓</p>
+                        {(script.hook || cj.hook) && !editingTrivia && (
+                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3">
+                            <p className="text-xs font-semibold text-blue-600 mb-1">1 · Hook <span className="font-normal">(optional)</span></p>
+                            <p className="text-base text-blue-900 font-medium">{script.hook || cj.hook}</p>
+                          </div>
+                        )}
+                        {!editingTrivia ? (
+                          <>
+                            {display.question && (
+                              <div className="rounded-md bg-gray-100 border border-gray-200 p-3">
+                                <p className="text-xs font-semibold text-gray-500 mb-1">2 · Question <span className="font-normal">(on screen + TTS)</span></p>
+                                <p className="text-base text-gray-900 font-medium">{display.question}</p>
+                              </div>
+                            )}
+                            <div className="rounded-md bg-yellow-50 border border-yellow-200 p-3 text-center">
+                              <p className="text-xs font-semibold text-yellow-700 mb-1">3 · 3-2-1 Countdown</p>
+                            </div>
+                            <div className="rounded-md bg-gray-100 border border-gray-200 p-3 space-y-1">
+                              <p className="text-xs font-semibold text-gray-500 mb-1">4 · Options</p>
+                              {display.option_a && <p className="text-sm text-gray-800">A) {display.option_a}</p>}
+                              {display.option_b && <p className="text-sm text-gray-800">B) {display.option_b}</p>}
+                              {display.option_c && <p className="text-sm text-gray-800">C) {display.option_c}</p>}
+                              <p className="text-green-700 font-medium pt-1">Correct: {display.correct_answer}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setTriviaEdit({
+                                  question: (cj.question ?? '').toString(),
+                                  option_a: (cj.option_a ?? '').toString(),
+                                  option_b: (cj.option_b ?? '').toString(),
+                                  option_c: (cj.option_c ?? '').toString(),
+                                  correct_answer: ((cj.correct_answer || 'A').toUpperCase().charAt(0))
+                                });
+                                setEditingTrivia(true);
+                              }}
+                              className="text-sm text-indigo-600 hover:text-indigo-800 font-medium"
+                            >
+                              Edit trivia
+                            </button>
+                          </>
+                        ) : (
+                          <div className="space-y-3 rounded-md bg-gray-50 border border-gray-200 p-3">
+                            <label className="block">
+                              <span className="text-xs font-semibold text-gray-600 block mb-1">Question</span>
+                              <input
+                                type="text"
+                                value={triviaEdit.question}
+                                onChange={(e) => setTriviaEdit((prev) => ({ ...prev, question: e.target.value }))}
+                                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                                maxLength={500}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-gray-600 block mb-1">Option A</span>
+                              <input
+                                type="text"
+                                value={triviaEdit.option_a}
+                                onChange={(e) => setTriviaEdit((prev) => ({ ...prev, option_a: e.target.value }))}
+                                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                                maxLength={200}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-gray-600 block mb-1">Option B</span>
+                              <input
+                                type="text"
+                                value={triviaEdit.option_b}
+                                onChange={(e) => setTriviaEdit((prev) => ({ ...prev, option_b: e.target.value }))}
+                                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                                maxLength={200}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-gray-600 block mb-1">Option C</span>
+                              <input
+                                type="text"
+                                value={triviaEdit.option_c}
+                                onChange={(e) => setTriviaEdit((prev) => ({ ...prev, option_c: e.target.value }))}
+                                className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm"
+                                maxLength={200}
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="text-xs font-semibold text-gray-600 block mb-1">Correct answer</span>
+                              <select
+                                value={triviaEdit.correct_answer}
+                                onChange={(e) => setTriviaEdit((prev) => ({ ...prev, correct_answer: e.target.value }))}
+                                className="rounded border border-gray-300 px-2 py-1.5 text-sm"
+                              >
+                                <option value="A">A</option>
+                                <option value="B">B</option>
+                                <option value="C">C</option>
+                              </select>
+                            </label>
+                            <div className="flex gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={handleSaveTrivia}
+                                disabled={savingTrivia}
+                                className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50"
+                              >
+                                {savingTrivia ? 'Saving...' : 'Save'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingTrivia(false)}
+                                className="px-3 py-1.5 border border-gray-300 text-sm rounded hover:bg-gray-100"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   }

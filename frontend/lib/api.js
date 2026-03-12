@@ -431,6 +431,7 @@ export const orbixNetworkAPI = {
   startRenderForStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/start-render`, {}, { params }),
   forceRenderStory: (id, params) => api.post(`/v2/orbix-network/stories/${id}/force-render`, {}, { params }),
   editScriptHook: (id, hook, params) => api.post(`/v2/orbix-network/stories/${id}/script/edit-hook`, { hook }, { params }),
+  editTriviaContent: (id, body, params) => api.post(`/v2/orbix-network/stories/${id}/script/edit-trivia`, body, { params }),
   getAnalytics: (params) => api.get('/v2/orbix-network/analytics', { params }),
   getYoutubeAuthUrl: (params) => api.get('/v2/orbix-network/youtube/auth-url', { params }),
   getYoutubeChannel: (params) => api.get('/v2/orbix-network/youtube/channel', { params }),

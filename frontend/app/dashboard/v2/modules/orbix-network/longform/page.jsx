@@ -368,14 +368,14 @@ export default function OrbixLongformPage() {
                       New dad joke long-form
                     </button>
                   ) : (
-                    <button
-                      type="button"
-                      onClick={() => setShowCreateForm(!showCreateForm)}
-                      className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
-                    >
-                      <Plus className="w-4 h-4" />
-                      New long-form video
-                    </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowCreateForm(!showCreateForm)}
+                    className="inline-flex items-center gap-2 px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
+                  >
+                    <Plus className="w-4 h-4" />
+                    New long-form video
+                  </button>
                   )}
                 </div>
                 {videos.length === 0 ? (
@@ -452,7 +452,7 @@ export default function OrbixLongformPage() {
                                 </button>
                               </span>
                             )}
-                          </div>
+                        </div>
                         )}
                       </li>
                     ))}
