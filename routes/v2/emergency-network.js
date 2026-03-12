@@ -4,6 +4,7 @@
  */
 import express from 'express';
 import multer from 'multer';
+import { randomUUID } from 'crypto';
 import { authenticate } from '../../middleware/auth.js';
 import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
 import { supabaseClient } from '../../config/database.js';
@@ -229,6 +230,30 @@ router.get('/public/website-page/:key', async (req, res) => {
   } catch (err) {
     console.error('[EmergencyNetwork] public/website-page error:', err?.message || err);
     res.status(500).json({ error: 'Failed to load page content' });
+  }
+});
+
+/**
+ * POST /api/v2/emergency-network/public/intake/chat
+ * Web chat intake: same flow as SMS (one prompt, parse reply, follow-up if missing, then dispatch).
+ * Body: { session_id?: string, message?: string }. If no message, returns initial prompt + session_id.
+ */
+router.post('/public/intake/chat', express.json(), async (req, res) => {
+  try {
+    const { session_id: clientSessionId, message } = req.body || {};
+    const sessionId = typeof clientSessionId === 'string' && clientSessionId.trim()
+      ? clientSessionId.trim()
+      : null;
+    const messageText = typeof message === 'string' ? message.trim() : '';
+
+    const { handleWebIntake } = await import('../../services/emergency-network/sms-intake.js');
+
+    const sid = sessionId || randomUUID();
+    const result = await handleWebIntake(sid, messageText);
+    res.json({ reply: result.reply, request_id: result.requestId || undefined, session_id: sid });
+  } catch (err) {
+    console.error('[EmergencyNetwork] public/intake/chat error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to process message' });
   }
 });
 

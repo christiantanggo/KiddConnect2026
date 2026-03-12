@@ -5,6 +5,20 @@ import Link from 'next/link';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
+async function chatIntake(sessionId, message) {
+  const res = await fetch(`${API_URL}/api/v2/emergency-network/public/intake/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(
+      message === undefined || message === ''
+        ? (sessionId ? { session_id: sessionId } : {})
+        : { session_id: sessionId, message }
+    ),
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 function useEmergencyPhone() {
   const [phone, setPhone] = useState(process.env.NEXT_PUBLIC_EMERGENCY_PHONE || '');
   useEffect(() => {
@@ -45,6 +59,12 @@ export default function EmergencyDispatchPage() {
   const pageContent = useWebsitePageContent('emergency-main');
   const [heroImageError, setHeroImageError] = useState(false);
   const contentRef = useRef(null);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatSessionId, setChatSessionId] = useState(null);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const chatEndRef = useRef(null);
   const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Dispatch';
   const heroSubtext = pageContent?.hero_subtext ?? 'We connect you with licensed local professionals. One call or form—we find someone available and get you help fast.';
@@ -54,6 +74,44 @@ export default function EmergencyDispatchPage() {
     { label: 'Request help online', url: '#form' },
   ];
   const scrollToContent = () => contentRef.current?.scrollIntoView({ behavior: 'smooth' });
+
+  const openChat = () => {
+    setChatOpen(true);
+    if (chatMessages.length === 0) {
+      setChatLoading(true);
+      chatIntake(null)
+        .then((data) => {
+          setChatMessages([{ role: 'assistant', content: data.reply || '' }]);
+          setChatSessionId(data.session_id || null);
+        })
+        .catch(() => {
+          setChatMessages([{ role: 'assistant', content: 'Sorry, we couldn\'t load the form. Please try again or call us.' }]);
+        })
+        .finally(() => setChatLoading(false));
+    }
+  };
+
+  const sendChatMessage = (e) => {
+    e.preventDefault();
+    const text = (chatInput || '').trim();
+    if (!text || chatLoading || !chatSessionId) return;
+    setChatInput('');
+    setChatMessages((prev) => [...prev, { role: 'user', content: text }]);
+    setChatLoading(true);
+    chatIntake(chatSessionId, text)
+      .then((data) => {
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: data.reply || '' }]);
+        if (data.session_id) setChatSessionId(data.session_id);
+      })
+      .catch(() => {
+        setChatMessages((prev) => [...prev, { role: 'assistant', content: 'Something went wrong. Please try again or call us.' }]);
+      })
+      .finally(() => setChatLoading(false));
+  };
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [chatMessages]);
 
   return (
     <div className="min-h-screen bg-[#f5f5f5] text-[#1a1a1a] antialiased">
@@ -92,7 +150,7 @@ export default function EmergencyDispatchPage() {
                     <button
                       key={i}
                       type="button"
-                      onClick={scrollToContent}
+                      onClick={openChat}
                       className={`inline-flex justify-center py-4 px-8 rounded text-white font-bold text-lg transition-colors ${i === 0 ? 'bg-[#c41e3a] hover:bg-[#a01830] uppercase tracking-wide' : 'border-2 border-white/80 font-semibold hover:bg-white/15'}`}
                     >
                       {btn.label || 'Request help online'}
@@ -163,6 +221,44 @@ export default function EmergencyDispatchPage() {
           </p>
         </div>
       </footer>
+
+      {/* Chat panel: same flow as SMS intake — no SMS sent; dispatch only */}
+      {chatOpen && (
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/40" onClick={() => setChatOpen(false)}>
+          <div className="w-full max-h-[90vh] sm:max-w-md sm:rounded-xl bg-white shadow-xl flex flex-col border border-slate-200" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 bg-slate-50">
+              <span className="font-semibold text-[#1a1a1a]">Request help online</span>
+              <button type="button" onClick={() => setChatOpen(false)} className="p-1 rounded hover:bg-slate-200 text-slate-600" aria-label="Close">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3 min-h-[200px] max-h-[50vh]">
+              {chatLoading && chatMessages.length === 0 && <p className="text-slate-500 text-sm">Loading…</p>}
+              {chatMessages.map((msg, i) => (
+                <div key={i} className={msg.role === 'user' ? 'flex justify-end' : 'flex justify-start'}>
+                  <div className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${msg.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-slate-100 text-slate-800'}`}>
+                    {msg.content}
+                  </div>
+                </div>
+              ))}
+              <div ref={chatEndRef} />
+            </div>
+            <form onSubmit={sendChatMessage} className="p-4 border-t border-slate-200">
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Type your message…"
+                  className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                  disabled={chatLoading || !chatSessionId}
+                />
+                <button type="submit" disabled={chatLoading || !chatSessionId || !chatInput?.trim()} className="px-4 py-2 rounded-lg bg-emerald-600 text-white font-medium text-sm hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none">
+                  Send
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
