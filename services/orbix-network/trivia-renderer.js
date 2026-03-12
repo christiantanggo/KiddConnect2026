@@ -178,13 +178,13 @@ export async function processTriviaRenderJob(render, story, script) {
     if (musicPath) {
       // Voice +25% (1.5625), music -25% (0.1875 → 0.140625)
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       // Voice only: +25% volume
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)},volume=1.5625[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }

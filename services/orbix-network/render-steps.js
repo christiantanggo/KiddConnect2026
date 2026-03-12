@@ -305,10 +305,10 @@ export async function step4Voice(renderId, renderJob, script, story, step3VideoP
     
     if (musicPath) {
       // Pad voice to targetDuration, then mix with music; output length = targetDuration
-      ffmpegCommand = `"${ffmpegPath}" -i "${step3VideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_dur=${padDur}[v];[v][2:a]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
+      ffmpegCommand = `"${ffmpegPath}" -i "${step3VideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)}[v];[v][2:a]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
     } else {
       // Voice only: pad to targetDuration, output length = targetDuration
-      ffmpegCommand = `"${ffmpegPath}" -i "${step3VideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
+      ffmpegCommand = `"${ffmpegPath}" -i "${step3VideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${targetDuration} -pix_fmt yuv420p "${step4OutputPath}"`;
     }
     
     await logStepEvent(renderId, step, 'COMMAND', 'FFmpeg command', { command: ffmpegCommand });

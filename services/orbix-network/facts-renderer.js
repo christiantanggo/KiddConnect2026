@@ -107,12 +107,12 @@ export async function processFactsRenderJob(render, story, script) {
 
     if (musicPath) {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_len=${Math.round(padDur * 24000)},volume=1.5625[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }

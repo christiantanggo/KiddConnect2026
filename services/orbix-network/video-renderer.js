@@ -724,8 +724,9 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
     const pads = inputs.map((_, i) => Math.max(0, totalDuration - delays[i] - durs[i]));
     const contentEndSeconds = inputs.length ? Math.max(...inputs.map((_, i) => delays[i] + durs[i])) : 0;
 
+    // pad_len in samples (TTS is 24kHz mono); older FFmpeg lacks pad_dur
     const streams = inputs
-      .map((_, i) => `[${i}:a]adelay=${Math.round(delays[i] * 1000)}|${Math.round(delays[i] * 1000)},apad=pad_dur=${pads[i]}[s${i}]`)
+      .map((_, i) => `[${i}:a]adelay=${Math.round(delays[i] * 1000)}|${Math.round(delays[i] * 1000)},apad=pad_len=${Math.round(pads[i] * 24000)}[s${i}]`)
       .join(';');
     const mixInputs = inputs.map((_, i) => `[s${i}]`).join('');
     const filter = `${streams};${mixInputs}amix=inputs=${inputs.length}:duration=first:dropout_transition=0[aout]`;
@@ -1204,8 +1205,9 @@ export async function generateFactsAudio(opts, totalDuration = 30) {
   const actualDur = await getDur(audioPath);
   const padDur = Math.max(0, totalDuration - actualDur);
   const mixedPath = join(tmpdir(), `facts-mixed-${Date.now()}.mp3`);
+  // pad_len in samples (24kHz); older FFmpeg lacks pad_dur
   await execAsync(
-    `"${ffmpegPath}" -i "${audioPath}" -af "apad=pad_dur=${padDur}" -t ${totalDuration} -y "${mixedPath}"`,
+    `"${ffmpegPath}" -i "${audioPath}" -af "apad=pad_len=${Math.round(padDur * 24000)}" -t ${totalDuration} -y "${mixedPath}"`,
     { timeout: 30000 }
   );
   try {

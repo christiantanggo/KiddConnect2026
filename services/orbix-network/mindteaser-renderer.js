@@ -91,14 +91,14 @@ async function generateMindTeaserAudio(questionText, answerText, totalDuration) 
     const actualTotal = answerStart + Math.max(ANSWER_FLASH_DURATION, aDur);
     const padTotal = Math.max(totalDuration || actualTotal, actualTotal);
 
-    // FFmpeg apad rejects scientific notation and near-zero; use fixed decimal and minimum 0.01
-    const toPadDur = (sec) => Math.max(0.01, Number((Math.max(0, sec)).toFixed(3)));
-    const padQ = toPadDur(padTotal - qDur);
-    const padA = toPadDur(padTotal - answerStart - aDur);
+    // pad_len in samples (TTS 24kHz); older FFmpeg lacks pad_dur
+    const toPadSamples = (sec) => Math.max(240, Math.round((Math.max(0, sec)) * 24000));
+    const padQ = toPadSamples(padTotal - qDur);
+    const padA = toPadSamples(padTotal - answerStart - aDur);
 
     const filter = [
-      `[0:a]apad=pad_dur=${padQ}[q]`,
-      `[1:a]adelay=${Math.round(answerStart * 1000)}|${Math.round(answerStart * 1000)},apad=pad_dur=${padA}[a]`,
+      `[0:a]apad=pad_len=${padQ}[q]`,
+      `[1:a]adelay=${Math.round(answerStart * 1000)}|${Math.round(answerStart * 1000)},apad=pad_len=${padA}[a]`,
       `[q][a]amix=inputs=2:duration=first:dropout_transition=0[aout]`
     ].join(';');
     await execAsync(
