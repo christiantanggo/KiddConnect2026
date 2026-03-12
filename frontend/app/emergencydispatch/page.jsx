@@ -65,6 +65,7 @@ export default function EmergencyDispatchPage() {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const chatEndRef = useRef(null);
+  const chatInputRef = useRef(null);
   const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const heroHeader = pageContent?.hero_header ?? '24/7 Emergency Dispatch';
   const heroSubtext = pageContent?.hero_subtext ?? 'We connect you with licensed local professionals. One call or form—we find someone available and get you help fast.';
@@ -112,6 +113,13 @@ export default function EmergencyDispatchPage() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatMessages]);
+
+  useEffect(() => {
+    if (chatOpen && !chatLoading) {
+      const t = setTimeout(() => chatInputRef.current?.focus(), 0);
+      return () => clearTimeout(t);
+    }
+  }, [chatOpen, chatLoading, chatMessages]);
 
   return (
     <div className="min-h-screen bg-[#f5f5f5] text-[#1a1a1a] antialiased">
@@ -244,12 +252,15 @@ export default function EmergencyDispatchPage() {
             <form onSubmit={sendChatMessage} className="p-4 border-t border-slate-200">
               <div className="flex gap-2">
                 <input
+                  ref={chatInputRef}
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
                   placeholder="Type your message…"
                   className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
                   disabled={chatLoading || !chatSessionId}
+                  autoFocus
+                  aria-label="Chat message"
                 />
                 <button type="submit" disabled={chatLoading || !chatSessionId || !chatInput?.trim()} className="px-4 py-2 rounded-lg bg-emerald-600 text-white font-medium text-sm hover:bg-emerald-700 disabled:opacity-50 disabled:pointer-events-none">
                   Send

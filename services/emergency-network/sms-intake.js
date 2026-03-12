@@ -308,19 +308,19 @@ function mapUrgency(text) {
 function getNextWebQuestion(serviceName, step, _data) {
   switch (step) {
     case 'name':
-      return `Thanks for contacting ${serviceName}! What is your name?`;
+      return `Hi there — thanks for reaching out! What should we call you?`;
     case 'address':
-      return 'What is your service address?';
+      return 'Got it. What\'s the address where you need help?';
     case 'service_type':
-      return 'What service do you need? (Plumbing / HVAC / Gas / Other)';
+      return 'What do you need help with? You can say Plumbing, HVAC, Gas, or Other.';
     case 'urgency':
-      return 'What is the urgency? (Immediate / Same day / Schedule for later)';
+      return 'How urgent is it? You can say Immediate, Same day, or Schedule for later.';
     case 'issue':
-      return 'Please describe the issue.';
+      return 'In a few words, what\'s going on? (e.g. burst pipe, no heat, leak)';
     case 'phone':
-      return 'What is the best phone number to reach you?';
+      return 'Last one — what\'s the best number to reach you?';
     default:
-      return `Thanks for contacting ${serviceName}! What is your name?`;
+      return `Hi there — thanks for reaching out! What should we call you?`;
   }
 }
 
@@ -355,37 +355,37 @@ export async function handleWebIntake(sessionId, messageText) {
   if (step === 'name') {
     data.caller_name = rawText.slice(0, 100).trim() || null;
     await upsertSession(fromPhone, toPhone, 'address', data);
-    return { reply: 'What is your service address?' };
+    return { reply: 'Got it. What\'s the address where you need help?' };
   }
 
   if (step === 'address') {
     data.location = rawText.slice(0, 500).trim() || null;
     await upsertSession(fromPhone, toPhone, 'service_type', data);
-    return { reply: 'What service do you need? (Plumbing / HVAC / Gas / Other)' };
+    return { reply: 'What do you need help with? You can say Plumbing, HVAC, Gas, or Other.' };
   }
 
   if (step === 'service_type') {
     data.service_category = mapServiceType(rawText);
     await upsertSession(fromPhone, toPhone, 'urgency', data);
-    return { reply: 'What is the urgency? (Immediate / Same day / Schedule for later)' };
+    return { reply: 'How urgent is it? You can say Immediate, Same day, or Schedule for later.' };
   }
 
   if (step === 'urgency') {
     data.urgency_level = mapUrgency(rawText);
     await upsertSession(fromPhone, toPhone, 'issue', data);
-    return { reply: 'Please describe the issue.' };
+    return { reply: 'In a few words, what\'s going on? (e.g. burst pipe, no heat, leak)' };
   }
 
   if (step === 'issue') {
     data.issue_summary = rawText.slice(0, 2000).trim() || 'See request';
     await upsertSession(fromPhone, toPhone, 'phone', data);
-    return { reply: 'What is the best phone number to reach you?' };
+    return { reply: 'Last one — what\'s the best number to reach you?' };
   }
 
   if (step === 'phone') {
     const callbackPhone = extractPhoneFromMessage(rawText);
     if (!callbackPhone) {
-      return { reply: 'We need a valid phone number to reach you. Please enter it (e.g. (519) 872-2736).' };
+      return { reply: 'We need a number we can call or text you at. Try entering it like (519) 872-2736.' };
     }
     await deleteSession(fromPhone, toPhone);
     const request = await createServiceRequest({
@@ -400,7 +400,7 @@ export async function handleWebIntake(sessionId, messageText) {
     startDispatch(request.id).catch((err) =>
       console.error('[Emergency Web Intake] startDispatch error:', err?.message || err)
     );
-    return { reply: `${serviceName}: Thanks. We're contacting providers now. You may get a call or text shortly.`, requestId: request.id };
+    return { reply: `Perfect — we\'ve got everything we need. We\'re reaching out to local pros now; you should get a call or text shortly. Thanks!`, requestId: request.id };
   }
 
   await upsertSession(fromPhone, toPhone, 'name', {});
