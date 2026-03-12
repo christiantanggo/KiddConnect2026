@@ -22,6 +22,29 @@ function normalizeE164(value) {
 }
 
 /**
+ * Format E.164 phone for clear speech (no +); e.g. +15198722736 -> "519, 872, 2736" (commas = brief pause).
+ */
+export function formatPhoneForSpeech(e164) {
+  if (!e164 || typeof e164 !== 'string') return '';
+  let digits = String(e164).replace(/[^0-9]/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  if (digits.length === 10) return `${digits.slice(0, 3)}, ${digits.slice(3, 6)}, ${digits.slice(6)}`;
+  if (digits.length > 10) return digits.replace(/(\d{3})(?=\d)/g, '$1, ').trim();
+  return digits;
+}
+
+/**
+ * Format E.164 for SMS body (readable, no +); e.g. +15198722736 -> "(519) 872-2736".
+ */
+export function formatPhoneForSms(e164) {
+  if (!e164 || typeof e164 !== 'string') return '';
+  let digits = String(e164).replace(/[^0-9]/g, '');
+  if (digits.length === 11 && digits.startsWith('1')) digits = digits.slice(1);
+  if (digits.length === 10) return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  return digits;
+}
+
+/**
  * Get providers eligible for a request: same trade type, available, ordered by priority.
  * @param {Object} request - emergency_service_requests row
  * @returns {Promise<Array>} emergency_providers rows
@@ -211,26 +234,51 @@ function substituteCallbackPlaceholders(template, vars) {
 
 /**
  * Build the transient assistant config for outbound callback to the customer after a provider accepts.
- * @param {string} message - Full message to speak (placeholders already substituted by caller).
+ * Speaks the message (phone number without +, in groups e.g. 519, 872, 2736), then offers SMS or repeat; repeat up to 3 times; then "Anything else?" with 30s silence then hang up.
+ * @param {string} message - Full message to speak (placeholders already substituted; provider_phone is speakable format).
  */
 export function buildCustomerCallbackAssistantConfig(message) {
-  const finalMessage = (message && String(message).trim()) || "We've assigned a plumber to your request. Goodbye.";
+  const fullMessage = (message && String(message).trim()) || "We've assigned a plumber to your request.";
+  const firstMessage = `${fullMessage} Would you like these details sent to you by SMS, or would you like me to repeat this message?`;
+  const webhookUrl = getWebhookUrl();
   return {
     model: {
       provider: 'openai',
       model: PHONE_AGENT_MODEL,
       temperature: 0.2,
-      maxTokens: 100,
+      maxTokens: 300,
       messages: [
         {
           role: 'system',
-          content: 'You are an automated callback. Say exactly the first message you were given. Do not ask questions or wait for a response. After saying it, say "Goodbye." and the call is over.',
+          content: `You are calling the customer back to tell them a trades professional has been assigned.
+
+STEP 1 – Say exactly the first message you were given (it includes the company name and the phone number). Then you have already asked: "Would you like these details sent to you by SMS, or would you like me to repeat this message?" Wait for their response.
+
+STEP 2 – Respond to their choice:
+- If they say SMS or text or send me a text: call the function customer_callback_send_sms. Then say exactly the result the system returns (e.g. "I've sent the details to your phone by text.").
+- If they say repeat or say it again: say the exact same full message again (the whole message with company name and phone number). Then ask again: "Would you like these details sent by SMS, or would you like me to repeat?" You may repeat the full message at most 2 more times (3 readings in total). After the third time you have said the full message, do not repeat again; go to STEP 3.
+- If unclear: say once "Would you like these details sent by SMS, or would you like me to repeat the message?" Then wait.
+
+STEP 3 – After they have chosen SMS (and you said the result) or after you have repeated the message up to 3 times total, say: "Is there anything else I can assist you with today?" Wait for their response. If they say no or nothing else, say "Thank you for calling. Goodbye." and end the call. If they are silent for about 30 seconds, say "Thank you for calling. Goodbye." and end the call.`,
+        },
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'customer_callback_send_sms',
+            description: 'Call when the customer says they want the details sent by SMS or text. Sends the dispatch details to their phone.',
+            parameters: { type: 'object', properties: {} },
+          },
         },
       ],
     },
     voice: { provider: 'openai', voiceId: 'alloy' },
-    firstMessage: finalMessage,
+    firstMessage,
     firstMessageMode: 'assistant-speaks-first',
+    serverUrl: webhookUrl,
+    ...(process.env.VAPI_WEBHOOK_SECRET ? { serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET } : {}),
+    serverMessages: ['status-update', 'end-of-call-report', 'function-call', 'hang'],
     transcriber: {
       provider: 'deepgram',
       model: 'nova-2',
@@ -266,11 +314,12 @@ export async function placeCustomerCallbackCall(request, provider) {
   const config = await getEmergencyConfig();
   const serviceLineName = (config.service_line_name && String(config.service_line_name).trim()) || 'the emergency plumbing line';
   const template = (config.customer_callback_message && String(config.customer_callback_message).trim()) || DEFAULT_CUSTOMER_CALLBACK_MESSAGE;
+  const providerPhoneSpeakable = formatPhoneForSpeech(providerPhone);
   const message = substituteCallbackPlaceholders(template, {
     caller_name: request.caller_name ?? '',
     service_line_name: serviceLineName,
     business_name: provider.business_name ?? 'your assigned plumber',
-    provider_phone: providerPhone,
+    provider_phone: providerPhoneSpeakable,
   });
   const assistant = buildCustomerCallbackAssistantConfig(message);
   try {

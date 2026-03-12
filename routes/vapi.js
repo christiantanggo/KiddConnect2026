@@ -2114,6 +2114,17 @@ async function handleFunctionCall(event) {
       }
       return out;
     }
+    if (functionName === 'customer_callback_send_sms') {
+      const out = await handleCustomerCallbackSendSms(event);
+      resultContent = typeof out === 'object' && out?.result != null ? out.result : out;
+      if (toolCallId && resultContent != null) {
+        return { results: [{ toolCallId, result: resultContent }] };
+      }
+      if (toolCallId) {
+        return { results: [{ toolCallId, result: (typeof out === 'object' && out?.result != null) ? out.result : "The text could not be sent. You can ask me to repeat the details." }] };
+      }
+      return out;
+    }
     console.log(`[VAPI Webhook] ⚠️ Unhandled function: ${functionName}`);
     // Always return a result when we have toolCallId so VAPI does not show "No result returned"
     if (toolCallId) {
@@ -2343,6 +2354,64 @@ async function handleDispatchSmsDetails(event) {
   } catch (err) {
     console.error('[VAPI Webhook] dispatch_sms_details failed:', err?.message || err);
     return { result: "The text could not be sent. The details were shared at the start of this call." };
+  }
+}
+
+/**
+ * Handle customer_callback_send_sms: send dispatch details to the customer by SMS after they requested it on the callback call.
+ * Call metadata must have request_id and provider_id (set when placing the customer callback call).
+ * Returns { result: string } for the assistant to speak.
+ */
+async function handleCustomerCallbackSendSms(event) {
+  const call = event.call || event.message?.call || event.message?.artifact?.call || event.artifact?.call || {};
+  const metadata = call.metadata || {};
+  if (metadata.type !== 'emergency_customer_callback' || !metadata.request_id || !metadata.provider_id) {
+    console.warn('[VAPI Webhook] customer_callback_send_sms: missing or invalid call metadata', metadata);
+    return { result: "I couldn't find this call. I can repeat the details if you like." };
+  }
+  const { supabaseClient } = await import("../config/database.js");
+  const { data: requestRow } = await supabaseClient
+    .from('emergency_service_requests')
+    .select('id, callback_phone')
+    .eq('id', metadata.request_id)
+    .single();
+  const { data: providerRow } = await supabaseClient
+    .from('emergency_providers')
+    .select('id, business_name, phone')
+    .eq('id', metadata.provider_id)
+    .single();
+  if (!requestRow || !providerRow) {
+    console.warn('[VAPI Webhook] customer_callback_send_sms: request or provider not found');
+    return { result: "Something went wrong. I can repeat the details if you like." };
+  }
+  const config = await (await import("../services/emergency-network/config.js")).getEmergencyConfig();
+  const serviceLineName = (config.service_line_name && String(config.service_line_name).trim()) || '24/7 Emergency Dispatch';
+  const numbers = config.emergency_phone_numbers || [];
+  const fromNumber = numbers[0] && String(numbers[0]).trim();
+  if (!fromNumber) {
+    console.warn('[VAPI Webhook] customer_callback_send_sms: no emergency from number');
+    return { result: "Text is not configured. I can repeat the details if you like." };
+  }
+  const { formatPhoneForSms } = await import("../services/emergency-network/dispatch.js");
+  const providerPhoneFormatted = formatPhoneForSms(providerRow.phone);
+  const businessName = (providerRow.business_name && String(providerRow.business_name).trim()) || 'A trades professional';
+  const messageText = `Thanks for contacting ${serviceLineName}. ${businessName} has been dispatched and can be contacted at ${providerPhoneFormatted}. Thanks for using ${serviceLineName}`;
+  let fromE164 = fromNumber.replace(/[^0-9+]/g, '');
+  if (!fromE164.startsWith('+')) fromE164 = fromE164.length === 10 ? `+1${fromE164}` : `+${fromE164}`;
+  let toE164 = String(requestRow.callback_phone || '').replace(/[^0-9+]/g, '');
+  if (!toE164.startsWith('+')) toE164 = toE164.length === 10 ? `+1${toE164}` : `+${toE164}`;
+  if (!toE164) {
+    console.warn('[VAPI Webhook] customer_callback_send_sms: no callback_phone');
+    return { result: "I don't have a number to text. I can repeat the details if you like." };
+  }
+  try {
+    const { sendSMSDirect } = await import("../services/notifications.js");
+    await sendSMSDirect(fromE164, toE164, messageText, true);
+    console.log('[VAPI Webhook] Customer callback: sent details by SMS to customer', requestRow.id);
+    return { result: "I've sent the details to your phone by text." };
+  } catch (err) {
+    console.error('[VAPI Webhook] customer_callback_send_sms failed:', err?.message || err);
+    return { result: "The text could not be sent. I can repeat the details if you like." };
   }
 }
 
