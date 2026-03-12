@@ -2191,10 +2191,10 @@ async function handleDispatchProviderResponse(functionName, event) {
     } catch (billingErr) {
       console.error('[VAPI Webhook] Billing charge create failed (non-blocking):', billingErr?.message || billingErr);
     }
-    // Call the customer back to tell them the assigned company name and provider phone
+    // Call the customer back only if they came by phone/SMS — not for web chat (they get the update in chat)
     const { data: requestRow } = await supabaseClient
       .from('emergency_service_requests')
-      .select('id, callback_phone, caller_name')
+      .select('id, callback_phone, caller_name, intake_channel')
       .eq('id', row.service_request_id)
       .single();
     const { data: providerRow } = await supabaseClient
@@ -2202,13 +2202,13 @@ async function handleDispatchProviderResponse(functionName, event) {
       .select('id, business_name, phone')
       .eq('id', row.provider_id)
       .single();
-    if (requestRow && providerRow) {
+    if (requestRow && providerRow && requestRow.intake_channel !== 'web') {
       const { placeCustomerCallbackCall } = await import("../services/emergency-network/dispatch.js");
       placeCustomerCallbackCall(requestRow, providerRow).catch((err) => {
         console.error('[VAPI Webhook] Customer callback failed:', err?.message || err);
       });
     }
-    return "Job accepted. Would you like the details emailed, sent by SMS, or repeat?";
+    return "Job accepted. Say: Would you like the details emailed, sent by SMS, or repeat? Then wait for their answer before doing anything else.";
   } else {
     const { callNextProvider } = await import("../services/emergency-network/dispatch.js");
     await callNextProvider(row.service_request_id);

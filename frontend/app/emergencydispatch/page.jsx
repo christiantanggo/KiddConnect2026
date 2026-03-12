@@ -5,6 +5,23 @@ import Link from 'next/link';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 const CHAT_REPLY_DELAY_MS = 1100;
+const CHAT_SESSION_STORAGE_KEY = 'emergency_dispatch_chat_session_id';
+
+function getStoredChatSessionId() {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.localStorage.getItem(CHAT_SESSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setStoredChatSessionId(id) {
+  if (typeof window === 'undefined' || !id) return;
+  try {
+    window.localStorage.setItem(CHAT_SESSION_STORAGE_KEY, id);
+  } catch (_) {}
+}
 
 async function chatIntake(sessionId, message) {
   const res = await fetch(`${API_URL}/api/v2/emergency-network/public/intake/chat`, {
@@ -61,7 +78,7 @@ export default function EmergencyDispatchPage() {
   const [heroImageError, setHeroImageError] = useState(false);
   const contentRef = useRef(null);
   const [chatOpen, setChatOpen] = useState(false);
-  const [chatSessionId, setChatSessionId] = useState(null);
+  const [chatSessionId, setChatSessionId] = useState(() => getStoredChatSessionId());
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -84,7 +101,10 @@ export default function EmergencyDispatchPage() {
     chatDelayTimerRef.current = setTimeout(() => {
       chatDelayTimerRef.current = null;
       setChatMessages((prev) => [...prev, { role: 'assistant', content: reply || '' }]);
-      if (sessionId != null) setChatSessionId(sessionId);
+      if (sessionId != null) {
+        setChatSessionId(sessionId);
+        setStoredChatSessionId(sessionId);
+      }
       setChatLoading(false);
     }, CHAT_REPLY_DELAY_MS);
   };
@@ -93,7 +113,7 @@ export default function EmergencyDispatchPage() {
     setChatOpen(true);
     if (chatMessages.length === 0) {
       setChatLoading(true);
-      const sessionId = chatSessionId || null;
+      const sessionId = chatSessionId || getStoredChatSessionId() || null;
       chatIntake(sessionId)
         .then((data) => {
           applyReplyAfterDelay(data.reply || '', data.session_id ?? sessionId);
@@ -171,20 +191,23 @@ export default function EmergencyDispatchPage() {
         <div className="relative z-20 w-full max-w-[900px] mx-auto px-4 py-12 text-center">
           <h1 className="text-3xl sm:text-4xl font-bold text-white drop-shadow-sm mb-3">{heroHeader}</h1>
           <p className="text-lg text-white/90 max-w-xl mx-auto mb-8">{heroSubtext}</p>
-          {phone && buttons.length > 0 && (
+          {(phone || buttons.length > 0) && (
             <div className="flex flex-wrap gap-3 justify-center">
-              {buttons.map((btn, i) => {
+              {buttons.length > 0 ? buttons.map((btn, i) => {
                 const url = (btn.url || '').trim().toLowerCase();
-                const isChatButton = url === '#form' || url.endsWith('#form');
+                const label = (btn.label || '').trim();
+                const isChatByUrl = url === '#form' || url.endsWith('#form');
+                const isChatByLabel = /request\s+help\s+online|help\s+online|chat|request\s+help/i.test(label);
+                const isChatButton = isChatByUrl || isChatByLabel;
                 if (isChatButton) {
                   return (
                     <button
                       key={i}
                       type="button"
-                      onClick={(e) => { e.preventDefault(); openChat(); }}
+                      onClick={(e) => { e.preventDefault(); e.stopPropagation(); setChatOpen(true); if (chatMessages.length === 0) { setChatLoading(true); chatIntake(chatSessionId || null).then((data) => { applyReplyAfterDelay(data.reply || '', data.session_id ?? chatSessionId); }).catch(() => { applyReplyAfterDelay('Sorry, we couldn\'t load the form. Please try again or call us.', null); }); } }}
                       className={`inline-flex justify-center py-4 px-8 rounded text-white font-bold text-lg transition-colors ${i === 0 ? 'bg-[#c41e3a] hover:bg-[#a01830] uppercase tracking-wide' : 'border-2 border-white/80 font-semibold hover:bg-white/15'}`}
                     >
-                      {btn.label || 'Request help online'}
+                      {label || 'Request help online'}
                     </button>
                   );
                 }
@@ -195,10 +218,18 @@ export default function EmergencyDispatchPage() {
                     href={href}
                     className={`inline-flex justify-center py-4 px-8 rounded text-white font-bold text-lg transition-colors ${i === 0 ? 'bg-[#c41e3a] hover:bg-[#a01830] uppercase tracking-wide' : 'border-2 border-white/80 font-semibold hover:bg-white/15'}`}
                   >
-                    {btn.label || 'Link'}
+                    {label || 'Link'}
                   </a>
                 );
-              })}
+              }) : (
+                <button
+                  type="button"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); setChatOpen(true); if (chatMessages.length === 0) { setChatLoading(true); chatIntake(null).then((data) => { applyReplyAfterDelay(data.reply || '', data.session_id ?? null); }).catch(() => { applyReplyAfterDelay('Sorry, we couldn\'t load the form. Please try again or call us.', null); }); } }}
+                  className="inline-flex justify-center py-4 px-8 rounded border-2 border-white/80 text-white font-semibold text-lg hover:bg-white/15 transition-colors"
+                >
+                  Request help online
+                </button>
+              )}
             </div>
           )}
           {phone && <p className="mt-3 text-white/90 font-medium">{phone}</p>}
@@ -207,6 +238,15 @@ export default function EmergencyDispatchPage() {
 
       <section ref={contentRef} className="py-10 px-4">
         <div className="max-w-[900px] mx-auto">
+          <div className="text-center mb-6">
+            <button
+              type="button"
+              onClick={() => { setChatOpen(true); if (chatMessages.length === 0) { setChatLoading(true); chatIntake(null).then((d) => applyReplyAfterDelay(d.reply || '', d.session_id ?? null)).catch(() => applyReplyAfterDelay('Sorry, we couldn\'t load the form. Please try again or call us.', null)); } }}
+              className="inline-flex items-center justify-center py-3 px-6 rounded-lg bg-emerald-600 text-white font-semibold text-base hover:bg-emerald-700 transition-colors"
+            >
+              Request help online
+            </button>
+          </div>
           <h2 className="text-xl font-bold text-[#1a1a1a] mb-6 text-center">Choose your service</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             <Link

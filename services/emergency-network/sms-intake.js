@@ -340,6 +340,33 @@ export async function handleWebIntake(sessionId, messageText) {
 
   const session = await getSession(fromPhone, toPhone);
 
+  if (session?.step === 'completed' && session.data?.request_id) {
+    const requestId = session.data.request_id;
+    const { data: req } = await supabaseClient
+      .from('emergency_service_requests')
+      .select('id, status, accepted_provider_id')
+      .eq('id', requestId)
+      .single();
+    if (req?.status === 'Accepted' && req.accepted_provider_id) {
+      const { data: provider } = await supabaseClient
+        .from('emergency_providers')
+        .select('id, business_name, phone')
+        .eq('id', req.accepted_provider_id)
+        .single();
+      await deleteSession(fromPhone, toPhone);
+      const { formatPhoneForSms } = await import('./dispatch.js');
+      const businessName = (provider?.business_name && String(provider.business_name).trim()) || 'A trades professional';
+      const phoneFormatted = provider?.phone ? formatPhoneForSms(provider.phone) : '';
+      const msg = phoneFormatted
+        ? `Good news — we've assigned ${businessName} to your request. You can reach them at ${phoneFormatted}. Thanks for using ${serviceName}!`
+        : `Good news — we've assigned ${businessName} to your request. They'll contact you shortly. Thanks for using ${serviceName}!`;
+      return { reply: msg };
+    }
+    if (req) {
+      return { reply: `We're still reaching out to providers. We'll update you here when someone is assigned — you can check back anytime by sending a message.` };
+    }
+  }
+
   if (!rawText) {
     const step = session?.step && WEB_CHAT_STEPS.includes(session.step) ? session.step : 'name';
     const data = session?.data && typeof session.data === 'object' ? session.data : {};
@@ -387,7 +414,6 @@ export async function handleWebIntake(sessionId, messageText) {
     if (!callbackPhone) {
       return { reply: 'We need a number we can call or text you at. Try entering it like (519) 872-2736.' };
     }
-    await deleteSession(fromPhone, toPhone);
     const request = await createServiceRequest({
       caller_name: data.caller_name || null,
       callback_phone: callbackPhone,
@@ -397,10 +423,11 @@ export async function handleWebIntake(sessionId, messageText) {
       issue_summary: data.issue_summary || 'See request',
       intake_channel: 'web',
     });
+    await upsertSession(fromPhone, toPhone, 'completed', { ...data, request_id: request.id });
     startDispatch(request.id).catch((err) =>
       console.error('[Emergency Web Intake] startDispatch error:', err?.message || err)
     );
-    return { reply: `Perfect — we\'ve got everything we need. We\'re reaching out to local pros now; you should get a call or text shortly. Thanks!`, requestId: request.id };
+    return { reply: `Perfect — we've got everything we need. We're reaching out to local pros now. When someone is assigned, we'll update you here in the chat — you can leave this open or come back and send any message to check. Thanks!`, requestId: request.id };
   }
 
   await upsertSession(fromPhone, toPhone, 'name', {});
