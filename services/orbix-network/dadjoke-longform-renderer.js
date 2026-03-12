@@ -10,7 +10,6 @@ import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { supabaseClient } from '../../config/database.js';
-import { ffmpegPath } from './ffmpeg-path.js';
 import {
   getBackgroundImageUrl,
   getRandomMusicTrack,
@@ -157,7 +156,7 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
           await fs.promises.writeFile(imgPath, imgResp.data);
           segMotion = await applyMotionToImage(imgPath, segDuration);
           await execAsync(
-            `"${ffmpegPath}" -i "${segMotion}" -c:v copy -t ${segDuration} -y "${segVideoPath}"`,
+            `"ffmpeg" -i "${segMotion}" -c:v copy -t ${segDuration} -y "${segVideoPath}"`,
             { timeout: 120000 }
           );
           segmentPaths.push(segVideoPath);
@@ -173,7 +172,7 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
       );
       motionPath = join(tmpdir(), `dadjoke-motion-${videoId}-${timestamp}.mp4`);
       await execAsync(
-        `"${ffmpegPath}" -f concat -safe 0 -i "${concatListPath}" -c copy -t ${duration} -y "${motionPath}"`,
+        `"ffmpeg" -f concat -safe 0 -i "${concatListPath}" -c copy -t ${duration} -y "${motionPath}"`,
         { timeout: 120000 }
       );
       for (const p of [...segmentPaths, concatListPath]) {
@@ -214,12 +213,12 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
     const voiceFilter = `[1:a]atrim=0:${duration},asetpts=PTS-STARTPTS,volume=1.2`;
     if (musicPath) {
       await execAsync(
-        `"${ffmpegPath}" -i "${motionPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceFilter}[voice];[2:a]volume=0.12[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${duration} -y "${finalVideoPath}"`,
+        `"ffmpeg" -i "${motionPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceFilter}[voice];[2:a]volume=0.12[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${duration} -y "${finalVideoPath}"`,
         { timeout: 600000 }
       );
     } else {
       await execAsync(
-        `"${ffmpegPath}" -i "${motionPath}" -i "${audioPath}" -filter_complex "${voiceFilter}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${duration} -y "${finalVideoPath}"`,
+        `"ffmpeg" -i "${motionPath}" -i "${audioPath}" -filter_complex "${voiceFilter}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${duration} -y "${finalVideoPath}"`,
         { timeout: 600000 }
       );
     }

@@ -7,7 +7,7 @@
  * Music tracks must be in Supabase Storage bucket 'orbix-network-music'
  */
 
-import { exec, execFile } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import { unlink } from 'fs';
 import { join } from 'path';
@@ -16,10 +16,8 @@ import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
-import { ffmpegPath, ffprobePath } from './ffmpeg-path.js';
 
 const execAsync = promisify(exec);
-const execFileAsync = promisify(execFile);
 const unlinkAsync = promisify(unlink);
 
 // Background asset configuration
@@ -257,18 +255,24 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     const segment3Path = join(tmpdir(), `orbix-segment3-${Date.now()}.mp4`);
     const segment4Path = join(tmpdir(), `orbix-segment4-${Date.now()}.mp4`);
     
-    const segmentTimeoutMs = duration > 120 ? 10 * 60 * 1000 : 2 * 60 * 1000;
     console.log(`[Orbix Video Renderer] Applying 4-segment A-B-A-B motion (segment=${segmentDuration.toFixed(1)}s each, total=${duration}s)...`);
     
-    // Run ffmpeg via execFile (no shell) so bundled path works on Windows
-    const runFf = (args) => execFileAsync(ffmpegPath, args, { timeout: segmentTimeoutMs });
-    const segArgs = (filter, outPath) => ['-loop', '1', '-i', imagePath, '-vf', filter, '-t', String(segmentDuration), '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', outPath];
-
-    await runFf(segArgs(segment1Filter, segment1Path));
-    await runFf(segArgs(segment2Filter, segment2Path));
-    await runFf(segArgs(segment3Filter, segment3Path));
-    await runFf(segArgs(segment4Filter, segment4Path));
-
+    // Segment 1: Zoom in
+    const segment1Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment1Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment1Path}"`;
+    await execAsync(segment1Command, { timeout: 2 * 60 * 1000 });
+    
+    // Segment 2: Pan right-to-left, upper angle
+    const segment2Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment2Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment2Path}"`;
+    await execAsync(segment2Command, { timeout: 2 * 60 * 1000 });
+    
+    // Segment 3: Zoom out
+    const segment3Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment3Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment3Path}"`;
+    await execAsync(segment3Command, { timeout: 2 * 60 * 1000 });
+    
+    // Segment 4: Pan left-to-right, lower angle
+    const segment4Command = `ffmpeg -loop 1 -i "${imagePath}" -vf "${segment4Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment4Path}"`;
+    await execAsync(segment4Command, { timeout: 2 * 60 * 1000 });
+    
     const concatListPath = join(tmpdir(), `orbix-concat-${Date.now()}.txt`);
     const fs = (await import('fs')).default;
     await fs.promises.writeFile(concatListPath, 
@@ -277,8 +281,10 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
       `file '${segment3Path.replace(/\\/g, '/')}'\n` +
       `file '${segment4Path.replace(/\\/g, '/')}'\n`
     );
-
-    await execFileAsync(ffmpegPath, ['-f', 'concat', '-safe', '0', '-i', concatListPath, '-c', 'copy', '-t', String(duration), '-y', videoPath], { timeout: segmentTimeoutMs });
+    
+    // Use concat demuxer to join segments, then trim to exact duration
+    const concatCommand = `ffmpeg -f concat -safe 0 -i "${concatListPath}" -c copy -t ${duration} -y "${videoPath}"`;
+    await execAsync(concatCommand, { timeout: 2 * 60 * 1000 });
     
     // Cleanup temporary segment files
     try {
@@ -296,7 +302,7 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     
   } catch (error) {
     if (error.code === 'ENOENT' || (error.message && (error.message.includes('not recognized') || error.message.includes('not found')))) {
-      throw new Error(`FFmpeg could not be run at: ${ffmpegPath}. If using the bundled binary run: npm install. Otherwise set FFMPEG_PATH in .env. [v:2026-03-12]`);
+      throw new Error('FFmpeg is not installed or not in your system PATH. Please install FFmpeg:\n\nWindows: Download from https://www.gyan.dev/ffmpeg/builds/ or use: choco install ffmpeg\nMac: brew install ffmpeg\nLinux: sudo apt-get install ffmpeg\n\nAfter installation, restart your development server.');
     }
     console.error('[Orbix Video Renderer] Error applying motion to image:', error);
     throw error;
@@ -370,171 +376,6 @@ export async function uploadRenderToStorage(businessId, renderId, localPath) {
 }
 
 /**
- * Upload long-form video to Supabase Storage (dad joke long-form only).
- * Path: businessId/longform/longformVideoId.mp4
- * @param {string} businessId - Business ID
- * @param {string} longformVideoId - orbix_longform_videos.id
- * @param {string} localPath - Path to the rendered .mp4 file
- * @returns {Promise<string|null>} Public URL or null on failure
- */
-export async function uploadLongformVideoToStorage(businessId, longformVideoId, localPath) {
-  const fs = await import('fs');
-  const maxAttempts = 3;
-  const delayMs = 1500;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const buffer = await fs.default.promises.readFile(localPath);
-      const remotePath = `${businessId}/longform/${longformVideoId}.mp4`;
-      const { data, error } = await supabaseClient.storage
-        .from(RENDERS_BUCKET)
-        .upload(remotePath, buffer, { contentType: 'video/mp4', upsert: true });
-      if (error) {
-        console.error(`[Orbix Video Renderer] Longform upload attempt ${attempt}/${maxAttempts} failed:`, error.message);
-        if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
-        continue;
-      }
-      const { data: urlData } = supabaseClient.storage.from(RENDERS_BUCKET).getPublicUrl(data.path);
-      const baseUrl = urlData?.publicUrl ?? null;
-      const url = baseUrl ? `${baseUrl}${baseUrl.includes('?') ? '&' : '?'}v=${Date.now()}` : null;
-      if (url) return url;
-    } catch (error) {
-      console.error(`[Orbix Video Renderer] Longform upload attempt ${attempt}/${maxAttempts} error:`, error?.message || error);
-      if (attempt < maxAttempts) await new Promise(r => setTimeout(r, delayMs));
-    }
-  }
-  return null;
-}
-
-/** OpenAI TTS max characters per request. */
-const TTS_MAX_CHARS = 4000;
-
-/**
- * Split text into chunks of at most TTS_MAX_CHARS, breaking at sentence boundaries when possible.
- */
-function chunkTextForTTS(text) {
-  if (!text || typeof text !== 'string') return [];
-  const trimmed = text.trim();
-  if (!trimmed.length) return [];
-  const chunks = [];
-  let rest = trimmed;
-  while (rest.length > 0) {
-    if (rest.length <= TTS_MAX_CHARS) {
-      chunks.push(rest);
-      break;
-    }
-    const slice = rest.slice(0, TTS_MAX_CHARS);
-    const lastSentence = slice.match(/[^.!?]*[.!?]\s*$/);
-    const breakAt = lastSentence ? slice.lastIndexOf(lastSentence[0].trim()) + lastSentence[0].trim().length : TTS_MAX_CHARS;
-    const chunk = (breakAt > 0 ? slice.slice(0, breakAt) : slice).trim();
-    if (chunk) chunks.push(chunk);
-    rest = (breakAt > 0 ? rest.slice(breakAt) : rest.slice(TTS_MAX_CHARS)).replace(/^\s+/, '');
-  }
-  return chunks;
-}
-
-/** Pause duration in seconds for [beat] in long-form scripts (0.6–1.2s). */
-const LONGFORM_BEAT_PAUSE_SEC = 0.9;
-
-/**
- * Generate long-form narration audio using OpenAI TTS.
- * - Splits on [beat] and inserts ~0.9s silence between segments (comedic timing).
- * - Each segment may be long; chunks at 4000 chars for TTS limit, then concatenates.
- * @param {string} fullScriptText - Full narration text (may contain [beat] markers)
- * @returns {Promise<{audioPath: string, duration: number}>}
- */
-export async function generateLongformTTS(fullScriptText) {
-  const OpenAI = (await import('openai')).default;
-  const fs = (await import('fs')).default;
-
-  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not set');
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const text = (fullScriptText || '').trim();
-  if (!text) throw new Error('No script text for long-form TTS');
-
-  const tmpDir = tmpdir();
-  const ts = Date.now();
-
-  // Split by [beat] so we can insert silence between parts
-  const segments = text.split(/\s*\[beat\]\s*/gi).map((s) => s.trim()).filter(Boolean);
-  if (segments.length === 0) throw new Error('No script content after splitting on [beat]');
-
-  const segmentAudioPaths = [];
-  const toCleanup = [];
-
-  try {
-    for (let segIdx = 0; segIdx < segments.length; segIdx++) {
-      const segmentText = segments[segIdx];
-      const chunks = chunkTextForTTS(segmentText);
-      if (chunks.length === 0) continue;
-      const chunkPaths = [];
-      for (let c = 0; c < chunks.length; c++) {
-        const partPath = join(tmpDir, `orbix-lf-tts-${ts}-s${segIdx}-c${c}.mp3`);
-        const response = await openai.audio.speech.create({
-          model: 'tts-1',
-          voice: 'alloy',
-          input: chunks[c],
-        });
-        await fs.promises.writeFile(partPath, Buffer.from(await response.arrayBuffer()));
-        chunkPaths.push(partPath);
-        toCleanup.push(partPath);
-      }
-      if (chunkPaths.length === 1) {
-        segmentAudioPaths.push(chunkPaths[0]);
-      } else {
-        const segPath = join(tmpDir, `orbix-lf-seg-${ts}-${segIdx}.mp3`);
-        const listPath = join(tmpDir, `orbix-lf-list-${ts}-${segIdx}.txt`);
-        await fs.promises.writeFile(listPath, chunkPaths.map((p) => `file '${p.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`).join('\n'), 'utf8');
-        await execAsync(
-          `"${ffmpegPath}" -f concat -safe 0 -i "${listPath}" -c copy -y "${segPath}"`,
-          { timeout: 120000 }
-        );
-        try { await unlinkAsync(listPath); } catch (_) {}
-        segmentAudioPaths.push(segPath);
-        toCleanup.push(segPath);
-      }
-    }
-
-    if (segmentAudioPaths.length === 0) throw new Error('No TTS segments generated');
-
-    // Build concat list: seg0, silence, seg1, silence, ... segN
-    const silencePath = join(tmpDir, `orbix-lf-silence-${ts}.mp3`);
-    await execAsync(
-      `"${ffmpegPath}" -f lavfi -i anullsrc=r=24000:cl=mono -t ${LONGFORM_BEAT_PAUSE_SEC} -q:a 9 -acodec libmp3lame -y "${silencePath}"`,
-      { timeout: 10000 }
-    );
-    toCleanup.push(silencePath);
-
-    const concatLines = [];
-    for (let i = 0; i < segmentAudioPaths.length; i++) {
-      concatLines.push(`file '${segmentAudioPaths[i].replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
-      if (i < segmentAudioPaths.length - 1) {
-        concatLines.push(`file '${silencePath.replace(/\\/g, '/').replace(/'/g, "'\\''")}'`);
-      }
-    }
-    const concatListPath = join(tmpDir, `orbix-lf-concat-${ts}.txt`);
-    await fs.promises.writeFile(concatListPath, concatLines.join('\n'), 'utf8');
-    toCleanup.push(concatListPath);
-
-    const outPath = join(tmpDir, `orbix-longform-tts-full-${ts}.mp3`);
-    await execAsync(
-      `"${ffmpegPath}" -f concat -safe 0 -i "${concatListPath}" -c copy -y "${outPath}"`,
-      { timeout: 300000 }
-    );
-
-    const { duration } = await execAsync(
-      `"${ffprobePath}" -i "${outPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
-      { timeout: 10000 }
-    ).then((r) => ({ duration: parseFloat(r.stdout.trim()) })).catch(() => ({ duration: 0 }));
-
-    return { audioPath: outPath, duration: duration || 0 };
-  } finally {
-    for (const p of toCleanup) {
-      try { await unlinkAsync(p); } catch (_) {}
-    }
-  }
-}
-
-/**
  * Generate audio from script using OpenAI TTS
  * @param {Object} script - Script object with narration text
  * @param {Object} [story] - Optional story; when category is 'psychology', TTS is body-only (no hook, no end question)
@@ -575,7 +416,7 @@ export async function generateAudio(script, story = null) {
       const buffer = Buffer.from(await response.arrayBuffer());
       await fs.promises.writeFile(audioPath, buffer);
       const { duration } = await execAsync(
-        `"${ffprobePath}" -i "${audioPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        `ffprobe -i "${audioPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
         { timeout: 10000 }
       ).then(result => ({ duration: parseFloat(result.stdout.trim()) }))
       .catch(() => ({ duration: 35 }));
@@ -612,7 +453,7 @@ export async function generateAudio(script, story = null) {
     
     // Get audio duration using ffprobe
     const { duration } = await execAsync(
-      `"${ffprobePath}" -i "${audioPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+      `ffprobe -i "${audioPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
       { timeout: 10000 }
     ).then(result => ({ duration: parseFloat(result.stdout.trim()) }))
     .catch(() => ({ duration: 35 })); // Default to 35 seconds if ffprobe fails
@@ -664,7 +505,7 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
   const getDur = async (p) => {
     try {
       const r = await execAsync(
-        `"${ffprobePath}" -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        `ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
         { timeout: 5000 }
       );
       return parseFloat(r.stdout.trim()) || 0;
@@ -714,13 +555,13 @@ export async function generateTriviaAudio(opts, totalDuration = 11) {
     const contentEndSeconds = inputs.length ? Math.max(...inputs.map((_, i) => delays[i] + durs[i])) : 0;
 
     const streams = inputs
-      .map((_, i) => `[${i}:a]adelay=${Math.round(delays[i] * 1000)}|${Math.round(delays[i] * 1000)},apad=pad_len=${Math.round(pads[i] * 24000)}[s${i}]`)
+      .map((_, i) => `[${i}:a]adelay=${Math.round(delays[i] * 1000)}|${Math.round(delays[i] * 1000)},apad=pad_dur=${pads[i]}[s${i}]`)
       .join(';');
     const mixInputs = inputs.map((_, i) => `[s${i}]`).join('');
     const filter = `${streams};${mixInputs}amix=inputs=${inputs.length}:duration=first:dropout_transition=0[aout]`;
 
     await execAsync(
-      `"${ffmpegPath}" ${inputs.map((p) => `-i "${p}"`).join(' ')} -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${totalDuration} -y "${mixedPath}"`,
+      `ffmpeg ${inputs.map((p) => `-i "${p}"`).join(' ')} -filter_complex "${filter}" -map "[aout]" -c:a libmp3lame -q:a 2 -t ${totalDuration} -y "${mixedPath}"`,
       { timeout: 90000 }
     );
 
@@ -836,7 +677,7 @@ export async function prependSilenceToAudio(audioPath, silenceSeconds) {
   let channels = 1;
   try {
     const probe = await execAsync(
-      `"${ffprobePath}" -i "${audioPath}" -select_streams a:0 -show_entries stream=channels -v quiet -of csv="p=0"`,
+      `ffprobe -i "${audioPath}" -select_streams a:0 -show_entries stream=channels -v quiet -of csv="p=0"`,
       { timeout: 5000 }
     );
     const n = parseInt(probe.stdout?.trim(), 10);
@@ -845,10 +686,10 @@ export async function prependSilenceToAudio(audioPath, silenceSeconds) {
   // adelay (ms): one value for mono, N values for N channels
   const adelayArg = channels === 1 ? String(delayMs) : Array(channels).fill(delayMs).join('|');
   const adelayFilter = `adelay=${adelayArg}`;
-  const cmd = `"${ffmpegPath}" -i "${audioPath}" -af "${adelayFilter}" -c:a libmp3lame -q:a 2 -y "${outPath}"`;
+  const cmd = `ffmpeg -i "${audioPath}" -af "${adelayFilter}" -c:a libmp3lame -q:a 2 -y "${outPath}"`;
   await execAsync(cmd, { timeout: 60000 });
   const { duration } = await execAsync(
-    `"${ffprobePath}" -i "${outPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
+    `ffprobe -i "${outPath}" -show_entries format=duration -v quiet -of csv="p=0"`,
     { timeout: 10000 }
   ).then(result => ({ duration: parseFloat(result.stdout.trim()) }))
   .catch(() => ({ duration: silenceSeconds + 10 }));
@@ -1182,7 +1023,7 @@ export async function generateFactsAudio(opts, totalDuration = 30) {
   const getDur = async (p) => {
     try {
       const r = await execAsync(
-        `"${ffprobePath}" -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
+        `ffprobe -i "${p}" -show_entries format=duration -v quiet -of csv="p=0"`,
         { timeout: 5000 }
       );
       return parseFloat(r.stdout.trim()) || 0;
@@ -1194,7 +1035,7 @@ export async function generateFactsAudio(opts, totalDuration = 30) {
   const padDur = Math.max(0, totalDuration - actualDur);
   const mixedPath = join(tmpdir(), `facts-mixed-${Date.now()}.mp3`);
   await execAsync(
-    `"${ffmpegPath}" -i "${audioPath}" -af "apad=pad_len=${Math.round(padDur * 24000)}" -t ${totalDuration} -y "${mixedPath}"`,
+    `ffmpeg -i "${audioPath}" -af "apad=pad_dur=${padDur}" -t ${totalDuration} -y "${mixedPath}"`,
     { timeout: 30000 }
   );
   try {
@@ -1379,7 +1220,7 @@ export async function prepareMusicTrack(url, duration) {
     
     // Trim/fade music to match duration
     const trimmedPath = join(tmpdir(), `orbix-music-trimmed-${Date.now()}.mp3`);
-    const ffmpegCommand = `"${ffmpegPath}" -i "${musicPath}" -t ${duration} -af "afade=t=in:st=0:d=0.8,afade=t=out:st=${duration - 0.8}:d=0.8" -y "${trimmedPath}"`;
+    const ffmpegCommand = `ffmpeg -i "${musicPath}" -t ${duration} -af "afade=t=in:st=0:d=0.8,afade=t=out:st=${duration - 0.8}:d=0.8" -y "${trimmedPath}"`;
     await execAsync(ffmpegCommand, { timeout: 30000 });
     
     // Cleanup original

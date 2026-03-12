@@ -147,6 +147,5 @@ Return JSON:
       if (attempt === MAX_ATTEMPTS) throw err;
     }
   }
-  console.warn('[Trick Question Generator] All attempts exhausted (invalid response or duplicates)');
   return null;
 }

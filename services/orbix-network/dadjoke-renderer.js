@@ -17,7 +17,6 @@ import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { supabaseClient } from '../../config/database.js';
-import { ffmpegPath } from './ffmpeg-path.js';
 import {
   getBackgroundImageUrl,
   getRandomMusicTrack,
@@ -28,7 +27,6 @@ import {
 } from './video-renderer.js';
 import { buildYouTubeMetadata } from './youtube-metadata.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
-import { updateStepStatus } from './render-steps.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
 const execAsync = promisify(exec);
@@ -169,7 +167,6 @@ export async function processDadJokeRenderJob(render, story, script) {
 
   writeProgressLog('DADJOKE_RENDER_START', { renderId });
   setCurrentRender(renderId, 'DADJOKE_RENDER');
-  await updateStepStatus(renderId, 'DADJOKE_RENDER', 0);
 
   const content = script?.content_json
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
@@ -211,7 +208,6 @@ export async function processDadJokeRenderJob(render, story, script) {
     await fs.promises.writeFile(bgPath, imgResp.data);
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
-    await updateStepStatus(renderId, 'DADJOKE_RENDER', 40);
 
     assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd, episode_number: episodeIndex });
     simpleAssPath = join(tmpdir(), `dadjoke-ass-${renderId}-${Date.now()}.ass`);
@@ -221,7 +217,7 @@ export async function processDadJokeRenderJob(render, story, script) {
     baseVideoPath = join(tmpdir(), `dadjoke-base-${renderId}-${Date.now()}.mp4`);
     const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.22:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
     await execAsync(
-      `"${ffmpegPath}" -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
+      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
     );
     try { await unlinkAsync(assPath); } catch (_) {}
@@ -237,16 +233,15 @@ export async function processDadJokeRenderJob(render, story, script) {
     const voiceTrim = `[1:a]atrim=0:${DURATION},asetpts=PTS-STARTPTS,volume=1.5625`;
     if (musicPath) {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceTrim}[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceTrim}[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "${voiceTrim}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "${voiceTrim}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }
-    await updateStepStatus(renderId, 'DADJOKE_RENDER', 80);
 
     const { title, description, hashtags } = buildYouTubeMetadata(story, script, renderId);
     await supabaseClient.from('orbix_renders').update({

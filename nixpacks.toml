@@ -1,11 +1,9 @@
-# Railway builds the Node backend only. Supabase Edge Functions (Deno) are deployed by Supabase.
-# Force Node provider so Nixpacks doesn't use Deno (triggered by supabase/functions/* importing deno.land).
-providers = ["node"]
-
-# Orbix video renders: FFmpeg + libass (ASS subtitles). libass needs fontconfig + fonts or text won't render.
 [phases.setup]
-nixPkgs = ["...", "ffmpeg", "fontconfig", "dejavu_fonts"]
+nixPkgs = ["nodejs-18_x", "ffmpeg"]
 
-# Force Node 20 (avoids Node 18 deprecation warnings from Supabase/AWS SDK).
-[variables]
-NIXPACKS_NODE_VERSION = "20"
+[phases.build]
+cmds = ["npm ci"]
+
+[start]
+cmd = "npm start"
+

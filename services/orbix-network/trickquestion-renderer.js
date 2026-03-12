@@ -9,7 +9,6 @@ import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { supabaseClient } from '../../config/database.js';
-import { ffmpegPath } from './ffmpeg-path.js';
 import {
   getBackgroundImageUrl,
   getRandomMusicTrack,
@@ -20,7 +19,6 @@ import {
 } from './video-renderer.js';
 import { buildYouTubeMetadata } from './youtube-metadata.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
-import { updateStepStatus } from './render-steps.js';
 
 const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
@@ -154,25 +152,20 @@ export async function processTrickQuestionRenderJob(render, story, script) {
 
   writeProgressLog('TRICKQUESTION_RENDER_START', { renderId });
   setCurrentRender(renderId, 'TRICKQUESTION_RENDER');
-  await updateStepStatus(renderId, 'TRICKQUESTION_RENDER', 0);
 
-  // Same content source as dad joke: content_json first, then script columns (what_happened = question/setup, why_it_matters = answer/punchline)
-  let content = {};
-  try {
-    content = script?.content_json
-      ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
-      : {};
-  } catch (_) { /* ignore */ }
+  const content = script?.content_json
+    ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+    : {};
   const { getTrickQuestionCta } = await import('./trick-question-cta.js');
   const episodeIndex = content?.episode_number ?? 0;
   const defaultCta = getTrickQuestionCta(episodeIndex);
-  const setup = stripEmoji((content?.setup || script?.what_happened || '').trim().slice(0, 200));
-  const punchline = stripEmoji((content?.punchline || script?.why_it_matters || '').trim().slice(0, 100));
-  const voice_script = stripEmoji((content?.voice_script || setup || '').trim().slice(0, 300));
-  const hook = stripEmoji((content?.hook || script?.cta_line || defaultCta).trim());
+  const setup = stripEmoji((content?.setup || '').trim().slice(0, 200));
+  const punchline = stripEmoji((content?.punchline || '').trim().slice(0, 100));
+  const voice_script = stripEmoji((content?.voice_script || setup).trim().slice(0, 300));
+  const hook = stripEmoji((content?.hook || defaultCta).trim());
 
   if (!setup || !punchline) {
-    throw new Error(`Trick question render missing content: setup="${setup}" punchline="${punchline}". Use Rewrite to generate new question + answer.`);
+    throw new Error(`Trick question render missing content: setup="${setup}" punchline="${punchline}"`);
   }
 
   const backgroundStoragePath = render.background_storage_path ?? null;
@@ -199,7 +192,6 @@ export async function processTrickQuestionRenderJob(render, story, script) {
     await fs.promises.writeFile(bgPath, imgResp.data);
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
-    await updateStepStatus(renderId, 'TRICKQUESTION_RENDER', 40);
 
     assPath = await generateTrickQuestionASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd, episode_number: episodeIndex });
     simpleAssPath = join(tmpdir(), `trickquestion-ass-${renderId}-${Date.now()}.ass`);
@@ -209,7 +201,7 @@ export async function processTrickQuestionRenderJob(render, story, script) {
     baseVideoPath = join(tmpdir(), `trickquestion-base-${renderId}-${Date.now()}.mp4`);
     const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.22:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
     await execAsync(
-      `"${ffmpegPath}" -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
+      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
     );
     try { await unlinkAsync(assPath); } catch (_) {}
@@ -224,16 +216,15 @@ export async function processTrickQuestionRenderJob(render, story, script) {
     const voiceTrim = `[1:a]atrim=0:${DURATION},asetpts=PTS-STARTPTS,volume=1.5625`;
     if (musicPath) {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceTrim}[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceTrim}[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       await execAsync(
-        `"${ffmpegPath}" -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "${voiceTrim}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "${voiceTrim}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }
-    await updateStepStatus(renderId, 'TRICKQUESTION_RENDER', 80);
 
     const { title, description, hashtags } = buildYouTubeMetadata(story, script, renderId);
     await supabaseClient.from('orbix_renders').update({

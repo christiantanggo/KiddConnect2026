@@ -4,14 +4,13 @@
  * 2s ending total (0.5s answer flash + 1.5s loop line) for max retention loop.
  */
 
-import { execFile } from 'child_process';
+import { exec } from 'child_process';
 import { promisify } from 'util';
 import { unlink } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomInt } from 'crypto';
 import { supabaseClient } from '../../config/database.js';
-import { ffmpegPath } from './ffmpeg-path.js';
 import {
   getBackgroundImageUrl,
   getRandomMusicTrack,
@@ -23,10 +22,9 @@ import {
 } from './video-renderer.js';
 import { buildYouTubeMetadata } from './youtube-metadata.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
-import { updateStepStatus } from './render-steps.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 
-const execFileAsync = promisify(execFile);
+const execAsync = promisify(exec);
 const unlinkAsync = promisify(unlink);
 
 // Timing constants (11s total)
@@ -48,7 +46,6 @@ export async function processTriviaRenderJob(render, story, script) {
 
   writeProgressLog('TRIVIA_RENDER_START', { renderId });
   setCurrentRender(renderId, 'TRIVIA_RENDER');
-  await updateStepStatus(renderId, 'TRIVIA_RENDER', 0);
 
   const content = script?.content_json
     ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
@@ -136,30 +133,21 @@ export async function processTriviaRenderJob(render, story, script) {
 
     const simpleAssPath = join(tmpdir(), `trivia-ass-${renderId}-${Date.now()}.ass`);
     await fs.promises.copyFile(assFilePath, simpleAssPath);
-    // Use path as-is for execFile (no shell); ass filter accepts path in single quotes
-    const assPathForFilter = simpleAssPath.replace(/\\/g, '/');
-    const filterComplex = [
-      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill[v1]`,
-      `[v1]ass='${assPathForFilter}'[vout]`
-    ].join(';');
+    const simpleAssPathEscaped = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
     // 4. 40% black overlay + ASS overlays (progress bar is drawn entirely in the ASS file)
     baseVideoPath = join(tmpdir(), `trivia-base-${renderId}-${Date.now()}.mp4`);
-    await execFileAsync(
-      ffmpegPath,
-      [
-        '-i', motionPath,
-        '-filter_complex', filterComplex,
-        '-map', '[vout]', '-map', '0:a?',
-        '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', '-c:a', 'copy',
-        '-t', String(DURATION), '-pix_fmt', 'yuv420p', '-y', baseVideoPath
-      ],
+    const filterComplex = [
+      `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.4:t=fill[v1]`,
+      `[v1]ass='${simpleAssPathEscaped}'[vout]`
+    ].join(';');
+    await execAsync(
+      `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
     );
 
     try { await unlinkAsync(assFilePath); } catch (_) {}
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
-    await updateStepStatus(renderId, 'TRIVIA_RENDER', 50);
 
     // 5. Generate trivia TTS: question starts at 1s (hook enabled) or 0s (hook disabled)
     const audioResult = await generateTriviaAudio(
@@ -183,33 +171,19 @@ export async function processTriviaRenderJob(render, story, script) {
       musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
     }
 
-    const padLen = Math.round(padDur * 24000);
     if (musicPath) {
       // Voice +25% (1.5625), music -25% (0.1875 → 0.140625)
-      await execFileAsync(
-        ffmpegPath,
-        [
-          '-i', baseVideoPath, '-i', audioPath, '-i', musicPath,
-          '-filter_complex', `[1:a]apad=pad_len=${padLen},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]`,
-          '-map', '0:v', '-map', '[a]',
-          '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-t', String(DURATION), '-y', finalVideoPath
-        ],
+      await execAsync(
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[voice];[2:a]volume=0.140625[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     } else {
       // Voice only: +25% volume
-      await execFileAsync(
-        ffmpegPath,
-        [
-          '-i', baseVideoPath, '-i', audioPath,
-          '-filter_complex', `[1:a]apad=pad_len=${padLen},volume=1.5625[a]`,
-          '-map', '0:v', '-map', '[a]',
-          '-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-t', String(DURATION), '-y', finalVideoPath
-        ],
+      await execAsync(
+        `ffmpeg -i "${baseVideoPath}" -i "${audioPath}" -filter_complex "[1:a]apad=pad_dur=${padDur},volume=1.5625[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${DURATION} -y "${finalVideoPath}"`,
         { timeout: 60000 }
       );
     }
-    await updateStepStatus(renderId, 'TRIVIA_RENDER', 90);
 
     // 7. Metadata
     const { title, description, hashtags } = buildYouTubeMetadata(story, script, renderId);
