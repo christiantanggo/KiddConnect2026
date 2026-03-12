@@ -7,7 +7,7 @@
  * Music tracks must be in Supabase Storage bucket 'orbix-network-music'
  */
 
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import { unlink } from 'fs';
 import { join } from 'path';
@@ -19,6 +19,7 @@ import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progre
 import { ffmpegPath, ffprobePath } from './ffmpeg-path.js';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const unlinkAsync = promisify(unlink);
 
 // Background asset configuration
@@ -259,22 +260,15 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     const segmentTimeoutMs = duration > 120 ? 10 * 60 * 1000 : 2 * 60 * 1000;
     console.log(`[Orbix Video Renderer] Applying 4-segment A-B-A-B motion (segment=${segmentDuration.toFixed(1)}s each, total=${duration}s)...`);
     
-    // Segment 1: Zoom in
-    const segment1Command = `"${ffmpegPath}" -loop 1 -i "${imagePath}" -vf "${segment1Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment1Path}"`;
-    await execAsync(segment1Command, { timeout: segmentTimeoutMs });
-    
-    // Segment 2: Pan right-to-left, upper angle
-    const segment2Command = `"${ffmpegPath}" -loop 1 -i "${imagePath}" -vf "${segment2Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment2Path}"`;
-    await execAsync(segment2Command, { timeout: segmentTimeoutMs });
-    
-    // Segment 3: Zoom out
-    const segment3Command = `"${ffmpegPath}" -loop 1 -i "${imagePath}" -vf "${segment3Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment3Path}"`;
-    await execAsync(segment3Command, { timeout: segmentTimeoutMs });
-    
-    // Segment 4: Pan left-to-right, lower angle
-    const segment4Command = `"${ffmpegPath}" -loop 1 -i "${imagePath}" -vf "${segment4Filter}" -t ${segmentDuration} -pix_fmt yuv420p -c:v libx264 -preset medium -crf 23 "${segment4Path}"`;
-    await execAsync(segment4Command, { timeout: segmentTimeoutMs });
-    
+    // Run ffmpeg via execFile (no shell) so bundled path works on Windows
+    const runFf = (args) => execFileAsync(ffmpegPath, args, { timeout: segmentTimeoutMs });
+    const segArgs = (filter, outPath) => ['-loop', '1', '-i', imagePath, '-vf', filter, '-t', String(segmentDuration), '-pix_fmt', 'yuv420p', '-c:v', 'libx264', '-preset', 'medium', '-crf', '23', outPath];
+
+    await runFf(segArgs(segment1Filter, segment1Path));
+    await runFf(segArgs(segment2Filter, segment2Path));
+    await runFf(segArgs(segment3Filter, segment3Path));
+    await runFf(segArgs(segment4Filter, segment4Path));
+
     const concatListPath = join(tmpdir(), `orbix-concat-${Date.now()}.txt`);
     const fs = (await import('fs')).default;
     await fs.promises.writeFile(concatListPath, 
@@ -283,10 +277,8 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
       `file '${segment3Path.replace(/\\/g, '/')}'\n` +
       `file '${segment4Path.replace(/\\/g, '/')}'\n`
     );
-    
-    // Use concat demuxer to join segments, then trim to exact duration
-    const concatCommand = `"${ffmpegPath}" -f concat -safe 0 -i "${concatListPath}" -c copy -t ${duration} -y "${videoPath}"`;
-    await execAsync(concatCommand, { timeout: segmentTimeoutMs });
+
+    await execFileAsync(ffmpegPath, ['-f', 'concat', '-safe', '0', '-i', concatListPath, '-c', 'copy', '-t', String(duration), '-y', videoPath], { timeout: segmentTimeoutMs });
     
     // Cleanup temporary segment files
     try {
@@ -304,7 +296,7 @@ export async function applyMotionToImage(imagePath, duration = VIDEO_DURATION) {
     
   } catch (error) {
     if (error.code === 'ENOENT' || (error.message && (error.message.includes('not recognized') || error.message.includes('not found')))) {
-      throw new Error('FFmpeg is not installed or not in your system PATH. Please install FFmpeg:\n\nWindows: Download from https://www.gyan.dev/ffmpeg/builds/ or use: choco install ffmpeg\nMac: brew install ffmpeg\nLinux: sudo apt-get install ffmpeg\n\nAfter installation, restart your development server.');
+      throw new Error(`FFmpeg could not be run at: ${ffmpegPath}\n\nIf using the bundled binary, run: npm install\nOtherwise set FFMPEG_PATH in .env to your ffmpeg executable.`);
     }
     console.error('[Orbix Video Renderer] Error applying motion to image:', error);
     throw error;
