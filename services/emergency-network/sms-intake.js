@@ -62,6 +62,32 @@ export async function deleteSession(fromPhone, toPhone) {
 /** Words that suggest they described an actual issue (not just "plumbing" or "emergency"). */
 const ISSUE_KEYWORDS = /\b(leak|leaking|burst|pipe|flood|clog|blocked|drain|no\s*heat|no\s*water|broken|overflow|smell|gas\s*leak|frozen|flooding|emergency|urgent|toilet|faucet|heater|furnace|ac\b|hvac)\b/i;
 
+/** Standalone urgency words to strip from issue line so we don't repeat them. */
+const URGENCY_WORDS = /\b(emergency|urgent|asap|same\s*day|schedule|immediate)\b/gi;
+
+/**
+ * Derive issue_summary only: strip caller name, service, urgency, location from raw so we don't repeat them to providers.
+ */
+function issueSummaryOnly(raw, parsed) {
+  if (!raw || typeof raw !== 'string') return 'See request';
+  let rest = raw.trim();
+  const toRemove = [
+    parsed.caller_name,
+    parsed.service_category,
+    parsed.urgency_level,
+    parsed.location,
+  ].filter(Boolean);
+  for (const part of toRemove) {
+    const re = new RegExp(part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+'), 'gi');
+    rest = rest.replace(re, ' ').replace(/\s+/g, ' ').trim();
+  }
+  rest = rest.replace(URGENCY_WORDS, ' ').replace(/\s+/g, ' ').trim();
+  rest = rest.replace(/,+\s*|\s*,/g, ' ').replace(/\s+/g, ' ').trim();
+  if (rest.length >= 3 && rest.length <= 2000) return rest;
+  if (rest.length > 2000) return rest.slice(0, 2000);
+  return ISSUE_KEYWORDS.test(raw) ? raw.replace(/\n/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) : 'See request';
+}
+
 /**
  * Parse a single freeform message for name, service type, urgency, location, and issue.
  */
@@ -74,7 +100,7 @@ function parseSingleMessage(text, callbackPhone) {
     service_category: 'Other',
     urgency_level: 'Immediate Emergency',
     location: null,
-    issue_summary: raw.slice(0, 2000) || 'See request',
+    issue_summary: 'See request',
   };
 
   if (/plumb|pipe|drain|leak|water\s*heater|toilet|faucet|burst\s*pipe/i.test(lower)) result.service_category = 'Plumbing';
@@ -104,6 +130,7 @@ function parseSingleMessage(text, callbackPhone) {
     }
   }
 
+  result.issue_summary = issueSummaryOnly(raw, result);
   return result;
 }
 
@@ -144,10 +171,19 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
 
   const session = await getSession(fromPhone, toPhone);
 
-  // No session or first contact: send the single prompt
+  // No session or first contact: send the single prompt (numbered list format)
   if (!session || session.step !== 'awaiting_details' && session.step !== 'awaiting_more') {
     await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
-    const reply = `${serviceName}: Reply with your name, service (Plumbing/HVAC/Gas/Other), urgency (Emergency/Same day/Schedule), address, and issue. One message is fine.`;
+    const reply = [
+      `Thanks for contacting ${serviceName}!`,
+      'Please answer all questions below so we can help as soon as possible',
+      '1. Your Name:',
+      '2. Your address:',
+      '3. The service that you require (Plumbing/HVAC/Gas/etc.)',
+      '4. Urgency Level: Immediate / Same Day / Schedule for future',
+      '5. Details of the issue:',
+      'Please respond in one message and we will dispatch a trades professional.',
+    ].join('\n');
     return { reply };
   }
 
@@ -190,7 +226,7 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
     service_category: second.service_category !== 'Other' ? second.service_category : (first.service_category || 'Other'),
     urgency_level: first.urgency_level || second.urgency_level || 'Immediate Emergency',
     location: second.location || first.location || null,
-    issue_summary: rawText.length >= 10 ? rawText.slice(0, 2000).trim() : (first.issue_summary || second.issue_summary || 'See request'),
+    issue_summary: rawText.length >= 10 ? issueSummaryOnly(rawText, second) : (first.issue_summary || second.issue_summary || 'See request'),
   };
 
   await deleteSession(fromPhone, toPhone);
