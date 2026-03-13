@@ -2249,6 +2249,120 @@ router.post('/stories/:id/script/edit-trivia', async (req, res) => {
 });
 
 /**
+ * POST /api/v2/orbix-network/stories/:id/script/edit-riddle
+ * Edit riddle text and/or answer so incorrectly scraped riddles can still be used.
+ * Body: { riddle_text?, answer_text?, hook?, category? }
+ */
+router.post('/stories/:id/script/edit-riddle', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { id: storyId } = req.params;
+    const { riddle_text, answer_text, hook, category } = req.body;
+
+    const { data: story, error: storyError } = await supabaseClient
+      .from('orbix_stories')
+      .select('id, raw_item_id')
+      .eq('id', storyId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+    if (storyError || !story) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+
+    let script = null;
+    const { data: existingScript, error: scriptError } = await supabaseClient
+      .from('orbix_scripts')
+      .select('id, content_json')
+      .eq('story_id', storyId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (scriptError) {
+      return res.status(500).json({ error: 'Failed to load script' });
+    }
+    if (existingScript) {
+      script = existingScript;
+    } else {
+      const { ensureTriviaScript } = await import('../../services/orbix-network/pipeline-scheduler.js');
+      const storyForEnsure = { id: story.id, category: 'riddle', raw_item_id: story.raw_item_id };
+      const created = await ensureTriviaScript(businessId, storyForEnsure);
+      if (created) {
+        script = { id: created.id, content_json: created.content_json };
+      }
+      if (!script) {
+        const initialContent = {
+          riddle_text: riddle_text != null ? String(riddle_text).trim().slice(0, 1000) : '',
+          answer_text: answer_text != null ? String(answer_text).trim().slice(0, 500) : '',
+          hook: hook != null ? String(hook).trim().slice(0, 200) : '',
+          category: category != null ? String(category).trim().slice(0, 50) : ''
+        };
+        const { data: inserted, error: insertErr } = await supabaseClient
+          .from('orbix_scripts')
+          .insert({
+            business_id: businessId,
+            story_id: storyId,
+            hook: initialContent.hook || '',
+            what_happened: '',
+            why_it_matters: '',
+            what_happens_next: '',
+            cta_line: '',
+            duration_target_seconds: 35,
+            content_type: 'riddle',
+            content_json: initialContent
+          })
+          .select('id, content_json')
+          .single();
+        if (insertErr) throw insertErr;
+        script = inserted;
+      }
+    }
+
+    const content = typeof script.content_json === 'string' ? JSON.parse(script.content_json) : { ...(script.content_json || {}) };
+    if (riddle_text !== undefined && riddle_text !== null) content.riddle_text = String(riddle_text).trim().slice(0, 1000);
+    if (answer_text !== undefined && answer_text !== null) content.answer_text = String(answer_text).trim().slice(0, 500);
+    if (hook !== undefined && hook !== null) content.hook = String(hook).trim().slice(0, 200);
+    if (category !== undefined && category !== null) content.category = String(category).trim().slice(0, 50);
+
+    const { error: updateError } = await supabaseClient
+      .from('orbix_scripts')
+      .update({ content_json: content })
+      .eq('id', script.id)
+      .eq('story_id', storyId);
+    if (updateError) throw updateError;
+
+    if (story.raw_item_id) {
+      const { data: rawRow } = await supabaseClient
+        .from('orbix_raw_items')
+        .select('snippet')
+        .eq('id', story.raw_item_id)
+        .eq('business_id', businessId)
+        .maybeSingle();
+      if (rawRow?.snippet) {
+        try {
+          const rawSnippet = typeof rawRow.snippet === 'string' ? JSON.parse(rawRow.snippet) : { ...rawRow.snippet };
+          if (riddle_text !== undefined && riddle_text !== null) rawSnippet.riddle_text = content.riddle_text;
+          if (answer_text !== undefined && answer_text !== null) rawSnippet.answer_text = content.answer_text;
+          if (hook !== undefined && hook !== null) rawSnippet.hook = content.hook;
+          if (category !== undefined && category !== null) rawSnippet.category = content.category;
+          await supabaseClient
+            .from('orbix_raw_items')
+            .update({ snippet: rawSnippet })
+            .eq('id', story.raw_item_id)
+            .eq('business_id', businessId);
+        } catch (_) { /* ignore */ }
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/stories/:id/script/edit-riddle] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to edit riddle' });
+  }
+});
+
+/**
  * POST /api/v2/orbix-network/raw-items/:id/force-score
  * Run classifier + shock scorer on a raw item and save score (no story created).
  * Use when background scoring never ran or failed.

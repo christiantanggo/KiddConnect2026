@@ -21,6 +21,10 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
   const [editingTrivia, setEditingTrivia] = useState(false);
   const [triviaEdit, setTriviaEdit] = useState({ question: '', option_a: '', option_b: '', option_c: '', correct_answer: 'A' });
   const [savingTrivia, setSavingTrivia] = useState(false);
+  /** Riddle edit: when true show form; form values for riddle_text, answer_text, hook, category */
+  const [editingRiddle, setEditingRiddle] = useState(false);
+  const [riddleEdit, setRiddleEdit] = useState({ riddle_text: '', answer_text: '', hook: '', category: '' });
+  const [savingRiddle, setSavingRiddle] = useState(false);
 
   // Check if this is a raw item (has raw_item_id but no story_id)
   const isRawItem = item.raw_item_id && !item.story_id;
@@ -30,6 +34,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
       setDetails(null);
       setLogs([]);
       setEditingTrivia(false);
+      setEditingRiddle(false);
       loadDetails();
     }
   }, [isOpen, item]);
@@ -659,6 +664,81 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                         </ul>
                         <p className="text-green-700 font-medium pt-1">Correct: {display.correct_answer}</p>
                         <button type="button" onClick={() => { setTriviaEdit({ question: (cj.question ?? '').toString(), option_a: (cj.option_a ?? '').toString(), option_b: (cj.option_b ?? '').toString(), option_c: (cj.option_c ?? '').toString(), correct_answer: ((cj.correct_answer || 'A').toUpperCase().charAt(0)) }); setEditingTrivia(true); }} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">Edit trivia</button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+              {/* Riddle story: show content + Edit so you can fix wrong riddle/answer (same pattern as trivia) */}
+              {item.story_category === 'riddle' && (item.snippet || details?.orbix_scripts?.length > 0 || editingRiddle) && (
+                <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                  <h4 className="text-sm font-semibold text-gray-800 mb-3">Riddle Content</h4>
+                  {(() => {
+                    const fromScript = details?.orbix_scripts?.length > 0
+                      ? (details.orbix_scripts[0].content_json
+                          ? (typeof details.orbix_scripts[0].content_json === 'string' ? JSON.parse(details.orbix_scripts[0].content_json) : details.orbix_scripts[0].content_json)
+                          : {})
+                      : null;
+                    let fromSnippet = null;
+                    if (item.snippet) {
+                      try {
+                        fromSnippet = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      } catch (_) { /* ignore */ }
+                    }
+                    const cj = fromScript || fromSnippet || {};
+                    const display = editingRiddle ? riddleEdit : { riddle_text: cj.riddle_text ?? '', answer_text: cj.answer_text ?? '', hook: cj.hook ?? '', category: cj.category ?? '' };
+                    const handleSaveRiddleStandalone = async () => {
+                      if (!item.story_id) return;
+                      setSavingRiddle(true);
+                      try {
+                        await orbixNetworkAPI.editRiddleContent(item.story_id, {
+                          riddle_text: riddleEdit.riddle_text,
+                          answer_text: riddleEdit.answer_text,
+                          hook: riddleEdit.hook,
+                          category: riddleEdit.category
+                        }, apiParams());
+                        success('Riddle updated');
+                        setEditingRiddle(false);
+                        await loadDetails();
+                      } catch (err) {
+                        showErrorToast(err?.response?.data?.error || err?.message || 'Failed to save riddle');
+                      } finally {
+                        setSavingRiddle(false);
+                      }
+                    };
+                    if (editingRiddle) {
+                      return (
+                        <div className="space-y-3">
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Riddle</span>
+                            <textarea value={riddleEdit.riddle_text} onChange={(e) => setRiddleEdit((p) => ({ ...p, riddle_text: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm min-h-[80px]" maxLength={1000} rows={3} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Answer</span>
+                            <input type="text" value={riddleEdit.answer_text} onChange={(e) => setRiddleEdit((p) => ({ ...p, answer_text: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={500} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Hook (optional)</span>
+                            <input type="text" value={riddleEdit.hook} onChange={(e) => setRiddleEdit((p) => ({ ...p, hook: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={200} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Category (optional)</span>
+                            <input type="text" value={riddleEdit.category} onChange={(e) => setRiddleEdit((p) => ({ ...p, category: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={50} />
+                          </label>
+                          <div className="flex gap-2 pt-1">
+                            <button type="button" onClick={handleSaveRiddleStandalone} disabled={savingRiddle} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50">{savingRiddle ? 'Saving...' : 'Save'}</button>
+                            <button type="button" onClick={() => setEditingRiddle(false)} className="px-3 py-1.5 border border-gray-300 text-sm rounded hover:bg-gray-100">Cancel</button>
+                          </div>
+                        </div>
+                      );
+                    }
+                    return (
+                      <div className="space-y-2 text-sm">
+                        {display.hook && <p className="text-gray-600 italic">&quot;{display.hook}&quot;</p>}
+                        {display.riddle_text && <p className="font-medium text-gray-900">{display.riddle_text}</p>}
+                        {display.answer_text && <p className="text-green-700 font-semibold">Answer: {display.answer_text}</p>}
+                        {display.category && <p className="text-gray-400 text-xs">Category: {display.category}</p>}
+                        <button type="button" onClick={() => { setRiddleEdit({ riddle_text: (cj.riddle_text ?? '').toString(), answer_text: (cj.answer_text ?? '').toString(), hook: (cj.hook ?? '').toString(), category: (cj.category ?? '').toString() }); setEditingRiddle(true); }} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">Edit riddle</button>
                       </div>
                     );
                   })()}
