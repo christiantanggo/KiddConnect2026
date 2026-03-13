@@ -33,9 +33,9 @@ export default function OrbixNetworkRendersPage() {
   const loadRenders = async () => {
     try {
       setLoading(true);
-      const params = {};
+      const params = { exclude_published: true };
       if (statusFilter) params.status = statusFilter;
-      const response = await orbixNetworkAPI.getRenders({ ...params, limit: 100 });
+      const response = await orbixNetworkAPI.getRenders({ ...params, ...apiParams(), limit: 100 });
       setRenders(response.data.renders || []);
     } catch (error) {
       console.error('Failed to load renders:', error);

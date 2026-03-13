@@ -354,7 +354,7 @@ router.get('/renders', async (req, res) => {
   try {
     const channelId = await requireChannelId(req);
     const businessId = req.active_business_id;
-    const { status, limit = 50, offset = 0 } = req.query;
+    const { status, limit = 50, offset = 0, exclude_published: excludePublished } = req.query;
 
     const { data: channelStories } = await supabaseClient
       .from('orbix_stories')
@@ -379,7 +379,28 @@ router.get('/renders', async (req, res) => {
     }
     const { data: renders, error } = await query;
     if (error) throw error;
-    res.json({ renders: renders || [] });
+    let result = renders || [];
+
+    // When exclude_published=true, only return renders that have NOT been uploaded to YouTube
+    if (excludePublished === 'true' || excludePublished === true) {
+      const renderIds = result.map((r) => r.id);
+      const publishedRenderIds = new Set();
+      if (renderIds.length > 0) {
+        const { data: publishedRows } = await supabaseClient
+          .from('orbix_publishes')
+          .select('render_id')
+          .eq('business_id', businessId)
+          .in('render_id', renderIds);
+        (publishedRows || []).forEach((r) => { if (r.render_id) publishedRenderIds.add(r.render_id); });
+      }
+      const isUploadedByUrl = (r) => {
+        const url = (r.output_url || '').trim();
+        return r.render_status === 'COMPLETED' && url && (url.includes('youtube') || url.includes('youtu.be'));
+      };
+      result = result.filter((r) => !publishedRenderIds.has(r.id) && !isUploadedByUrl(r));
+    }
+
+    res.json({ renders: result });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/renders] Error:', error);
     res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to fetch renders' });
@@ -967,6 +988,28 @@ router.post('/renders/:id/upload-youtube', async (req, res) => {
       })
       .eq('id', id)
       .eq('business_id', businessId);
+
+    // Record publish so pipeline/Renders list exclude this render (only show not-yet-uploaded)
+    const publishTitle = (metadata?.title || render.youtube_title || 'Orbix Video').toString().slice(0, 255);
+    await supabaseClient
+      .from('orbix_publishes')
+      .upsert(
+        {
+          business_id: businessId,
+          render_id: id,
+          platform: 'YOUTUBE',
+          platform_video_id: result.videoId || null,
+          title: publishTitle,
+          publish_status: 'PUBLISHED',
+          posted_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        },
+        { onConflict: 'render_id,platform' }
+      )
+      .then(({ error }) => {
+        if (error) console.warn('[POST /renders/:id/upload-youtube] Could not write orbix_publishes:', error.message);
+      });
+
     res.json({ url: result.url, videoId: result.videoId });
   } catch (error) {
     const status = error?.response?.status;
@@ -2781,8 +2824,32 @@ router.get('/pipeline', async (req, res) => {
     });
     
     // Combine: raw items (Step 1), pending stories (Step 2), then active stories (Steps 3-7)
-    const pipeline = [...rawItemsPipeline, ...pendingStoriesPipeline, ...activeStoriesPipeline];
-    
+    let pipeline = [...rawItemsPipeline, ...pendingStoriesPipeline, ...activeStoriesPipeline];
+
+    // Exclude any row whose render has already been uploaded to YouTube (so Rendering section only shows not-yet-uploaded)
+    const isUploadedToYouTube = (row) => {
+      if (!row.render_id) return false;
+      // Completed with YouTube URL = uploaded (covers manual uploads before we wrote orbix_publishes)
+      const url = (row.output_url || '').trim();
+      if (row.render_status === 'COMPLETED' && url && (url.includes('youtube') || url.includes('youtu.be'))) return true;
+      return false;
+    };
+    const pipelineRenderIds = [...new Set(pipeline.map((row) => row.render_id).filter(Boolean))];
+    if (pipelineRenderIds.length > 0) {
+      const { data: publishedRows } = await supabaseClient
+        .from('orbix_publishes')
+        .select('render_id')
+        .eq('business_id', businessId)
+        .in('render_id', pipelineRenderIds);
+      const publishedRenderIds = new Set((publishedRows || []).map((r) => r.render_id).filter(Boolean));
+      pipeline = pipeline.filter((row) => {
+        if (!row.render_id) return true;
+        if (publishedRenderIds.has(row.render_id)) return false;
+        if (isUploadedToYouTube(row)) return false;
+        return true;
+      });
+    }
+
     res.json({ pipeline });
   } catch (error) {
     console.error('[GET /api/v2/orbix-network/pipeline] Error:', error);
