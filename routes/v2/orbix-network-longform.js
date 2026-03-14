@@ -26,6 +26,7 @@ import {
   uploadLongformDadJokeSegmentImage,
 } from '../../services/orbix-network/longform-dadjoke.js';
 import { sanitizeScriptForTTS } from '../../services/orbix-network/longform-script-sanitizer.js';
+import { buildYouTubeMetadata } from '../../services/orbix-network/youtube-metadata.js';
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } }); // 15MB for segment images
 const router = express.Router();
@@ -369,13 +370,9 @@ router.post('/dadjoke/videos/:id/start-render', async (req, res) => {
 });
 
 /**
- * POST /api/v2/orbix-network/longform/dadjoke/videos/:id/reset-render
- * Set render_status to FAILED so user can click "Start render" again. Use when stuck in PROCESSING.
- * Matches video by id + business + channel (or null channel); does not require longform_type so older videos work.
- */
-/**
  * POST /api/v2/orbix-network/longform/dadjoke/videos/:id/upload-to-youtube
- * Upload the completed long-form video to YouTube (channel's Manual-tab OAuth). Query: channel_id.
+ * Upload the completed long-form video to YouTube (channel's Manual-tab OAuth).
+ * Uses same metadata as shorts: buildYouTubeMetadata (dad joke title/description/hashtags), tags from hashtags. Query: channel_id.
  */
 router.post('/dadjoke/videos/:id/upload-to-youtube', async (req, res) => {
   try {
@@ -397,10 +394,22 @@ router.post('/dadjoke/videos/:id/upload-to-youtube', async (req, res) => {
     if (!video.video_path?.trim()) {
       return res.status(400).json({ error: 'No video file to upload. Render the video first.' });
     }
-    const title = (video.title || 'Long-form video').trim().slice(0, 100);
+    // Build metadata the same way shorts do: title, description, hashtags from youtube-metadata (dad joke rules)
+    const { title: builtTitle, description: builtShortDescription, hashtags } = buildYouTubeMetadata(
+      { category: 'dadjoke', title: video.title },
+      {},
+      videoId
+    );
+    const title = (builtTitle || video.title || 'Dad Joke').trim().slice(0, 100);
     const descParts = [video.subtitle, video.hook_text, video.description].filter(Boolean);
-    const description = (descParts.join('\n\n') || '').trim().slice(0, 5000);
-    const metadata = { title, description, tags: [] };
+    const descriptionBody = descParts.length ? descParts.join('\n\n').trim().slice(0, 4500) : builtShortDescription;
+    const descriptionForYouTube = (descriptionBody || '').trim() + (hashtags ? '\n\n' + hashtags.trim() : '');
+    const tags = (hashtags || '')
+      .split(/\s+/)
+      .filter(t => t.startsWith('#') && t.length > 1)
+      .map(t => t.replace(/^#/, ''))
+      .slice(0, 15);
+    const metadata = { title, description: descriptionForYouTube, tags };
     res.status(202).json({ message: 'YouTube upload started. This may take a few minutes.' });
     const { publishVideo } = await import('../../services/orbix-network/youtube-publisher.js');
     publishVideo(businessId, videoId, video.video_path, metadata, { useManual: true, orbixChannelId: channelId })
