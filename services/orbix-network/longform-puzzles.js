@@ -103,31 +103,49 @@ export async function getPuzzleExplanation(puzzleId) {
 
 /**
  * List long-form videos for a channel.
+ * Uses select('*') so the list still works if longform_type (or other added columns) are missing in the DB.
  */
 export async function listLongformVideos(businessId, channelId) {
   let q = supabaseClient
     .from('orbix_longform_videos')
-    .select('id, title, subtitle, hook_text, thumbnail_path, video_path, render_status, total_puzzles, duration_seconds, created_at')
+    .select('*')
     .eq('business_id', businessId)
     .order('created_at', { ascending: false });
   if (channelId) q = q.eq('channel_id', channelId);
   const { data, error } = await q;
   if (error) throw error;
-  return data || [];
+  return (data || []).map((v) => ({
+    id: v.id,
+    title: v.title,
+    subtitle: v.subtitle,
+    hook_text: v.hook_text,
+    thumbnail_path: v.thumbnail_path,
+    video_path: v.video_path,
+    render_status: v.render_status,
+    render_error: v.render_error ?? null,
+    total_puzzles: v.total_puzzles ?? 0,
+    duration_seconds: v.duration_seconds,
+    longform_type: v.longform_type || 'puzzle',
+    created_at: v.created_at,
+  }));
 }
 
 /**
  * Get one long-form video with its puzzle links and puzzle details.
  */
 export async function getLongformVideoById(videoId, businessId, channelId = null) {
-  let q = supabaseClient
+  const { data: video, error: videoErr } = await supabaseClient
     .from('orbix_longform_videos')
     .select('*')
     .eq('id', videoId)
-    .eq('business_id', businessId);
-  if (channelId) q = q.eq('channel_id', channelId);
-  const { data: video, error: videoErr } = await q.single();
+    .eq('business_id', businessId)
+    .single();
   if (videoErr || !video) throw videoErr || new Error('Long-form video not found');
+  if (channelId != null && video.channel_id != null && video.channel_id !== channelId) {
+    const err = new Error('Long-form video not found');
+    err.status = 404;
+    throw err;
+  }
 
   const { data: links } = await supabaseClient
     .from('orbix_longform_video_puzzles')
@@ -148,7 +166,32 @@ export async function getLongformVideoById(videoId, businessId, channelId = null
     ...l,
     puzzle: puzzleById[l.puzzle_id] || null,
   }));
-  return { ...video, puzzles: items };
+  let longformType = video.longform_type || 'puzzle';
+  const result = { ...video, puzzles: items, longform_type: longformType };
+  try {
+    const { data: dadjokeRow } = await supabaseClient
+      .from('orbix_longform_dadjoke_data')
+      .select('story_id, script_json')
+      .eq('longform_video_id', videoId)
+      .maybeSingle();
+    if (dadjokeRow) {
+      result.story_id = dadjokeRow.story_id ?? null;
+      result.script_json = dadjokeRow.script_json ?? null;
+      result.longform_type = 'dadjoke'; // treat as dad joke so UI shows correct actions
+      result.dadjoke_data = { story_id: result.story_id, script_json: result.script_json };
+    } else if (result.longform_type === 'dadjoke') {
+      result.story_id = null;
+      result.script_json = null;
+      result.dadjoke_data = null;
+    }
+  } catch (_) {
+    if (result.longform_type === 'dadjoke') {
+      result.story_id = null;
+      result.script_json = null;
+      result.dadjoke_data = null;
+    }
+  }
+  return result;
 }
 
 /**

@@ -43,9 +43,11 @@ export default function ModuleActivationModal({
     onClose();
   };
 
-  // Get module-specific terms URLs
-  const termsUrl = moduleKey ? `/legal/modules/${moduleKey}/terms` : `/legal/terms`;
-  const privacyUrl = moduleKey ? `/legal/modules/${moduleKey}/privacy` : `/legal/privacy`;
+  // Use module-specific legal pages only for modules that have them; otherwise use general terms/privacy to avoid 404s
+  const MODULES_WITH_LEGAL_PAGES = ['reviews'];
+  const useModuleLegal = moduleKey && MODULES_WITH_LEGAL_PAGES.includes(moduleKey);
+  const termsUrl = useModuleLegal ? `/legal/modules/${moduleKey}/terms` : '/legal/terms';
+  const privacyUrl = useModuleLegal ? `/legal/modules/${moduleKey}/privacy` : '/legal/privacy';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">

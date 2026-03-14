@@ -425,8 +425,28 @@ try {
     console.warn('⚠️  The reviews module will not be available until this is fixed.');
   }
   
+  // Orbix Network: mount LONGFORM first (most specific path) so it matches before the generic /orbix-network router
+  try {
+    const longformModule = await import("./routes/v2/orbix-network-longform.js");
+    const v2OrbixNetworkLongformRoutes = longformModule?.default;
+    if (!v2OrbixNetworkLongformRoutes) {
+      throw new Error('orbix-network-longform.js did not export a default router');
+    }
+    app.use("/api/v2/orbix-network/longform", v2OrbixNetworkLongformRoutes);
+    console.log('✅ Orbix Network long-form routes at /api/v2/orbix-network/longform');
+  } catch (longformErr) {
+    console.error('❌ Orbix Network long-form routes FAILED to load:', longformErr.message);
+    console.error('❌ Longform load stack:', longformErr.stack);
+  }
+  try {
+    const v2OrbixNetworkJobRoutes = (await import("./routes/v2/orbix-network-jobs.js")).default;
+    app.use("/api/v2/orbix-network/jobs", v2OrbixNetworkJobRoutes);
+    console.log('✅ Orbix Network job routes loaded');
+  } catch (orbixJobError) {
+    console.warn('⚠️  Orbix Network job routes not loaded:', orbixJobError.message);
+  }
+
   // Load Orbix Network YouTube OAuth callback (PUBLIC route - no auth required)
-  // MUST be registered BEFORE authenticated routes so it's matched first
   try {
     const v2OrbixNetworkYouTubeCallback = (await import("./routes/v2/orbix-network-youtube-callback.js")).default;
     app.use("/api/v2/orbix-network", v2OrbixNetworkYouTubeCallback);
@@ -452,7 +472,7 @@ try {
   } catch (setupError) {
     console.warn('⚠️  Orbix Network setup routes not loaded:', setupError.message);
   }
-  
+
   // Load Orbix Network main routes
   try {
     const v2OrbixNetworkRoutes = (await import("./routes/v2/orbix-network.js")).default;
@@ -467,29 +487,6 @@ try {
     console.warn('⚠️  The Orbix Network module will not be available until this is fixed.');
   }
 
-  // Load Orbix Network long-form routes (puzzle library + long-form videos; additive only)
-  try {
-    const v2OrbixNetworkLongformRoutes = (await import("./routes/v2/orbix-network-longform.js")).default;
-    if (v2OrbixNetworkLongformRoutes) {
-      app.use("/api/v2/orbix-network/longform", v2OrbixNetworkLongformRoutes);
-      console.log('✅ Orbix Network long-form routes loaded at /api/v2/orbix-network/longform');
-    }
-  } catch (longformErr) {
-    console.warn('⚠️  Orbix Network long-form routes not loaded:', longformErr.message);
-  }
-
-  // Load Orbix Network job routes (for scheduled tasks)
-  // NOTE: This import may fail on Node.js 18 due to undici/File API dependency
-  // If it fails, the server will still start but Orbix Network jobs won't be available
-  try {
-    const v2OrbixNetworkJobRoutes = (await import("./routes/v2/orbix-network-jobs.js")).default;
-    app.use("/api/v2/orbix-network/jobs", v2OrbixNetworkJobRoutes);
-    console.log('✅ Orbix Network job routes loaded');
-  } catch (orbixJobError) {
-    console.warn('⚠️  Orbix Network job routes not loaded:', orbixJobError.message);
-    console.warn('⚠️  This is likely due to Node.js 18 incompatibility. Orbix Network jobs will not be available.');
-  }
-
   // Emergency Network (separate stream — does not touch existing agent)
   try {
     const v2EmergencyNetworkRoutes = (await import("./routes/v2/emergency-network.js")).default;
@@ -497,6 +494,15 @@ try {
     console.log('✅ Emergency Network routes loaded at /api/v2/emergency-network');
   } catch (emergencyError) {
     console.warn('⚠️  Emergency Network routes not loaded:', emergencyError.message);
+  }
+
+  // Delivery Network (last-mile delivery dispatch; shared line, business from caller)
+  try {
+    const v2DeliveryNetworkRoutes = (await import("./routes/v2/delivery-network.js")).default;
+    app.use("/api/v2/delivery-network", v2DeliveryNetworkRoutes);
+    console.log('✅ Delivery Network routes loaded at /api/v2/delivery-network');
+  } catch (deliveryError) {
+    console.warn('⚠️  Delivery Network routes not loaded:', deliveryError.message);
   }
 
   // Kid Quiz Studio (PUBLIC callback must be before authenticated routes)
@@ -541,6 +547,7 @@ try {
         reviews: "/api/v2/reviews (optional - requires openai package)",
         orbixNetwork: "/api/v2/orbix-network",
         emergencyNetwork: "/api/v2/emergency-network",
+        deliveryNetwork: "/api/v2/delivery-network",
         webhooks: {
           stripe: "/api/v2/webhooks/stripe",
           clickbank: "/api/v2/webhooks/clickbank"
@@ -608,6 +615,15 @@ app.get("/api/telnyx-phone-numbers/search", async (req, res, next) => {
   } catch (error) {
     console.error("Telnyx phone numbers search error:", error);
     res.status(500).json({ error: error.message || "Failed to search phone numbers" });
+  }
+});
+
+// Catch-all for unmatched /api routes — return JSON 404 so API clients never get HTML
+app.use("/api", (req, res, next) => {
+  if (!res.headersSent) {
+    res.status(404).json({ error: 'Not found', path: req.path });
+  } else {
+    next();
   }
 });
 

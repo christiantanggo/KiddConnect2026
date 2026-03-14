@@ -433,6 +433,7 @@ export const orbixNetworkAPI = {
   editScriptHook: (id, hook, params) => api.post(`/v2/orbix-network/stories/${id}/script/edit-hook`, { hook }, { params }),
   editTriviaContent: (id, body, params) => api.post(`/v2/orbix-network/stories/${id}/script/edit-trivia`, body, { params }),
   editRiddleContent: (id, body, params) => api.post(`/v2/orbix-network/stories/${id}/script/edit-riddle`, body, { params }),
+  editDadJokeContent: (id, body, params) => api.post(`/v2/orbix-network/stories/${id}/script/edit-dadjoke`, body, { params }),
   getAnalytics: (params) => api.get('/v2/orbix-network/analytics', { params }),
   getYoutubeAuthUrl: (params) => api.get('/v2/orbix-network/youtube/auth-url', { params }),
   getYoutubeChannel: (params) => api.get('/v2/orbix-network/youtube/channel', { params }),
@@ -476,10 +477,16 @@ export const orbixNetworkAPI = {
   generateLongformDadjokeBackground: (id, params) => api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/generate-background`, {}, { params, timeout: 300000 }),
   uploadLongformDadjokeSegmentImage: (id, formData, params) =>
     api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/segment-image`, formData, { params, timeout: 60000 }),
+  updateLongformDadjokeScript: (id, body, params) =>
+    api.patch(`/v2/orbix-network/longform/dadjoke/videos/${id}/script`, body, { params }),
+  rewriteLongformDadjokeScript: (id, params) =>
+    api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/rewrite-script`, {}, { params }),
   startLongformDadjokeRender: (id, params) =>
     api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/start-render`, {}, { params, timeout: 15000 }),
   resetLongformDadjokeRender: (id, params) =>
     api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/reset-render`, {}, { params }),
+  uploadLongformDadjokeToYoutube: (id, params) =>
+    api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/upload-to-youtube`, {}, { params }),
 };
 
 // Emergency Network API (v2). Requires X-Active-Business-Id for admin routes.
@@ -511,6 +518,42 @@ export const emergencyNetworkAPI = {
   updateWebsitePage: (key, content) => api.put(`/v2/emergency-network/website-pages/${key}`, { content }, { headers: emergencyNetworkHeaders() }),
   uploadWebsiteHero: (formData, pageKey) => api.post(`/v2/emergency-network/website-pages/upload-hero?page_key=${encodeURIComponent(pageKey)}`, formData, {
     headers: emergencyNetworkHeaders(),
+  }),
+};
+
+// Delivery Network API (v2). Requires X-Active-Business-Id for dashboard routes.
+function deliveryNetworkHeaders() {
+  if (typeof window === 'undefined') return {};
+  const id = localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
+  return id ? { 'X-Active-Business-Id': id } : {};
+}
+export const deliveryNetworkAPI = {
+  getConfig: () => api.get('/v2/delivery-network/config', { headers: deliveryNetworkHeaders() }),
+  getPhoneNumbers: () => api.get('/v2/delivery-network/phone-numbers', { headers: deliveryNetworkHeaders() }),
+  createAgent: () => api.post('/v2/delivery-network/create-agent', {}, { headers: deliveryNetworkHeaders() }),
+  linkAgent: () => api.post('/v2/delivery-network/link-agent', {}, { headers: deliveryNetworkHeaders() }),
+  updateConfig: (data) => api.put('/v2/delivery-network/config', data, { headers: deliveryNetworkHeaders() }),
+  getRequests: () => api.get('/v2/delivery-network/requests', { headers: deliveryNetworkHeaders() }),
+  updateRequest: (id, data) => api.patch(`/v2/delivery-network/requests/${id}`, data, { headers: deliveryNetworkHeaders() }),
+  deleteRequest: (requestId) => api.delete(`/v2/delivery-network/requests/${requestId}`, { headers: deliveryNetworkHeaders() }),
+  resetDispatch: (requestId) => api.post(`/v2/delivery-network/requests/${requestId}/reset-dispatch`, {}, { headers: deliveryNetworkHeaders() }),
+  retryDispatch: (requestId) => api.post(`/v2/delivery-network/requests/${requestId}/call-provider`, {}, { headers: deliveryNetworkHeaders() }),
+  getApprovedNumbers: () => api.get('/v2/delivery-network/approved-numbers', { headers: deliveryNetworkHeaders() }),
+  createApprovedNumber: (data) => api.post('/v2/delivery-network/approved-numbers', data, { headers: deliveryNetworkHeaders() }),
+  updateApprovedNumber: (id, data) => api.patch(`/v2/delivery-network/approved-numbers/${id}`, data, { headers: deliveryNetworkHeaders() }),
+  deleteApprovedNumber: (id) => api.delete(`/v2/delivery-network/approved-numbers/${id}`, { headers: deliveryNetworkHeaders() }),
+  getDispatchLog: (requestId) => api.get('/v2/delivery-network/dispatch-log', { params: requestId ? { request_id: requestId } : {}, headers: deliveryNetworkHeaders() }),
+  getRequestActivity: (requestId) => api.get(`/v2/delivery-network/requests/${requestId}/activity`, { headers: deliveryNetworkHeaders() }),
+  getAnalytics: () => api.get('/v2/delivery-network/analytics', { headers: deliveryNetworkHeaders() }),
+  getSavedLocations: () => api.get('/v2/delivery-network/saved-locations', { headers: deliveryNetworkHeaders() }),
+  createSavedLocation: (data) => api.post('/v2/delivery-network/saved-locations', data, { headers: deliveryNetworkHeaders() }),
+  updateSavedLocation: (id, data) => api.patch(`/v2/delivery-network/saved-locations/${id}`, data, { headers: deliveryNetworkHeaders() }),
+  deleteSavedLocation: (id) => api.delete(`/v2/delivery-network/saved-locations/${id}`, { headers: deliveryNetworkHeaders() }),
+  getWebsitePages: () => api.get('/v2/delivery-network/website-pages', { headers: deliveryNetworkHeaders() }),
+  getWebsitePage: (key) => api.get(`/v2/delivery-network/website-pages/${key}`, { headers: deliveryNetworkHeaders() }),
+  updateWebsitePage: (key, content) => api.put(`/v2/delivery-network/website-pages/${key}`, { content }, { headers: deliveryNetworkHeaders() }),
+  uploadWebsiteHero: (formData, pageKey) => api.post(`/v2/delivery-network/website-pages/upload-hero?page_key=${encodeURIComponent(pageKey)}`, formData, {
+    headers: deliveryNetworkHeaders(),
   }),
 };
 

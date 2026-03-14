@@ -89,6 +89,10 @@ router.post('/', express.raw({ type: 'application/json' }), async (req, res) => 
       case 'invoice.payment_failed':
         await handlePaymentFailed(event.data.object);
         break;
+
+      case 'checkout.session.completed':
+        await handleCheckoutSessionCompleted(event.data.object);
+        break;
         
       default:
         console.log('[v2 Stripe Webhook] Unhandled event type:', event.type);
@@ -309,6 +313,28 @@ async function handlePaymentFailed(stripeInvoice) {
   } catch (error) {
     console.error('[v2 Stripe Webhook] Error in handlePaymentFailed:', error);
     throw error;
+  }
+}
+
+/**
+ * Handle checkout.session.completed (one-time payments, e.g. delivery individual payment)
+ */
+async function handleCheckoutSessionCompleted(session) {
+  const meta = session.metadata || {};
+  if (meta.type !== 'delivery_individual' || !meta.delivery_request_id) return;
+
+  const requestId = meta.delivery_request_id;
+  const amountPaidCents = session.amount_total ? Math.round(session.amount_total) : null;
+
+  try {
+    const { markDeliveryRequestPaid } = await import('../../../services/delivery-network/payment.js');
+    await markDeliveryRequestPaid(requestId, amountPaidCents);
+    const { startDispatch } = await import('../../../services/delivery-network/dispatch.js');
+    await startDispatch(requestId);
+    console.log('[v2 Stripe Webhook] Delivery individual payment completed, dispatch started:', requestId);
+  } catch (err) {
+    console.error('[v2 Stripe Webhook] Delivery payment completion error:', err?.message || err);
+    throw err;
   }
 }
 

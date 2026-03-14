@@ -2363,6 +2363,109 @@ router.post('/stories/:id/script/edit-riddle', async (req, res) => {
 });
 
 /**
+ * POST /api/v2/orbix-network/stories/:id/script/edit-dadjoke
+ * Edit dad joke setup/punchline so incorrectly scraped jokes can still be used.
+ * Body: { setup?, punchline?, hook? }
+ */
+router.post('/stories/:id/script/edit-dadjoke', async (req, res) => {
+  try {
+    const channelId = await requireChannelId(req);
+    const businessId = req.active_business_id;
+    const { id: storyId } = req.params;
+    const { setup, punchline, hook } = req.body;
+
+    const { data: story, error: storyError } = await supabaseClient
+      .from('orbix_stories')
+      .select('id, raw_item_id')
+      .eq('id', storyId)
+      .eq('business_id', businessId)
+      .eq('channel_id', channelId)
+      .single();
+    if (storyError || !story) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+
+    let script = null;
+    const { data: existingScript, error: scriptError } = await supabaseClient
+      .from('orbix_scripts')
+      .select('id, content_json')
+      .eq('story_id', storyId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (scriptError) {
+      return res.status(500).json({ error: 'Failed to load script' });
+    }
+    if (existingScript) {
+      script = existingScript;
+    } else {
+      const initialContent = {
+        setup: setup != null ? String(setup).trim().slice(0, 500) : '',
+        punchline: punchline != null ? String(punchline).trim().slice(0, 300) : '',
+        hook: hook != null ? String(hook).trim().slice(0, 200) : ''
+      };
+      const { data: inserted, error: insertErr } = await supabaseClient
+        .from('orbix_scripts')
+        .insert({
+          business_id: businessId,
+          story_id: storyId,
+          hook: initialContent.hook || '',
+          what_happened: initialContent.setup || '',
+          why_it_matters: initialContent.punchline || '',
+          what_happens_next: '',
+          cta_line: '',
+          duration_target_seconds: 35,
+          content_type: 'dadjoke',
+          content_json: initialContent
+        })
+        .select('id, content_json')
+        .single();
+      if (insertErr) throw insertErr;
+      script = inserted;
+    }
+
+    const content = typeof script.content_json === 'string' ? JSON.parse(script.content_json) : { ...(script.content_json || {}) };
+    if (setup !== undefined && setup !== null) content.setup = String(setup).trim().slice(0, 500);
+    if (punchline !== undefined && punchline !== null) content.punchline = String(punchline).trim().slice(0, 300);
+    if (hook !== undefined && hook !== null) content.hook = String(hook).trim().slice(0, 200);
+
+    const { error: updateError } = await supabaseClient
+      .from('orbix_scripts')
+      .update({ content_json: content })
+      .eq('id', script.id)
+      .eq('story_id', storyId);
+    if (updateError) throw updateError;
+
+    if (story.raw_item_id) {
+      const { data: rawRow } = await supabaseClient
+        .from('orbix_raw_items')
+        .select('snippet')
+        .eq('id', story.raw_item_id)
+        .eq('business_id', businessId)
+        .maybeSingle();
+      if (rawRow?.snippet) {
+        try {
+          const rawSnippet = typeof rawRow.snippet === 'string' ? JSON.parse(rawRow.snippet) : { ...rawRow.snippet };
+          if (setup !== undefined && setup !== null) rawSnippet.setup = content.setup;
+          if (punchline !== undefined && punchline !== null) rawSnippet.punchline = content.punchline;
+          if (hook !== undefined && hook !== null) rawSnippet.hook = content.hook;
+          await supabaseClient
+            .from('orbix_raw_items')
+            .update({ snippet: rawSnippet })
+            .eq('id', story.raw_item_id)
+            .eq('business_id', businessId);
+        } catch (_) { /* ignore */ }
+      }
+    }
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[POST /api/v2/orbix-network/stories/:id/script/edit-dadjoke] Error:', error);
+    res.status(channelErrorStatus(error)).json({ error: error.message || 'Failed to edit dad joke' });
+  }
+});
+
+/**
  * POST /api/v2/orbix-network/raw-items/:id/force-score
  * Run classifier + shock scorer on a raw item and save score (no story created).
  * Use when background scoring never ran or failed.
@@ -2781,7 +2884,12 @@ router.get('/pipeline', async (req, res) => {
         ),
         orbix_scripts (
           id,
-          created_at
+          created_at,
+          content_json,
+          what_happened,
+          why_it_matters,
+          hook,
+          cta_line
         )
       `)
       .eq('business_id', businessId)
@@ -2811,6 +2919,15 @@ router.get('/pipeline', async (req, res) => {
           updated_at,
           completed_at,
           output_url
+        ),
+        orbix_scripts (
+          id,
+          created_at,
+          content_json,
+          what_happened,
+          why_it_matters,
+          hook,
+          cta_line
         )
       `)
       .eq('business_id', businessId)
@@ -2860,15 +2977,20 @@ router.get('/pipeline', async (req, res) => {
     ].filter(id => id !== null))];
     
     let rawItemTitlesMap = {};
+    let rawItemSnippetsMap = {};
     if (allRawItemIds.length > 0) {
       const { data: rawItems, error: rawItemsError } = await supabaseClient
         .from('orbix_raw_items')
-        .select('id, title')
+        .select('id, title, snippet')
         .in('id', allRawItemIds);
       
       if (!rawItemsError && rawItems) {
         rawItemTitlesMap = rawItems.reduce((acc, item) => {
           acc[item.id] = item.title;
+          return acc;
+        }, {});
+        rawItemSnippetsMap = rawItems.reduce((acc, item) => {
+          if (item.snippet != null) acc[item.id] = item.snippet;
           return acc;
         }, {});
       }
@@ -2887,11 +3009,44 @@ router.get('/pipeline', async (req, res) => {
       return render;
     };
 
+    // Build snippet from script for trick question/dad joke so modal always has content (fixes "loses content" for old stories)
+    const scriptToSnippet = (script, category) => {
+      if (!script) return null;
+      const cat = (category || '').toLowerCase();
+      if (cat !== 'trickquestion' && cat !== 'dadjoke') return null;
+      const cj = script.content_json
+        ? (typeof script.content_json === 'string' ? (() => { try { return JSON.parse(script.content_json); } catch { return {}; } })() : script.content_json)
+        : {};
+      const setup = (cj.setup || script.what_happened || '').trim();
+      const punchline = (cj.punchline || script.why_it_matters || '').trim();
+      const hook = (cj.hook || script.hook || script.cta_line || '').trim();
+      return { setup, punchline, hook };
+    };
+    // Prefer script snippet; if missing or empty, fall back to raw item snippet so dad joke / trick question content persists
+    const snippetForStory = (story, script, rawSnippetsMap) => {
+      const cat = (story.category || '').toLowerCase();
+      if (cat !== 'trickquestion' && cat !== 'dadjoke') return null;
+      let sn = scriptToSnippet(script, story.category);
+      if (sn && (sn.setup || sn.punchline)) return sn;
+      const rawSnippet = story.raw_item_id ? rawSnippetsMap[story.raw_item_id] : null;
+      if (!rawSnippet) return sn || null;
+      try {
+        const parsed = typeof rawSnippet === 'string' ? JSON.parse(rawSnippet) : rawSnippet;
+        const setup = (parsed.setup || '').trim();
+        const punchline = (parsed.punchline || '').trim();
+        const hook = (parsed.hook || '').trim();
+        if (setup || punchline || hook) return { setup, punchline, hook };
+      } catch (_) { /* ignore */ }
+      return sn || null;
+    };
+
     // Transform pending stories to pipeline format (Step 2)
     const pendingStoriesPipeline = (pendingStories || []).map(story => {
       const render = sanitizeRenderForDisplay(story.orbix_renders && story.orbix_renders.length > 0 ? story.orbix_renders[0] : null);
-      const script = story.orbix_scripts && story.orbix_scripts.length > 0 ? story.orbix_scripts[0] : null;
+      const scripts = (story.orbix_scripts || []).sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      const script = scripts.length > 0 ? scripts[0] : null;
       const title = (story.title && String(story.title).trim()) ? String(story.title).trim() : (story.raw_item_id ? (rawItemTitlesMap[story.raw_item_id] || 'Untitled') : 'Untitled');
+      const snippetFromScript = snippetForStory(story, script, rawItemSnippetsMap);
       return {
         raw_item_id: story.raw_item_id || null,
         story_id: story.id,
@@ -2909,14 +3064,18 @@ router.get('/pipeline', async (req, res) => {
         step_logs: render?.step_logs || null,
         output_url: render?.output_url || null,
         render_created_at: render?.created_at || null,
-        render_updated_at: render?.updated_at || null
+        render_updated_at: render?.updated_at || null,
+        ...(snippetFromScript ? { snippet: snippetFromScript } : {})
       };
     });
 
     // Transform active stories to pipeline format (Steps 3-7)
     const activeStoriesPipeline = (activeStories || []).map(story => {
       const render = sanitizeRenderForDisplay(story.orbix_renders && story.orbix_renders.length > 0 ? story.orbix_renders[0] : null);
+      const scripts = (story.orbix_scripts || []).sort((a, b) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      const script = scripts.length > 0 ? scripts[0] : null;
       const storyTitle = (story.title && String(story.title).trim()) ? String(story.title).trim() : (story.raw_item_id ? (rawItemTitlesMap[story.raw_item_id] || 'Untitled') : 'Untitled');
+      const snippetFromScript = snippetForStory(story, script, rawItemSnippetsMap);
       return {
         raw_item_id: story.raw_item_id || null,
         story_id: story.id,
@@ -2925,6 +3084,7 @@ router.get('/pipeline', async (req, res) => {
         story_category: story.category,
         story_shock_score: story.shock_score,
         story_created_at: story.created_at,
+        ...(snippetFromScript ? { snippet: snippetFromScript } : {}),
         render_id: render?.id || null,
         render_status: render?.render_status || null,
         render_step: render?.render_step || null,

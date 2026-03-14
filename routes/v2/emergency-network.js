@@ -13,6 +13,7 @@ import { startDispatch, callNextProvider } from '../../services/emergency-networ
 import { getEmergencyConfig, invalidateEmergencyConfigCache } from '../../services/emergency-network/config.js';
 import { createEmergencyNetworkAssistant } from '../../services/emergency-network/create-vapi-assistant.js';
 import { getAllVapiPhoneNumbers, checkIfNumberProvisionedInVAPI, linkAssistantToNumber, provisionPhoneNumber, getVapiPhoneNumberId } from '../../services/vapi.js';
+import { getPhoneNumbersForBusiness } from '../../utils/businessPhoneNumbersForDropdown.js';
 
 const router = express.Router();
 
@@ -330,11 +331,11 @@ router.get('/config', async (req, res) => {
 
 /**
  * GET /api/v2/emergency-network/phone-numbers
- * List phone numbers Tavari owns (from Telnyx, same as current agent; fallback VAPI) for the emergency config dropdown.
+ * List phone numbers assigned to this business for the emergency config dropdown (not the full Tavari pool).
  */
 router.get('/phone-numbers', async (req, res) => {
   try {
-    const phone_numbers = await getOwnedPhoneNumbersForDropdown();
+    const phone_numbers = await getPhoneNumbersForBusiness(req.business);
     res.json({ phone_numbers });
   } catch (err) {
     console.error('[EmergencyNetwork] phone-numbers get error:', err?.message || err);

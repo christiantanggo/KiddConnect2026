@@ -20,6 +20,7 @@ import {
 } from './video-renderer.js';
 import { generateLongformDadJokeBackgroundImage } from './longform-dadjoke-image-prompts.js';
 import { LONGFORM_SCENE_KEYS } from './longform-dadjoke-image-prompts.js';
+import { sanitizeScriptForTTS } from './longform-script-sanitizer.js';
 import { writeProgressLog, setCurrentRender } from '../../utils/crash-and-progress-log.js';
 
 const execAsync = promisify(exec);
@@ -106,10 +107,12 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
   const scriptJson = dadjokeData?.script_json && typeof dadjokeData.script_json === 'object'
     ? dadjokeData.script_json
     : (typeof dadjokeData?.script_json === 'string' ? (() => { try { return JSON.parse(dadjokeData.script_json); } catch { return {}; } })() : {});
-  const fullScript = (scriptJson.full_script || '').trim();
+  const rawScript = (scriptJson.full_script || '').trim();
+  const fullScript = sanitizeScriptForTTS(rawScript);
   if (!fullScript) {
     await supabaseClient.from('orbix_longform_videos').update({
       render_status: 'FAILED',
+      render_error: 'No full_script in script_json',
       updated_at: new Date().toISOString(),
     }).eq('id', videoId);
     return { status: 'FAILED', error: 'No full_script in script_json' };
@@ -123,6 +126,7 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
 
     await supabaseClient.from('orbix_longform_videos').update({
       render_status: 'PROCESSING',
+      render_error: null,
       updated_at: new Date().toISOString(),
     }).eq('id', videoId);
 
@@ -157,7 +161,7 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
           segMotion = await applyMotionToImage(imgPath, segDuration);
           await execAsync(
             `"ffmpeg" -i "${segMotion}" -c:v copy -t ${segDuration} -y "${segVideoPath}"`,
-            { timeout: 120000 }
+            { timeout: 120000, windowsHide: true }
           );
           segmentPaths.push(segVideoPath);
         } finally {
@@ -173,7 +177,7 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
       motionPath = join(tmpdir(), `dadjoke-motion-${videoId}-${timestamp}.mp4`);
       await execAsync(
         `"ffmpeg" -f concat -safe 0 -i "${concatListPath}" -c copy -t ${duration} -y "${motionPath}"`,
-        { timeout: 120000 }
+        { timeout: 120000, windowsHide: true }
       );
       for (const p of [...segmentPaths, concatListPath]) {
         await unlinkAsync(p).catch(() => {});
@@ -214,12 +218,12 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
     if (musicPath) {
       await execAsync(
         `"ffmpeg" -i "${motionPath}" -i "${audioPath}" -i "${musicPath}" -filter_complex "${voiceFilter}[voice];[2:a]volume=0.12[music];[voice][music]amix=inputs=2:duration=first:dropout_transition=2[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${duration} -y "${finalVideoPath}"`,
-        { timeout: 600000 }
+        { timeout: 600000, windowsHide: true }
       );
     } else {
       await execAsync(
         `"ffmpeg" -i "${motionPath}" -i "${audioPath}" -filter_complex "${voiceFilter}[a]" -map 0:v -map "[a]" -c:v copy -c:a aac -b:a 192k -t ${duration} -y "${finalVideoPath}"`,
-        { timeout: 600000 }
+        { timeout: 600000, windowsHide: true }
       );
     }
 
@@ -237,12 +241,15 @@ export async function processDadJokeLongformRenderJob(video, dadjokeData) {
     writeProgressLog('DADJOKE_LONGFORM_RENDER_DONE', { videoId, url: storageUrl });
     return { status: 'COMPLETED', outputUrl: storageUrl };
   } catch (error) {
-    console.error(`[Dad Joke Long-form Renderer] FAILED video_id=${videoId}`, error?.message);
+    const errMsg = error?.message || 'Render failed';
+    console.error(`[Dad Joke Long-form Renderer] FAILED video_id=${videoId}`, errMsg);
+    const renderError = String(errMsg).slice(0, 2000);
     await supabaseClient.from('orbix_longform_videos').update({
       render_status: 'FAILED',
+      render_error: renderError,
       updated_at: new Date().toISOString(),
     }).eq('id', videoId);
-    return { status: 'FAILED', error: error?.message || 'Render failed' };
+    return { status: 'FAILED', error: errMsg };
   } finally {
     for (const p of [bgPath, motionPath, audioPath, musicPath, finalVideoPath].filter(Boolean)) {
       try { await unlinkAsync(p); } catch (_) {}

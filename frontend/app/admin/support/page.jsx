@@ -136,6 +136,10 @@ function AdminSupportPage() {
                 Support Tickets
               </Link>
               <span className="text-gray-300">|</span>
+              <Link href="/admin/delivery-operator" className="text-gray-700 hover:text-blue-600">
+                Delivery operator
+              </Link>
+              <span className="text-gray-300">|</span>
               <button
                 onClick={() => {
                   document.cookie = 'admin_token=; path=/; max-age=0';

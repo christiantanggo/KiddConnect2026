@@ -652,6 +652,50 @@ async function handleAssistantRequest(body, res) {
     }
   }
 
+  // DELIVERY NETWORK: dedicated number(s) route to Delivery assistant; resolve business from caller
+  if (phoneNumber) {
+    const { isDeliveryLineNumber, getDeliveryAssistantId, getBusinessIdByCallerPhone } = await import("../services/delivery-network/config.js");
+    const isDelivery = await isDeliveryLineNumber(phoneNumber);
+    const deliveryId = await getDeliveryAssistantId();
+    if (isDelivery && deliveryId) {
+      const vapiClient = getVapiClient();
+      try {
+        const assistantResponse = await vapiClient.get(`/assistant/${deliveryId}`);
+        let assistant = assistantResponse.data;
+        if (assistant) {
+          const businessId = callerNumber ? await getBusinessIdByCallerPhone(callerNumber) : null;
+          if (callerNumber) {
+            const { getRecentDeliveryRequestsByPhone } = await import("../services/delivery-network/callback-lookup.js");
+            const recent = await getRecentDeliveryRequestsByPhone(callerNumber, { days: 7 });
+            if (recent.length > 0) {
+              const contextLines = recent.slice(0, 5).map((r) => {
+                const date = r.created_at ? new Date(r.created_at).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "";
+                return `- ${r.reference_number} (${r.status}, ${date})`;
+              });
+              const callerContext = `\n\n[CALLER CONTEXT]\nThis caller has recent delivery request(s):\n${contextLines.join("\n")}\nIf they have a request, ask: "Are you calling about an existing delivery or scheduling a new one?"`;
+              assistant = JSON.parse(JSON.stringify(assistant));
+              if (assistant.model?.messages?.length) {
+                const systemMsg = assistant.model.messages.find((m) => m.role === "system");
+                if (systemMsg && typeof systemMsg.content === "string") {
+                  systemMsg.content += callerContext;
+                }
+              }
+            }
+          }
+          if (businessId) {
+            assistant = JSON.parse(JSON.stringify(assistant));
+            assistant.metadata = { ...(assistant.metadata || {}), delivery_business_id: businessId };
+          }
+          console.log("[VAPI Webhook] assistant-request: delivery number -> returning Delivery Network assistant", deliveryId, businessId ? `business_id=${businessId}` : "");
+          res.status(200).json({ assistant });
+          return { sent: true };
+        }
+      } catch (err) {
+        console.warn("[VAPI Webhook] assistant-request: delivery assistant fetch failed", err?.message || err);
+      }
+    }
+  }
+
   let assistantId = existingAssistantId;
   if (!assistantId && phoneNumber) {
     const business = await Business.findByPhoneNumber(phoneNumber);
@@ -1373,6 +1417,90 @@ async function handleCallEnd(event) {
       );
     } catch (err) {
       console.error("[VAPI Webhook] Emergency intake/email error:", err?.message || err);
+    }
+    return;
+  }
+
+  // Delivery Network: handle end-of-call for delivery assistant (create request + startDispatch)
+  const { getDeliveryAssistantId, getBusinessIdByCallerPhone } = await import("../services/delivery-network/config.js");
+  const deliveryAssistantId = await getDeliveryAssistantId();
+  if (assistantId && deliveryAssistantId && assistantId === deliveryAssistantId) {
+    console.log(`[VAPI Webhook] Delivery Network call-end for call: ${callId}`);
+    let transcript = "";
+    let summary = "";
+    if (event.message?.analysis?.summary) summary = event.message.analysis.summary;
+    if (event.message?.artifact?.transcript) {
+      transcript = event.message.artifact.transcript;
+    } else if (event.message?.artifact?.messages) {
+      const messages = event.message.artifact.messages || [];
+      transcript = messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => `${m.role === "user" ? "User" : "AI"}: ${m.message || m.content || ""}`)
+        .join("\n");
+    } else if (event.transcript) transcript = event.transcript;
+    if (!transcript && !summary && callId) {
+      try {
+        const callSummary = await getCallSummary(callId);
+        transcript = callSummary.transcript || "";
+        summary = summary || callSummary.summary || "";
+      } catch (e) {
+        console.warn("[VAPI Webhook] Delivery: getCallSummary failed", e?.message);
+      }
+    }
+    const callerNumberFromCall = call?.customer?.number || event.message?.customer?.number;
+    const metadata = event?.message?.assistant?.metadata || event?.call?.assistant?.metadata || {};
+    const businessIdFromMeta = metadata.delivery_business_id || null;
+    const businessId = businessIdFromMeta || (callerNumberFromCall ? await getBusinessIdByCallerPhone(callerNumberFromCall) : null);
+    const extracted = extractDeliveryFromTranscript(transcript, summary, callerNumberFromCall);
+    if (!extracted.callback_phone) {
+      extracted.callback_phone = callerNumberFromCall || "Unknown";
+    }
+    if (!extracted.delivery_address || !extracted.delivery_address.trim()) {
+      extracted.delivery_address = "(Address to be confirmed)";
+    }
+    const MIN_DURATION_SECONDS = 20;
+    let deliveryDuration = duration;
+    if (deliveryDuration === 0 && callId) {
+      try {
+        const { getCallData } = await import("../services/vapi.js");
+        const callData = await getCallData(callId);
+        deliveryDuration = callData?.durationSeconds ?? callData?.duration ?? 0;
+        if (deliveryDuration === 0 && callData?.startedAt && callData?.endedAt) {
+          const start = new Date(callData.startedAt).getTime();
+          const end = new Date(callData.endedAt).getTime();
+          if (!isNaN(start) && !isNaN(end) && end > start) {
+            deliveryDuration = Math.floor((end - start) / 1000);
+          }
+        }
+      } catch (_) {}
+    }
+    const hasMeaningful = (transcript || "").length + (summary || "").length >= 50;
+    if (!hasMeaningful && deliveryDuration < MIN_DURATION_SECONDS) {
+      console.log("[VAPI Webhook] Delivery: skipping request — no meaningful intake and call too short");
+      return;
+    }
+    try {
+      const { createDeliveryRequest } = await import("../services/delivery-network/intake.js");
+      const { startDispatch } = await import("../services/delivery-network/dispatch.js");
+      const fullTranscript = [transcript, summary].filter(Boolean).join("\n\n").trim() || null;
+      const request = await createDeliveryRequest({
+        business_id: businessId,
+        caller_phone: callerNumberFromCall || null,
+        callback_phone: extracted.callback_phone,
+        pickup_address: extracted.pickup_address || null,
+        delivery_address: extracted.delivery_address,
+        recipient_name: extracted.recipient_name || null,
+        package_description: extracted.package_description || null,
+        priority: extracted.priority || "Schedule",
+        intake_channel: "phone",
+        intake_transcript: fullTranscript || undefined,
+      });
+      console.log("[VAPI Webhook] Delivery request created:", request.id, request.reference_number);
+      startDispatch(request.id).catch((err) =>
+        console.error("[VAPI Webhook] Delivery startDispatch error:", err?.message || err)
+      );
+    } catch (err) {
+      console.error("[VAPI Webhook] Delivery intake error:", err?.message || err);
     }
     return;
   }
@@ -3390,6 +3518,35 @@ function determineIntent(summary, transcript) {
   }
   
   return "general";
+}
+
+/**
+ * Extract delivery intake fields from transcript/summary (Delivery Network phone calls).
+ */
+function extractDeliveryFromTranscript(transcript, summary, callerNumberFromCall = null) {
+  const text = `${summary || ""} ${transcript || ""}`;
+  const lower = text.toLowerCase();
+  const result = {
+    callback_phone: callerNumberFromCall && String(callerNumberFromCall).trim() ? String(callerNumberFromCall).trim() : null,
+    pickup_address: null,
+    delivery_address: null,
+    recipient_name: null,
+    package_description: (summary || transcript || "").slice(0, 2000).trim() || null,
+    priority: "Schedule",
+  };
+  if (/immediate|urgent|asap|right\s*away/i.test(lower)) result.priority = "Immediate";
+  else if (/same\s*day|today|this\s*afternoon|this\s*evening/i.test(lower)) result.priority = "Same Day";
+  const deliveryMatch = text.match(/(?:delivery|deliver to|drop off at|address is)\s*[:\s]*([^\n.]+?)(?=\n|\.|pickup|$)/i);
+  if (deliveryMatch && deliveryMatch[1]) result.delivery_address = deliveryMatch[1].trim().slice(0, 500);
+  const pickupMatch = text.match(/(?:pickup|pick up at|pick up from)\s*[:\s]*([^\n.]+?)(?=\n|\.|delivery|$)/i);
+  if (pickupMatch && pickupMatch[1]) result.pickup_address = pickupMatch[1].trim().slice(0, 500);
+  const phoneMatch = text.match(/(?:callback|call back|phone|number)\s*[:\s]*(\+?[\d\s\-\(\)]{10,})/i);
+  if (phoneMatch && phoneMatch[1] && !result.callback_phone) result.callback_phone = phoneMatch[1].replace(/\s/g, "");
+  if (!result.delivery_address && (summary || transcript)) {
+    const firstSubstantial = (summary || transcript).split(/\n/).find((l) => l.trim().length > 15 && /\d|street|ave|road|blvd|drive|lane|way|place/i.test(l));
+    if (firstSubstantial) result.delivery_address = firstSubstantial.trim().slice(0, 500);
+  }
+  return result;
 }
 
 /**

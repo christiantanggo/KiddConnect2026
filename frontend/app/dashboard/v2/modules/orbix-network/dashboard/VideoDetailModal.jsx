@@ -25,6 +25,10 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
   const [editingRiddle, setEditingRiddle] = useState(false);
   const [riddleEdit, setRiddleEdit] = useState({ riddle_text: '', answer_text: '', hook: '', category: '' });
   const [savingRiddle, setSavingRiddle] = useState(false);
+  /** Dad joke edit: when true show form; form values for setup, punchline, hook */
+  const [editingDadJoke, setEditingDadJoke] = useState(false);
+  const [dadJokeEdit, setDadJokeEdit] = useState({ setup: '', punchline: '', hook: '' });
+  const [savingDadJoke, setSavingDadJoke] = useState(false);
 
   // Check if this is a raw item (has raw_item_id but no story_id)
   const isRawItem = item.raw_item_id && !item.story_id;
@@ -35,6 +39,7 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
       setLogs([]);
       setEditingTrivia(false);
       setEditingRiddle(false);
+      setEditingDadJoke(false);
       loadDetails();
     }
   }, [isOpen, item]);
@@ -543,44 +548,77 @@ export default function VideoDetailModal({ item, isOpen, onClose, onRestart, onF
                   })()}
                 </div>
               )}
-              {item.story_category === 'dadjoke' && (item.snippet || (details?.orbix_scripts?.length > 0)) && (
+              {item.story_category === 'dadjoke' && (item.snippet || details?.orbix_scripts?.length > 0 || editingDadJoke) && (
                 <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                   <h4 className="text-sm font-semibold text-gray-800 mb-3">Dad Joke</h4>
                   {(() => {
-                    try {
-                      let setup = '';
-                      let punchline = '';
-                      if (item.snippet) {
-                        const d = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
-                        setup = d.setup || '';
-                        punchline = d.punchline || '';
+                    const fromScript = details?.orbix_scripts?.length > 0
+                      ? (details.orbix_scripts[0].content_json
+                          ? (typeof details.orbix_scripts[0].content_json === 'string' ? JSON.parse(details.orbix_scripts[0].content_json) : details.orbix_scripts[0].content_json)
+                          : {})
+                      : null;
+                    let fromSnippet = null;
+                    if (item.snippet) {
+                      try {
+                        fromSnippet = typeof item.snippet === 'string' ? JSON.parse(item.snippet) : item.snippet;
+                      } catch (_) { /* ignore */ }
+                    }
+                    const cj = fromScript || fromSnippet || {};
+                    const display = editingDadJoke ? dadJokeEdit : { setup: cj.setup ?? '', punchline: cj.punchline ?? '', hook: cj.hook ?? '' };
+                    const handleSaveDadJokeStandalone = async () => {
+                      if (!item.story_id) return;
+                      setSavingDadJoke(true);
+                      try {
+                        await orbixNetworkAPI.editDadJokeContent(item.story_id, {
+                          setup: dadJokeEdit.setup,
+                          punchline: dadJokeEdit.punchline,
+                          hook: dadJokeEdit.hook
+                        }, apiParams());
+                        success('Dad joke updated');
+                        setEditingDadJoke(false);
+                        await loadDetails();
+                      } catch (err) {
+                        showErrorToast(err?.response?.data?.error || err?.message || 'Failed to save dad joke');
+                      } finally {
+                        setSavingDadJoke(false);
                       }
-                      if ((!setup || !punchline) && details?.orbix_scripts?.length > 0) {
-                        const scripts = [...(details.orbix_scripts || [])].sort((a, b) =>
-                          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
-                        );
-                        const script = scripts[0];
-                        if (script) {
-                          const cj = script.content_json ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json) : {};
-                          if (!setup) setup = (cj.setup || script.what_happened || '').trim();
-                          if (!punchline) punchline = (cj.punchline || script.why_it_matters || '').trim();
-                        }
-                      }
+                    };
+                    if (editingDadJoke) {
                       return (
-                        <div className="space-y-3 text-sm">
-                          <div>
-                            <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Setup</p>
-                            <p className="font-medium text-gray-900">{setup || '—'}</p>
-                          </div>
-                          <div>
-                            <p className="text-xs font-semibold text-amber-700 uppercase mb-1">Punchline</p>
-                            <p className="font-semibold text-amber-900">{punchline || '—'}</p>
+                        <div className="space-y-3">
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Setup</span>
+                            <textarea value={dadJokeEdit.setup} onChange={(e) => setDadJokeEdit((p) => ({ ...p, setup: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm min-h-[60px]" maxLength={500} rows={2} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Punchline</span>
+                            <input type="text" value={dadJokeEdit.punchline} onChange={(e) => setDadJokeEdit((p) => ({ ...p, punchline: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={300} />
+                          </label>
+                          <label className="block">
+                            <span className="text-xs font-semibold text-gray-600 block mb-1">Hook (optional)</span>
+                            <input type="text" value={dadJokeEdit.hook} onChange={(e) => setDadJokeEdit((p) => ({ ...p, hook: e.target.value }))} className="w-full rounded border border-gray-300 px-2 py-1.5 text-sm" maxLength={200} />
+                          </label>
+                          <div className="flex gap-2 pt-1">
+                            <button type="button" onClick={handleSaveDadJokeStandalone} disabled={savingDadJoke} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded hover:bg-indigo-700 disabled:opacity-50">{savingDadJoke ? 'Saving...' : 'Save'}</button>
+                            <button type="button" onClick={() => setEditingDadJoke(false)} className="px-3 py-1.5 border border-gray-300 text-sm rounded hover:bg-gray-100">Cancel</button>
                           </div>
                         </div>
                       );
-                    } catch {
-                      return <p className="text-gray-500 text-sm">Could not parse content.</p>;
                     }
+                    return (
+                      <div className="space-y-2 text-sm">
+                        <div>
+                          <p className="text-xs font-semibold text-gray-500 uppercase mb-1">Setup</p>
+                          <p className="font-medium text-gray-900">{display.setup || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-amber-700 uppercase mb-1">Punchline</p>
+                          <p className="font-semibold text-amber-900">{display.punchline || '—'}</p>
+                        </div>
+                        {display.hook && <p className="text-gray-500 text-xs">Hook: {display.hook}</p>}
+                        <button type="button" onClick={() => { setDadJokeEdit({ setup: (cj.setup ?? '').toString(), punchline: (cj.punchline ?? '').toString(), hook: (cj.hook ?? '').toString() }); setEditingDadJoke(true); }} className="text-sm text-indigo-600 hover:text-indigo-800 font-medium">Edit dad joke</button>
+                      </div>
+                    );
                   })()}
                 </div>
               )}

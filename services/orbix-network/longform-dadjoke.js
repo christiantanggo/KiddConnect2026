@@ -238,6 +238,8 @@ Deliver one short classic dad joke (exact words will be provided). Use [beat] be
 
 End with: "Subscribe for daily dad jokes. Leave your worst dad joke in the comments. And tell me… how many jokes I told before the real one."
 
+IMPORTANT: The full_script field is read aloud by TTS. Never put section headers or labels (e.g. "Act 1", "Act 2 – Escalation", "Cold open") in the narration—only the spoken story.
+
 QUALITY: 900–1200 words. Family friendly. Output valid JSON only.`;
 
   const userPrompt = `Generate one long-form story-based comedy script: 6–8 minutes, 900–1200 words.
@@ -266,7 +268,7 @@ ${jokePoolText}
 Return JSON with:
 - "title": string (e.g. "I Tried To Tell One Dad Joke…", "I Promised Only One Dad Joke")
 - "thumbnail_text_suggestions": array of 2–4 short strings (e.g. "ONLY ONE JOKE", "DAD LOGIC")
-- "full_script": string — COMPLETE narration, 900–1200 words. VIDEO STRUCTURE: cold open → intro → Act 1 → Act 2 → Act 3 (domino) → peak chaos (multiple events at once) → final reset → final joke → closing CTA. Each scene: event description, observational commentary, analogy, mini punchline, meta reminder. Max 1 Q&A joke per 3–4 scenes; prefer observational. Curiosity loop required (mystery early, reference mid-story, reveal near end). [beat], [pause], [sigh], [looks around]; running meta joke frequently.
+- "full_script": string — COMPLETE narration only, 900–1200 words. This text is read aloud by TTS: do NOT include any section headers or labels (e.g. "Act 1", "Act 2 – Escalation", "Cold open", "Final reset"). Write only the spoken story. Follow the structure in order (cold open → intro → Act 1 → Act 2 → Act 3 → peak chaos → final reset → final joke → closing CTA) but never label the sections in the text. Each scene: event description, observational commentary, analogy, mini punchline, meta reminder. Max 1 Q&A joke per 3–4 scenes; prefer observational. Curiosity loop required. Use [beat], [pause], [sigh], [looks around] for pacing only.
 - "segment_markers": object with keys: cold_open, story_introduction, act_1_setup, act_2_escalation, act_3_absurd_chaos, final_reset, final_joke, outro_cta — each value is the text for that segment only
 - "visual_suggestions": object with same keys as segment_markers, values like "mower won't start", "Gary with ladder", "skateboard kid", "dog in grass"
 - "final_joke": object with "setup", "punchline"
@@ -402,6 +404,66 @@ export async function createLongformDadJokeVideo(businessId, channelId, payload)
     });
 
   return { id: video.id };
+}
+
+/**
+ * Update the full_script (and optionally other script_json fields) for a dad joke long-form video.
+ * Used when the user edits the script before (re-)rendering.
+ * @param {string} videoId - orbix_longform_videos.id
+ * @param {string} businessId
+ * @param {string|null} channelId
+ * @param {{ full_script: string }} payload - full_script to merge into script_json
+ */
+export async function updateLongformDadJokeScript(videoId, businessId, channelId, payload) {
+  const fullScript = typeof payload?.full_script === 'string' ? payload.full_script.trim() : '';
+  const { data: video, error: videoErr } = await supabaseClient
+    .from('orbix_longform_videos')
+    .select('id')
+    .eq('id', videoId)
+    .eq('business_id', businessId)
+    .single();
+  if (videoErr || !video) {
+    const err = new Error('Long-form video not found');
+    err.status = 404;
+    throw err;
+  }
+  if (channelId != null) {
+    const { data: row } = await supabaseClient
+      .from('orbix_longform_videos')
+      .select('channel_id')
+      .eq('id', videoId)
+      .single();
+    if (row?.channel_id != null && row.channel_id !== channelId) {
+      const err = new Error('Long-form video not found');
+      err.status = 404;
+      throw err;
+    }
+  }
+
+  const { data: existing, error: fetchErr } = await supabaseClient
+    .from('orbix_longform_dadjoke_data')
+    .select('script_json')
+    .eq('longform_video_id', videoId)
+    .maybeSingle();
+  if (fetchErr) throw fetchErr;
+
+  if (!existing) {
+    const err = new Error('No script data for this video. Create the video from a dad joke first.');
+    err.status = 404;
+    throw err;
+  }
+  const currentScript = (existing.script_json && typeof existing.script_json === 'object')
+    ? existing.script_json
+    : {};
+  const updatedScriptJson = { ...currentScript, full_script: fullScript };
+
+  const { error: updateErr } = await supabaseClient
+    .from('orbix_longform_dadjoke_data')
+    .update({ script_json: updatedScriptJson })
+    .eq('longform_video_id', videoId);
+  if (updateErr) throw updateErr;
+
+  return { script_json: updatedScriptJson };
 }
 
 /**

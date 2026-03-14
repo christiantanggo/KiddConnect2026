@@ -8,7 +8,7 @@ import V2AppShell from '@/components/V2AppShell';
 import { orbixNetworkAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 import { handleAPIError } from '@/lib/errorHandler';
-import { Loader, Film, ListChecks, Plus, Check, X, Sparkles, FileText, Image as ImageIcon, ChevronRight, Upload } from 'lucide-react';
+import { Loader, Film, ListChecks, Plus, Check, X, Sparkles, FileText, Image as ImageIcon, ChevronRight, Upload, Pencil, Save, Wand2, Youtube } from 'lucide-react';
 import { useOrbixChannel } from '../OrbixChannelContext';
 
 const LONGFORM_SEGMENT_KEYS = ['cold_open', 'act_1_setup', 'act_2_escalation', 'act_3_chaos', 'final_reset'];
@@ -42,6 +42,11 @@ export default function OrbixLongformPage() {
   const [generatingBackgroundId, setGeneratingBackgroundId] = useState(null);
   const [uploadingSegmentKey, setUploadingSegmentKey] = useState(null);
   const [resettingRenderId, setResettingRenderId] = useState(null);
+  const [scriptEditMode, setScriptEditMode] = useState(false);
+  const [editedFullScript, setEditedFullScript] = useState('');
+  const [savingScript, setSavingScript] = useState(false);
+  const [rewritingScript, setRewritingScript] = useState(false);
+  const [uploadingToYoutubeId, setUploadingToYoutubeId] = useState(null);
 
   useEffect(() => {
     if (!currentChannelId) {
@@ -58,15 +63,21 @@ export default function OrbixLongformPage() {
   useEffect(() => {
     if (!selectedVideoDetailId || !isDadJokeChannel) {
       setVideoDetail(null);
+      setScriptEditMode(false);
+      setEditedFullScript('');
       return;
     }
     let cancelled = false;
     setVideoDetailLoading(true);
     setVideoDetail(null);
+    setScriptEditMode(false);
+    setEditedFullScript('');
     orbixNetworkAPI.getLongformVideo(selectedVideoDetailId, apiParams())
       .then((res) => {
         if (!cancelled) {
           setVideoDetail(res.data);
+          setScriptEditMode(false);
+          setEditedFullScript('');
         }
       })
       .catch(() => {
@@ -91,7 +102,10 @@ export default function OrbixLongformPage() {
             success('Render finished. Video is ready.');
             loadData();
           } else if (data?.render_status === 'FAILED') {
-            showErrorToast('Render failed. Check the video and try again.');
+            const msg = data?.render_error
+              ? (data.render_error.length > 120 ? `${data.render_error.slice(0, 120)}…` : data.render_error)
+              : 'Render failed. Check the video and try again.';
+            showErrorToast(msg);
             loadData();
           }
         })
@@ -271,6 +285,68 @@ export default function OrbixLongformPage() {
     }
   };
 
+  const handleStartEditScript = () => {
+    const scriptJson = videoDetail?.dadjoke_data?.script_json ?? videoDetail?.script_json;
+    setEditedFullScript(scriptJson?.full_script ?? '');
+    setScriptEditMode(true);
+  };
+
+  const handleSaveScript = async () => {
+    if (!videoDetail?.id) return;
+    try {
+      setSavingScript(true);
+      const res = await orbixNetworkAPI.updateLongformDadjokeScript(
+        videoDetail.id,
+        { full_script: editedFullScript },
+        apiParams()
+      );
+      setVideoDetail((prev) => {
+        if (!prev) return null;
+        const updated = { ...prev };
+        if (updated.dadjoke_data) {
+          updated.dadjoke_data = { ...updated.dadjoke_data, script_json: res.data?.script_json ?? { ...(updated.dadjoke_data?.script_json || {}), full_script: editedFullScript } };
+        } else {
+          updated.dadjoke_data = { script_json: res.data?.script_json ?? { full_script: editedFullScript } };
+        }
+        updated.script_json = updated.dadjoke_data?.script_json ?? updated.script_json;
+        return updated;
+      });
+      setScriptEditMode(false);
+      success('Script saved. You can Re-render to generate a new video with this script.');
+    } catch (err) {
+      showErrorToast(handleAPIError(err).message || 'Failed to save script');
+    } finally {
+      setSavingScript(false);
+    }
+  };
+
+  const handleRewriteScriptForVoice = async () => {
+    if (!videoDetail?.id) return;
+    try {
+      setRewritingScript(true);
+      const res = await orbixNetworkAPI.rewriteLongformDadjokeScript(videoDetail.id, apiParams());
+      setVideoDetail((prev) => {
+        if (!prev) return null;
+        const updated = { ...prev };
+        const newScriptJson = res.data?.script_json ?? prev.dadjoke_data?.script_json ?? prev.script_json;
+        if (updated.dadjoke_data) {
+          updated.dadjoke_data = { ...updated.dadjoke_data, script_json: newScriptJson };
+        } else {
+          updated.dadjoke_data = { script_json: newScriptJson };
+        }
+        updated.script_json = updated.dadjoke_data?.script_json ?? updated.script_json;
+        return updated;
+      });
+      setScriptEditMode(false);
+      setEditedFullScript('');
+      success('Script rewritten: labels and pauses (Cold Open, Beat, [pause], etc.) removed. Re-render to use the clean script.');
+    } catch (err) {
+      showErrorToast(handleAPIError(err).message || 'Rewrite failed');
+    } finally {
+      setRewritingScript(false);
+    }
+  };
+
   const handleResetRender = async (videoId) => {
     try {
       setResettingRenderId(videoId);
@@ -284,6 +360,18 @@ export default function OrbixLongformPage() {
       showErrorToast(handleAPIError(err).message || 'Reset failed');
     } finally {
       setResettingRenderId(null);
+    }
+  };
+
+  const handleUploadToYoutube = async (videoId) => {
+    try {
+      setUploadingToYoutubeId(videoId);
+      await orbixNetworkAPI.uploadLongformDadjokeToYoutube(videoId, apiParams());
+      success('Upload to YouTube started. It may take a few minutes; check your channel when it finishes.');
+    } catch (err) {
+      showErrorToast(handleAPIError(err).message || 'Upload failed');
+    } finally {
+      setUploadingToYoutubeId(null);
     }
   };
 
@@ -400,9 +488,14 @@ export default function OrbixLongformPage() {
                           {v.subtitle && (
                             <span className="text-gray-500 text-sm ml-2">— {v.subtitle}</span>
                           )}
-                          <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1">
+                          <div className="text-xs text-gray-500 mt-0.5 flex items-center gap-1 flex-wrap">
                             {v.longform_type === 'dadjoke' ? 'Story → joke' : `${v.total_puzzles} puzzle(s)`} · {v.render_status}
                             {v.duration_seconds != null && ` · ${Number(v.duration_seconds)}s`}
+                            {v.render_status === 'FAILED' && v.render_error && (
+                              <span className="text-red-600 max-w-[200px] truncate" title={v.render_error}>
+                                — {v.render_error.length > 40 ? `${v.render_error.slice(0, 40)}…` : v.render_error}
+                              </span>
+                            )}
                             {isDadJokeChannel && v.longform_type === 'dadjoke' && (
                               <ChevronRight className="w-3.5 h-3.5 text-gray-400" aria-hidden />
                             )}
@@ -410,34 +503,50 @@ export default function OrbixLongformPage() {
                         </button>
                         {isDadJokeChannel && v.longform_type === 'dadjoke' && (
                           <div className="shrink-0 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                            {v.render_status === 'COMPLETED' && v.video_path ? (
-                              <a
-                                href={v.video_path}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-sm text-indigo-600 hover:underline"
-                              >
-                                Watch
-                              </a>
-                            ) : (v.render_status === 'PENDING' || v.render_status === 'FAILED') && (
+                            {v.render_status === 'COMPLETED' && v.video_path && (
+                              <>
+                                <a
+                                  href={v.video_path}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-sm text-indigo-600 hover:underline"
+                                >
+                                  Watch
+                                </a>
+                                <button
+                                  type="button"
+                                  onClick={(e) => { e.stopPropagation(); handleUploadToYoutube(v.id); }}
+                                  disabled={uploadingToYoutubeId != null}
+                                  className="text-sm px-2 py-1 rounded text-red-600 hover:bg-red-50 border border-red-200 disabled:opacity-50"
+                                  title="Upload to YouTube"
+                                >
+                                  {uploadingToYoutubeId === v.id ? <Loader className="w-3.5 h-3.5 animate-spin inline" /> : <Youtube className="w-3.5 h-3.5 inline" />}
+                                  {' Upload'}
+                                </button>
+                              </>
+                            )}
+                            {(v.render_status === 'PENDING' || v.render_status === 'FAILED' || (v.render_status === 'COMPLETED' && v.video_path)) && (
                               <button
                                 type="button"
                                 onClick={() => handleStartRender(v.id)}
                                 disabled={renderingId != null}
                                 className="text-sm px-3 py-1.5 bg-amber-600 text-white rounded hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                title={v.render_status === 'COMPLETED' ? 'Generate the video again (e.g. new voice or script)' : undefined}
                               >
                                 {renderingId === v.id ? (
                                   <>
                                     <Loader className="w-3.5 h-3.5 inline animate-spin mr-1" />
                                     Rendering…
                                   </>
+                                ) : v.render_status === 'COMPLETED' ? (
+                                  'Re-render'
                                 ) : (
                                   'Start render'
                                 )}
                               </button>
                             )}
                             {(v.render_status === 'RENDERING' || v.render_status === 'PROCESSING') && (
-                              <span className="text-sm text-gray-500 flex items-center gap-2">
+                              <span className="text-sm text-gray-500 flex items-center gap-2 flex-wrap">
                                 <span className="flex items-center gap-1">
                                   <Loader className="w-3.5 h-3.5 animate-spin" />
                                   Rendering…
@@ -446,9 +555,10 @@ export default function OrbixLongformPage() {
                                   type="button"
                                   onClick={(e) => { e.stopPropagation(); handleResetRender(v.id); }}
                                   disabled={resettingRenderId != null}
-                                  className="text-xs text-amber-600 hover:underline disabled:opacity-50"
+                                  title="Stop the current render so you can start over or edit the video"
+                                  className="text-xs px-2 py-1 rounded border border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                                 >
-                                  {resettingRenderId === v.id ? 'Resetting…' : 'Reset render'}
+                                  {resettingRenderId === v.id ? 'Resetting…' : 'Stop & reset render'}
                                 </button>
                               </span>
                             )}
@@ -610,31 +720,95 @@ export default function OrbixLongformPage() {
                             {videoDetail.duration_seconds != null && (
                               <span>· {Number(videoDetail.duration_seconds)}s</span>
                             )}
-                            {videoDetail.dadjoke_data?.script_json?.dad_activity && (
-                              <span>· {videoDetail.dadjoke_data.script_json.dad_activity}</span>
+                            {(videoDetail.dadjoke_data?.script_json?.dad_activity || videoDetail.script_json?.dad_activity) && (
+                              <span>· {videoDetail.dadjoke_data?.script_json?.dad_activity || videoDetail.script_json?.dad_activity}</span>
                             )}
                           </div>
 
-                          <section>
-                            <h4 className="font-medium flex items-center gap-2 text-gray-900 mb-2">
-                              <FileText className="w-4 h-4" />
-                              Script
-                            </h4>
-                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 max-h-60 overflow-y-auto">
-                              <p className="whitespace-pre-wrap text-sm text-gray-800">
-                                {videoDetail.dadjoke_data?.script_json?.full_script || 'No script stored.'}
+                          {videoDetail.render_status === 'FAILED' && (
+                            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800" role="alert">
+                              <p className="font-medium text-red-900 mb-1">Render failed</p>
+                              <p className="whitespace-pre-wrap break-words">
+                                {videoDetail.render_error || 'An error occurred. Try "Start render" again or "Stop & reset render" if it was stuck.'}
                               </p>
                             </div>
+                          )}
+
+                          <section>
+                            <div className="flex items-center justify-between gap-2 mb-2">
+                              <h4 className="font-medium flex items-center gap-2 text-gray-900">
+                                <FileText className="w-4 h-4" />
+                                Script
+                              </h4>
+                              {!scriptEditMode ? (
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={handleRewriteScriptForVoice}
+                                    disabled={rewritingScript}
+                                    className="inline-flex items-center gap-1.5 px-2 py-1.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 disabled:opacity-50"
+                                    title="Remove labels and pauses (Cold Open, Beat, [pause], etc.) so the AI does not speak them"
+                                  >
+                                    {rewritingScript ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+                                    Rewrite for voice
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={handleStartEditScript}
+                                    className="inline-flex items-center gap-1.5 px-2 py-1.5 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-lg hover:bg-amber-100"
+                                  >
+                                    <Pencil className="w-3.5 h-3.5" />
+                                    Edit script
+                                  </button>
+                                </div>
+                              ) : null}
+                            </div>
+                            {scriptEditMode ? (
+                              <div className="space-y-2">
+                                <textarea
+                                  value={editedFullScript}
+                                  onChange={(e) => setEditedFullScript(e.target.value)}
+                                  className="w-full rounded-lg border border-gray-300 p-3 text-sm text-gray-800 font-sans min-h-[200px] max-h-[320px] resize-y"
+                                  placeholder="Narration (read aloud by TTS). No section headers like &quot;Act 2&quot;."
+                                  spellCheck="true"
+                                />
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={handleSaveScript}
+                                    disabled={savingScript}
+                                    className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 text-sm font-medium"
+                                  >
+                                    {savingScript ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                    {savingScript ? 'Saving…' : 'Save script'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => { setScriptEditMode(false); setEditedFullScript(''); }}
+                                    disabled={savingScript}
+                                    className="px-3 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 text-sm"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 max-h-60 overflow-y-auto">
+                                <p className="whitespace-pre-wrap text-sm text-gray-800">
+                                  {(videoDetail.dadjoke_data?.script_json ?? videoDetail.script_json)?.full_script || 'No script stored.'}
+                                </p>
+                              </div>
+                            )}
                           </section>
 
-                          {videoDetail.dadjoke_data?.script_json?.visual_suggestions && typeof videoDetail.dadjoke_data.script_json.visual_suggestions === 'object' && (
+                          {((videoDetail.dadjoke_data?.script_json ?? videoDetail.script_json)?.visual_suggestions && typeof (videoDetail.dadjoke_data?.script_json ?? videoDetail.script_json).visual_suggestions === 'object') && (
                             <section>
                               <h4 className="font-medium flex items-center gap-2 text-gray-900 mb-2">
                                 <ImageIcon className="w-4 h-4" />
                                 Visual suggestions (per segment)
                               </h4>
                               <ul className="rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-1.5 text-sm">
-                                {Object.entries(videoDetail.dadjoke_data.script_json.visual_suggestions).map(([key, value]) => (
+                                {Object.entries((videoDetail.dadjoke_data?.script_json ?? videoDetail.script_json).visual_suggestions).map(([key, value]) => (
                                   <li key={key} className="flex gap-2">
                                     <span className="text-gray-500 shrink-0">{key.replace(/_/g, ' ')}:</span>
                                     <span className="text-gray-800">{String(value)}</span>
@@ -719,7 +893,7 @@ export default function OrbixLongformPage() {
                       <div className="p-4 border-t flex items-center justify-between gap-2 shrink-0">
                         <span className="text-sm text-gray-500">
                           {(videoDetail.render_status === 'RENDERING' || videoDetail.render_status === 'PROCESSING') ? (
-                            <span className="flex items-center gap-2">
+                            <span className="flex items-center gap-2 flex-wrap">
                               <span className="flex items-center gap-1.5">
                                 <Loader className="w-4 h-4 animate-spin" />
                                 Rendering… (this may take several minutes)
@@ -728,9 +902,10 @@ export default function OrbixLongformPage() {
                                 type="button"
                                 onClick={() => handleResetRender(videoDetail.id)}
                                 disabled={resettingRenderId != null}
-                                className="text-amber-600 hover:underline disabled:opacity-50 text-sm"
+                                title="Stop the current render so you can start over or edit the video"
+                                className="px-2 py-1 rounded border border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50 text-sm font-medium"
                               >
-                                {resettingRenderId === videoDetail.id ? 'Resetting…' : 'Reset render'}
+                                {resettingRenderId === videoDetail.id ? 'Resetting…' : 'Stop & reset render'}
                               </button>
                             </span>
                           ) : (
@@ -739,27 +914,46 @@ export default function OrbixLongformPage() {
                         </span>
                         <div className="flex items-center gap-2">
                           {videoDetail.render_status === 'COMPLETED' && videoDetail.video_path && (
-                            <a
-                              href={videoDetail.video_path}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
-                            >
-                              Watch
-                            </a>
+                            <>
+                              <a
+                                href={videoDetail.video_path}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
+                              >
+                                Watch
+                              </a>
+                              <button
+                                type="button"
+                                onClick={() => handleUploadToYoutube(videoDetail.id)}
+                                disabled={uploadingToYoutubeId != null}
+                                className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 disabled:opacity-50 text-sm font-medium"
+                                title="Upload this video to YouTube (uses Manual-tab OAuth for this channel)"
+                              >
+                                {uploadingToYoutubeId === videoDetail.id ? (
+                                  <Loader className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Youtube className="w-4 h-4" />
+                                )}
+                                Upload to YouTube
+                              </button>
+                            </>
                           )}
-                          {(videoDetail.render_status === 'PENDING' || videoDetail.render_status === 'FAILED') && (
+                          {(videoDetail.render_status === 'PENDING' || videoDetail.render_status === 'FAILED' || (videoDetail.render_status === 'COMPLETED' && videoDetail.video_path)) && (
                             <button
                               type="button"
                               onClick={() => handleStartRender(videoDetail.id)}
                               disabled={renderingId != null}
                               className="px-3 py-2 bg-amber-600 text-white rounded-lg hover:bg-amber-700 disabled:opacity-50 text-sm"
+                              title={videoDetail.render_status === 'COMPLETED' ? 'Generate the video again (e.g. new voice or script)' : undefined}
                             >
                               {renderingId === videoDetail.id ? (
                                 <>
                                   <Loader className="w-4 h-4 inline animate-spin mr-1" />
                                   Starting…
                                 </>
+                              ) : videoDetail.render_status === 'COMPLETED' ? (
+                                'Re-render'
                               ) : (
                                 'Start render'
                               )}

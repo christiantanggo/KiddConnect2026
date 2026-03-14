@@ -29,7 +29,26 @@ const SETTINGS_SUB_TABS = [
   { id: 'greeting-script', label: 'Greeting & script' },
   { id: 'services', label: 'Emergency Services (Provider Directory)' },
   { id: 'communication', label: 'Communication Settings' },
-  { id: 'website-pages', label: 'Website pages' },
+  { id: 'website-pages', label: 'Edit Website Pages' },
+  { id: 'page-links', label: 'Page Links' },
+];
+
+/** Public website paths for the Emergency Dispatch module (path -> description). */
+const EMERGENCY_DISPATCH_PAGE_LINKS = [
+  { path: '/emergencydispatch', description: 'Main landing — hero, call/SMS/chat, links to plumbing and terms' },
+  { path: '/emergency-plumbing', description: 'Plumbing form page — request help form and info' },
+  { path: '/termsofservice', description: 'Terms of Service — editable in Edit Website Pages' },
+  { path: '/emergency', description: 'Emergency response entry page' },
+  { path: '/emergency-plumber-london', description: 'Emergency plumber London — SEO landing' },
+  { path: '/burst-pipe-repair-london', description: 'Burst pipe repair London — SEO landing' },
+  { path: '/drain-cleaning-london', description: 'Drain cleaning London — SEO landing' },
+  { path: '/clogged-drain-london', description: 'Clogged drain London — SEO landing' },
+  { path: '/sewer-backup-london', description: 'Sewer backup London — SEO landing' },
+  { path: '/toilet-overflow-london', description: 'Toilet overflow London — SEO landing' },
+  { path: '/water-heater-emergency-london', description: 'Water heater emergency London — SEO landing' },
+  { path: '/water-heater-repair-london', description: 'Water heater repair London — SEO landing' },
+  { path: '/sump-pump-repair-london', description: 'Sump pump repair London — SEO landing' },
+  { path: '/leaking-pipe-repair-london', description: 'Leaking pipe repair London — SEO landing' },
 ];
 
 const WEBSITE_PAGE_OPTIONS = [
@@ -1233,7 +1252,7 @@ export default function EmergencyDispatchPage() {
 
               {settingsSubTab === 'website-pages' && (
             <section className="bg-white rounded-xl border border-slate-200 p-6">
-              <h2 className="text-lg font-medium mb-4">Website pages</h2>
+              <h2 className="text-lg font-medium mb-4">Edit Website Pages</h2>
               <p className="text-slate-600 text-sm mb-4">Edit hero and content for the public Emergency Response, Plumbing, and Terms of Service pages.</p>
               <div className="mb-4">
                 <label className="block text-sm font-medium text-slate-700 mb-1">Page</label>
@@ -1395,6 +1414,36 @@ export default function EmergencyDispatchPage() {
                 </div>
                 );
               })()}
+            </section>
+          )}
+
+              {settingsSubTab === 'page-links' && (
+            <section className="bg-white rounded-xl border border-slate-200 p-6">
+              <h2 className="text-lg font-medium mb-4">Page Links</h2>
+              <p className="text-slate-600 text-sm mb-4">Directory of all public website paths for the Emergency Dispatch module. Use these paths in menus, ads, or when linking from other sites.</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-600">
+                      <th className="pb-2 pr-2 font-medium">Path</th>
+                      <th className="pb-2 pr-2 font-medium">Description</th>
+                      <th className="pb-2 w-24 font-medium">Open</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {EMERGENCY_DISPATCH_PAGE_LINKS.map(({ path, description }) => (
+                      <tr key={path} className="border-b border-slate-100 hover:bg-slate-50/50">
+                        <td className="py-3 pr-4 font-mono text-slate-800">{path}</td>
+                        <td className="py-3 pr-4 text-slate-600">{description}</td>
+                        <td className="py-3">
+                          <a href={path} target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline text-sm">Open →</a>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-slate-500 text-xs mt-4">Full URLs use your current site origin. Copy and share as needed.</p>
             </section>
           )}
             </>

@@ -598,6 +598,15 @@ export default function ModuleDetailPage() {
               }
             } catch (error) {
               console.error('Failed to activate module:', error);
+              const code = error.response?.data?.code;
+              const status = error.response?.status;
+              if ((status === 403 && code === 'TERMS_NOT_ACCEPTED') || code === 'TERMS_NOT_ACCEPTED') {
+                setIsActivationModalOpen(false);
+                setActivating(false);
+                const returnUrl = `/dashboard/v2/modules/${moduleKey}`;
+                router.push(`/accept-terms?return=${encodeURIComponent(returnUrl)}`);
+                return;
+              }
               alert(error.response?.data?.message || 'Failed to activate module. Please try again.');
               setActivating(false);
               throw error; // Re-throw so modal stays open

@@ -130,7 +130,7 @@ router.get('/:moduleKey', authenticate, requireBusinessContext, async (req, res)
  * Test mode also bypasses legal acceptance requirement
  */
 // Internal/free modules that don't require Stripe or legal acceptance gate
-const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network']);
+const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network', 'delivery-dispatch']);
 
 router.post('/:moduleKey/activate',
   authenticate,
@@ -646,6 +646,7 @@ router.post('/:moduleKey/activate',
         'movie-review': '/dashboard/v2/modules/movie-review/dashboard',
         'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
         'emergency-network': '/dashboard/v2/modules/emergency-dispatch',
+        'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
       };
       const dashboardPath = moduleDashboards[moduleKey] || `/modules/${moduleKey}/setup`;
       const successUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}${dashboardPath}`;

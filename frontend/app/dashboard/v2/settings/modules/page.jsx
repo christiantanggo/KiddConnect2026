@@ -111,6 +111,7 @@ export default function ModuleSettingsPage() {
       'phone-agent': '/tavari-ai-phone/dashboard/settings',
       'orbix-network': '/dashboard/v2/modules/orbix-network/settings',
       'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
+      'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
     };
     return paths[moduleKey] || null;
   };
@@ -122,6 +123,7 @@ export default function ModuleSettingsPage() {
       'phone-agent': '/tavari-ai-phone/dashboard',
       'orbix-network': '/dashboard/v2/modules/orbix-network/dashboard',
       'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
+      'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
     };
     return paths[moduleKey] || `/dashboard/v2/modules/${moduleKey}/dashboard`;
   };

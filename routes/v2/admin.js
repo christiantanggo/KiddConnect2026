@@ -484,5 +484,67 @@ router.get('/modules/:moduleKey/outputs', async (req, res) => {
   }
 });
 
+// ---------- Delivery operator (admin-only): escalated deliveries, retry, cancel, override ----------
+/**
+ * GET /api/v2/admin/delivery-operator/requests
+ * List delivery requests for operator (escalated first, then recent). Query: status, limit.
+ */
+router.get('/delivery-operator/requests', async (req, res) => {
+  try {
+    const status = req.query.status; // e.g. Needs Manual Assist
+    const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    let q = supabaseClient
+      .from('delivery_requests')
+      .select('id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, created_at, updated_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (status) q = q.eq('status', status);
+    const { data, error } = await q;
+    if (error) throw error;
+    res.json({ requests: data || [] });
+  } catch (err) {
+    console.error('[Admin delivery-operator] list error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load requests' });
+  }
+});
+
+/**
+ * POST /api/v2/admin/delivery-operator/requests/:id/retry-dispatch
+ * Retry broker dispatch for a request (admin only).
+ */
+router.post('/delivery-operator/requests/:id/retry-dispatch', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { startDispatch } = await import('../../services/delivery-network/dispatch.js');
+    await startDispatch(id);
+    res.json({ success: true, message: 'Dispatch retry started' });
+  } catch (err) {
+    console.error('[Admin delivery-operator] retry error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Retry failed' });
+  }
+});
+
+/**
+ * PATCH /api/v2/admin/delivery-operator/requests/:id
+ * Operator override: status, amount_quoted_cents. Use to cancel or set Needs Manual Assist, override price.
+ */
+router.patch('/delivery-operator/requests/:id', express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, amount_quoted_cents } = req.body || {};
+    const updates = { updated_at: new Date().toISOString() };
+    const allowedStatuses = ['New', 'Contacting', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'];
+    if (status && allowedStatuses.includes(status)) updates.status = status;
+    if (amount_quoted_cents !== undefined && Number.isFinite(amount_quoted_cents)) updates.amount_quoted_cents = Math.max(0, Math.round(amount_quoted_cents));
+    if (Object.keys(updates).length <= 1) return res.status(400).json({ error: 'No valid updates' });
+    const { data, error } = await supabaseClient.from('delivery_requests').update(updates).eq('id', id).select().single();
+    if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
+    res.json(data);
+  } catch (err) {
+    console.error('[Admin delivery-operator] patch error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Update failed' });
+  }
+});
+
 export default router;
 
