@@ -190,8 +190,11 @@ export function buildYouTubeMetadata(story, script, renderId = '') {
   let hashtags;
 
   if (isDadJoke) {
-    title = sanitizeTitleForYouTube(story?.title || 'Dad Joke');
     const episodeIndex = content?.episode_number ?? 0;
+    const numPart = ` #${String(episodeIndex).padStart(2, '0')}`;
+    const baseTitle = (story?.title || 'Dad Joke').trim();
+    const alreadyHasNumber = / #\d{1,}$/.test(baseTitle);
+    title = sanitizeTitleForYouTube(alreadyHasNumber ? baseTitle : baseTitle + numPart);
     const cta = getDadJokeCta(episodeIndex);
     description = 'Clean humor. Family friendly. ' + cta;
     hashtags = DAD_JOKE_HASHTAGS.slice(0, 6).join(' ');

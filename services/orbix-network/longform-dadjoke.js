@@ -4,8 +4,10 @@
  */
 
 import OpenAI from 'openai';
-import { readFile, unlink } from 'fs';
+import { readFile, unlink, writeFile, mkdir } from 'fs';
 import { promisify } from 'util';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { supabaseClient } from '../../config/database.js';
 import {
   getLongformDadJokeScenePromptsFromChat,
@@ -16,6 +18,8 @@ import {
 
 const readFileAsync = promisify(readFile);
 const unlinkAsync = promisify(unlink);
+const writeFileAsync = promisify(writeFile);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const BACKGROUNDS_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_ORBIX_BACKGROUNDS || 'orbix-network-backgrounds';
 
@@ -30,11 +34,86 @@ function getOpenAIClient() {
   return openaiClient;
 }
 
+/** Opening joke pool — cold open only. Rotated so we don't repeat back-to-back. */
+const OPENING_JOKE_POOL = [
+  'I just burned 2,000 calories. That\'s the last time I leave brownies in the oven.',
+  'I used to be addicted to soap, but I\'m clean now.',
+  'I ordered a chicken and an egg online. I\'ll let you know.',
+  'I stayed up all night wondering where the sun went, then it dawned on me.',
+  'I told my wife she was drawing her eyebrows too high. She looked surprised.',
+  'I only know 25 letters of the alphabet. I don\'t know y.',
+  'I used to hate facial hair, but then it grew on me.',
+  'I\'m reading a book on the history of glue. I just can\'t seem to put it down.',
+  'I\'m friends with all electricians. We have good current connections.',
+  'I just read a book about anti-gravity. I couldn\'t put it down.',
+  'Why don\'t scientists trust atoms? Because they make up everything.',
+  'I would avoid the sushi if I were you. It\'s a little fishy.',
+  'I used to work in a shoe recycling shop. It was sole destroying.',
+  'I have a few jokes about unemployed people, but none of them work.',
+  'I told my computer I needed a break. Now it won\'t stop sending me Kit Kats.',
+  'I\'m on a seafood diet. I see food and I eat it.',
+  'I asked the librarian if they had any books on paranoia. She whispered, "They\'re right behind you."',
+  'I used to be a baker, but I couldn\'t make enough dough.',
+  'I have a joke about chemistry, but I don\'t think it will get a reaction.',
+  'Why don\'t eggs tell jokes? They\'d crack each other up.',
+  'I was going to tell a time-travel joke, but you didn\'t like it.',
+];
+
+/** Story element pool — pick 3–6 to build an escalating causal story. */
+const STORY_ELEMENT_POOL = [
+  'backyard BBQ', 'empty propane tank', 'missing charcoal', 'messy garage', 'neighbor Gary',
+  'ladder borrowing', 'leaf blower', 'skateboard kid', 'toolbox ramp', 'dog running through mud',
+  'sprinkler system', 'paint cans', 'patio furniture', 'water bucket', 'gutter cleaning',
+  'grill lid crashing', 'lawn chair', 'remote under couch cushions', 'basketball game on TV',
+  'broken hose', 'slipping in the yard', 'missing screwdriver', 'borrowed lawn mower',
+  'kids\' toys in the driveway', 'bee swarm near the grill', 'cooler tipping over',
+];
+
 const DAD_ACTIVITIES = [
   'BBQ', 'mowing the lawn', 'washing the car', 'fishing', 'hardware store trip',
   'fixing something in the garage', 'watching sports', 'shopping for something simple that becomes overcomplicated',
   'chatting with a neighbor', 'trying to do a basic household task', 'lawn chair', 'grilling'
 ];
+
+const STATE_FILE = path.join(__dirname, 'longform-dadjoke-state.json');
+
+async function getLastUsedOpeningJoke() {
+  try {
+    const data = await readFileAsync(STATE_FILE, 'utf8');
+    const obj = JSON.parse(data);
+    return obj?.lastOpeningJokeText ?? null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function setLastUsedOpeningJoke(text) {
+  try {
+    const dir = path.dirname(STATE_FILE);
+    await mkdir(dir, { recursive: true }).catch(() => {});
+    await writeFileAsync(STATE_FILE, JSON.stringify({ lastOpeningJokeText: text, updatedAt: new Date().toISOString() }, null, 0));
+  } catch (e) {
+    console.warn('[longform-dadjoke] Could not persist last opening joke:', e?.message);
+  }
+}
+
+/** Pick an opening joke from the pool, avoiding the last used one. */
+async function pickOpeningJoke() {
+  const last = await getLastUsedOpeningJoke();
+  const candidates = last
+    ? OPENING_JOKE_POOL.filter((j) => j !== last)
+    : OPENING_JOKE_POOL;
+  const joke = candidates.length ? candidates[Math.floor(Math.random() * candidates.length)] : OPENING_JOKE_POOL[0];
+  await setLastUsedOpeningJoke(joke);
+  return joke;
+}
+
+/** Pick 3–6 random story elements for this script. */
+function pickStoryElements() {
+  const count = 3 + Math.floor(Math.random() * 4);
+  const shuffled = [...STORY_ELEMENT_POOL].sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, count);
+}
 
 /**
  * List dad joke stories for this channel that can be used as the punchline for a long-form video.
@@ -139,7 +218,11 @@ async function _generateLongformDadJokeScript(businessId, channelId, options = {
 
   const jokePoolText = jokePool.length
     ? jokePool.map((j, i) => `${i + 1}. Setup: ${j.setup} | Punchline: ${j.punchline}`).join('\n')
-    : '(Use your own dad jokes in the same style: short setup, quick punchline.)';
+    : '(Use your own dad jokes in the same style: short setup, quick punchline. Weave 2–5 subtly into the story as observations, not announced jokes.)';
+
+  const openingJoke = await pickOpeningJoke();
+  const storyElements = pickStoryElements();
+  const storyElementsText = storyElements.join(', ');
 
   let openai;
   try {
@@ -150,130 +233,59 @@ async function _generateLongformDadJokeScript(businessId, channelId, options = {
     err.status = 502;
     throw err;
   }
-  const systemPrompt = `You are a writer for "Orbix – Dad Jokes" story-based comedy scripts for 6–8 minute YouTube videos. Target: 900–1200 words. The narrator sounds like a calm dad telling a story that slowly becomes ridiculous.
 
-GOAL: Generate long-form comedy scripts where a calm dad tells a story that slowly spirals into ridiculous chaos while repeatedly insisting he has not told the real joke yet.
+  const systemPrompt = `You are a writer for "Orbix – Dad Jokes" long-form comedy scripts for 6–8 minute YouTube videos. Target: 900–1200 words. Style: Craig Ferguson–esque monologue — one joke promised at the start, a funny escalating story, subtle dad humor woven in, then a callback and the real joke at the end.
 
-=== VIDEO STRUCTURE (required order) ===
+VOICE: Conversational, dad-like, slightly sarcastic, clean, family friendly. Story-driven with natural spoken cadence. Like a stand-up monologue with one narrator speaking to camera. Use occasional [beat], [pause], [sigh] for pacing but do not overuse them.
 
-1. Cold Open Joke
-2. Story Introduction
-3. Act 1 – Setup
-4. Act 2 – Escalation
-5. Act 3 – Chaos
-6. Peak Chaos Moment
-7. Final Reset
-8. Final Dad Joke
-9. Closing Call to Action
+DO NOT: Use section headers or labels in the narration (no "Act 1", "Cold open", etc.). Do not repeat "still not the joke yet" or "we're building to the joke" or "that wasn't the joke" more than once in the whole script — at most one light reminder in the middle. Do not make the script feel like a bulleted template or a list of random events. Do not announce "here's a joke" — embed wordplay naturally.
 
-=== COLD OPEN ===
+=== STRUCTURE (follow this order in the spoken script only; never label sections) ===
 
-Start with a quick dad joke. Example: "I just read a book about anti-gravity. [beat] I couldn't put it down." Immediately follow with: "Anyway… I've got one joke for you today. Just one. But first I need to explain something that happened this weekend."
+1. COLD OPEN: Start with this exact opening joke (provided in the user message). Then immediately say a variation of "Anyway… I've only got one joke for you tonight." or "Tonight I'm only telling one joke." Wording can vary slightly.
 
-=== ACT 1 – SETUP ===
+2. STORY: Tell a funny, escalating everyday chaos story. Use the story elements provided — combine 3–6 of them into one coherent causal narrative. One thing leads to the next. Start simple (inconvenience), then interruption, then problem, then chaos, then absurd chaos. It should feel like a comedian telling a real story.
 
-Introduce a normal dad scenario: washing the car, fixing the garage door, mowing the lawn, cleaning the garage, going to the hardware store. Introduce the first minor inconvenience: hose tangled, tool missing, ladder misplaced, paint can in the way. Include 3–4 observational jokes.
+3. EMBEDDED DAD JOKES: Weave 2–5 subtle puns or dad-joke-style observations into the narration. They should feel like side comments or clever observations, not the script stopping to announce a joke. Natural and sparing.
 
-=== ACT 2 – ESCALATION ===
+4. CALLBACK: Near the end, the narrator remembers the promise: e.g. "Oh right… the one joke I promised." Then deliver the final joke (exact words provided).
 
-Introduce additional characters and complications: neighbor Gary appears, kid rides through yard on skateboard, dog runs through paint or mud, Gary borrows a ladder, something spills. Include 6–8 jokes.
+5. CTA: End with a short channel outro: "Subscribe for daily dad jokes." "Leave your worst dad joke in the comments." "How many jokes did I tell before the real one?" Keep it short.
 
-=== ACT 3 – CHAOS ===
+QUALITY: 900–1200 words. Family friendly. Output valid JSON only. full_script must be narration only — no headers, no labels.`;
 
-Events must escalate through a domino chain of cause and effect. Example: kid knocks paint → dog runs through paint → dog bumps ladder → ladder hits shelf → shelf triggers sprinkler → sprinkler floods yard. Each event must cause the next event.
+  const userPrompt = `Generate one long-form dad joke script: 6–8 minutes, 900–1200 words.
 
-=== CHAOS LADDER ===
+OPENING JOKE (use this exact line first, then add "Anyway… I've only got one joke for you tonight." or similar):
+${openingJoke}
 
-Stories must escalate through five levels: Level 1 – inconvenience | Level 2 – interruption | Level 3 – problem | Level 4 – chaos | Level 5 – absurd chaos. Each paragraph should increase the chaos level.
+STORY ELEMENTS (use 3–6 of these; build a causal chain so one event leads to the next; pick a subset that fit together):
+${storyElementsText}
 
-=== SCENE EXPANSION ===
-
-Each scene must contain at least: (1) event description, (2) observational commentary, (3) analogy, (4) mini punchline, (5) meta reminder. Each event should be 5–8 lines before the next. This increases runtime and improves storytelling.
-
-=== SCENE COMEDY RULE ===
-
-Every scene must contain a mini punchline. Structure: event → observation → punchline → meta reminder.
-
-Example: "The dog ran through the paint. Which technically makes him an artist. Except instead of a gallery opening… he's just repainting the driveway. Still zero jokes."
-
-=== JOKE LIMIT RULE ===
-
-Classic question-and-answer dad jokes should be limited. Maximum: 1 Q&A joke every 3–4 scenes. Prefer observational humor instead.
-
-Bad: "What do you call a lazy kangaroo? A pouch potato."
-Better: "That kid flies around the yard like a caffeinated kangaroo. Honestly he's one lazy jump away from becoming a pouch potato."
-
-=== JOKE STYLE ===
-
-Prefer observational humor tied to the story. Avoid excessive Q&A.
-
-Bad: "Why did the math book look sad?"
-Better: "At that point the situation had more problems than a math textbook."
-
-=== RUNNING META JOKE ===
-
-Throughout the story the narrator repeatedly reminds viewers that the real joke has not happened yet. Examples: "That doesn't count." / "Still zero jokes." / "We're not at the joke yet." / "That was just context." / "We're building toward it." These lines should appear frequently.
-
-=== CURIOSITY LOOP REQUIREMENT ===
-
-Every script must introduce a mystery early in the story. Example: "Remind me to tell you what Gary did with the leaf blower later." This mystery should be referenced again in the middle of the story and revealed near the end.
-
-=== PEAK CHAOS RULE ===
-
-Near the end of the story, multiple chaotic events should happen simultaneously. Example: Gary loses control of the ladder, the dog runs through paint, the skateboard kid jumps the toolbox, the sprinkler activates. This should feel like the situation collapsing into chaos.
-
-=== COMEDIC TIMING ===
-
-Use pacing markers throughout: [beat], [pause], [sigh], [looks around]. These help slow narration.
-
-=== FINAL RESET ===
-
-After peak chaos, the narrator suddenly becomes calm and recaps the chaos. Example: "Anyway after all that… Gary breaking my ladder… the dog covered in paint… the kid trying to ollie over my toolbox… and the sprinkler system turning the driveway into a water park… it reminded me of the one joke I promised you." Use the same details that actually happened in your story.
-
-=== FINAL JOKE ===
-
-Deliver one short classic dad joke (exact words will be provided). Use [beat] before the punchline.
-
-=== ENDING ===
-
-End with: "Subscribe for daily dad jokes. Leave your worst dad joke in the comments. And tell me… how many jokes I told before the real one."
-
-IMPORTANT: The full_script field is read aloud by TTS. Never put section headers or labels (e.g. "Act 1", "Act 2 – Escalation", "Cold open") in the narration—only the spoken story.
-
-QUALITY: 900–1200 words. Family friendly. Output valid JSON only.`;
-
-  const userPrompt = `Generate one long-form story-based comedy script: 6–8 minutes, 900–1200 words.
-
-VIDEO STRUCTURE: Cold Open Joke → Story Introduction → Act 1 Setup (normal dad scenario + first inconvenience, 3–4 jokes) → Act 2 Escalation (Gary, kid, dog, complications, 6–8 jokes) → Act 3 Chaos (domino chain: each event causes the next, e.g. kid knocks paint → dog runs through paint → dog bumps ladder → ladder hits shelf → sprinkler floods yard) → Peak Chaos Moment (multiple events at once: ladder, dog, kid, sprinkler—situation collapsing) → Final Reset (calm recap; use exact details from your story) → Final Joke (exact words below) → Closing Call to Action.
-
-SCENE EXPANSION: Each scene at least: event description, observational commentary, analogy, mini punchline, meta reminder. 5–8 lines per event.
-
-JOKE LIMIT: Max 1 Q&A joke per 3–4 scenes; prefer observational (e.g. weave "pouch potato" into story observation, don't do "What do you call a lazy kangaroo?").
-
-CURIOSITY LOOP: Every script must have a mystery early (e.g. "Remind me to tell you what Gary did with the leaf blower later"), reference again mid-story, reveal near end.
-
-PEAK CHAOS: Multiple events at once near the end (ladder, dog through paint, kid jumps toolbox, sprinkler)—situation collapsing into chaos.
-
-CHAOS LADDER: each paragraph increases level (1→5). Running meta joke frequently. Use [beat], [pause], [sigh], [looks around].
-
-FINAL JOKE (use these exact words only at the very end, after the build-up):
+FINAL JOKE (use these exact words only at the very end, after the story and a natural callback like "Oh right… the one joke I promised."):
 Setup: ${finalJoke.setup}
 Punchline: ${finalJoke.punchline}
 
 Dad activity/setting: ${dadActivity}.
 
-JOKE POOL (weave 11–17 into the story as event→observation→joke; final joke above is separate and must be last):
+RULES:
+- Do NOT say "still not the joke yet" or "we're building to the joke" more than once. At most one light reminder. Let the audience almost forget the promise until the callback.
+- Weave 2–5 subtle dad jokes/wordplay into the story as observations. Do not overdo it.
+- Story must escalate: simple → chaotic. Use the story elements to build cause-and-effect.
+- No section headers in full_script. Write only the spoken monologue.
+
+OPTIONAL joke pool for inspiration (you may weave a setup/punchline into the story as an observation; the final joke above is separate and must be last):
 ${jokePoolText}
 
 Return JSON with:
-- "title": string (e.g. "I Tried To Tell One Dad Joke…", "I Promised Only One Dad Joke")
-- "thumbnail_text_suggestions": array of 2–4 short strings (e.g. "ONLY ONE JOKE", "DAD LOGIC")
-- "full_script": string — COMPLETE narration only, 900–1200 words. This text is read aloud by TTS: do NOT include any section headers or labels (e.g. "Act 1", "Act 2 – Escalation", "Cold open", "Final reset"). Write only the spoken story. Follow the structure in order (cold open → intro → Act 1 → Act 2 → Act 3 → peak chaos → final reset → final joke → closing CTA) but never label the sections in the text. Each scene: event description, observational commentary, analogy, mini punchline, meta reminder. Max 1 Q&A joke per 3–4 scenes; prefer observational. Curiosity loop required. Use [beat], [pause], [sigh], [looks around] for pacing only.
-- "segment_markers": object with keys: cold_open, story_introduction, act_1_setup, act_2_escalation, act_3_absurd_chaos, final_reset, final_joke, outro_cta — each value is the text for that segment only
-- "visual_suggestions": object with same keys as segment_markers, values like "mower won't start", "Gary with ladder", "skateboard kid", "dog in grass"
+- "title": string (e.g. "I Tried To Tell One Dad Joke…", "Only One Joke Tonight")
+- "thumbnail_text_suggestions": array of 2–4 short strings
+- "full_script": string — COMPLETE narration only, 900–1200 words. No section headers or labels. Spoken story only. Include the opening joke above, then "one joke tonight" line, then story, then callback + final joke, then CTA.
+- "segment_markers": object with keys cold_open, story_introduction, act_1_setup, act_2_escalation, act_3_absurd_chaos, final_reset, final_joke, outro_cta (each value = text for that segment)
+- "visual_suggestions": object same keys as segment_markers, short scene descriptions
 - "final_joke": object with "setup", "punchline"
-- "joke_metadata": array for each joke: { "setup", "punchline", "position_in_script", "is_final" }
-- "estimated_duration_seconds": number (360–480 for 6–8 min)`;
+- "joke_metadata": array of { "setup", "punchline", "position_in_script", "is_final" }
+- "estimated_duration_seconds": number (360–480)`;
 
   let raw;
   try {
