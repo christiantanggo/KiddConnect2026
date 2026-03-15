@@ -270,7 +270,7 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
         className="px-4 py-3 text-xs border-t"
         style={{ color: 'var(--color-text-muted)', borderColor: 'var(--color-border)' }}
       >
-        Deployed March 10 2026 V3
+        March 14, 2026 V1
       </div>
     </aside>
     </>
