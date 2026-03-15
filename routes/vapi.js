@@ -1220,7 +1220,9 @@ async function handleCallEnd(event) {
   } else if (event.message?.durationSeconds !== undefined && event.message?.durationSeconds !== null) {
     duration = typeof event.message.durationSeconds === 'number' ? event.message.durationSeconds : parseInt(event.message.durationSeconds) || 0;
   }
-  
+  // Normalize to integer so DB (duration_seconds INTEGER) never receives a float
+  duration = Math.floor(Number(duration)) || 0;
+
   // Extract endedReason (e.g. 'voicemail' when VAPI voicemail detection ended the call)
   const endedReason = call.endedReason ?? event.message?.artifact?.endedReason ?? event.message?.call?.endedReason ?? null;
 
@@ -1260,7 +1262,7 @@ async function handleCallEnd(event) {
         // Try to fetch duration from VAPI API (browser calls might not report duration in webhook)
         const { getCallData } = await import("../services/vapi.js");
         const callData = await getCallData(callId);
-        actualDuration = callData?.durationSeconds || callData?.duration || 0;
+        actualDuration = Math.floor(Number(callData?.durationSeconds ?? callData?.duration ?? 0)) || 0;
         console.log(`[VAPI Webhook] Fetched duration from VAPI API: ${actualDuration} seconds`);
       } catch (apiError) {
         console.warn(`[VAPI Webhook] Could not fetch duration from VAPI API:`, apiError.message);
