@@ -83,7 +83,12 @@ export default function MovieReviewUploadPage() {
   useEffect(() => {
     loadProject();
     loadYtStatus();
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && projectId) loadProject();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
     return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
       clearInterval(pollRef.current);
       if (progressRef.current) clearInterval(progressRef.current);
     };

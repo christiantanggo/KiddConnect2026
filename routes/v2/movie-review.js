@@ -46,7 +46,24 @@ async function getProject(projectId, businessId) {
     .eq('business_id', businessId)
     .single();
   if (error || !data) return null;
-  return data;
+  const project = data;
+  // Fallback: if project has no render_url but a completed render exists, use its output_url
+  // (handles race where user opens upload before renderer updated the project row)
+  if (project && !(project.render_url && project.render_url.trim())) {
+    const { data: latestRender } = await supabaseClient
+      .from('movie_review_renders')
+      .select('output_url')
+      .eq('project_id', project.id)
+      .eq('status', 'DONE')
+      .not('output_url', 'is', null)
+      .order('completed_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (latestRender?.output_url) {
+      project.render_url = latestRender.output_url.trim();
+    }
+  }
+  return project;
 }
 
 function isYouTubeConfigured() {
