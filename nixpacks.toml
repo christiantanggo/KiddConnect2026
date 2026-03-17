@@ -1,5 +1,7 @@
+# Use Node 20 via .nvmrc + package.json "engines" (do not pin nodejs-18 here).
+# ffmpeg needed for Orbix video.
 [phases.setup]
-nixPkgs = ["nodejs-18_x", "ffmpeg"]
+nixPkgs = ["ffmpeg"]
 
 [phases.build]
 cmds = ["npm ci"]

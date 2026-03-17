@@ -30,7 +30,7 @@ The app deploys in two places:
 
 1. [vercel.com](https://vercel.com) → Add New Project → Import this repo.
 2. Set **Root Directory** to `frontend`.
-3. Add env var: `NEXT_PUBLIC_API_URL` = your backend URL (e.g. Railway URL or `https://api.tavarios.com`).
+3. Add env var: `NEXT_PUBLIC_API_URL` = your backend URL (e.g. Railway URL or `https://api.kiddconnect.com`).
 4. Deploy. Vercel will auto-deploy on push to `main` if the project is connected to GitHub.
 
 **If using the GitHub Action** (`.github/workflows/deploy-frontend.yml`), add repo secrets:
@@ -38,14 +38,15 @@ The app deploys in two places:
 - `VERCEL_TOKEN` — [vercel.com/account/tokens](https://vercel.com/account/tokens)
 - `VERCEL_ORG_ID` — Vercel project → Settings → General
 - `VERCEL_PROJECT_ID` — same page
-- `NEXT_PUBLIC_API_URL` (optional) — backend URL used at build time (defaults to `https://api.tavarios.com`)
+- `NEXT_PUBLIC_API_URL` (optional) — backend URL used at build time (defaults to `https://api.kiddconnect.com`)
 
 ### Railway (backend)
 
 1. [railway.app](https://railway.app) → New Project → Deploy from GitHub repo.
-2. Select this repo. Railway will use `railway.json` and `package.json` (build: `npm ci`, start: `npm start` → `start.js` → `server.js`).
+2. Select this repo. Railway will use `nixpacks.toml` and `package.json` (build: `npm ci`, start: `npm start` → `start.js` → `server.js`).
 3. In the Railway service (name it **Tavari-Communications-Agent** to match the GitHub Action), add your env vars (e.g. `DATABASE_URL`, `VAPI_API_KEY`, `BACKEND_URL` or `RAILWAY_PUBLIC_DOMAIN`, etc.).
-4. Deploy. Railway will auto-deploy on push if connected to GitHub.
+4. **Health check (required for "Application failed to respond"):** In the service → **Settings** → set **Health Check Path** to `/health` (path only; the app listens on `PORT` and exposes `GET /health`). Optionally set env `RAILWAY_HEALTHCHECK_TIMEOUT_SEC=300` if startup is slow.
+5. Deploy. Railway will auto-deploy on push if connected to GitHub.
 
 **If using the GitHub Action** (`.github/workflows/deploy-backend.yml`):
 
