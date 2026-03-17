@@ -14,7 +14,7 @@ import {
 import Cookies from 'js-cookie';
 import axios from 'axios';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 function getBusinessId() {
   if (typeof window === 'undefined') return null;

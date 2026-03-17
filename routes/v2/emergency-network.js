@@ -310,7 +310,7 @@ router.use(authenticate);
 router.use(requireBusinessContext);
 
 function getVapiWebhookUrl() {
-  let base = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.tavarios.com';
+  let base = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.kiddconnect.com';
   if (base && !base.startsWith('http')) base = `https://${base}`;
   return `${base}/api/vapi/webhook`;
 }

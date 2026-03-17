@@ -47,7 +47,7 @@ router.get("/check-and-send", async (req, res) => {
     
     console.log(`[Demo Follow-up] Found ${pendingFollowUps.length} demo emails needing follow-up`);
     
-    const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'https://tavarios.com';
+    const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'https://www.kiddconnect.com';
     let sentCount = 0;
     let errorCount = 0;
     

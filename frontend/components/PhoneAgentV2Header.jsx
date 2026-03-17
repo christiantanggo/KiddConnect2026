@@ -7,7 +7,7 @@ import { logout } from '@/lib/auth';
 import { agentsAPI, authAPI } from '@/lib/api';
 import { useToast } from '@/components/ToastProvider';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 export default function PhoneAgentV2Header() {
   const pathname = usePathname();

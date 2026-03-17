@@ -7,7 +7,7 @@ import V2DashboardHeader from '@/components/V2DashboardHeader';
 import V2Sidebar from '@/components/V2Sidebar';
 import { ArrowLeft } from 'lucide-react';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 export default function CommunicationsSettingsPage() {
   const [loading, setLoading] = useState(true);

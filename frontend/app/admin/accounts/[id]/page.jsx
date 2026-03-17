@@ -7,7 +7,7 @@ import Link from 'next/link';
 import { useToast } from '@/components/ToastProvider';
 import { adminPhoneNumbersAPI, adminSMSNumbersAPI } from '@/lib/api';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 function AdminAccountDetailPage() {
   const params = useParams();

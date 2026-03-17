@@ -156,7 +156,7 @@ export default function HelcimPaymentForm({ customerId, onSuccess, onCancel }) {
       }
 
       // Send token to backend to save payment method
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com';
       const token = document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1];
 
       const response = await fetch(`${API_URL}/api/billing/payment-method`, {

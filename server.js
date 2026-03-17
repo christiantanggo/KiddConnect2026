@@ -29,11 +29,11 @@ import helmet from "helmet";
 import fs from "fs";
 import path from "path";
 
-// Load environment variables FIRST
+// Load environment variables FIRST (use .env only - old communications app DB)
 dotenv.config();
 
-// Log immediately so you can confirm THIS file is running and which port we will use
-const __SERVER_PORT__ = 5002;
+// Port: use Railway/PaaS PORT when set, else 5002 for local (avoids EADDRINUSE with 5001)
+const __SERVER_PORT__ = Number(process.env.PORT) || 5002;
 console.log('[Server] LOADED:', path.resolve(process.cwd(), 'server.js'));
 console.log('[Server] WILL LISTEN ON PORT:', __SERVER_PORT__);
 
@@ -98,16 +98,18 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const app = express();
-// Listen port: 5002 to avoid EADDRINUSE on 5001. Production (e.g. Railway) sets PORT; we never use 5001.
-const LISTEN_PORT = 5002;
+// Listen port: Railway/production set PORT; local defaults to 5002 (avoid 5001 EADDRINUSE)
+const LISTEN_PORT = __SERVER_PORT__;
 
 // Trust proxy for Railway/behind reverse proxy (fixes rate limiter warnings)
 app.set('trust proxy', true);
 
 // CORS configuration - allow requests from frontend
 const allowedOrigins = [
-  'https://tavarios.com',
-  'https://www.tavarios.com',
+  'https://www.kiddconnect.com',
+  'https://www.kiddconnect.ca',
+  'https://kiddconnect.com',
+  'https://kiddconnect.ca',
   'http://localhost:3000',
   'http://localhost:3001',
   process.env.FRONTEND_URL,

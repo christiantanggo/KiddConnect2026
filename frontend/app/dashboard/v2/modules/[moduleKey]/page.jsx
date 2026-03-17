@@ -11,7 +11,7 @@ import ModuleActivationModal from '@/components/ModuleActivationModal';
 import { ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { modulesAPI } from '@/lib/api';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 export default function ModuleDetailPage() {
   const router = useRouter();

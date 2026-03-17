@@ -10,7 +10,7 @@ async function checkVoiceAppWebhook() {
   console.log('=== CHECKING VOICE API APPLICATION WEBHOOK ===\n');
   
   const voiceAppId = process.env.TELNYX_VOICE_APPLICATION_ID;
-  const webhookUrl = process.env.WEBHOOK_URL || `${process.env.SERVER_URL || 'https://api.tavarios.com'}/api/calls/webhook`;
+  const webhookUrl = process.env.WEBHOOK_URL || `${process.env.SERVER_URL || 'https://api.kiddconnect.com'}/api/calls/webhook`;
   
   if (!voiceAppId) {
     console.error('❌ TELNYX_VOICE_APPLICATION_ID not set');

@@ -175,7 +175,7 @@ async function main() {
     process.env.RAILWAY_PUBLIC_DOMAIN ||
     process.env.VERCEL_URL ||
     process.env.SERVER_URL ||
-    "https://api.tavarios.com";
+    "https://api.kiddconnect.com";
   const webhookUrl = backendUrl.startsWith("http") ? backendUrl + "/api/vapi/webhook" : "https://" + backendUrl + "/api/vapi/webhook";
 
   if (!process.env.BACKEND_URL && !process.env.RAILWAY_PUBLIC_DOMAIN && !process.env.VERCEL_URL && !process.env.SERVER_URL) {

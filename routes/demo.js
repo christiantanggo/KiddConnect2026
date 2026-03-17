@@ -403,7 +403,7 @@ router.post("/send-summary", async (req, res) => {
     // For demos, we need to add marketing content, so we'll build the email ourselves
     // but use the same sendEmail function that production uses
     const { sendEmail } = await import("../services/notifications.js");
-    const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'https://tavarios.com';
+    const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'https://www.kiddconnect.com';
     
     // Build email content similar to production but with demo marketing
     const subject = `📞 Call Summary from ${demoData.businessName} Demo`;

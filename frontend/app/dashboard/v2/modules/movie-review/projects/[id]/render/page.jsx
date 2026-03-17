@@ -7,7 +7,7 @@ import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { ChevronLeft, Loader2, CheckCircle, XCircle, Play, Upload } from 'lucide-react';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 function getAuthHeaders() {
   if (typeof document === 'undefined') return {};

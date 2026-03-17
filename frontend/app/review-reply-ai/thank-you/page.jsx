@@ -56,7 +56,7 @@ export default function ReviewReplyThankYouPage() {
           <h2 className="text-2xl font-semibold text-gray-900 mb-4">How to Access Your Account</h2>
           <ol className="list-decimal list-inside space-y-3 text-gray-700 mb-6">
             <li>Check your email for your account login credentials (sent to the email address used for purchase)</li>
-            <li>Log in to your Tavari AI dashboard at <a href="/login" className="text-blue-600 hover:text-blue-700 underline">tavarios.com/login</a></li>
+            <li>Log in to your Tavari AI dashboard at <a href="/login" className="text-blue-600 hover:text-blue-700 underline">www.kiddconnect.com/login</a></li>
             <li>Complete the quick setup wizard (takes approximately 10 minutes)</li>
             <li>Start generating professional review responses instantly!</li>
           </ol>

@@ -6,7 +6,7 @@ import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { ArrowLeft } from 'lucide-react';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 export default function UsersSettingsPage() {
   const [loading, setLoading] = useState(true);

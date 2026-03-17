@@ -3,7 +3,7 @@ import { ToastProvider } from '@/components/ToastProvider';
 import Script from 'next/script';
 
 export const metadata = {
-  title: 'Tavari AI Phone Agent',
+  title: 'KiddConnect',
   description: 'Self-serve AI phone answering service',
 };
 

@@ -23,7 +23,7 @@ export default function PhoneAgentClickBankPaymentPage() {
   const generatePaymentLink = (id) => {
     if (!id) return;
     
-    // Format: https://tavarios.com/tavari-ai-phone/landing?clickbank_id=YOUR_ID
+    // Format: https://www.kiddconnect.com/tavari-ai-phone/landing?clickbank_id=YOUR_ID
     const baseUrl = window.location.origin;
     const link = `${baseUrl}/tavari-ai-phone/landing?clickbank_id=${id}`;
     setPaymentLink(link);

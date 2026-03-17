@@ -34,7 +34,7 @@ function getWebhookUrl() {
     process.env.RAILWAY_PUBLIC_DOMAIN ||
     process.env.VERCEL_URL ||
     process.env.SERVER_URL ||
-    'https://api.tavarios.com';
+    'https://api.kiddconnect.com';
   if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {
     backendUrl = `https://${backendUrl}`;
   }

@@ -6,7 +6,7 @@ import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import Link from 'next/link';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 function getAuthHeaders() {
   if (typeof document === 'undefined') return {};

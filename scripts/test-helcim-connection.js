@@ -208,7 +208,7 @@ async function testHelcimConnection() {
   try {
     const testCustomer = {
       contactName: 'Test Customer',
-      contactEmail: 'test@tavarios.com',
+      contactEmail: 'test@kiddconnect.com',
       contactPhone: '5551234567',
     };
 

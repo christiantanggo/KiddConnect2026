@@ -11,7 +11,7 @@ async function fixWebhook() {
     const { updateAssistant } = await import("../services/vapi.js");
     
     // Get the correct webhook URL
-    const webhookUrl = `${process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || "https://api.tavarios.com"}/api/vapi/webhook`;
+    const webhookUrl = `${process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || "https://api.kiddconnect.com"}/api/vapi/webhook`;
     
     console.log(`[Fix Webhook] Updating assistant ${ASSISTANT_ID}`);
     console.log(`[Fix Webhook] Setting serverUrl to: ${webhookUrl}`);

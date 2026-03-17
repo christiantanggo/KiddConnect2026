@@ -73,7 +73,7 @@ function getYtFromChannelEntry(entry, useManual) {
 }
 
 /** Redirect URI used when per-channel OAuth is set and env YOUTUBE_REDIRECT_URI is not (token refresh does not send redirect_uri to Google). */
-const DEFAULT_REDIRECT_URI = 'https://api.tavarios.com/api/v2/orbix-network/youtube/callback';
+const DEFAULT_REDIRECT_URI = 'https://api.kiddconnect.com/api/v2/orbix-network/youtube/callback';
 
 async function getYouTubeClient(businessId, orbixChannelId = null, options = {}) {
   const useManual = !!options.useManual;

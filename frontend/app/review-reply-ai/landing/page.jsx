@@ -75,7 +75,7 @@ export default function ReviewReplyAILandingPage() {
             {/* CTA Buttons */}
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center mb-6">
               <a
-                href="https://tavarios.pay.clickbank.net/?cbitems=2"
+                href="https://kiddconnect.pay.clickbank.net/?cbitems=2"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 w-full sm:w-auto text-center"
@@ -237,7 +237,7 @@ export default function ReviewReplyAILandingPage() {
               Join businesses that are saving time while maintaining professional review responses.
             </p>
             <a
-              href="https://tavarios.pay.clickbank.net/?cbitems=2"
+              href="https://kiddconnect.pay.clickbank.net/?cbitems=2"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-block bg-white text-blue-600 px-10 py-4 rounded-lg text-lg font-semibold hover:bg-gray-100 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5"

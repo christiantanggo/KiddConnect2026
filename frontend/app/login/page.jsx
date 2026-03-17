@@ -24,7 +24,7 @@ export default function LoginPage() {
       // If onboarding is not complete, redirect to setup wizard
       if (!onboardingComplete) {
         // Check which module they have to determine which setup wizard to use
-        const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+        const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
         const token = document.cookie.split(';').find(c => c.trim().startsWith('token='))?.split('=')[1];
         
         try {

@@ -12,7 +12,7 @@ const router = express.Router();
  * 
  * ClickBank v8.0 sends plain JSON (no encryption, no decryption needed).
  * 
- * URL to configure in ClickBank: https://api.tavarios.com/api/clickbank/webhook
+ * URL to configure in ClickBank: https://api.kiddconnect.com/api/clickbank/webhook
  * Version: 8.0
  */
 router.post('/webhook', express.json(), async (req, res) => {
@@ -105,7 +105,7 @@ router.get('/webhook', (_req, res) => {
                     process.env.RAILWAY_PUBLIC_DOMAIN || 
                     process.env.VERCEL_URL || 
                     process.env.SERVER_URL ||
-                    'https://api.tavarios.com';
+                    'https://api.kiddconnect.com';
   
   const webhookUrl = `${backendUrl}/api/clickbank/webhook`;
   

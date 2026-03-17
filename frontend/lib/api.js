@@ -1,7 +1,7 @@
 import axios from 'axios';
 import Cookies from 'js-cookie';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002').replace(/\/$/, ''); // Remove trailing slash
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, ''); // Remove trailing slash (production: Tavari backend; local: set NEXT_PUBLIC_API_URL=http://localhost:5001)
 
 console.log('[API] Initializing API client with URL:', API_URL);
 
@@ -11,7 +11,7 @@ const api = axios.create({
     'Content-Type': 'application/json',
   },
   timeout: 30000, // 30 second timeout
-  withCredentials: true, // send cookies cross-origin (e.g. tavarios.com -> api.tavarios.com)
+  withCredentials: true, // send cookies cross-origin (e.g. kiddconnect.com -> api.kiddconnect.com)
 });
 
 // Add auth token to requests

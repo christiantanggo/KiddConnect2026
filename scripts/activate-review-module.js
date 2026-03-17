@@ -5,7 +5,7 @@ import { Business } from '../models/Business.js';
 import { Subscription } from '../models/v2/Subscription.js';
 import { calculateBillingCycle } from '../services/billing.js';
 
-const email = process.argv[2] || 'test@tavarios.com';
+const email = process.argv[2] || 'test@kiddconnect.com';
 
 async function activateReviewModule() {
   try {

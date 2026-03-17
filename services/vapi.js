@@ -113,7 +113,7 @@ export async function createAssistant(businessData) {
                           process.env.RAILWAY_PUBLIC_DOMAIN || 
                           process.env.VERCEL_URL || 
                           process.env.SERVER_URL ||
-                          "https://api.tavarios.com";
+                          "https://api.kiddconnect.com";
         
         // Ensure URL has https:// protocol
         if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {
@@ -1534,7 +1534,7 @@ export async function rebuildAssistant(businessId) {
                           process.env.RAILWAY_PUBLIC_DOMAIN || 
                           process.env.VERCEL_URL || 
                           process.env.SERVER_URL ||
-                          "https://api.tavarios.com";
+                          "https://api.kiddconnect.com";
         
         // Ensure URL has https:// protocol
         if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {

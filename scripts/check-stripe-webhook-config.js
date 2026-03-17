@@ -19,7 +19,7 @@ async function checkStripeWebhookConfig() {
                        process.env.RAILWAY_PUBLIC_DOMAIN || 
                        process.env.VERCEL_URL || 
                        process.env.SERVER_URL ||
-                       'https://api.tavarios.com';
+                       'https://api.kiddconnect.com';
     
     const expectedWebhookUrl = `${expectedUrl}/api/billing/webhook`;
     

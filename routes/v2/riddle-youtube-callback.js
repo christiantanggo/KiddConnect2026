@@ -1,7 +1,7 @@
 /**
  * Riddle (per-channel) YouTube OAuth callback — PUBLIC route, no auth.
  * Used when a channel has a custom OAuth app (separate quota). Redirect URI in Google must be
- * https://api.tavarios.com/api/v2/riddle/youtube/callback
+ * https://api.kiddconnect.com/api/v2/riddle/youtube/callback
  * State = businessId:orbixChannelId or businessId:orbixChannelId:setup
  */
 import express from 'express';
@@ -14,8 +14,8 @@ const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000';
 
 /** Single source of truth for per-channel (custom) OAuth redirect URI. Used by auth-url and by this callback so they always match. */
 export function getRiddleYoutubeRedirectUri() {
-  if (process.env.NODE_ENV === 'production' && (process.env.YOUTUBE_REDIRECT_URI || '').includes('api.tavarios.com')) {
-    return 'https://api.tavarios.com/api/v2/riddle/youtube/callback';
+  if (process.env.NODE_ENV === 'production' && (process.env.YOUTUBE_REDIRECT_URI || '').includes('api.kiddconnect.com')) {
+    return 'https://api.kiddconnect.com/api/v2/riddle/youtube/callback';
   }
   const raw = (process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback').trim();
   let base = raw.replace(/\/api\/v2\/.*$/, '').replace(/\/$/, '');

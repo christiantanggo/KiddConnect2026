@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 const DEFAULT_SECTIONS = [
   { id: '1', header: '1. We Are a Dispatch Service', content: 'Tavari Emergency Dispatch ("we," "us," or "the service") is a dispatch and referral service. We connect customers who need emergency or scheduled service with independent, third-party licensed professionals (e.g., plumbers, HVAC technicians). We do not perform any repair, installation, or trade work ourselves. We are not the service provider.' },

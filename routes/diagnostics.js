@@ -158,7 +158,7 @@ router.get('/check-webhook', authenticate, async (req, res) => {
                       process.env.RAILWAY_PUBLIC_DOMAIN || 
                       process.env.VERCEL_URL || 
                       process.env.SERVER_URL ||
-                      "https://api.tavarios.com";
+                      "https://api.kiddconnect.com";
     
     // Ensure URL has https:// protocol
     if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {
@@ -269,7 +269,7 @@ router.get('/dashboard', authenticate, async (req, res) => {
                       process.env.RAILWAY_PUBLIC_DOMAIN || 
                       process.env.VERCEL_URL || 
                       process.env.SERVER_URL ||
-                      "https://api.tavarios.com";
+                      "https://api.kiddconnect.com";
     const expectedWebhookUrl = `${backendUrl}/api/vapi/webhook`;
 
     res.json({

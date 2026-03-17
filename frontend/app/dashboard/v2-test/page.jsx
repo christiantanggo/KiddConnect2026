@@ -48,7 +48,7 @@ export default function V2TestPage() {
       }
 
       // Use same API URL logic as api.js
-      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+      const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
       const response = await fetch(`${API_URL}${endpoint}`, options);
       
       // Check if response is HTML (error page) instead of JSON
@@ -150,7 +150,7 @@ export default function V2TestPage() {
                 <strong>Business ID:</strong> {businessId || 'Not set'}
               </p>
               <p className="text-sm text-blue-800">
-                <strong>API Base:</strong> {(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '')}
+                <strong>API Base:</strong> {(process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '')}
               </p>
               <p className="text-xs text-blue-600 mt-2">
                 ⚠️ If API Base shows production URL but you're testing locally, set NEXT_PUBLIC_API_URL=http://localhost:5001 in your .env file

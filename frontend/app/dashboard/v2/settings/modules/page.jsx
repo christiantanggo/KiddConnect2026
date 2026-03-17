@@ -7,7 +7,7 @@ import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { ArrowLeft, CheckCircle2, Lock, Settings, ExternalLink, Loader, Phone } from 'lucide-react';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 export default function ModuleSettingsPage() {
   const router = useRouter();
@@ -43,7 +43,44 @@ export default function ModuleSettingsPage() {
       setError(null);
       setLoading(true);
       const headers = getAuthHeaders();
-      const businessId = getActiveBusinessId();
+      let businessId = getActiveBusinessId();
+
+      // If no business ID in localStorage, resolve from session (same as dashboard / module pages)
+      if (!businessId) {
+        try {
+          const meRes = await fetch(`${API_URL}/api/auth/me`, { headers });
+          if (meRes.ok) {
+            const meData = await meRes.json();
+            if (meData.business?.id) {
+              businessId = meData.business.id;
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('activeBusinessId', businessId);
+              }
+            }
+          }
+        } catch (meErr) {
+          console.warn('[Module Settings] Failed to load user/org from /me:', meErr);
+        }
+      }
+
+      // If still no businessId, try organizations list and use first
+      if (!businessId) {
+        try {
+          const orgsRes = await fetch(`${API_URL}/api/v2/organizations`, { headers });
+          if (orgsRes.ok) {
+            const orgsData = await orgsRes.json();
+            const orgs = orgsData.organizations || [];
+            if (orgs.length > 0) {
+              businessId = orgs[0].id;
+              if (typeof window !== 'undefined') {
+                localStorage.setItem('activeBusinessId', businessId);
+              }
+            }
+          }
+        } catch (orgErr) {
+          console.warn('[Module Settings] Failed to load organizations:', orgErr);
+        }
+      }
 
       if (!businessId) {
         setError('Please select an organization first');
@@ -55,7 +92,7 @@ export default function ModuleSettingsPage() {
 
       const [modulesRes, userRes] = await Promise.all([
         fetch(`${API_URL}/api/v2/modules`, { headers }),
-        fetch(`${API_URL}/api/auth/user`, { headers }),
+        fetch(`${API_URL}/api/auth/me`, { headers }),
       ]);
 
       if (modulesRes.ok) {

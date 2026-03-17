@@ -5,7 +5,7 @@
 
 import WebSocket from 'ws';
 
-const WS_URL = process.env.WS_TEST_URL || 'wss://api.tavarios.com/api/calls/test-connection/audio';
+const WS_URL = process.env.WS_TEST_URL || 'wss://api.kiddconnect.com/api/calls/test-connection/audio';
 
 console.log('🔵 Testing WebSocket server connectivity...');
 console.log('🔵 WebSocket URL:', WS_URL);

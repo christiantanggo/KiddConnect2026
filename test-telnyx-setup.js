@@ -12,7 +12,7 @@ async function testTelnyxSetup() {
   const voiceAppId = process.env.TELNYX_VOICE_APPLICATION_ID;
   const messagingProfileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
   const webhookUrl = process.env.WEBHOOK_URL || `${process.env.SERVER_URL || 'http://localhost:5001'}/api/calls/webhook`;
-  const messagingWebhookUrl = `${process.env.SERVER_URL || 'https://api.tavarios.com'}/api/messages/webhook`;
+  const messagingWebhookUrl = `${process.env.SERVER_URL || 'https://api.kiddconnect.com'}/api/messages/webhook`;
   
   console.log('   TELNYX_API_KEY:', apiKey ? '✅ SET' : '❌ NOT SET');
   console.log('   TELNYX_VOICE_APPLICATION_ID:', voiceAppId ? `✅ SET (${voiceAppId})` : '❌ NOT SET');

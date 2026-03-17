@@ -583,7 +583,7 @@ export async function sendEmergencyEscalationSMS(config, request) {
 
 /** Default message body for customer confirmation SMS when not configured. */
 const DEFAULT_CUSTOMER_SMS_MESSAGE = "Hi {{caller_name}}, we've received your {{service_category}} request ({{urgency_level}}). Location: {{location}}. Issue: {{issue_summary}}. Our dispatch team is looking for a provider and will contact you once someone is assigned.";
-/** Default legal disclaimer when not configured. {{terms_url}} is replaced with config.terms_of_service_url or https://tavarios.com/termsofservice */
+/** Default legal disclaimer when not configured. {{terms_url}} is replaced with config.terms_of_service_url or https://www.kiddconnect.com/termsofservice */
 const DEFAULT_CUSTOMER_SMS_LEGAL = "We are a dispatch service only, not the provider. You are responsible for verifying the provider's license, insurance, and terms when they contact you. Terms: {{terms_url}}";
 
 /**
@@ -634,7 +634,7 @@ export async function sendEmergencyCustomerConfirmationSMS(config, request) {
     ? replaceCustomerSmsPlaceholders(config.customer_sms_legal.trim(), request)
     : replaceCustomerSmsPlaceholders(DEFAULT_CUSTOMER_SMS_LEGAL, request);
   let fullText = legalBody ? `${messageBody}\n\n${legalBody}` : messageBody;
-  const termsUrl = (config.terms_of_service_url && String(config.terms_of_service_url).trim()) || 'https://tavarios.com/termsofservice';
+  const termsUrl = (config.terms_of_service_url && String(config.terms_of_service_url).trim()) || 'https://www.kiddconnect.com/termsofservice';
   fullText = fullText.replace(/\{\{terms_url\}\}/g, termsUrl);
   const messageText = addBusinessIdentification(fullText, config.service_line_name || 'Emergency Dispatch');
   let fromE164 = fromNumber.replace(/[^0-9+]/g, '');

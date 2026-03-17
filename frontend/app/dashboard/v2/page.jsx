@@ -5,9 +5,10 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
-import { ArrowRight, AlertTriangle } from 'lucide-react';
+import { ArrowRight, AlertTriangle, Archive, ChevronDown, ChevronRight } from 'lucide-react';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
+const ARCHIVED_MODULE_KEYS = ['phone-agent', 'reviews', 'emergency-dispatch', 'delivery-dispatch'];
 
 export default function V2DashboardPage() {
   const router = useRouter();
@@ -16,6 +17,7 @@ export default function V2DashboardPage() {
   const [organizations, setOrganizations] = useState([]);
   const [modules, setModules] = useState([]);
   const [error, setError] = useState(null);
+  const [archiveExpanded, setArchiveExpanded] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -132,8 +134,9 @@ export default function V2DashboardPage() {
     );
   }
 
-  const activeModules = modules.filter(m => m.subscribed && m.health_status !== 'offline');
-  const availableModules = modules.filter(m => !m.subscribed);
+  const activeModules = modules.filter(m => m.subscribed && m.health_status !== 'offline' && !ARCHIVED_MODULE_KEYS.includes(m.key));
+  const availableModules = modules.filter(m => !m.subscribed && !ARCHIVED_MODULE_KEYS.includes(m.key));
+  const archivedModules = modules.filter(m => ARCHIVED_MODULE_KEYS.includes(m.key));
 
   return (
     <AuthGuard>
@@ -272,6 +275,90 @@ export default function V2DashboardPage() {
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* Archive (collapsible, collapsed by default) */}
+          {currentOrg && archivedModules.length > 0 && (
+            <div 
+              className="shadow mb-8"
+              style={{
+                backgroundColor: 'var(--color-surface)',
+                borderRadius: 'var(--card-radius)',
+                border: '1px solid var(--color-border)',
+                overflow: 'hidden',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setArchiveExpanded((v) => !v)}
+                className="w-full flex items-center justify-between gap-2 px-6 py-4 text-left transition-colors"
+                style={{ color: 'var(--color-text-muted)' }}
+                onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.03)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+              >
+                <div className="flex items-center gap-2">
+                  <Archive className="w-5 h-5" />
+                  <h2 className="text-xl font-semibold">Archive</h2>
+                  <span className="text-sm">({archivedModules.length})</span>
+                </div>
+                {archiveExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+              </button>
+              {archiveExpanded && (
+                <div style={{ padding: '0 var(--padding-base) var(--padding-base)' }}>
+                  <p className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>
+                    Archived modules are still accessible but no longer shown in the main active list.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {archivedModules.map((module) => {
+                  const dashboardHref = module.key === 'phone-agent' 
+                    ? '/dashboard' 
+                    : module.key === 'reviews'
+                    ? '/review-reply-ai/dashboard'
+                    : (module.key === 'delivery-dispatch' || module.key === 'emergency-dispatch')
+                    ? `/dashboard/v2/modules/${module.key}`
+                    : `/dashboard/v2/modules/${module.key}/dashboard`;
+                  return (
+                    <Link
+                      key={module.key}
+                      href={dashboardHref}
+                      className="p-4 transition-shadow hover:shadow-md block"
+                      style={{
+                        border: `1px solid var(--color-border)`,
+                        borderRadius: 'var(--card-radius)',
+                        cursor: 'pointer',
+                        opacity: 0.9,
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.08)';
+                        e.currentTarget.style.borderColor = 'var(--color-text-muted)';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.boxShadow = 'none';
+                        e.currentTarget.style.borderColor = 'var(--color-border)';
+                      }}
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <h3 className="font-semibold" style={{ color: 'var(--color-text-muted)' }}>{module.name}</h3>
+                        <Archive className="w-4 h-4 flex-shrink-0" style={{ color: 'var(--color-text-muted)' }} />
+                      </div>
+                      {module.description && (
+                        <p className="text-sm mb-2 line-clamp-2" style={{ color: 'var(--color-text-muted)' }}>{module.description}</p>
+                      )}
+                      {module.subscribed && (
+                        <div className="text-xs mb-2" style={{ color: 'var(--color-text-muted)' }}>
+                          Status: <span className="font-medium">{module.subscription_status}</span>
+                        </div>
+                      )}
+                      <div className="text-xs font-medium flex items-center gap-1" style={{ color: 'var(--color-text-muted)' }}>
+                        Open <ArrowRight className="w-3 h-3" />
+                      </div>
+                    </Link>
+                  );
+                })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -25,7 +25,7 @@ router.get("/webhook", (_req, res) => {
                     process.env.RAILWAY_PUBLIC_DOMAIN || 
                     process.env.VERCEL_URL || 
                     process.env.SERVER_URL ||
-                    "https://api.tavarios.com";
+                    "https://api.kiddconnect.com";
   
   const webhookUrl = `${backendUrl}/api/vapi/webhook`;
   
@@ -106,7 +106,7 @@ router.get("/webhook/check", async (req, res) => {
                       process.env.RAILWAY_PUBLIC_DOMAIN || 
                       process.env.VERCEL_URL || 
                       process.env.SERVER_URL ||
-                      "https://api.tavarios.com";
+                      "https://api.kiddconnect.com";
     
     const expectedWebhookUrl = `${backendUrl}/api/vapi/webhook`;
     
@@ -323,7 +323,7 @@ router.get("/webhook/diagnostic", async (req, res) => {
                       process.env.RAILWAY_PUBLIC_DOMAIN || 
                       process.env.VERCEL_URL || 
                       process.env.SERVER_URL ||
-                      "https://api.tavarios.com";
+                      "https://api.kiddconnect.com";
     
     const webhookUrl = `${backendUrl}/api/vapi/webhook`;
     
@@ -400,7 +400,7 @@ router.get("/webhook/diagnostic", async (req, res) => {
     const webhookUrlStatus = (process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || 
                               process.env.VERCEL_URL || process.env.SERVER_URL) 
       ? "✅ Webhook URL can be determined" 
-      : "❌ CRITICAL: No webhook URL environment variable set! Using default: https://api.tavarios.com";
+      : "❌ CRITICAL: No webhook URL environment variable set! Using default: https://api.kiddconnect.com";
     
     // Test VAPI API connection
     let vapiConnectionTest = { status: "⚠️ Not tested" };
@@ -537,7 +537,7 @@ router.get("/webhook/diagnostic", async (req, res) => {
           determinedFrom: process.env.BACKEND_URL ? "BACKEND_URL" :
                          process.env.RAILWAY_PUBLIC_DOMAIN ? "RAILWAY_PUBLIC_DOMAIN" :
                          process.env.VERCEL_URL ? "VERCEL_URL" :
-                         process.env.SERVER_URL ? "SERVER_URL" : "default (https://api.tavarios.com)"
+                         process.env.SERVER_URL ? "SERVER_URL" : "default (https://api.kiddconnect.com)"
         },
         environmentVariables: envChecks,
         vapiConnection: vapiConnectionTest,
@@ -2394,7 +2394,7 @@ async function handleDispatchEmailDetails(event) {
   }
   try {
     const baseUrl = (() => {
-      let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.tavarios.com';
+      let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.kiddconnect.com';
       if (u && !u.startsWith('http')) u = `https://${u}`;
       return u;
     })();
@@ -2446,7 +2446,7 @@ async function handleDispatchSmsDetails(event) {
   const fromE164 = fromDigits.length === 10 ? `+1${fromDigits}` : fromDigits.length === 11 && fromDigits.startsWith('1') ? `+${fromDigits}` : `+${fromDigits}`;
   const toE164 = toNumber.length === 10 ? `+1${toNumber}` : toNumber.startsWith('+') ? toNumber : `+${toNumber}`;
   const baseUrl = (() => {
-    let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.tavarios.com';
+    let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.kiddconnect.com';
     if (u && !u.startsWith('http')) u = `https://${u}`;
     return u;
   })();

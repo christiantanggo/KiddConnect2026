@@ -31,7 +31,7 @@ function PackageDetailPage() {
     try {
       setLoading(true);
       const token = getAdminToken();
-      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001';
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com';
       const response = await fetch(`${API_URL}/api/admin/packages/${packageId}`, {
         headers: {
           'Authorization': `Bearer ${token}`,

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import AdminGuard from '@/components/AdminGuard';
 import Link from 'next/link';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 function ReviewsAdminPage() {
   const [stats, setStats] = useState(null);

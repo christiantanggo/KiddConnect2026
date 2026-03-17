@@ -6,15 +6,18 @@ import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2DashboardHeader from '@/components/V2DashboardHeader';
 import V2Sidebar from '@/components/V2Sidebar';
-import { ArrowLeft, ArrowRight, CheckCircle2, Lock } from 'lucide-react';
+import { ArrowLeft, ArrowRight, CheckCircle2, Lock, Archive, ChevronDown, ChevronRight } from 'lucide-react';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const ARCHIVED_MODULE_KEYS = ['phone-agent', 'reviews', 'emergency-dispatch', 'delivery-dispatch'];
+
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
 export default function ModulesMarketplacePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [modules, setModules] = useState([]);
   const [error, setError] = useState(null);
+  const [archiveExpanded, setArchiveExpanded] = useState(false);
 
   useEffect(() => {
     loadModules();
@@ -146,9 +149,10 @@ export default function ModulesMarketplacePage() {
     return logoMap[moduleKey] || null;
   };
 
-  // Separate modules into active and available (same logic as sidebar)
-  const activeModules = modules.filter(module => module.subscribed && module.health_status !== 'offline');
-  const availableModules = modules.filter(module => !module.subscribed);
+  // Separate modules into active, available, and archived (same logic as sidebar)
+  const activeModules = modules.filter(m => m.subscribed && m.health_status !== 'offline' && !ARCHIVED_MODULE_KEYS.includes(m.key));
+  const availableModules = modules.filter(m => !m.subscribed && !ARCHIVED_MODULE_KEYS.includes(m.key));
+  const archivedModules = modules.filter(m => ARCHIVED_MODULE_KEYS.includes(m.key));
 
   // Module card component
   const ModuleCard = ({ module }) => {
@@ -293,6 +297,48 @@ export default function ModulesMarketplacePage() {
               </div>
             )}
 
+            {/* Archive (collapsible, collapsed by default) */}
+            {archivedModules.length > 0 && (
+              <div 
+                className="mb-12"
+                style={{
+                  backgroundColor: 'var(--color-surface)',
+                  borderRadius: 'var(--card-radius)',
+                  border: '1px solid var(--color-border)',
+                  overflow: 'hidden',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setArchiveExpanded((v) => !v)}
+                  className="w-full flex items-center justify-between gap-2 px-6 py-4 text-left transition-colors"
+                  style={{ color: 'var(--color-text-muted)' }}
+                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.03)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+                >
+                  <div className="flex items-center gap-2">
+                    <Archive className="w-5 h-5" />
+                    <h2 className="text-2xl font-semibold">Archive</h2>
+                    <span className="text-sm">({archivedModules.length})</span>
+                  </div>
+                  {archiveExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
+                </button>
+                {archiveExpanded && (
+                  <div className="p-6 pt-0">
+                    <p className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>
+                      Archived modules are still accessible but no longer shown in the main lists.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {archivedModules.map((module) => (
+                        <ModuleCard key={module.key} module={module} />
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Available Modules Section */}
             {availableModules.length > 0 && (
               <div>
@@ -316,7 +362,7 @@ export default function ModulesMarketplacePage() {
             )}
 
             {/* Empty State */}
-            {activeModules.length === 0 && availableModules.length === 0 && (
+            {activeModules.length === 0 && availableModules.length === 0 && archivedModules.length === 0 && (
               <div 
                 className="shadow p-12 text-center"
                 style={{

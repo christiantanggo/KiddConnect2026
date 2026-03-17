@@ -55,7 +55,7 @@ async function fixWebhook() {
     const backendUrl = process.env.BACKEND_URL || 
                        process.env.RAILWAY_PUBLIC_DOMAIN || 
                        process.env.VERCEL_URL ||
-                       'https://api.tavarios.com';
+                       'https://api.kiddconnect.com';
     
     const webhookUrl = `${backendUrl}/api/vapi/webhook`;
     const webhookSecret = process.env.VAPI_WEBHOOK_SECRET || null;
