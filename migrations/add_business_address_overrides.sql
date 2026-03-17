@@ -1,4 +1,5 @@
 -- Optional per-module address overrides. When NULL, use business.address.
+-- If this migration is not run, the app still works; Business.update() skips these columns.
 -- phone_agent_address: e.g. head office for AI phone.
 -- delivery_default_pickup_address: e.g. warehouse for delivery default pickup.
 ALTER TABLE businesses

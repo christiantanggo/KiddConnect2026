@@ -52,6 +52,12 @@ export class Business {
     return data;
   }
   
+  /** True if error looks like a missing DB column (e.g. migration not run). */
+  static _isMissingColumnError(error) {
+    const msg = (error?.message || '').toLowerCase();
+    return msg.includes('column') || msg.includes('does not exist') || (error?.code === '42703');
+  }
+
   static async update(id, data) {
     const updateData = {
       ...data,
@@ -60,12 +66,32 @@ export class Business {
     
     console.log('[Business Model] Updating business:', { id, updateData });
     
-    const { data: business, error } = await supabaseClient
+    let result = await supabaseClient
       .from('businesses')
       .update(updateData)
       .eq('id', id)
       .select()
       .single();
+    
+    let { data: business, error } = result;
+    
+    // If DB is missing optional columns (migration add_business_address_overrides not run), retry without them
+    if (error && this._isMissingColumnError(error)) {
+      const fallback = { ...updateData };
+      delete fallback.phone_agent_address;
+      delete fallback.delivery_default_pickup_address;
+      if (Object.keys(fallback).length !== Object.keys(updateData).length) {
+        console.warn('[Business Model] Retrying update without phone_agent_address/delivery_default_pickup_address (run migrations/add_business_address_overrides.sql to enable).');
+        result = await supabaseClient
+          .from('businesses')
+          .update(fallback)
+          .eq('id', id)
+          .select()
+          .single();
+        business = result.data;
+        error = result.error;
+      }
+    }
     
     if (error) {
       console.error('[Business Model] Update error:', {
