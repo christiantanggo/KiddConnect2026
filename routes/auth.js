@@ -275,6 +275,8 @@ router.get('/me', authenticate, async (req, res) => {
         phone: business.phone,
         public_phone_number: business.public_phone_number,
         address: business.address,
+        phone_agent_address: business.phone_agent_address ?? null,
+        delivery_default_pickup_address: business.delivery_default_pickup_address ?? null,
         website: business.website,
         timezone: business.timezone,
         onboarding_complete: business.onboarding_complete,

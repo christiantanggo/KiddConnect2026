@@ -154,6 +154,82 @@ router.get("/accounts/:id", authenticateAdmin, async (req, res) => {
   }
 });
 
+// Cancel account: stop all Stripe charges and mark account inactive
+router.post("/accounts/:id/cancel", authenticateAdmin, async (req, res) => {
+  try {
+    const business = await Business.findById(req.params.id);
+    if (!business) {
+      return res.status(404).json({ error: "Business not found" });
+    }
+
+    const canceledSubscriptionIds = [];
+
+    if (business.stripe_customer_id && process.env.STRIPE_SECRET_KEY) {
+      try {
+        const { getStripeInstance } = await import("../services/stripe.js");
+        const { StripeService } = await import("../services/stripe.js");
+        const stripe = getStripeInstance();
+        if (stripe) {
+          const { data: subscriptions } = await stripe.subscriptions.list({
+            customer: business.stripe_customer_id,
+            status: "all",
+            limit: 100,
+          });
+          const toCancel = (subscriptions || []).filter(
+            (sub) => sub.status === "active" || sub.status === "trialing" || sub.status === "past_due"
+          );
+          for (const sub of toCancel) {
+            await StripeService.cancelSubscription(sub.id);
+            canceledSubscriptionIds.push(sub.id);
+          }
+        }
+      } catch (stripeErr) {
+        console.error("[Admin Cancel] Stripe cancel error:", stripeErr);
+        return res.status(500).json({
+          error: "Failed to cancel Stripe subscriptions",
+          details: stripeErr.message,
+        });
+      }
+    }
+
+    try {
+      const { Subscription } = await import("../models/v2/Subscription.js");
+      const v2Subs = await Subscription.findByBusinessId(business.id);
+      for (const sub of v2Subs || []) {
+        if (sub.status !== "canceled") {
+          await Subscription.updateStatus(business.id, sub.module_key, "canceled");
+        }
+      }
+    } catch (v2Err) {
+      console.warn("[Admin Cancel] v2 subscriptions update (non-fatal):", v2Err.message);
+    }
+
+    await Business.update(req.params.id, {
+      ai_enabled: false,
+      stripe_subscription_id: null,
+    });
+
+    await AdminActivityLog.create({
+      admin_user_id: req.adminId,
+      business_id: req.params.id,
+      action: "cancel_account",
+      details: {
+        canceled_stripe_subscription_ids: canceledSubscriptionIds,
+        business_name: business.name,
+      },
+    });
+
+    res.json({
+      success: true,
+      message: "Account canceled. Billing has been stopped and account set to inactive.",
+      canceled_subscriptions: canceledSubscriptionIds.length,
+    });
+  } catch (error) {
+    console.error("Cancel account error:", error);
+    res.status(500).json({ error: "Failed to cancel account" });
+  }
+});
+
 // Add bonus minutes
 router.post("/accounts/:id/minutes", authenticateAdmin, async (req, res) => {
   try {

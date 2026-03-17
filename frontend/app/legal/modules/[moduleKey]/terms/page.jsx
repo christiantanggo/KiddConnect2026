@@ -110,6 +110,122 @@ export default function ModuleTermsPage() {
           )
         }
       ]
+    },
+    'delivery-dispatch': {
+      title: 'Last-Mile Delivery - Terms of Service',
+      moduleName: 'Last-Mile Delivery',
+      version: '1.0.0',
+      sections: [
+        {
+          title: '1. Service Description',
+          content: (
+            <>
+              <p>
+                Last-Mile Delivery is a platform that connects your business with third-party delivery providers.
+                We facilitate the scheduling and coordination of pickup and delivery requests. <strong>We do not
+                perform deliveries ourselves.</strong> All physical delivery services are provided by independent
+                third-party carriers or couriers.
+              </p>
+            </>
+          )
+        },
+        {
+          title: '2. Third-Party Delivery Service',
+          content: (
+            <>
+              <p>
+                Delivery service is provided exclusively by third-party providers. By using Last-Mile Delivery you
+                acknowledge and agree that:
+              </p>
+              <ul className="list-disc list-inside space-y-2 ml-4">
+                <li>Tavari (and its affiliates) is not a carrier, courier, or delivery company</li>
+                <li>We do not employ drivers or operate delivery vehicles</li>
+                <li>We act only as a technology platform to connect you with third-party delivery providers</li>
+                <li>The third-party provider is solely responsible for performing the pickup and delivery, including
+                    safety, timeliness, handling of goods, and compliance with applicable laws</li>
+              </ul>
+            </>
+          )
+        },
+        {
+          title: '3. Your Responsibilities',
+          content: (
+            <>
+              <p>
+                You are responsible for: providing accurate pickup and delivery addresses and contact information;
+                ensuring that goods are properly packaged and lawful to transport; and complying with all applicable
+                laws. You use the platform and any third-party delivery service at your own risk.
+              </p>
+            </>
+          )
+        },
+        {
+          title: '4. No Warranty as to Third-Party Services',
+          content: (
+            <p>
+              We do not guarantee the quality, safety, timeliness, or legality of any third-party delivery service.
+              We do not endorse or assume any responsibility for the conduct, performance, or omissions of any
+              third-party delivery provider. Any dispute regarding a delivery (e.g., loss, damage, delay, injury)
+              is between you and the third-party provider.
+            </p>
+          )
+        },
+        {
+          title: '5. Limitation of Liability – Third-Party Delivery',
+          content: (
+            <>
+              <p>
+                To the maximum extent permitted by law, Tavari and its affiliates, officers, directors, employees,
+                and agents shall not be liable for any loss, damage, delay, injury, or claim arising from or related
+                to the acts, errors, or omissions of any third-party delivery provider, including but not limited to:
+              </p>
+              <ul className="list-disc list-inside space-y-2 ml-4">
+                <li>Loss, damage, or theft of goods in transit</li>
+                <li>Delays, missed deliveries, or failure to perform</li>
+                <li>Personal injury or property damage caused by the third-party provider or its personnel</li>
+                <li>Violations of law or regulation by the third-party provider</li>
+                <li>Any conduct or service quality of the third-party provider</li>
+              </ul>
+              <p className="mt-4">
+                <strong>Liability for the delivery service rests solely with the third-party provider that performs
+                the delivery.</strong> You agree to look solely to that provider for any claims arising from the
+                delivery. You release and hold harmless Tavari from any such claims to the fullest extent permitted by law.
+              </p>
+            </>
+          )
+        },
+        {
+          title: '6. General Limitation of Liability',
+          content: (
+            <p>
+              Except as required by law, our total liability arising from or related to the Last-Mile Delivery
+              module (including the platform, matching, or coordination services) is limited to the fees you paid
+              for this module in the twelve (12) months preceding the claim. We are not liable for indirect,
+              incidental, consequential, or punitive damages.
+            </p>
+          )
+        },
+        {
+          title: '7. Subscription and Billing',
+          content: (
+            <p>
+              Last-Mile Delivery operates on a subscription basis. Your subscription may include usage limits or
+              fees for delivery requests. Additional terms may apply to the third-party provider's services. You may
+              cancel your subscription at any time through your billing settings.
+            </p>
+          )
+        },
+        {
+          title: '8. Module-Specific Terms',
+          content: (
+            <p>
+              These terms apply specifically to the Last-Mile Delivery module. By activating this module, you agree
+              to these terms in addition to Tavari AI's general Terms of Service. Your use of third-party delivery
+              services may also be subject to the provider's own terms and conditions.
+            </p>
+          )
+        }
+      ]
     }
   };
   

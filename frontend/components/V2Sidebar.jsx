@@ -166,6 +166,8 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
                 ? '/dashboard' 
                 : module.key === 'reviews'
                 ? '/review-reply-ai/dashboard'
+                : (module.key === 'delivery-dispatch' || module.key === 'emergency-dispatch')
+                ? `/dashboard/v2/modules/${module.key}`
                 : `/dashboard/v2/modules/${module.key}/dashboard`;
               
               // For phone-agent, check if we're on the Phone Agent dashboard

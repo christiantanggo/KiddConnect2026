@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import AdminGuard from '@/components/AdminGuard';
 import Link from 'next/link';
 import { useToast } from '@/components/ToastProvider';
 import { adminPackagesAPI } from '@/lib/api';
@@ -195,58 +194,14 @@ function PackagesPage() {
 
   if (loading) {
     return (
-      <AdminGuard>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-lg">Loading packages...</div>
-        </div>
-      </AdminGuard>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-lg">Loading packages...</div>
+      </div>
     );
   }
 
   return (
-    <AdminGuard>
-      <div className="min-h-screen bg-gray-50">
-        <nav className="bg-white shadow-sm">
-          <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-            <h1 className="text-xl font-bold text-blue-600">Package Management</h1>
-            <div className="flex gap-4 items-center">
-              <Link href="/admin-dashboard" className="text-gray-700 hover:text-blue-600">
-                Dashboard
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/accounts" className="text-gray-700 hover:text-blue-600">
-                Accounts
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/pricing" className="text-blue-600 font-medium">
-                Pricing
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/settings" className="text-gray-700 hover:text-blue-600">
-                Settings
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/website-analytics" className="text-gray-700 hover:text-blue-600">
-                Website Analytics
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/support" className="text-gray-700 hover:text-blue-600">
-                Support Tickets
-              </Link>
-              <span className="text-gray-300">|</span>
-              <button
-                onClick={() => {
-                  document.cookie = 'admin_token=; path=/; max-age=0';
-                  router.push('/admin/login');
-                }}
-                className="text-gray-700 hover:text-blue-600"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </nav>
-
+    <div className="min-h-screen bg-gray-50">
         <main className="container mx-auto px-4 py-8 max-w-7xl">
           <div className="mb-6 flex justify-between items-center">
             <h2 className="text-2xl font-bold text-gray-900">Pricing Packages</h2>
@@ -653,8 +608,7 @@ function PackagesPage() {
             </div>
           </div>
         </main>
-      </div>
-    </AdminGuard>
+    </div>
   );
 }
 

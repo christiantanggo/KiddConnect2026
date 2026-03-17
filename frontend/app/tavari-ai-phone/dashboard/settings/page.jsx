@@ -232,7 +232,7 @@ function SettingsPage() {
         const loadedBusinessInfo = {
           name: business.name || '',
           phone: business.phone || '',
-          address: business.address || '',
+          address: business.phone_agent_address ?? business.address ?? '',
           timezone: business.timezone || 'America/New_York',
           public_phone_number: business.public_phone_number || '',
           website: business.website || '',
@@ -401,13 +401,12 @@ function SettingsPage() {
       const businessPayload = {
         name: businessInfo.name,
         phone: businessInfo.phone,
-        address: businessInfo.address,
+        phone_agent_address: businessInfo.address ? String(businessInfo.address).trim() || null : null,
         timezone: businessInfo.timezone,
         public_phone_number: businessInfo.public_phone_number,
         ...aiSettings,
         ...notifications,
         ...features,
-        // Put website last to ensure it's never overwritten
         website: businessInfo.website,
       };
       
@@ -904,13 +903,15 @@ function SettingsPage() {
                     <p className="mt-1 text-xs text-gray-500">This is the number customers call. Forward calls from this number to your Tavari number above.</p>
                   </div>
                   <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">Address</label>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">Address (for AI phone)</label>
                     <textarea
                       value={businessInfo.address}
                       onChange={(e) => setBusinessInfo({ ...businessInfo, address: e.target.value })}
                       className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 bg-white"
                       rows={3}
+                      placeholder="Defaults to company address from Profile"
                     />
+                    <p className="mt-1 text-xs text-gray-500">Defaults to your company address. Set a different one here (e.g. head office) if needed; other modules are not affected.</p>
                   </div>
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-1">Website</label>

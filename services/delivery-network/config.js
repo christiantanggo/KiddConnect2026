@@ -111,3 +111,111 @@ export function invalidateDeliveryConfigCache() {
   cachedConfig = null;
   cacheTime = 0;
 }
+
+/**
+ * Get full config value from DB (all keys). For admin UI.
+ */
+export async function getDeliveryConfigFull() {
+  try {
+    const { data, error } = await supabaseClient
+      .from('delivery_network_config')
+      .select('value')
+      .eq('key', CONFIG_KEY)
+      .single();
+    if (error && error.code !== 'PGRST116') {
+      console.warn('[DeliveryNetwork] getDeliveryConfigFull error:', error.message);
+      return {};
+    }
+    const value = data?.value;
+    return value && typeof value === 'object' ? value : {};
+  } catch (e) {
+    console.warn('[DeliveryNetwork] getDeliveryConfigFull error:', e?.message || e);
+    return {};
+  }
+}
+
+/**
+ * Update global delivery config (admin or backend). Merges updates into current value.
+ * @param {Object} updates - Same shape as PUT /config body
+ */
+export async function updateDeliveryConfig(updates) {
+  const {
+    delivery_phone_numbers,
+    delivery_vapi_assistant_id,
+    max_dispatch_attempts,
+    notification_email,
+    notification_sms_number,
+    email_enabled,
+    sms_enabled,
+    escalation_email_enabled,
+    escalation_sms_enabled,
+    customer_sms_enabled,
+    customer_sms_message,
+    customer_sms_legal,
+    terms_of_service_url,
+    intake_fields,
+    opening_greeting,
+    service_line_name,
+    custom_instructions,
+    customer_callback_message,
+    billing,
+    brokers,
+  } = updates || {};
+  const merged = {};
+  if (Array.isArray(delivery_phone_numbers)) merged.delivery_phone_numbers = delivery_phone_numbers;
+  if (delivery_vapi_assistant_id !== undefined) merged.delivery_vapi_assistant_id = delivery_vapi_assistant_id || null;
+  if (typeof max_dispatch_attempts === 'number') merged.max_dispatch_attempts = max_dispatch_attempts;
+  if (notification_email !== undefined) merged.notification_email = notification_email ? String(notification_email).trim() || null : null;
+  if (notification_sms_number !== undefined) merged.notification_sms_number = notification_sms_number ? String(notification_sms_number).trim() || null : null;
+  if (email_enabled !== undefined) merged.email_enabled = !!email_enabled;
+  if (sms_enabled !== undefined) merged.sms_enabled = !!sms_enabled;
+  if (escalation_email_enabled !== undefined) merged.escalation_email_enabled = !!escalation_email_enabled;
+  if (escalation_sms_enabled !== undefined) merged.escalation_sms_enabled = !!escalation_sms_enabled;
+  if (customer_sms_enabled !== undefined) merged.customer_sms_enabled = !!customer_sms_enabled;
+  if (customer_sms_message !== undefined) merged.customer_sms_message = customer_sms_message ? String(customer_sms_message).trim() || null : null;
+  if (customer_sms_legal !== undefined) merged.customer_sms_legal = customer_sms_legal ? String(customer_sms_legal).trim() || null : null;
+  if (terms_of_service_url !== undefined) merged.terms_of_service_url = terms_of_service_url ? String(terms_of_service_url).trim() || null : null;
+  if (opening_greeting !== undefined) merged.opening_greeting = opening_greeting ? String(opening_greeting).trim() || null : null;
+  if (service_line_name !== undefined) merged.service_line_name = service_line_name ? String(service_line_name).trim() || null : null;
+  if (custom_instructions !== undefined) merged.custom_instructions = custom_instructions ? String(custom_instructions).trim() || null : null;
+  if (customer_callback_message !== undefined) merged.customer_callback_message = customer_callback_message ? String(customer_callback_message).trim() || null : null;
+  if (billing !== undefined && billing !== null && typeof billing === 'object') {
+    merged.billing = {
+      price_basic_cents: typeof billing.price_basic_cents === 'number' ? billing.price_basic_cents : undefined,
+      price_priority_cents: typeof billing.price_priority_cents === 'number' ? billing.price_priority_cents : undefined,
+      price_premium_cents: typeof billing.price_premium_cents === 'number' ? billing.price_premium_cents : undefined,
+      sms_fee_cents: typeof billing.sms_fee_cents === 'number' ? billing.sms_fee_cents : undefined,
+    };
+    Object.keys(merged.billing).forEach((k) => { if (merged.billing[k] === undefined) delete merged.billing[k]; });
+  }
+  if (intake_fields !== undefined && Array.isArray(intake_fields)) {
+    merged.intake_fields = intake_fields.map((f) => ({
+      key: String(f.key || '').trim() || undefined,
+      label: String(f.label || '').trim() || undefined,
+      required: !!f.required,
+      enabled: f.enabled !== false,
+    })).filter((f) => f.key);
+  }
+  if (brokers !== undefined && brokers !== null && typeof brokers === 'object') {
+    merged.brokers = {};
+    for (const [id, entry] of Object.entries(brokers)) {
+      if (!id || typeof entry !== 'object') continue;
+      merged.brokers[id] = {
+        enabled: entry.enabled !== false,
+        api_key: typeof entry.api_key === 'string' ? entry.api_key.trim() || null : null,
+        base_url: typeof entry.base_url === 'string' ? entry.base_url.trim() || null : null,
+      };
+    }
+  }
+  if (Object.keys(merged).length === 0) return await getDeliveryConfigFull();
+  const current = await getDeliveryConfigFull();
+  const newValue = { ...current, ...merged };
+  if (merged.billing) newValue.billing = { ...(current.billing || {}), ...merged.billing };
+  if (merged.brokers) newValue.brokers = { ...(current.brokers || {}), ...merged.brokers };
+  const { error: upsertErr } = await supabaseClient
+    .from('delivery_network_config')
+    .upsert({ key: CONFIG_KEY, value: newValue, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+  if (upsertErr) throw new Error(upsertErr.message);
+  invalidateDeliveryConfigCache();
+  return newValue;
+}

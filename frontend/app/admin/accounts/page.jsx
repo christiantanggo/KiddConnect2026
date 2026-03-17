@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import AdminGuard from '@/components/AdminGuard';
 import Link from 'next/link';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
@@ -12,6 +11,7 @@ function AdminAccountsPage() {
   const [search, setSearch] = useState('');
   const [filterPlan, setFilterPlan] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
+  const [cancellingId, setCancellingId] = useState(null);
 
   useEffect(() => {
     loadAccounts();
@@ -41,58 +41,14 @@ function AdminAccountsPage() {
 
   if (loading) {
     return (
-      <AdminGuard>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </AdminGuard>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-lg">Loading...</div>
+      </div>
     );
   }
 
   return (
-    <AdminGuard>
-      <div className="min-h-screen bg-gray-50">
-        <nav className="bg-white shadow-sm">
-          <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-            <h1 className="text-xl font-bold text-blue-600">Manage Accounts</h1>
-            <div className="flex gap-4 items-center">
-              <Link href="/admin-dashboard" className="text-gray-700 hover:text-blue-600">
-                Dashboard
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/accounts" className="text-blue-600 font-medium">
-                Accounts
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/pricing" className="text-gray-700 hover:text-blue-600">
-                Pricing
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/settings" className="text-gray-700 hover:text-blue-600">
-                Settings
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/website-analytics" className="text-gray-700 hover:text-blue-600">
-                Website Analytics
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/support" className="text-gray-700 hover:text-blue-600">
-                Support Tickets
-              </Link>
-              <span className="text-gray-300">|</span>
-              <button
-                onClick={() => {
-                  document.cookie = 'admin_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
-                  window.location.href = '/admin/login';
-                }}
-                className="text-gray-700 hover:text-blue-600"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </nav>
-
+    <div className="min-h-screen bg-gray-50">
         <main className="container mx-auto px-4 py-8">
           {/* Filters */}
           <div className="bg-white rounded-lg shadow p-6 mb-6">
@@ -180,6 +136,41 @@ function AdminAccountsPage() {
                       >
                         View Details
                       </Link>
+                      <button
+                        onClick={async () => {
+                          if (!confirm(`Cancel account for ${account.name}? This will stop all billing (credit card will no longer be charged) and set the account to inactive.`)) {
+                            return;
+                          }
+                          setCancellingId(account.id);
+                          try {
+                            const token = getAdminToken();
+                            const response = await fetch(`${API_URL}/api/admin/accounts/${account.id}/cancel`, {
+                              method: 'POST',
+                              headers: {
+                                'Authorization': `Bearer ${token}`,
+                                'Content-Type': 'application/json',
+                              },
+                            });
+                            const data = await response.json();
+                            if (response.ok) {
+                              alert(data.message || 'Account canceled. Billing has been stopped.');
+                              loadAccounts();
+                            } else {
+                              alert('Error: ' + (data.error || 'Failed to cancel account'));
+                            }
+                          } catch (error) {
+                            console.error('Cancel account error:', error);
+                            alert('Failed to cancel account');
+                          } finally {
+                            setCancellingId(null);
+                          }
+                        }}
+                        disabled={cancellingId === account.id}
+                        className="text-red-600 hover:text-red-900 mr-3 disabled:opacity-50"
+                        title="Stop billing and set account to inactive"
+                      >
+                        {cancellingId === account.id ? 'Cancelling…' : 'Cancel account'}
+                      </button>
                       {account.vapi_phone_number && !account.telnyx_number && (
                         <button
                           onClick={async () => {
@@ -224,8 +215,7 @@ function AdminAccountsPage() {
             )}
           </div>
         </main>
-      </div>
-    </AdminGuard>
+    </div>
   );
 
   function getAdminToken() {

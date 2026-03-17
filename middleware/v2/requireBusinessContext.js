@@ -1,4 +1,5 @@
 import { Business } from '../../models/Business.js';
+import { OrganizationUser } from '../../models/v2/OrganizationUser.js';
 
 function isUpstreamHtmlError(error) {
   const msg = error?.message ?? '';
@@ -20,8 +21,13 @@ export const requireBusinessContext = async (req, res, next) => {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
-    // Use user's business_id directly (single business per user)
-    const activeBusinessId = req.user.business_id;
+    // Use X-Active-Business-Id when present and user has access; else user.business_id
+    let activeBusinessId = (req.headers['x-active-business-id'] || '').trim();
+    if (activeBusinessId && String(activeBusinessId) !== String(req.user.business_id)) {
+      const membership = await OrganizationUser.findByUserAndBusiness(req.user.id, activeBusinessId).catch(() => null);
+      if (!membership) activeBusinessId = req.user.business_id;
+    }
+    if (!activeBusinessId) activeBusinessId = req.user.business_id;
 
     if (!activeBusinessId) {
       return res.status(400).json({

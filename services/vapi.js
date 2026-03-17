@@ -1310,7 +1310,7 @@ export async function rebuildAssistant(businessId) {
     // Extract all values we need into simple variables - NO references to businessRecord after this
     const businessName = businessRecord.name || "Business";
     const businessEmail = businessRecord.email || "";
-    const businessAddress = businessRecord.address || "";
+    const businessAddress = businessRecord.phone_agent_address || businessRecord.address || "";
     const businessPhone = businessRecord.public_phone_number || "";
     const businessTimezone = businessRecord.timezone || "America/New_York";
     const allowTransfer = businessRecord.allow_call_transfer ?? true;

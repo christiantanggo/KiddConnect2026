@@ -1,14 +1,37 @@
 /**
  * Delivery Network dispatch: send delivery request to broker(s).
  * Phase 1: one broker (or stub). Phase 4: multi-broker, cheapest-first.
+ * Broker API keys can be set in Admin → Last-Mile Delivery → Settings → Delivery company APIs, or via env DELIVERY_SHIPDAY_API_KEY.
  */
 import { supabaseClient } from '../../config/database.js';
+import { getDeliveryConfigFull } from './config.js';
 
 const DEFAULT_BROKER_ID = 'shipday'; // or 'stub' when no API key
 
 /**
+ * Resolve whether we have a valid Shipday (or first enabled broker) API key: from delivery config (UI) or env.
+ */
+async function getEffectiveBrokerId() {
+  const config = await getDeliveryConfigFull();
+  const shipday = config?.brokers?.shipday;
+  if (shipday?.enabled && shipday?.api_key) return DEFAULT_BROKER_ID;
+  if (process.env.DELIVERY_SHIPDAY_API_KEY) return DEFAULT_BROKER_ID;
+  return 'stub';
+}
+
+/**
+ * Get Shipday API key for use when calling Shipday API. Prefers UI config, then env.
+ */
+export async function getShipdayApiKey() {
+  const config = await getDeliveryConfigFull();
+  const shipday = config?.brokers?.shipday;
+  if (shipday?.enabled && shipday?.api_key) return shipday.api_key;
+  return process.env.DELIVERY_SHIPDAY_API_KEY || null;
+}
+
+/**
  * Start dispatch for a delivery request: create broker job and log attempt.
- * If DELIVERY_SHIPDAY_API_KEY (or similar) is missing, stub: create log row and mark as dispatched after short delay.
+ * If no Shipday API key (config or env) is set, stub: create log row and mark as dispatched after short delay.
  */
 export async function startDispatch(deliveryRequestId) {
   const { data: request, error: reqErr } = await supabaseClient
@@ -30,7 +53,7 @@ export async function startDispatch(deliveryRequestId) {
     .update({ status: 'Contacting', updated_at: new Date().toISOString() })
     .eq('id', deliveryRequestId);
 
-  const brokerId = process.env.DELIVERY_SHIPDAY_API_KEY ? DEFAULT_BROKER_ID : 'stub';
+  const brokerId = await getEffectiveBrokerId();
   const { data: logRow, error: logErr } = await supabaseClient
     .from('delivery_dispatch_log')
     .insert({

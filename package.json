@@ -10,7 +10,8 @@
   "scripts": {
     "start": "node start.js",
     "dev": "node --watch server.js",
-    "dev:clean": "powershell -ExecutionPolicy Bypass -File ./start-dev.ps1",
+    "dev": "powershell -ExecutionPolicy Bypass -File ./start-dev.ps1",
+    "dev:raw": "node --watch server.js",
     "kill-port": "powershell -ExecutionPolicy Bypass -File ./kill-port.ps1",
     "vercel-build": "cd frontend && npm install && npm run build",
     "lint": "eslint .",

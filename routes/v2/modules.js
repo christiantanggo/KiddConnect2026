@@ -68,6 +68,7 @@ router.get('/', authenticate, requireBusinessContext, async (req, res) => {
       return {
         ...module,
         subscribed: subscribed,
+        subscription: subscription || null,
         subscription_status: subscription?.status || null,
         subscription_plan: subscription?.plan || null,
         usage_limit: subscription?.usage_limit || null
@@ -130,7 +131,8 @@ router.get('/:moduleKey', authenticate, requireBusinessContext, async (req, res)
  * Test mode also bypasses legal acceptance requirement
  */
 // Internal/free modules that don't require Stripe or legal acceptance gate
-const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network', 'delivery-dispatch']);
+// delivery-dispatch removed: uses same billing as rest of app (Stripe subscription, legal acceptance)
+const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network']);
 
 router.post('/:moduleKey/activate',
   authenticate,
@@ -233,37 +235,14 @@ router.post('/:moduleKey/activate',
         await Business.update(businessId, { stripe_customer_id: customerId });
       }
       
-      // Get or create main subscription (if doesn't exist, create it)
-      // IMPORTANT: All modules share ONE Stripe subscription. This ensures:
-      // - All modules charge on the SAME billing date (aligned with subscription.current_period_end)
-      // - All modules appear on ONE unified invoice
-      // - Single payment date per month, regardless of how many modules are active
-      // - New modules added mid-cycle are prorated until the next billing date
-      let subscriptionId = business.stripe_subscription_id;
-      
-      if (!subscriptionId) {
-        // Create a base subscription with no items (will add module item below)
-        const subscription = await stripe.subscriptions.create({
-          customer: customerId,
-          items: [], // Empty initially, module item added below
-          metadata: {
-            business_id: businessId,
-          },
-        });
-        subscriptionId = subscription.id;
-        await Business.update(businessId, { stripe_subscription_id: subscriptionId });
-        }
-        
-        // Get or create Stripe product and price for module
-        // First check if product/price IDs are in module metadata
-        let productId = module.metadata?.stripe_product_id || process.env[`STRIPE_PRODUCT_ID_${moduleKey.toUpperCase()}`];
-        let priceId = module.metadata?.stripe_price_id || process.env[`STRIPE_PRICE_ID_${moduleKey.toUpperCase()}`];
-        
-        if (!productId || !priceId) {
-        // Create product and price (idempotent - check if exists first)
+      // Get or create Stripe product and price for module (must have priceId before creating subscription)
+      let productId = module.metadata?.stripe_product_id || process.env[`STRIPE_PRODUCT_ID_${moduleKey.toUpperCase().replace(/-/g, '_')}`];
+      let priceId = module.metadata?.stripe_price_id || process.env[`STRIPE_PRICE_ID_${moduleKey.toUpperCase().replace(/-/g, '_')}`];
+
+      if (!productId || !priceId) {
         const products = await stripe.products.list({ limit: 100 });
         let product = products.data.find(p => p.metadata?.module_key === moduleKey);
-        
+
         if (!product) {
           product = await stripe.products.create({
             name: module.name,
@@ -273,16 +252,15 @@ router.post('/:moduleKey/activate',
           });
         }
         productId = product.id;
-        
-        // Create price
+
         const prices = await stripe.prices.list({ product: productId, limit: 1 });
         let price = prices.data[0];
-        
+
         if (!price || price.unit_amount !== pricing.monthly_price_cents) {
           price = await stripe.prices.create({
             product: productId,
             unit_amount: pricing.monthly_price_cents,
-            currency: pricing.currency,
+            currency: pricing.currency || 'usd',
             recurring: {
               interval: 'month',
             },
@@ -292,19 +270,34 @@ router.post('/:moduleKey/activate',
           });
         }
         priceId = price.id;
-        
-        // Update module metadata with product/price IDs
+
         await Module.update(moduleKey, {
           metadata: {
             ...module.metadata,
             stripe_product_id: productId,
             stripe_price_id: priceId,
-            pricing: pricing
-          }
+            pricing: pricing,
+          },
         });
       }
-      
-        // Add subscription item to existing subscription
+
+      // Get or create main subscription (Stripe requires at least one item when creating)
+      let subscriptionId = business.stripe_subscription_id;
+
+      if (!subscriptionId) {
+        const subscription = await stripe.subscriptions.create({
+          customer: customerId,
+          items: [{ price: priceId }],
+          metadata: {
+            business_id: businessId,
+          },
+        });
+        subscriptionId = subscription.id;
+        await Business.update(businessId, { stripe_subscription_id: subscriptionId });
+        subscriptionItemId = subscription.items.data[0]?.id;
+      }
+
+      if (!subscriptionItemId) {
         const subscriptionItem = await stripe.subscriptionItems.create({
           subscription: subscriptionId,
           price: priceId,
@@ -313,8 +306,8 @@ router.post('/:moduleKey/activate',
             module_key: moduleKey,
           },
         });
-        
         subscriptionItemId = subscriptionItem.id;
+      }
         
         // Create subscription record in database
         const billingCycle = calculateBillingCycle(business);
@@ -326,7 +319,7 @@ router.post('/:moduleKey/activate',
           module_key: moduleKey,
           plan: 'standard', // Or from pricing config
           status: 'active',
-          stripe_subscription_item_id: subscriptionItem.id,
+          stripe_subscription_item_id: subscriptionItemId,
           usage_limit: pricing.usage_limit || null,
           usage_limit_reset_date: resetDate.toISOString().split('T')[0],
           started_at: new Date().toISOString(),

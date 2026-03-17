@@ -199,7 +199,7 @@ export default function ModulesMarketplacePage() {
           <div className="mt-auto">
             <Link
               href={module.subscribed 
-                ? (module.key === 'phone-agent' ? '/tavari-ai-phone/dashboard' : module.key === 'reviews' ? '/review-reply-ai/dashboard' : `/dashboard/v2/modules/${module.key}/dashboard`)
+                ? (module.key === 'phone-agent' ? '/tavari-ai-phone/dashboard' : module.key === 'reviews' ? '/review-reply-ai/dashboard' : (module.key === 'delivery-dispatch' || module.key === 'emergency-dispatch') ? `/dashboard/v2/modules/${module.key}` : `/dashboard/v2/modules/${module.key}/dashboard`)
                 : `/dashboard/v2/modules/${module.key}`
               }
               className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium transition-colors rounded w-full"

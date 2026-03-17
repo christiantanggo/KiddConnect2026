@@ -373,7 +373,7 @@ export default function ModuleDetailPage() {
                   Configure Module
                 </Link>
                 <Link
-                  href={moduleKey === 'phone-agent' ? '/tavari-ai-phone/dashboard' : moduleKey === 'reviews' ? '/review-reply-ai/dashboard' : `/dashboard/v2/modules/${moduleKey}/dashboard`}
+                  href={moduleKey === 'phone-agent' ? '/tavari-ai-phone/dashboard' : moduleKey === 'reviews' ? '/review-reply-ai/dashboard' : (moduleKey === 'delivery-dispatch' || moduleKey === 'emergency-dispatch') ? `/dashboard/v2/modules/${moduleKey}` : `/dashboard/v2/modules/${moduleKey}/dashboard`}
                   className="px-6 py-3 font-medium transition-colors"
                   style={{
                     backgroundColor: 'var(--color-surface)',
@@ -589,6 +589,13 @@ export default function ModuleDetailPage() {
           onConfirm={async () => {
             try {
               setActivating(true);
+              const headers = getAuthHeaders();
+              const termsVersion = process.env.NEXT_PUBLIC_TERMS_VERSION || '1.0.0';
+              await fetch(`${API_URL}/api/v2/auth/accept-terms`, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify({ terms_version: termsVersion }),
+              });
               const response = await modulesAPI.activate(moduleKey);
               setIsActivationModalOpen(false);
               if (response.data.redirect_to) {

@@ -36,7 +36,11 @@ export default function ModuleActivationModal({
     }
   };
 
-  const handleClose = () => {
+  const handleClose = (e) => {
+    if (e) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
     if (activating) return; // Don't allow closing while activating
     setTermsAccepted(false);
     setActivating(false);
@@ -44,7 +48,7 @@ export default function ModuleActivationModal({
   };
 
   // Use module-specific legal pages only for modules that have them; otherwise use general terms/privacy to avoid 404s
-  const MODULES_WITH_LEGAL_PAGES = ['reviews'];
+  const MODULES_WITH_LEGAL_PAGES = ['reviews', 'delivery-dispatch'];
   const useModuleLegal = moduleKey && MODULES_WITH_LEGAL_PAGES.includes(moduleKey);
   const termsUrl = useModuleLegal ? `/legal/modules/${moduleKey}/terms` : '/legal/terms';
   const privacyUrl = useModuleLegal ? `/legal/modules/${moduleKey}/privacy` : '/legal/privacy';
@@ -157,6 +161,7 @@ export default function ModuleActivationModal({
         {/* Footer */}
         <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end gap-3 rounded-b-lg">
           <button
+            type="button"
             onClick={handleClose}
             disabled={activating}
             className="px-4 py-2 text-gray-700 bg-white border border-gray-300 rounded-md font-medium hover:bg-gray-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
@@ -164,6 +169,7 @@ export default function ModuleActivationModal({
             Cancel
           </button>
           <button
+            type="button"
             onClick={handleConfirm}
             disabled={!termsAccepted || activating}
             className="px-6 py-2 text-white font-medium rounded-md transition-colors flex items-center disabled:opacity-50 disabled:cursor-not-allowed"

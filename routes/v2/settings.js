@@ -124,6 +124,8 @@ router.get('/business', async (req, res) => {
         email: business.email,
         phone: business.phone,
         address: business.address,
+        phone_agent_address: business.phone_agent_address ?? null,
+        delivery_default_pickup_address: business.delivery_default_pickup_address ?? null,
         timezone: business.timezone || 'America/New_York',
         website: business.website,
         public_phone_number: business.public_phone_number,
@@ -149,6 +151,8 @@ router.put('/business', async (req, res) => {
       email,
       phone,
       address,
+      phone_agent_address,
+      delivery_default_pickup_address,
       timezone,
       website,
       public_phone_number,
@@ -162,6 +166,8 @@ router.put('/business', async (req, res) => {
     if (email !== undefined) updateData.email = email;
     if (phone !== undefined) updateData.phone = phone;
     if (address !== undefined) updateData.address = address;
+    if (phone_agent_address !== undefined) updateData.phone_agent_address = phone_agent_address ? String(phone_agent_address).trim() || null : null;
+    if (delivery_default_pickup_address !== undefined) updateData.delivery_default_pickup_address = delivery_default_pickup_address ? String(delivery_default_pickup_address).trim() || null : null;
     if (timezone !== undefined) updateData.timezone = timezone;
     if (website !== undefined) updateData.website = website;
     if (public_phone_number !== undefined) updateData.public_phone_number = public_phone_number;

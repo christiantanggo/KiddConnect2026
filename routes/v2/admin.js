@@ -9,6 +9,10 @@ import { OrganizationUser } from '../../models/v2/OrganizationUser.js';
 import { AdminActivityLog } from '../../models/AdminActivityLog.js';
 import { applyImpersonation } from '../../middleware/v2/applyImpersonation.js';
 import { supabaseClient } from '../../config/database.js';
+import { getDeliveryConfig, getDeliveryConfigFull, updateDeliveryConfig } from '../../services/delivery-network/config.js';
+import { createDeliveryNetworkAssistant } from '../../services/delivery-network/create-vapi-assistant.js';
+import { linkDeliveryAssistantToNumbers } from '../../services/delivery-network/linkAgent.js';
+import { getTavariOwnedPhoneNumbers } from '../../utils/tavariPhoneNumbers.js';
 
 const router = express.Router();
 
@@ -493,18 +497,86 @@ router.get('/delivery-operator/requests', async (req, res) => {
   try {
     const status = req.query.status; // e.g. Needs Manual Assist
     const limit = Math.min(parseInt(req.query.limit) || 100, 200);
+    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, created_at, updated_at, pickup_address, caller_phone';
     let q = supabaseClient
       .from('delivery_requests')
-      .select('id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, created_at, updated_at')
+      .select(`${cols}, businesses(name)`)
       .order('created_at', { ascending: false })
       .limit(limit);
     if (status) q = q.eq('status', status);
-    const { data, error } = await q;
-    if (error) throw error;
-    res.json({ requests: data || [] });
+    let { data, error } = await q;
+    if (error) {
+      // Fallback if relation "businesses" not available: fetch requests then look up names
+      q = supabaseClient.from('delivery_requests').select(cols).order('created_at', { ascending: false }).limit(limit);
+      if (status) q = q.eq('status', status);
+      const res2 = await q;
+      if (res2.error) throw res2.error;
+      data = res2.data || [];
+      const ids = [...new Set(data.map((r) => r.business_id).filter(Boolean))];
+      let names = {};
+      if (ids.length > 0) {
+        const { data: biz } = await supabaseClient.from('businesses').select('id, name').in('id', ids);
+        if (biz) biz.forEach((b) => { names[b.id] = b.name; });
+      }
+      data = data.map((r) => ({ ...r, business_name: r.business_id ? names[r.business_id] ?? null : null }));
+    } else {
+      data = (data || []).map((r) => {
+        const { businesses, ...rest } = r;
+        return { ...rest, business_name: businesses?.name ?? null };
+      });
+    }
+    res.json({ requests: data });
   } catch (err) {
     console.error('[Admin delivery-operator] list error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load requests' });
+  }
+});
+
+/**
+ * POST /api/v2/admin/delivery-operator/requests
+ * Admin creates a delivery request on behalf of a business (manual/back-office).
+ */
+router.post('/delivery-operator/requests', express.json(), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const business_id = body.business_id || null;
+    if (!business_id || typeof business_id !== 'string' || !business_id.trim()) {
+      return res.status(400).json({ error: 'Business is required.' });
+    }
+    const callback_phone = body.callback_phone || body.phone || '';
+    if (!callback_phone || !String(callback_phone).trim()) {
+      return res.status(400).json({ error: 'Contact phone is required.' });
+    }
+    const delivery_address = body.delivery_address || body.address || '';
+    if (!delivery_address || !String(delivery_address).trim()) {
+      return res.status(400).json({ error: 'Delivery address is required.' });
+    }
+    const { createDeliveryRequest } = await import('../../services/delivery-network/intake.js');
+    const { startDispatch } = await import('../../services/delivery-network/dispatch.js');
+    const request = await createDeliveryRequest({
+      business_id: business_id.trim(),
+      callback_phone: String(callback_phone).trim(),
+      pickup_address: body.pickup_address?.trim() || null,
+      delivery_address: String(delivery_address).trim(),
+      recipient_name: body.recipient_name?.trim() || null,
+      recipient_phone: body.recipient_phone?.trim() || null,
+      package_description: body.package_description?.trim() || null,
+      special_instructions: body.special_instructions?.trim() || null,
+      priority: body.priority === 'Immediate' || body.priority === 'Same Day' ? body.priority : 'Schedule',
+      intake_channel: 'admin',
+    });
+    startDispatch(request.id).catch((err) =>
+      console.error('[Admin delivery-operator] startDispatch after create error:', err?.message || err)
+    );
+    res.status(201).json({
+      success: true,
+      message: 'Delivery created. Dispatch has been started.',
+      request_id: request.id,
+      reference_number: request.reference_number,
+    });
+  } catch (err) {
+    console.error('[Admin delivery-operator] create request error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to create delivery request.' });
   }
 });
 
@@ -543,6 +615,159 @@ router.patch('/delivery-operator/requests/:id', express.json(), async (req, res)
   } catch (err) {
     console.error('[Admin delivery-operator] patch error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Update failed' });
+  }
+});
+
+// ---------- Delivery operator: global config (admin-only) ----------
+
+/**
+ * GET /api/v2/admin/delivery-operator/phone-numbers
+ * List Tavari-owned phone numbers for delivery line assignment (admin Settings).
+ */
+router.get('/delivery-operator/phone-numbers', async (req, res) => {
+  try {
+    const numbers = await getTavariOwnedPhoneNumbers();
+    res.json({ phone_numbers: numbers });
+  } catch (err) {
+    console.error('[Admin delivery-operator] phone-numbers error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load numbers', phone_numbers: [] });
+  }
+});
+
+/**
+ * GET /api/v2/admin/delivery-operator/config
+ * Full global delivery config for admin Settings.
+ */
+router.get('/delivery-operator/config', async (req, res) => {
+  try {
+    const config = await getDeliveryConfigFull();
+    res.json(config);
+  } catch (err) {
+    console.error('[Admin delivery-operator] config get error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load config' });
+  }
+});
+
+/**
+ * PUT /api/v2/admin/delivery-operator/config
+ * Update global delivery config (line numbers, assistant id, notifications, billing, etc.).
+ */
+router.put('/delivery-operator/config', express.json(), async (req, res) => {
+  try {
+    const updated = await updateDeliveryConfig(req.body || {});
+    res.json(updated);
+  } catch (err) {
+    console.error('[Admin delivery-operator] config put error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to update config' });
+  }
+});
+
+/**
+ * POST /api/v2/admin/delivery-operator/test-broker-connection
+ * Test API credentials for a delivery broker (e.g. Shipday) without saving.
+ * Body: { broker_id, api_key, base_url? }
+ */
+router.post('/delivery-operator/test-broker-connection', express.json(), async (req, res) => {
+  try {
+    const { broker_id, api_key, base_url } = req.body || {};
+    if (!broker_id || !api_key || typeof api_key !== 'string' || !api_key.trim()) {
+      return res.status(400).json({ success: false, error: 'Broker and API key are required.' });
+    }
+    const key = api_key.trim();
+    const baseUrl = (base_url && typeof base_url === 'string' && base_url.trim())
+      ? base_url.trim().replace(/\/$/, '')
+      : 'https://api.shipday.com';
+
+    if (broker_id === 'shipday') {
+      const axios = (await import('axios')).default;
+      const url = `${baseUrl}/orders`;
+      const response = await axios.get(url, {
+        headers: {
+          'Accept': 'application/json',
+          'Authorization': `Basic ${key}`,
+        },
+        params: { limit: 1 },
+        timeout: 15000,
+        validateStatus: () => true,
+      });
+      if (response.status === 200) {
+        return res.json({ success: true, message: 'Connection successful.' });
+      }
+      if (response.status === 401 || response.status === 403) {
+        return res.json({ success: false, error: 'Invalid API key or access denied.' });
+      }
+      const msg = response.data?.message || response.data?.error || response.statusText || `HTTP ${response.status}`;
+      return res.json({ success: false, error: msg });
+    }
+
+    return res.status(400).json({ success: false, error: `Unknown broker: ${broker_id}. Test is only supported for Shipday.` });
+  } catch (err) {
+    const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Connection test failed.';
+    console.error('[Admin delivery-operator] test-broker-connection error:', err?.message || err);
+    return res.status(500).json({ success: false, error: message });
+  }
+});
+
+/**
+ * POST /api/v2/admin/delivery-operator/create-agent
+ * Create delivery VAPI assistant and save id to config; optionally link to current delivery numbers.
+ */
+router.post('/delivery-operator/create-agent', async (req, res) => {
+  try {
+    const assistant = await createDeliveryNetworkAssistant();
+    const assistantId = assistant.id;
+    await updateDeliveryConfig({ delivery_vapi_assistant_id: assistantId });
+    const config = await getDeliveryConfig();
+    const numbers = config.delivery_phone_numbers || [];
+    let linkResult = { linked: [], notInVapi: [], errors: [] };
+    if (numbers.length > 0) {
+      linkResult = await linkDeliveryAssistantToNumbers(assistantId, numbers);
+    }
+    res.status(201).json({
+      success: true,
+      assistant_id: assistantId,
+      assistant_name: assistant.name,
+      link_result: linkResult,
+    });
+  } catch (err) {
+    const status = err.response?.status;
+    const vapiBody = err.response?.data;
+    const msg = (vapiBody && typeof vapiBody === 'object' && vapiBody.message) ? vapiBody.message : err?.message || 'Failed to create agent';
+    console.error('[Admin delivery-operator] create-agent error:', err?.message || err);
+    res.status(status === 400 ? 400 : 500).json({ error: msg });
+  }
+});
+
+/**
+ * POST /api/v2/admin/delivery-operator/link-agent
+ * Link current delivery assistant to configured delivery_phone_numbers in VAPI.
+ */
+router.post('/delivery-operator/link-agent', async (req, res) => {
+  try {
+    const config = await getDeliveryConfig();
+    const assistantId = config.delivery_vapi_assistant_id || null;
+    const numbers = config.delivery_phone_numbers || [];
+    if (!assistantId) {
+      return res.status(400).json({ error: 'No delivery assistant configured. Create an agent first.', linked: [], notInVapi: [], errors: [] });
+    }
+    if (numbers.length === 0) {
+      return res.status(400).json({ error: 'No delivery phone numbers configured. Add at least one number in Settings.', linked: [], notInVapi: [], errors: [] });
+    }
+    const result = await linkDeliveryAssistantToNumbers(assistantId, numbers);
+    res.json({
+      success: result.errors.length === 0 && result.linked.length > 0,
+      message: result.linked.length
+        ? `Linked to ${result.linked.length} number(s).`
+        : result.notInVapi.length
+          ? `Could not provision: ${result.notInVapi.join(', ')}. Ensure numbers are in Telnyx and VAPI.`
+          : result.errors.join('; '),
+      linked: result.linked,
+      notInVapi: result.notInVapi,
+      errors: result.errors,
+    });
+  } catch (err) {
+    console.error('[Admin delivery-operator] link-agent error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to link agent', linked: [], notInVapi: [], errors: [] });
   }
 });
 

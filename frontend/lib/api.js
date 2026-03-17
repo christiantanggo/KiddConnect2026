@@ -1,7 +1,7 @@
 import axios from 'axios';
 import Cookies from 'js-cookie';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, ''); // Remove trailing slash
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5002').replace(/\/$/, ''); // Remove trailing slash
 
 console.log('[API] Initializing API client with URL:', API_URL);
 
@@ -534,6 +534,7 @@ export const deliveryNetworkAPI = {
   linkAgent: () => api.post('/v2/delivery-network/link-agent', {}, { headers: deliveryNetworkHeaders() }),
   updateConfig: (data) => api.put('/v2/delivery-network/config', data, { headers: deliveryNetworkHeaders() }),
   getRequests: () => api.get('/v2/delivery-network/requests', { headers: deliveryNetworkHeaders() }),
+  createRequest: (data) => api.post('/v2/delivery-network/requests', data, { headers: deliveryNetworkHeaders() }),
   updateRequest: (id, data) => api.patch(`/v2/delivery-network/requests/${id}`, data, { headers: deliveryNetworkHeaders() }),
   deleteRequest: (requestId) => api.delete(`/v2/delivery-network/requests/${requestId}`, { headers: deliveryNetworkHeaders() }),
   resetDispatch: (requestId) => api.post(`/v2/delivery-network/requests/${requestId}/reset-dispatch`, {}, { headers: deliveryNetworkHeaders() }),

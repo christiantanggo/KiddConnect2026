@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import AdminGuard from '@/components/AdminGuard';
 import Link from 'next/link';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
@@ -89,11 +88,6 @@ function AdminDashboardPage() {
     }
   };
 
-  const handleLogout = () => {
-    document.cookie = 'admin_token=; path=/; max-age=0';
-    window.location.href = '/admin/login';
-  };
-
   const getModuleConfig = (moduleKey) => {
     const configs = {
       'phone-agent': { icon: '📞', color: 'blue' },
@@ -104,56 +98,15 @@ function AdminDashboardPage() {
 
   if (loading) {
     return (
-      <AdminGuard>
-        <div className="flex items-center justify-center min-h-screen">
-          <div className="text-lg">Loading...</div>
-        </div>
-      </AdminGuard>
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-lg">Loading...</div>
+      </div>
     );
   }
 
   return (
-    <AdminGuard>
-      <div className="min-h-screen bg-gray-50">
-        <nav className="bg-white shadow-sm">
-          <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-            <h1 className="text-xl font-bold text-blue-600">Admin Dashboard</h1>
-            <div className="flex gap-4 items-center">
-              <Link href="/admin-dashboard" className="text-blue-600 font-medium">
-                Dashboard
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/accounts" className="text-gray-700 hover:text-blue-600">
-                Accounts
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/pricing" className="text-gray-700 hover:text-blue-600">
-                Pricing
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/settings" className="text-gray-700 hover:text-blue-600">
-                Settings
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/website-analytics" className="text-gray-700 hover:text-blue-600">
-                Website Analytics
-              </Link>
-              <span className="text-gray-300">|</span>
-              <Link href="/admin/support" className="text-gray-700 hover:text-blue-600">
-                Support Tickets
-              </Link>
-              <span className="text-gray-300">|</span>
-              <button
-                onClick={handleLogout}
-                className="text-gray-700 hover:text-blue-600"
-              >
-                Logout
-              </button>
-            </div>
-          </div>
-        </nav>
-
-        <main className="container mx-auto px-4 py-8">
+    <div className="min-h-screen bg-gray-50">
+      <main className="container mx-auto px-4 py-8">
           {/* General Stats - Keep these */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <div className="bg-white rounded-lg shadow p-6">
@@ -202,7 +155,14 @@ function AdminDashboardPage() {
                 return (
                   <Link
                     key={module.key}
-                    href={module.key === 'phone-agent' ? '/tavari-ai-phone/admin-dashboard' : module.key === 'reviews' ? '/review-reply-ai/admin-dashboard' : `/${module.key}/admin-dashboard`}
+                    href={
+                      module.key === 'phone-agent' ? '/tavari-ai-phone/admin-dashboard'
+                      : module.key === 'reviews' ? '/review-reply-ai/admin-dashboard'
+                      : module.key === 'delivery-dispatch' ? '/admin/delivery-operator'
+                      : module.key === 'emergency-dispatch' ? '/dashboard/v2/modules/emergency-dispatch'
+                      : module.key === 'orbix-network' ? '/dashboard/v2/modules/orbix-network'
+                      : `/${module.key}/admin-dashboard`
+                    }
                     className="bg-white rounded-lg shadow p-6 hover:shadow-lg transition-shadow cursor-pointer"
                   >
                     <div className="flex items-start justify-between mb-4">
@@ -262,10 +222,8 @@ function AdminDashboardPage() {
             </div>
           </div>
         </main>
-      </div>
-    </AdminGuard>
+    </div>
   );
-
 }
 
 export default AdminDashboardPage;

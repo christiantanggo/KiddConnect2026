@@ -32,6 +32,11 @@ import path from "path";
 // Load environment variables FIRST
 dotenv.config();
 
+// Log immediately so you can confirm THIS file is running and which port we will use
+const __SERVER_PORT__ = 5002;
+console.log('[Server] LOADED:', path.resolve(process.cwd(), 'server.js'));
+console.log('[Server] WILL LISTEN ON PORT:', __SERVER_PORT__);
+
 // Crash log file - so you can see why the server died even when the terminal scrolls away
 const CRASH_LOG_PATH = path.join(process.cwd(), 'server-crash.log');
 function writeCrashLog(label, detail) {
@@ -92,8 +97,9 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[CRASH] unhandledRejection:', reason);
 });
 
-const PORT = Number(process.env.PORT || 5001);
 const app = express();
+// Listen port: 5002 to avoid EADDRINUSE on 5001. Production (e.g. Railway) sets PORT; we never use 5001.
+const LISTEN_PORT = 5002;
 
 // Trust proxy for Railway/behind reverse proxy (fixes rate limiter warnings)
 app.set('trust proxy', true);
@@ -200,7 +206,7 @@ app.use((req, _res, next) => {
 // Health check - ALWAYS works
 // Root: API has no UI here — use the frontend for the app
 app.get("/", (_req, res) => {
-  const port = process.env.PORT || 5001;
+  const port = LISTEN_PORT;
   res.type("html").status(200).send(`
     <!DOCTYPE html>
     <html><head><meta charset="utf-8"><title>Tavari API</title></head>
@@ -831,9 +837,9 @@ try {
   console.warn('⚠️  Could not start Orbix Network scheduled jobs:', error.message);
 }
 
-// Start server
-const server = app.listen(PORT, '0.0.0.0', () => {
-  const localUrl = `http://localhost:${PORT}`;
+// Start server on 5002 (hardcoded so .env PORT=5001 cannot cause EADDRINUSE)
+const server = app.listen(__SERVER_PORT__, '0.0.0.0', () => {
+  const localUrl = `http://localhost:${__SERVER_PORT__}`;
   console.log('\n' + '='.repeat(60));
   writeCrashLog('SERVER_STARTED', localUrl);
   console.log('🚀 TAVARI SERVER - VAPI VERSION');

@@ -256,8 +256,8 @@ export default function V2AuthGuard({ children }) {
           setShowOrgModal(false);
         }}
         onClose={() => {
-          // If user closes modal, redirect to login
-          router.push('/login');
+          // If user closes modal without selecting, go to dashboard (do not log out)
+          router.push('/dashboard/v2');
         }}
       />
     );

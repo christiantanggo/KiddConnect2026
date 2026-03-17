@@ -7,6 +7,7 @@ import multer from 'multer';
 import { randomUUID } from 'crypto';
 import { authenticate } from '../../middleware/auth.js';
 import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
+import { verifySubscriptionWithStripe } from '../../middleware/v2/verifySubscriptionWithStripe.js';
 import { supabaseClient } from '../../config/database.js';
 import { createDeliveryRequest } from '../../services/delivery-network/intake.js';
 import { startDispatch } from '../../services/delivery-network/dispatch.js';
@@ -14,51 +15,10 @@ import { getDeliveryConfig, invalidateDeliveryConfigCache } from '../../services
 import { getEmergencyConfig } from '../../services/emergency-network/config.js';
 import { getPhoneNumbersForBusiness } from '../../utils/businessPhoneNumbersForDropdown.js';
 import { createDeliveryNetworkAssistant } from '../../services/delivery-network/create-vapi-assistant.js';
-import { getAllVapiPhoneNumbers, checkIfNumberProvisionedInVAPI, linkAssistantToNumber, provisionPhoneNumber, getVapiPhoneNumberId } from '../../services/vapi.js';
+import { linkDeliveryAssistantToNumbers } from '../../services/delivery-network/linkAgent.js';
+import { getAllVapiPhoneNumbers } from '../../services/vapi.js';
 
 const router = express.Router();
-
-/**
- * Link the delivery assistant to all delivery_phone_numbers.
- * Same flow as the existing phone agent: provision from Telnyx to VAPI if not already there, then link.
- * @param {string} assistantId - delivery_vapi_assistant_id
- * @param {string[]} phoneNumbers - delivery_phone_numbers (E.164 or any format we normalize)
- * @returns {{ linked: string[], notInVapi: string[], errors: string[] }}
- */
-async function linkDeliveryAssistantToNumbers(assistantId, phoneNumbers) {
-  const result = { linked: [], notInVapi: [], errors: [] };
-  if (!assistantId || !Array.isArray(phoneNumbers) || phoneNumbers.length === 0) return result;
-  for (const raw of phoneNumbers) {
-    const e164 = normalizeE164(raw);
-    if (!e164) continue;
-    try {
-      let vapiNumber = await checkIfNumberProvisionedInVAPI(e164);
-      if (!vapiNumber) {
-        try {
-          vapiNumber = await provisionPhoneNumber(e164, null);
-          console.log('[DeliveryNetwork] Provisioned number to VAPI (same as phone agent):', e164);
-        } catch (provisionErr) {
-          result.notInVapi.push(e164);
-          result.errors.push(`${e164}: provision to VAPI failed — ${provisionErr?.message || provisionErr}`);
-          continue;
-        }
-      }
-      const phoneNumberId = getVapiPhoneNumberId(vapiNumber);
-      if (!phoneNumberId) {
-        console.warn('[DeliveryNetwork] VAPI number object missing id for', e164, 'keys:', vapiNumber ? Object.keys(vapiNumber) : []);
-        result.errors.push(`${e164}: no VAPI phone number id (number may not be provisioned in VAPI)`);
-        continue;
-      }
-      await linkAssistantToNumber(assistantId, phoneNumberId);
-      result.linked.push(e164);
-      console.log('[DeliveryNetwork] Linked emergency assistant to number', e164);
-    } catch (err) {
-      result.errors.push(`${e164}: ${err?.message || err}`);
-      console.warn('[DeliveryNetwork] Link number failed:', e164, err?.message || err);
-    }
-  }
-  return result;
-}
 
 /** Normalize to E.164 for display/dedupe. */
 function normalizeE164(value) {
@@ -422,9 +382,14 @@ router.post('/request', express.json(), async (req, res) => {
   }
 });
 
-// ---------- ADMIN (authenticate + business context for dashboard) ----------
+// ---------- AUTHENTICATED (dashboard): require active delivery-dispatch subscription (same billing as rest of app) ----------
 router.use(authenticate);
 router.use(requireBusinessContext);
+router.use((req, res, next) => {
+  req.module_key = 'delivery-dispatch';
+  next();
+});
+router.use(verifySubscriptionWithStripe);
 
 function getVapiWebhookUrl() {
   let base = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.tavarios.com';
@@ -786,6 +751,55 @@ router.get('/requests', async (req, res) => {
   } catch (err) {
     console.error('[DeliveryNetwork] requests list error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load requests' });
+  }
+});
+
+/**
+ * POST /api/v2/delivery-network/requests
+ * Customer (business) creates a new delivery request from the dashboard. Authenticated; business_id = req.active_business_id.
+ */
+router.post('/requests', express.json(), async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    if (!businessId) {
+      return res.status(400).json({ error: 'Business context required' });
+    }
+    const body = req.body || {};
+    const callback_phone = body.callback_phone || body.phone;
+    if (!callback_phone || !String(callback_phone).trim()) {
+      return res.status(400).json({ error: 'Contact phone is required' });
+    }
+    const delivery_address = body.delivery_address || body.address;
+    if (!delivery_address || !String(delivery_address).trim()) {
+      return res.status(400).json({ error: 'Delivery address is required' });
+    }
+
+    const request = await createDeliveryRequest({
+      business_id: businessId,
+      callback_phone: String(callback_phone).trim(),
+      pickup_address: body.pickup_address?.trim() || null,
+      delivery_address: String(delivery_address).trim(),
+      recipient_name: body.recipient_name?.trim() || null,
+      recipient_phone: body.recipient_phone?.trim() || null,
+      package_description: body.package_description?.trim() || null,
+      special_instructions: body.special_instructions?.trim() || null,
+      priority: body.priority === 'Immediate' || body.priority === 'Same Day' ? body.priority : 'Schedule',
+      intake_channel: 'dashboard',
+    });
+
+    startDispatch(request.id).catch((err) =>
+      console.error('[DeliveryNetwork] startDispatch error:', err?.message || err)
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "We're scheduling your delivery. You'll get updates as it progresses.",
+      request_id: request.id,
+      reference_number: request.reference_number,
+    });
+  } catch (err) {
+    console.error('[DeliveryNetwork] create request error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Could not create delivery request. Please try again.' });
   }
 });
 

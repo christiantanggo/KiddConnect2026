@@ -1,13 +1,11 @@
 'use client';
 
 import { useState } from 'react';
-import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
 function AdminLoginPage() {
-  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -29,13 +27,13 @@ function AdminLoginPage() {
 
       const data = await response.json();
 
-      if (response.ok) {
-        // Store admin token
+      if (response.ok && data.token) {
+        // Store admin token and do a full-page redirect so the dashboard sees the cookie
         document.cookie = `admin_token=${data.token}; path=/; max-age=86400; SameSite=Strict`;
-        router.push('/admin-dashboard');
-      } else {
-        setError(data.error || 'Login failed');
+        window.location.href = '/admin-dashboard';
+        return;
       }
+      setError(data.error || 'Login failed');
     } catch (err) {
       setError('Failed to connect to server');
     } finally {

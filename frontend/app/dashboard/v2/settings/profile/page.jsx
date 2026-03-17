@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
-import { ArrowLeft, User, Lock, CheckCircle } from 'lucide-react';
+import { ArrowLeft, User, Lock, CheckCircle, Building2 } from 'lucide-react';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
 
@@ -34,17 +34,33 @@ export default function ProfileSettingsPage() {
   const [pwSuccess, setPwSuccess] = useState(null);
   const [pwError, setPwError] = useState(null);
 
+  // Company details (business address & phone – used across the app)
+  const [company, setCompany] = useState({ address: '', phone: '' });
+  const [savingCompany, setSavingCompany] = useState(false);
+  const [companySuccess, setCompanySuccess] = useState(null);
+  const [companyError, setCompanyError] = useState(null);
+
   useEffect(() => { loadProfile(); }, []);
 
   async function loadProfile() {
     try {
-      const res = await fetch(`${API_URL}/api/v2/settings/profile`, { headers: getAuthHeaders() });
-      if (res.ok) {
-        const data = await res.json();
+      const [profileRes, businessRes] = await Promise.all([
+        fetch(`${API_URL}/api/v2/settings/profile`, { headers: getAuthHeaders() }),
+        fetch(`${API_URL}/api/v2/settings/business`, { headers: getAuthHeaders() }),
+      ]);
+      if (profileRes.ok) {
+        const data = await profileRes.json();
         setProfile({
           first_name: data.profile.first_name || '',
           last_name: data.profile.last_name || '',
           email: data.profile.email || '',
+        });
+      }
+      if (businessRes.ok) {
+        const data = await businessRes.json();
+        setCompany({
+          address: data.business?.address || '',
+          phone: data.business?.phone || '',
         });
       }
     } catch (err) {
@@ -73,6 +89,28 @@ export default function ProfileSettingsPage() {
       setProfileError(err.message);
     } finally {
       setSavingProfile(false);
+    }
+  }
+
+  async function saveCompany(e) {
+    e.preventDefault();
+    setSavingCompany(true);
+    setCompanyError(null);
+    setCompanySuccess(null);
+    try {
+      const res = await fetch(`${API_URL}/api/v2/settings/business`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ address: company.address || null, phone: company.phone || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save');
+      setCompanySuccess('Company details updated. This address and phone are used across the app unless you set a different one in a specific module.');
+      setTimeout(() => setCompanySuccess(null), 5000);
+    } catch (err) {
+      setCompanyError(err.message);
+    } finally {
+      setSavingCompany(false);
     }
   }
 
@@ -240,6 +278,72 @@ export default function ProfileSettingsPage() {
                 style={{ background: 'var(--color-accent)', borderRadius: 'var(--button-radius)' }}
               >
                 {savingProfile ? 'Saving…' : 'Save Changes'}
+              </button>
+            </form>
+          </div>
+
+          {/* ── Company details (address & phone – used across app) ───── */}
+          <div
+            className="shadow mb-6 p-6"
+            style={{ backgroundColor: 'var(--color-surface)', borderRadius: 'var(--card-radius)' }}
+          >
+            <div className="flex items-center gap-3 mb-6">
+              <Building2 className="w-5 h-5" style={{ color: 'var(--color-accent)' }} />
+              <div>
+                <h2 className="font-semibold text-lg" style={{ color: 'var(--color-text-main)' }}>Company details</h2>
+                <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Address and phone used across the app (AI phone, delivery, etc.). You can override them per module if needed.</p>
+              </div>
+            </div>
+            {companySuccess && (
+              <div className="flex items-center gap-2 px-4 py-3 mb-4 rounded-lg text-sm"
+                style={{ background: 'rgba(20,184,166,0.1)', color: 'var(--color-accent)', border: '1px solid rgba(20,184,166,0.2)' }}>
+                <CheckCircle className="w-4 h-4" /> {companySuccess}
+              </div>
+            )}
+            {companyError && (
+              <div className="px-4 py-3 mb-4 rounded-lg text-sm"
+                style={{ background: 'rgba(239,68,68,0.1)', color: 'var(--color-danger)', border: '1px solid rgba(239,68,68,0.2)' }}>
+                {companyError}
+              </div>
+            )}
+            <form onSubmit={saveCompany} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1" style={{ color: 'var(--color-text-main)' }}>
+                  Company address
+                </label>
+                <input
+                  type="text"
+                  value={company.address}
+                  onChange={(e) => setCompany(c => ({ ...c, address: e.target.value }))}
+                  className="w-full px-4 py-2 border focus:outline-none"
+                  style={inputStyle}
+                  onFocus={(e) => e.target.style.borderColor = 'var(--color-accent)'}
+                  onBlur={(e) => e.target.style.borderColor = 'var(--color-border)'}
+                  placeholder="Street, city, postal code"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1" style={{ color: 'var(--color-text-main)' }}>
+                  Company phone
+                </label>
+                <input
+                  type="text"
+                  value={company.phone}
+                  onChange={(e) => setCompany(c => ({ ...c, phone: e.target.value }))}
+                  className="w-full px-4 py-2 border focus:outline-none"
+                  style={inputStyle}
+                  onFocus={(e) => e.target.style.borderColor = 'var(--color-accent)'}
+                  onBlur={(e) => e.target.style.borderColor = 'var(--color-border)'}
+                  placeholder="+1 234 567 8900"
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={savingCompany}
+                className="px-6 py-2.5 text-white font-medium transition-opacity disabled:opacity-50"
+                style={{ background: 'var(--color-accent)', borderRadius: 'var(--button-radius)' }}
+              >
+                {savingCompany ? 'Saving…' : 'Save company details'}
               </button>
             </form>
           </div>

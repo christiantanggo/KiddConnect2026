@@ -219,6 +219,8 @@ export default function V2DashboardPage() {
                     ? '/dashboard' 
                     : module.key === 'reviews'
                     ? '/review-reply-ai/dashboard'
+                    : (module.key === 'delivery-dispatch' || module.key === 'emergency-dispatch')
+                    ? `/dashboard/v2/modules/${module.key}`
                     : `/dashboard/v2/modules/${module.key}/dashboard`;
                   
                   return (

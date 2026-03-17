@@ -208,10 +208,28 @@ router.post('/checkout', authenticate, async (req, res) => {
   }
 });
 
+// Resolve business id for billing: use X-Active-Business-Id when present and user has access (v2 app sends this).
+async function getBillingBusinessId(req) {
+  const headerId = (req.headers['x-active-business-id'] || '').trim();
+  if (!headerId) return req.businessId;
+  // Legacy: user.business_id
+  if (String(headerId) === String(req.businessId)) return headerId;
+  // v2: user is member of this organization
+  try {
+    const { OrganizationUser } = await import('../models/v2/OrganizationUser.js');
+    const membership = await OrganizationUser.findByUserAndBusiness(req.user.id, headerId);
+    if (membership) return headerId;
+  } catch (e) {
+    // ignore
+  }
+  return req.businessId;
+}
+
 // Get subscription status
 router.get('/status', authenticate, async (req, res) => {
   try {
-    const business = await Business.findById(req.businessId);
+    const businessId = await getBillingBusinessId(req);
+    const business = await Business.findById(businessId);
     if (!business) {
       return res.status(404).json({ error: 'Business not found' });
     }
@@ -408,7 +426,8 @@ router.get('/status', authenticate, async (req, res) => {
 // Get Stripe Customer Portal URL for managing payment methods and subscriptions
 router.get('/portal', authenticate, async (req, res) => {
   try {
-    const business = await Business.findById(req.businessId);
+    const businessId = await getBillingBusinessId(req);
+    const business = await Business.findById(businessId);
     if (!business) {
       return res.status(404).json({ error: 'Business not found' });
     }
