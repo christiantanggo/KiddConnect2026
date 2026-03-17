@@ -98,13 +98,8 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const app = express();
-<<<<<<< HEAD
 // Listen port: Railway/production set PORT; local defaults to 5002 (avoid 5001 EADDRINUSE)
 const LISTEN_PORT = __SERVER_PORT__;
-=======
-// Listen port: use PORT in production (Railway), 5002 locally to avoid EADDRINUSE on 5001.
-const LISTEN_PORT = Number(process.env.PORT) || 5002;
->>>>>>> 1407d0c (Backend: Business.update() tolerant of missing address columns; trigger deploy)
 
 // Trust proxy for Railway/behind reverse proxy (fixes rate limiter warnings)
 app.set('trust proxy', true);
