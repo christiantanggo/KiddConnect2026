@@ -645,6 +645,8 @@ router.get('/delivery-operator/config', async (req, res) => {
     if (Array.isArray(config.delivery_phone_numbers)) {
       config.delivery_phone_numbers = config.delivery_phone_numbers.map(normalizePhone).filter(Boolean);
     }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
     res.json(config);
   } catch (err) {
     console.error('[Admin delivery-operator] config get error:', err?.message || err);

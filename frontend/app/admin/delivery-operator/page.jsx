@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { getApiBaseUrl } from '@/lib/api';
 
 /** Normalize to E.164 with leading + so save/load/compare are consistent. */
@@ -95,6 +95,8 @@ function AdminDeliveryOperatorPage() {
     billing: { price_basic_cents: '', price_priority_cents: '', sms_fee_cents: '' },
     brokers: {},
   });
+  /** Ref so Save always sends the latest selection (avoids stale state / closure). */
+  const deliveryPhoneNumbersRef = useRef([]);
 
   const load = async () => {
     const token = getAdminToken();
@@ -145,18 +147,27 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setConfigLoading(true);
     try {
+      const cacheBust = `t=${Date.now()}`;
       const [configRes, numbersRes] = await Promise.all([
-        fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/config`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/phone-numbers`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/config?${cacheBust}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        }),
+        fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/phone-numbers`, {
+          headers: { Authorization: `Bearer ${token}` },
+          cache: 'no-store',
+        }),
       ]);
       const configData = configRes.ok ? await configRes.json() : {};
       const numbersData = numbersRes.ok ? await numbersRes.json() : {};
+      const deliveryNums = (Array.isArray(configData.delivery_phone_numbers) ? configData.delivery_phone_numbers : [])
+        .map(normalizeE164)
+        .filter(Boolean);
+      deliveryPhoneNumbersRef.current = deliveryNums;
       setConfig(configData);
       setPhoneNumbers(numbersData.phone_numbers || []);
       setConfigForm({
-        delivery_phone_numbers: (Array.isArray(configData.delivery_phone_numbers) ? configData.delivery_phone_numbers : [])
-          .map(normalizeE164)
-          .filter(Boolean),
+        delivery_phone_numbers: deliveryNums,
         notification_email: configData.notification_email || '',
         notification_sms_number: configData.notification_sms_number || '',
         email_enabled: configData.email_enabled !== false,
@@ -190,8 +201,9 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setConfigSaving(true);
     try {
+      const toSave = (deliveryPhoneNumbersRef.current || []).map(normalizeE164).filter(Boolean);
       const body = {
-        delivery_phone_numbers: (configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean),
+        delivery_phone_numbers: toSave,
         notification_email: configForm.notification_email || null,
         notification_sms_number: configForm.notification_sms_number || null,
         email_enabled: configForm.email_enabled,
@@ -215,7 +227,10 @@ function AdminDeliveryOperatorPage() {
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.json())?.error || res.statusText);
-      await loadConfig();
+      const updated = await res.json();
+      deliveryPhoneNumbersRef.current = (updated.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean);
+      setConfig(updated);
+      setConfigForm(f => ({ ...f, delivery_phone_numbers: deliveryPhoneNumbersRef.current }));
     } catch (e) {
       alert(e.message || 'Save failed');
     } finally {
@@ -356,14 +371,15 @@ function AdminDeliveryOperatorPage() {
   const filteredEscalated = escalated.filter(matchSearch);
   const displayRequests = baseDisplayRequests.filter(matchSearch);
 
-  const toggleDeliveryNumber = (num) => {
+  /** Select exactly this number as the delivery line. Click again to clear. (Single-select: the number you click is THE one used.) */
+  const selectDeliveryNumber = (num) => {
     const canonical = normalizeE164(num);
     if (!canonical) return;
-    const list = (configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean);
-    const set = new Set(list);
-    if (set.has(canonical)) set.delete(canonical);
-    else set.add(canonical);
-    setConfigForm(f => ({ ...f, delivery_phone_numbers: Array.from(set) }));
+    const current = (configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean);
+    const isAlreadyOnly = current.length === 1 && current[0] === canonical;
+    const next = isAlreadyOnly ? [] : [canonical];
+    deliveryPhoneNumbersRef.current = next;
+    setConfigForm(f => ({ ...f, delivery_phone_numbers: next }));
   };
 
   const handleAddDeliverySubmit = async (e) => {
@@ -470,18 +486,18 @@ function AdminDeliveryOperatorPage() {
                     <h2 className="text-lg font-semibold text-slate-800 mb-4">Delivery line & agent</h2>
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-2">Delivery line number(s)</label>
-                        <p className="text-xs text-slate-500 mb-2">Calls to these numbers are routed to the delivery assistant.</p>
+                        <label className="block text-sm font-medium text-slate-700 mb-2">Delivery line number</label>
+                        <p className="text-xs text-slate-500 mb-2">Calls to this number are routed to the delivery assistant. Click the number you want to use (only one).</p>
                         <div className="flex flex-wrap gap-2">
                           {phoneNumbers.map((pn) => {
                             const n = pn.number || pn.e164;
-                            const savedNormalized = new Set((configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean));
-                            const selected = savedNormalized.has(normalizeE164(n));
+                            const savedList = (configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean);
+                            const selected = savedList.length === 1 && savedList[0] === normalizeE164(n);
                             return (
                               <button
                                 key={n}
                                 type="button"
-                                onClick={() => toggleDeliveryNumber(n)}
+                                onClick={() => selectDeliveryNumber(n)}
                                 className={`px-3 py-1.5 rounded text-sm border ${
                                   selected ? 'bg-blue-50 border-blue-500 text-blue-700' : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
                                 }`}
