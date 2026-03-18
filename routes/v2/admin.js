@@ -703,6 +703,7 @@ router.post('/delivery-operator/test-broker-connection', express.json(), async (
     if (broker_id === 'shipday') {
       const axios = (await import('axios')).default;
       const url = `${baseUrl}/orders`;
+      console.log('[Admin delivery-operator] Shipday test: calling GET', url, '(limit=1)');
       const response = await axios.get(url, {
         headers: {
           'Accept': 'application/json',
@@ -712,17 +713,31 @@ router.post('/delivery-operator/test-broker-connection', express.json(), async (
         timeout: 15000,
         validateStatus: () => true,
       });
+      const data = response.data;
+      const count = data?.content?.length ?? (Array.isArray(data) ? data.length : data?.numberOfElements);
+      const bodySummary = typeof count === 'number'
+        ? `${count} order(s)`
+        : (data && typeof data === 'object' ? `keys: ${Object.keys(data).slice(0, 8).join(', ')}` : typeof data);
+      console.log('[Admin delivery-operator] Shipday test: response status=', response.status, 'body=', bodySummary);
       if (response.status === 200) {
-        const count = response.data?.content?.length ?? response.data?.length;
-        const detail = typeof count === 'number'
-          ? `Called Shipday API (GET ${baseUrl}/orders). Returned 200; your key is valid. (Sample: ${count} order(s) in response.)`
-          : `Called Shipday API (GET ${baseUrl}/orders). Returned 200; your API key was accepted.`;
-        return res.json({ success: true, message: 'Connection successful.', detail });
+        const responseSummary = typeof count === 'number'
+          ? `${count} order(s) in response`
+          : (data && typeof data === 'object' ? `Response keys: ${Object.keys(data).slice(0, 8).join(', ')}` : 'OK');
+        return res.json({
+          success: true,
+          message: 'Connection successful.',
+          detail: `Request: GET ${baseUrl}/orders?limit=1 (with your API key). Response: HTTP 200. Body: ${responseSummary}.`,
+          request_url: `${baseUrl}/orders`,
+          response_status: 200,
+          response_summary: responseSummary,
+        });
       }
       if (response.status === 401 || response.status === 403) {
+        console.log('[Admin delivery-operator] Shipday test: auth failed', response.status);
         return res.json({ success: false, error: 'Invalid API key or access denied.' });
       }
       const msg = response.data?.message || response.data?.error || response.statusText || `HTTP ${response.status}`;
+      console.log('[Admin delivery-operator] Shipday test: failed', response.status, msg);
       return res.json({ success: false, error: msg });
     }
 
@@ -730,6 +745,9 @@ router.post('/delivery-operator/test-broker-connection', express.json(), async (
   } catch (err) {
     const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Connection test failed.';
     console.error('[Admin delivery-operator] test-broker-connection error:', err?.message || err);
+    if (err.response) {
+      console.error('[Admin delivery-operator] Shipday test: request failed status=', err.response.status, 'data=', JSON.stringify(err.response.data)?.slice(0, 200));
+    }
     return res.status(500).json({ success: false, error: message });
   }
 });

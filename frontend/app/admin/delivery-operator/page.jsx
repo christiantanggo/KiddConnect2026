@@ -82,7 +82,7 @@ function AdminDeliveryOperatorPage() {
   const [phoneNumbers, setPhoneNumbers] = useState([]);
   const [agentLoading, setAgentLoading] = useState(null); // 'create' | 'link'
   const [testingBrokerId, setTestingBrokerId] = useState(null); // broker id while testing connection
-  const [brokerTestResult, setBrokerTestResult] = useState(null); // { brokerId, success, message, detail } after Test connection
+  const [brokerTestResult, setBrokerTestResult] = useState(null); // { brokerId, success, message, detail?, request_url?, response_status?, response_summary? } after Test connection
   const [configForm, setConfigForm] = useState({
     delivery_phone_numbers: [],
     notification_email: '',
@@ -288,6 +288,9 @@ function AdminDeliveryOperatorPage() {
         success: !!data.success,
         message: data.success ? (data.message || 'Connection successful.') : (data.error || 'Connection test failed.'),
         detail: data.detail || null,
+        request_url: data.request_url || null,
+        response_status: data.response_status,
+        response_summary: data.response_summary || null,
       });
       if (!data.success) alert(data.error || 'Connection test failed.');
     } catch (e) {
@@ -626,9 +629,20 @@ function AdminDeliveryOperatorPage() {
                                 {testingBrokerId === broker.id ? 'Testing…' : 'Test connection'}
                               </button>
                               {brokerTestResult?.brokerId === broker.id && (
-                                <div className={`mt-2 p-2 rounded text-sm ${brokerTestResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                                <div className={`mt-2 p-3 rounded text-sm ${brokerTestResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
                                   <p className="font-medium">{brokerTestResult.message}</p>
-                                  {brokerTestResult.detail && (
+                                  {brokerTestResult.success && brokerTestResult.request_url != null && (
+                                    <p className="mt-2 text-xs font-mono opacity-90">
+                                      <span className="font-semibold">Request:</span> GET {brokerTestResult.request_url}
+                                    </p>
+                                  )}
+                                  {brokerTestResult.success && brokerTestResult.response_status != null && (
+                                    <p className="mt-0.5 text-xs font-mono opacity-90">
+                                      <span className="font-semibold">Response:</span> HTTP {brokerTestResult.response_status}
+                                      {brokerTestResult.response_summary ? ` — ${brokerTestResult.response_summary}` : ''}
+                                    </p>
+                                  )}
+                                  {brokerTestResult.detail && !brokerTestResult.request_url && (
                                     <p className="mt-1 text-xs opacity-90">{brokerTestResult.detail}</p>
                                   )}
                                 </div>
