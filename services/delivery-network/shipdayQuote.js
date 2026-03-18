@@ -82,11 +82,14 @@ export async function getQuoteFromShipday(params) {
     Authorization: `Basic ${apiKey}`,
   };
 
+  const createUrl = `${baseUrl}/orders`;
+  console.log('[ShipdayQuote] POST', createUrl, '→ creating temporary order on Shipday');
+
   let orderId = null;
   try {
     // 1. Create a scheduled order (7 days out) so it is not dispatched immediately
     const createRes = await axios.post(
-      `${baseUrl}/orders`,
+      createUrl,
       orderPayload,
       { headers, timeout: 15000, validateStatus: (s) => s < 500 }
     );
@@ -96,10 +99,12 @@ export async function getQuoteFromShipday(params) {
       return null;
     }
     orderId = createRes.data.orderId;
-    console.log('[ShipdayQuote] created order', orderId, 'for quote; retrieving costing...');
+    console.log('[ShipdayQuote] Shipday responded 200, orderId', orderId, '— order exists on Shipday; retrieving costing...');
 
     // 2. Retrieve order details to get costing (Shipday may populate deliveryFee/totalCost; sometimes after a short delay)
-    let getRes = await axios.get(`${baseUrl}/orders/${encodeURIComponent(orderNumber)}`, {
+    const getUrl = `${baseUrl}/orders/${encodeURIComponent(orderNumber)}`;
+    console.log('[ShipdayQuote] GET', getUrl, '→ fetching order from Shipday');
+    let getRes = await axios.get(getUrl, {
       headers: { Accept: 'application/json', Authorization: headers.Authorization },
       timeout: 10000,
       validateStatus: (s) => s < 500,
