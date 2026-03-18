@@ -59,6 +59,8 @@ function AdminDeliveryOperatorPage() {
   });
   const [addDeliverySubmitting, setAddDeliverySubmitting] = useState(false);
   const [addDeliverySuccess, setAddDeliverySuccess] = useState(null);
+  const [addDeliveryQuoteLoading, setAddDeliveryQuoteLoading] = useState(false);
+  const [addDeliveryQuote, setAddDeliveryQuote] = useState(null); // { amount_cents, disclaimer, currency }
   const [businessSearchQuery, setBusinessSearchQuery] = useState('');
   const [businessDropdownOpen, setBusinessDropdownOpen] = useState(false);
 
@@ -435,6 +437,27 @@ function AdminDeliveryOperatorPage() {
       alert(err.message || 'Failed to create delivery.');
     } finally {
       setAddDeliverySubmitting(false);
+    }
+  };
+
+  const getAddDeliveryQuote = async () => {
+    setAddDeliveryQuote(null);
+    setAddDeliveryQuoteLoading(true);
+    try {
+      const token = getAdminToken();
+      if (!token) return;
+      const params = new URLSearchParams();
+      if (addDeliveryForm.business_id?.trim()) params.set('business_id', addDeliveryForm.business_id.trim());
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/quote?${params.toString()}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to get quote');
+      setAddDeliveryQuote(data);
+    } catch (e) {
+      setAddDeliveryQuote({ amount_cents: null, disclaimer: e.message || 'Quote unavailable', currency: 'CAD' });
+    } finally {
+      setAddDeliveryQuoteLoading(false);
     }
   };
 
@@ -831,7 +854,7 @@ function AdminDeliveryOperatorPage() {
                     <option value="Immediate">Immediate</option>
                   </select>
                 </div>
-                <div className="flex gap-3 pt-2">
+                <div className="flex flex-wrap gap-3 items-center pt-2">
                   <button
                     type="submit"
                     disabled={addDeliverySubmitting}
@@ -841,11 +864,29 @@ function AdminDeliveryOperatorPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={getAddDeliveryQuote}
+                    disabled={addDeliveryQuoteLoading}
+                    className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {addDeliveryQuoteLoading ? 'Getting quote…' : 'Quote'}
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setActiveTab('deliveries')}
                     className="px-4 py-2 rounded border border-slate-300 text-slate-700 text-sm hover:bg-slate-50"
                   >
                     View deliveries
                   </button>
+                  {addDeliveryQuote && (
+                    <span className="text-sm text-slate-600 ml-2">
+                      {addDeliveryQuote.amount_cents != null
+                        ? `Est. ${(addDeliveryQuote.amount_cents / 100).toFixed(2)} ${addDeliveryQuote.currency || 'CAD'}`
+                        : ''}
+                      {addDeliveryQuote.disclaimer && (
+                        <span className="text-slate-500"> — {addDeliveryQuote.disclaimer}</span>
+                      )}
+                    </span>
+                  )}
                 </div>
               </form>
             </div>

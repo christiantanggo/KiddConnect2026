@@ -635,6 +635,22 @@ router.get('/delivery-operator/phone-numbers', async (req, res) => {
 });
 
 /**
+ * GET /api/v2/admin/delivery-operator/quote
+ * Estimated cost for a delivery (optional business_id for per-business pricing). Query: business_id
+ */
+router.get('/delivery-operator/quote', async (req, res) => {
+  try {
+    const businessId = (req.query.business_id && String(req.query.business_id).trim()) || null;
+    const { getQuote } = await import('../../services/delivery-network/pricing.js');
+    const quote = await getQuote(businessId);
+    res.json(quote);
+  } catch (err) {
+    console.error('[Admin delivery-operator] quote error:', err?.message || err);
+    res.status(500).json({ amount_cents: 2000, disclaimer: 'Final cost may vary.', currency: 'CAD' });
+  }
+});
+
+/**
  * GET /api/v2/admin/delivery-operator/config
  * Full global delivery config for admin Settings.
  */
