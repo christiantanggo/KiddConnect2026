@@ -57,7 +57,13 @@ function AdminDeliveryOperatorPage() {
     business_id: '',
     callback_phone: '',
     delivery_address: '',
+    delivery_city: '',
+    delivery_province: '',
+    delivery_postal_code: '',
     pickup_address: '',
+    pickup_city: '',
+    pickup_province: '',
+    pickup_postal_code: '',
     recipient_name: '',
     package_description: '',
     priority: 'Schedule',
@@ -411,9 +417,16 @@ function AdminDeliveryOperatorPage() {
       alert('Contact phone is required.');
       return;
     }
-    if (!addDeliveryForm.delivery_address?.trim()) {
-      alert('Delivery address is required.');
-      return;
+    if (!addDeliveryForm.delivery_address?.trim()) { alert('Delivery street address is required.'); return; }
+    if (!addDeliveryForm.delivery_city?.trim()) { alert('Delivery city is required.'); return; }
+    if (!addDeliveryForm.delivery_province?.trim()) { alert('Delivery province is required.'); return; }
+    if (!addDeliveryForm.delivery_postal_code?.trim()) { alert('Delivery postal code is required.'); return; }
+    const hasPickup = addDeliveryForm.pickup_address?.trim() || addDeliveryForm.pickup_city?.trim() || addDeliveryForm.pickup_province?.trim() || addDeliveryForm.pickup_postal_code?.trim();
+    if (hasPickup) {
+      if (!addDeliveryForm.pickup_address?.trim()) { alert('Pickup address (street) is required when entering pickup details.'); return; }
+      if (!addDeliveryForm.pickup_city?.trim()) { alert('Pickup city is required.'); return; }
+      if (!addDeliveryForm.pickup_province?.trim()) { alert('Pickup province is required.'); return; }
+      if (!addDeliveryForm.pickup_postal_code?.trim()) { alert('Pickup postal code is required.'); return; }
     }
     setAddDeliverySubmitting(true);
     try {
@@ -425,7 +438,13 @@ function AdminDeliveryOperatorPage() {
           business_id: addDeliveryForm.business_id.trim(),
           callback_phone: addDeliveryForm.callback_phone.trim(),
           delivery_address: addDeliveryForm.delivery_address.trim(),
+          delivery_city: addDeliveryForm.delivery_city.trim(),
+          delivery_province: addDeliveryForm.delivery_province.trim(),
+          delivery_postal_code: addDeliveryForm.delivery_postal_code.trim(),
           pickup_address: addDeliveryForm.pickup_address?.trim() || undefined,
+          pickup_city: addDeliveryForm.pickup_city?.trim() || undefined,
+          pickup_province: addDeliveryForm.pickup_province?.trim() || undefined,
+          pickup_postal_code: addDeliveryForm.pickup_postal_code?.trim() || undefined,
           recipient_name: addDeliveryForm.recipient_name?.trim() || undefined,
           package_description: addDeliveryForm.package_description?.trim() || undefined,
           priority: addDeliveryForm.priority,
@@ -442,10 +461,18 @@ function AdminDeliveryOperatorPage() {
         business_id: addDeliveryForm.business_id,
         callback_phone: '',
         delivery_address: '',
+        delivery_city: '',
+        delivery_province: '',
+        delivery_postal_code: '',
         pickup_address: '',
+        pickup_city: '',
+        pickup_province: '',
+        pickup_postal_code: '',
         recipient_name: '',
         package_description: '',
         priority: 'Schedule',
+        scheduled_date: getTomorrowLocal(),
+        scheduled_time: '13:00',
       });
       setBusinessSearchQuery('');
       setBusinessDropdownOpen(false);
@@ -465,7 +492,13 @@ function AdminDeliveryOperatorPage() {
       const params = new URLSearchParams();
       if (addDeliveryForm.business_id?.trim()) params.set('business_id', addDeliveryForm.business_id.trim());
       if (addDeliveryForm.delivery_address?.trim()) params.set('delivery_address', addDeliveryForm.delivery_address.trim());
+      if (addDeliveryForm.delivery_city?.trim()) params.set('delivery_city', addDeliveryForm.delivery_city.trim());
+      if (addDeliveryForm.delivery_province?.trim()) params.set('delivery_province', addDeliveryForm.delivery_province.trim());
+      if (addDeliveryForm.delivery_postal_code?.trim()) params.set('delivery_postal_code', addDeliveryForm.delivery_postal_code.trim());
       if (addDeliveryForm.pickup_address?.trim()) params.set('pickup_address', addDeliveryForm.pickup_address.trim());
+      if (addDeliveryForm.pickup_city?.trim()) params.set('pickup_city', addDeliveryForm.pickup_city.trim());
+      if (addDeliveryForm.pickup_province?.trim()) params.set('pickup_province', addDeliveryForm.pickup_province.trim());
+      if (addDeliveryForm.pickup_postal_code?.trim()) params.set('pickup_postal_code', addDeliveryForm.pickup_postal_code.trim());
       if (addDeliveryForm.callback_phone?.trim()) params.set('customer_phone', addDeliveryForm.callback_phone.trim());
       if (addDeliveryForm.recipient_name?.trim()) params.set('recipient_name', addDeliveryForm.recipient_name.trim());
       const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/quote?${params.toString()}`, {
@@ -839,25 +872,98 @@ function AdminDeliveryOperatorPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Delivery address <span className="text-red-600">*</span></label>
-                  <input
-                    type="text"
-                    value={addDeliveryForm.delivery_address}
-                    onChange={(e) => setAddDeliveryForm(f => ({ ...f, delivery_address: e.target.value }))}
-                    placeholder="Street, city, postal code"
-                    required
-                    className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
-                  />
+                  <p className="text-sm font-medium text-slate-700 mb-2">Delivery address <span className="text-red-600">*</span></p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Street address</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.delivery_address}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, delivery_address: e.target.value }))}
+                        placeholder="e.g. 456 Oak Ave"
+                        required
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">City</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.delivery_city}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, delivery_city: e.target.value }))}
+                        placeholder="e.g. Toronto"
+                        required
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Province</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.delivery_province}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, delivery_province: e.target.value }))}
+                        placeholder="e.g. ON"
+                        required
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Postal code</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.delivery_postal_code}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, delivery_postal_code: e.target.value }))}
+                        placeholder="e.g. M5V 1A1"
+                        required
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Pickup address (optional)</label>
-                  <input
-                    type="text"
-                    value={addDeliveryForm.pickup_address}
-                    onChange={(e) => setAddDeliveryForm(f => ({ ...f, pickup_address: e.target.value }))}
-                    placeholder="Leave blank if same as business"
-                    className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
-                  />
+                <div className="border-t border-slate-200 pt-4 mt-2">
+                  <p className="text-sm font-medium text-slate-700 mb-2">Pickup address (optional — enter all four for accurate distance)</p>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Street address</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.pickup_address}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, pickup_address: e.target.value }))}
+                        placeholder="e.g. 123 Main St"
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">City</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.pickup_city}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, pickup_city: e.target.value }))}
+                        placeholder="e.g. Toronto"
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Province</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.pickup_province}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, pickup_province: e.target.value }))}
+                        placeholder="e.g. ON"
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-600 mb-1">Postal code</label>
+                      <input
+                        type="text"
+                        value={addDeliveryForm.pickup_postal_code}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, pickup_postal_code: e.target.value }))}
+                        placeholder="e.g. M5V 1A1"
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Recipient name (optional)</label>

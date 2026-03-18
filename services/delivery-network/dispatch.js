@@ -9,6 +9,37 @@ import { buildShipdayOrderPayload } from './shipdayOrder.js';
 
 const DEFAULT_BROKER_ID = 'shipday'; // or 'stub' when no API key
 
+/** Build full address for Shipday from structured fields (street, city, province, postal code). */
+function buildFullAddress(street, city, province, postalCode) {
+  const s = street && String(street).trim();
+  const c = city && String(city).trim();
+  const p = province && String(province).trim();
+  const z = postalCode && String(postalCode).trim();
+  if (s && (c || p || z)) {
+    const rest = [c, [p, z].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    return rest ? `${s}, ${rest}` : s;
+  }
+  return s || null;
+}
+
+function buildFullPickupAddress(request) {
+  return buildFullAddress(
+    request.pickup_address,
+    request.pickup_city,
+    request.pickup_province,
+    request.pickup_postal_code
+  ) || 'Pickup address TBD';
+}
+
+function buildFullDeliveryAddress(request) {
+  return buildFullAddress(
+    request.delivery_address,
+    request.delivery_city,
+    request.delivery_province,
+    request.delivery_postal_code
+  ) || String(request.delivery_address || '').trim() || 'Address TBD';
+}
+
 /**
  * Resolve whether we have a valid Shipday (or first enabled broker) API key: from delivery config (UI) or env.
  */
@@ -106,7 +137,7 @@ export async function startDispatch(deliveryRequestId) {
   const pickupPhone = Array.isArray(config?.delivery_phone_numbers) && config.delivery_phone_numbers.length > 0
     ? String(config.delivery_phone_numbers[0]).trim()
     : null;
-  const pickupAddress = (request.pickup_address && String(request.pickup_address).trim()) || 'Pickup address TBD';
+  const pickupAddress = buildFullPickupAddress(request);
 
   // Resolve business timezone for Schedule/Same Day (date and time in their timezone).
   let businessTimezone = 'America/New_York';
@@ -171,10 +202,11 @@ export async function startDispatch(deliveryRequestId) {
     deliveryTime = '13:00:00';
   }
 
+  const deliveryAddress = buildFullDeliveryAddress(request);
   const orderPayload = buildShipdayOrderPayload({
     orderNumber: (request.reference_number && String(request.reference_number).trim()) || `tavari-${deliveryRequestId.slice(0, 8)}`,
     customerName: (request.recipient_name && String(request.recipient_name).trim()) || 'Customer',
-    customerAddress: String(request.delivery_address || '').trim() || 'Address TBD',
+    customerAddress: deliveryAddress,
     customerPhoneNumber: (request.callback_phone && String(request.callback_phone).trim()) || (request.recipient_phone && String(request.recipient_phone).trim()) || null,
     restaurantName: 'Pickup',
     restaurantAddress: pickupAddress,

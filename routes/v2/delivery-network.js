@@ -327,6 +327,9 @@ router.post('/request', express.json(), async (req, res) => {
       caller_phone: body.caller_phone || null,
       callback_phone: String(callback_phone).trim(),
       delivery_address: String(delivery_address).trim(),
+      delivery_city: body.delivery_city?.trim() || null,
+      delivery_province: body.delivery_province?.trim() || null,
+      delivery_postal_code: body.delivery_postal_code?.trim() || null,
       recipient_name: body.recipient_name || body.name || null,
       recipient_phone: body.recipient_phone || null,
       package_description: body.package_description || body.issue_description || null,
@@ -772,15 +775,26 @@ router.post('/requests', express.json(), async (req, res) => {
       return res.status(400).json({ error: 'Contact phone is required' });
     }
     const delivery_address = body.delivery_address || body.address;
+    const delivery_city = body.delivery_city?.trim() || null;
+    const delivery_province = body.delivery_province?.trim() || null;
+    const delivery_postal_code = body.delivery_postal_code?.trim() || null;
     if (!delivery_address || !String(delivery_address).trim()) {
-      return res.status(400).json({ error: 'Delivery address is required' });
+      return res.status(400).json({ error: 'Delivery address (street) is required' });
     }
-
+    if (!delivery_city || !delivery_province || !delivery_postal_code) {
+      return res.status(400).json({ error: 'Delivery city, province, and postal code are required' });
+    }
     const request = await createDeliveryRequest({
       business_id: businessId,
       callback_phone: String(callback_phone).trim(),
       pickup_address: body.pickup_address?.trim() || null,
+      pickup_city: body.pickup_city?.trim() || null,
+      pickup_province: body.pickup_province?.trim() || null,
+      pickup_postal_code: body.pickup_postal_code?.trim() || null,
       delivery_address: String(delivery_address).trim(),
+      delivery_city,
+      delivery_province,
+      delivery_postal_code,
       recipient_name: body.recipient_name?.trim() || null,
       recipient_phone: body.recipient_phone?.trim() || null,
       package_description: body.package_description?.trim() || null,

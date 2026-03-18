@@ -45,7 +45,13 @@ export default function DeliveryDispatchPage() {
   };
   // Request form
   const [pickup_address, setPickupAddress] = useState('');
+  const [pickup_city, setPickupCity] = useState('');
+  const [pickup_province, setPickupProvince] = useState('');
+  const [pickup_postal_code, setPickupPostalCode] = useState('');
   const [delivery_address, setDeliveryAddress] = useState('');
+  const [delivery_city, setDeliveryCity] = useState('');
+  const [delivery_province, setDeliveryProvince] = useState('');
+  const [delivery_postal_code, setDeliveryPostalCode] = useState('');
   const [callback_phone, setCallbackPhone] = useState('');
   const [recipient_name, setRecipientName] = useState('');
   const [package_description, setPackageDescription] = useState('');
@@ -86,11 +92,24 @@ export default function DeliveryDispatchPage() {
     setSubmitError(null);
     setSubmitSuccess(null);
     if (!callback_phone?.trim()) { setSubmitError('Contact phone is required'); return; }
-    if (!delivery_address?.trim()) { setSubmitError('Delivery address is required'); return; }
+    if (!delivery_address?.trim()) { setSubmitError('Delivery street address is required'); return; }
+    if (!delivery_city?.trim()) { setSubmitError('Delivery city is required'); return; }
+    if (!delivery_province?.trim()) { setSubmitError('Delivery province is required'); return; }
+    if (!delivery_postal_code?.trim()) { setSubmitError('Delivery postal code is required'); return; }
+    const hasPickup = pickup_address?.trim() || pickup_city?.trim() || pickup_province?.trim() || pickup_postal_code?.trim();
+    if (hasPickup) {
+      if (!pickup_address?.trim()) { setSubmitError('Pickup street address is required'); return; }
+      if (!pickup_city?.trim()) { setSubmitError('Pickup city is required'); return; }
+      if (!pickup_province?.trim()) { setSubmitError('Pickup province is required'); return; }
+      if (!pickup_postal_code?.trim()) { setSubmitError('Pickup postal code is required'); return; }
+    }
     setSubmitting(true);
     try {
       const res = await deliveryNetworkAPI.createRequest({
         pickup_address: pickup_address.trim() || undefined,
+        pickup_city: pickup_city.trim() || undefined,
+        pickup_province: pickup_province.trim() || undefined,
+        pickup_postal_code: pickup_postal_code.trim() || undefined,
         delivery_address: delivery_address.trim(),
         callback_phone: callback_phone.trim(),
         recipient_name: recipient_name.trim() || undefined,
@@ -103,7 +122,13 @@ export default function DeliveryDispatchPage() {
       });
       setSubmitSuccess(res.data?.reference_number ? `Delivery scheduled. Reference: ${res.data.reference_number}` : 'Delivery scheduled.');
       setPickupAddress('');
+      setPickupCity('');
+      setPickupProvince('');
+      setPickupPostalCode('');
       setDeliveryAddress('');
+      setDeliveryCity('');
+      setDeliveryProvince('');
+      setDeliveryPostalCode('');
       setRecipientName('');
       setPackageDescription('');
       load();
@@ -195,25 +220,90 @@ export default function DeliveryDispatchPage() {
               <p className="text-slate-600 text-sm mb-6">Enter pickup and delivery addresses. We’ll schedule a driver for you.</p>
               <form onSubmit={handleSubmitRequest} className="space-y-4 max-w-xl">
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Pickup address</label>
-                  <input
-                    type="text"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="Street, city, postal code"
-                    value={pickup_address}
-                    onChange={(e) => setPickupAddress(e.target.value)}
-                  />
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Pickup address (optional — enter all for accurate distance)</label>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                    <div className="sm:col-span-2">
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Street address"
+                        value={pickup_address}
+                        onChange={(e) => setPickupAddress(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="City"
+                        value={pickup_city}
+                        onChange={(e) => setPickupCity(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Province (e.g. ON)"
+                        value={pickup_province}
+                        onChange={(e) => setPickupProvince(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Postal code"
+                        value={pickup_postal_code}
+                        onChange={(e) => setPickupPostalCode(e.target.value)}
+                      />
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Delivery address <span className="text-red-600">*</span></label>
-                  <input
-                    type="text"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="Street, city, postal code"
-                    value={delivery_address}
-                    onChange={(e) => setDeliveryAddress(e.target.value)}
-                    required
-                  />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
+                    <div className="sm:col-span-2">
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Street address"
+                        value={delivery_address}
+                        onChange={(e) => setDeliveryAddress(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="City"
+                        value={delivery_city}
+                        onChange={(e) => setDeliveryCity(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Province (e.g. ON)"
+                        value={delivery_province}
+                        onChange={(e) => setDeliveryProvince(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div>
+                      <input
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        placeholder="Postal code"
+                        value={delivery_postal_code}
+                        onChange={(e) => setDeliveryPostalCode(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Contact phone <span className="text-red-600">*</span></label>

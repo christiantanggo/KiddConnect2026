@@ -548,8 +548,14 @@ router.post('/delivery-operator/requests', express.json(), async (req, res) => {
       return res.status(400).json({ error: 'Contact phone is required.' });
     }
     const delivery_address = body.delivery_address || body.address || '';
+    const delivery_city = body.delivery_city?.trim() || null;
+    const delivery_province = body.delivery_province?.trim() || null;
+    const delivery_postal_code = body.delivery_postal_code?.trim() || null;
     if (!delivery_address || !String(delivery_address).trim()) {
-      return res.status(400).json({ error: 'Delivery address is required.' });
+      return res.status(400).json({ error: 'Delivery address (street) is required.' });
+    }
+    if (!delivery_city || !delivery_province || !delivery_postal_code) {
+      return res.status(400).json({ error: 'Delivery city, province, and postal code are required.' });
     }
     const { createDeliveryRequest } = await import('../../services/delivery-network/intake.js');
     const { startDispatch } = await import('../../services/delivery-network/dispatch.js');
@@ -557,7 +563,13 @@ router.post('/delivery-operator/requests', express.json(), async (req, res) => {
       business_id: business_id.trim(),
       callback_phone: String(callback_phone).trim(),
       pickup_address: body.pickup_address?.trim() || null,
+      pickup_city: body.pickup_city?.trim() || null,
+      pickup_province: body.pickup_province?.trim() || null,
+      pickup_postal_code: body.pickup_postal_code?.trim() || null,
       delivery_address: String(delivery_address).trim(),
+      delivery_city,
+      delivery_province,
+      delivery_postal_code,
       recipient_name: body.recipient_name?.trim() || null,
       recipient_phone: body.recipient_phone?.trim() || null,
       package_description: body.package_description?.trim() || null,
@@ -643,11 +655,31 @@ router.get('/delivery-operator/phone-numbers', async (req, res) => {
  * configured, we try to get a quote from Shipday (create scheduled order → get costing → delete order).
  * Otherwise uses configured rates (Settings → Billing).
  */
+function buildFullPickupFromParts(street, city, province, postalCode) {
+  const s = street && String(street).trim();
+  const c = city && String(city).trim();
+  const p = province && String(province).trim();
+  const z = postalCode && String(postalCode).trim();
+  if (s && (c || p || z)) {
+    const rest = [c, [p, z].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    return rest ? `${s}, ${rest}` : s;
+  }
+  return s || null;
+}
+
 router.get('/delivery-operator/quote', async (req, res) => {
   try {
     const businessId = (req.query.business_id && String(req.query.business_id).trim()) || null;
-    const pickup_address = (req.query.pickup_address && String(req.query.pickup_address).trim()) || null;
-    const delivery_address = (req.query.delivery_address && String(req.query.delivery_address).trim()) || null;
+    const pickup_street = (req.query.pickup_address && String(req.query.pickup_address).trim()) || null;
+    const pickup_city = (req.query.pickup_city && String(req.query.pickup_city).trim()) || null;
+    const pickup_province = (req.query.pickup_province && String(req.query.pickup_province).trim()) || null;
+    const pickup_postal_code = (req.query.pickup_postal_code && String(req.query.pickup_postal_code).trim()) || null;
+    const pickup_address = buildFullPickupFromParts(pickup_street, pickup_city, pickup_province, pickup_postal_code) || pickup_street;
+    const delivery_street = (req.query.delivery_address && String(req.query.delivery_address).trim()) || null;
+    const delivery_city_q = (req.query.delivery_city && String(req.query.delivery_city).trim()) || null;
+    const delivery_province_q = (req.query.delivery_province && String(req.query.delivery_province).trim()) || null;
+    const delivery_postal_code_q = (req.query.delivery_postal_code && String(req.query.delivery_postal_code).trim()) || null;
+    const delivery_address = buildFullPickupFromParts(delivery_street, delivery_city_q, delivery_province_q, delivery_postal_code_q) || delivery_street;
     const pickup_phone = (req.query.pickup_phone && String(req.query.pickup_phone).trim()) || null;
     const pickup_name = (req.query.pickup_name && String(req.query.pickup_name).trim()) || null;
     const customer_phone = (req.query.customer_phone && String(req.query.customer_phone).trim()) || null;
