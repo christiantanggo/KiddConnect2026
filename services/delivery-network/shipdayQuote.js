@@ -93,17 +93,24 @@ export async function getQuoteFromShipday(params) {
     const deliveryFee = costing?.deliveryFee != null ? Number(costing.deliveryFee) : null;
     const totalCost = costing?.totalCost != null ? Number(costing.totalCost) : null;
     const amount = totalCost != null && totalCost > 0 ? totalCost : (deliveryFee != null && deliveryFee > 0 ? deliveryFee : null);
-    const amount_cents = amount != null ? Math.round(amount * 100) : null;
+    const shipday_cost_cents = amount != null ? Math.round(amount * 100) : null;
 
-    if (amount_cents == null || amount_cents <= 0) {
+    if (shipday_cost_cents == null || shipday_cost_cents <= 0) {
       console.log('[ShipdayQuote] no costing from Shipday (they may echo what we sent); falling back to config');
       return null;
     }
 
-    console.log('[ShipdayQuote] got quote', amount_cents, 'cents from Shipday');
+    const config = await getDeliveryConfigFull();
+    const margin_cents = Math.max(0, Math.round(Number(config?.billing?.quote_margin_cents) || 0));
+    const total_cents = shipday_cost_cents + margin_cents;
+
+    console.log('[ShipdayQuote] got quote: Shipday', shipday_cost_cents, 'cents, margin', margin_cents, 'cents, total', total_cents);
     return {
-      amount_cents,
       source: 'shipday',
+      shipday_cost_cents,
+      margin_cents,
+      total_cents,
+      amount_cents: total_cents,
       disclaimer: 'Quote from Shipday. Final cost may vary.',
       currency: 'CAD',
     };
@@ -111,7 +118,7 @@ export async function getQuoteFromShipday(params) {
     console.warn('[ShipdayQuote] error', err?.message || err);
     return null;
   } finally {
-    // 3. Delete the order so we don't leave draft orders in Shipday
+    // 3. Cancel/delete the temporary order in Shipday so it never gets dispatched
     if (orderId != null) {
       try {
         await axios.delete(`${baseUrl}/orders/${orderId}`, {
@@ -119,9 +126,9 @@ export async function getQuoteFromShipday(params) {
           timeout: 5000,
           validateStatus: (s) => s === 204 || s === 200,
         });
-        console.log('[ShipdayQuote] deleted quote order', orderId);
+        console.log('[ShipdayQuote] Pickup cancelled: temporary quote order', orderId, 'deleted from Shipday');
       } catch (delErr) {
-        console.warn('[ShipdayQuote] delete order failed', orderId, delErr?.message || delErr);
+        console.warn('[ShipdayQuote] Failed to cancel quote order', orderId, delErr?.message || delErr);
       }
     }
   }

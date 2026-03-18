@@ -95,7 +95,7 @@ function AdminDeliveryOperatorPage() {
     customer_sms_message: '',
     customer_sms_legal: '',
     service_line_name: 'Last-Mile Delivery',
-    billing: { price_basic_cents: '', price_priority_cents: '', sms_fee_cents: '' },
+    billing: { price_basic_cents: '', price_priority_cents: '', sms_fee_cents: '', quote_margin_cents: '' },
     brokers: {},
   });
   /** Ref so Save always sends the latest selection (avoids stale state / closure). */
@@ -185,6 +185,7 @@ function AdminDeliveryOperatorPage() {
           price_basic_cents: configData.billing?.price_basic_cents ?? '',
           price_priority_cents: configData.billing?.price_priority_cents ?? '',
           sms_fee_cents: configData.billing?.sms_fee_cents ?? '',
+          quote_margin_cents: configData.billing?.quote_margin_cents ?? '',
         },
         brokers: configData.brokers && typeof configData.brokers === 'object' ? configData.brokers : {},
       });
@@ -221,6 +222,7 @@ function AdminDeliveryOperatorPage() {
           price_basic_cents: typeof configForm.billing.price_basic_cents === 'number' ? configForm.billing.price_basic_cents : (configForm.billing.price_basic_cents === '' ? undefined : Math.round(Number(configForm.billing.price_basic_cents))),
           price_priority_cents: typeof configForm.billing.price_priority_cents === 'number' ? configForm.billing.price_priority_cents : (configForm.billing.price_priority_cents === '' ? undefined : Math.round(Number(configForm.billing.price_priority_cents))),
           sms_fee_cents: typeof configForm.billing.sms_fee_cents === 'number' ? configForm.billing.sms_fee_cents : (configForm.billing.sms_fee_cents === '' ? undefined : Math.round(Number(configForm.billing.sms_fee_cents))),
+          quote_margin_cents: typeof configForm.billing.quote_margin_cents === 'number' ? configForm.billing.quote_margin_cents : (configForm.billing.quote_margin_cents === '' ? undefined : Math.round(Number(configForm.billing.quote_margin_cents))),
         },
         brokers: configForm.brokers && typeof configForm.brokers === 'object' ? configForm.brokers : {},
       };
@@ -728,6 +730,11 @@ function AdminDeliveryOperatorPage() {
                         <label className="block text-sm text-slate-700 mb-1">SMS fee (cents)</label>
                         <input type="number" value={configForm.billing.sms_fee_cents} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, sms_fee_cents: e.target.value } }))} placeholder="e.g. 2" className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
                       </div>
+                      <div>
+                        <label className="block text-sm text-slate-700 mb-1">Quote margin (cents)</label>
+                        <input type="number" value={configForm.billing.quote_margin_cents} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, quote_margin_cents: e.target.value } }))} placeholder="e.g. 300" className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                        <p className="text-xs text-slate-500 mt-0.5">Added on top of Shipday cost when showing quote (e.g. 300 = $3)</p>
+                      </div>
                     </div>
                   </section>
                   )}
@@ -897,17 +904,27 @@ function AdminDeliveryOperatorPage() {
                     View deliveries
                   </button>
                   {addDeliveryQuote && (
-                    <span className="text-sm text-slate-600 ml-2">
-                      {addDeliveryQuote.amount_cents != null
-                        ? `Est. ${(addDeliveryQuote.amount_cents / 100).toFixed(2)} ${addDeliveryQuote.currency || 'CAD'}`
-                        : ''}
-                      {addDeliveryQuote.source === 'shipday'
-                        ? <span className="text-slate-500"> (from Shipday)</span>
-                        : <span className="text-slate-500"> (from Settings → Billing)</span>}
-                      {addDeliveryQuote.disclaimer && (
-                        <span className="text-slate-500"> — {addDeliveryQuote.disclaimer}</span>
+                    <div className="ml-2 text-sm text-slate-600">
+                      {addDeliveryQuote.source === 'shipday' && addDeliveryQuote.shipday_cost_cents != null ? (
+                        <span>
+                          <span className="font-medium">Shipday:</span> {(addDeliveryQuote.shipday_cost_cents / 100).toFixed(2)} {addDeliveryQuote.currency || 'CAD'}
+                          {' · '}
+                          <span className="font-medium">Our margin:</span> {((addDeliveryQuote.margin_cents ?? 0) / 100).toFixed(2)} {addDeliveryQuote.currency || 'CAD'}
+                          {' · '}
+                          <span className="font-medium">Total for customer:</span> {((addDeliveryQuote.total_cents ?? addDeliveryQuote.amount_cents) / 100).toFixed(2)} {addDeliveryQuote.currency || 'CAD'}
+                        </span>
+                      ) : (
+                        <span>
+                          {addDeliveryQuote.amount_cents != null
+                            ? `Est. ${(addDeliveryQuote.amount_cents / 100).toFixed(2)} ${addDeliveryQuote.currency || 'CAD'}`
+                            : ''}
+                          <span className="text-slate-500"> (from Settings → Billing)</span>
+                        </span>
                       )}
-                    </span>
+                      {addDeliveryQuote.disclaimer && (
+                        <span className="text-slate-500 block mt-0.5">— {addDeliveryQuote.disclaimer}</span>
+                      )}
+                    </div>
                   )}
                 </div>
               </form>

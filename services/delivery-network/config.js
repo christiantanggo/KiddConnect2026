@@ -187,6 +187,7 @@ export async function updateDeliveryConfig(updates) {
       price_priority_cents: typeof billing.price_priority_cents === 'number' ? billing.price_priority_cents : undefined,
       price_premium_cents: typeof billing.price_premium_cents === 'number' ? billing.price_premium_cents : undefined,
       sms_fee_cents: typeof billing.sms_fee_cents === 'number' ? billing.sms_fee_cents : undefined,
+      quote_margin_cents: typeof billing.quote_margin_cents === 'number' ? billing.quote_margin_cents : undefined,
     };
     Object.keys(merged.billing).forEach((k) => { if (merged.billing[k] === undefined) delete merged.billing[k]; });
   }
