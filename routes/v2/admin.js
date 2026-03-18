@@ -563,6 +563,8 @@ router.post('/delivery-operator/requests', express.json(), async (req, res) => {
       package_description: body.package_description?.trim() || null,
       special_instructions: body.special_instructions?.trim() || null,
       priority: body.priority === 'Immediate' || body.priority === 'Same Day' ? body.priority : 'Schedule',
+      scheduled_date: body.scheduled_date?.trim() || null,
+      scheduled_time: body.scheduled_time?.trim() || null,
       intake_channel: 'admin',
     });
     startDispatch(request.id).catch((err) =>

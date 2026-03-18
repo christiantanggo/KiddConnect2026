@@ -107,26 +107,69 @@ export async function startDispatch(deliveryRequestId) {
     ? String(config.delivery_phone_numbers[0]).trim()
     : null;
   const pickupAddress = (request.pickup_address && String(request.pickup_address).trim()) || 'Pickup address TBD';
+
+  // Resolve business timezone for Schedule/Same Day (date and time in their timezone).
+  let businessTimezone = 'America/New_York';
+  if (request.business_id) {
+    const { data: biz } = await supabaseClient.from('businesses').select('timezone').eq('id', request.business_id).single();
+    if (biz?.timezone && String(biz.timezone).trim()) businessTimezone = String(biz.timezone).trim();
+  }
+
+  /** Normalize time string to HH:mm:ss for Shipday. */
+  function toHHmmss(s) {
+    if (!s || typeof s !== 'string') return null;
+    const t = s.trim();
+    const parts = t.split(':').map((x) => x.padStart(2, '0'));
+    if (parts.length >= 2) return `${parts[0]}:${parts[1]}:${(parts[2] || '00').slice(0, 2)}`;
+    return null;
+  }
+
+  /** Tomorrow's date (YYYY-MM-DD) in the given IANA timezone. */
+  function tomorrowInTz(timezone) {
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
+  }
+
+  /** Today's date (YYYY-MM-DD) in the given IANA timezone. */
+  function todayInTz(timezone) {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  }
+
   const now = new Date();
   const isImmediate = (request.priority || '').toLowerCase() === 'immediate';
   const isSameDay = (request.priority || '').toLowerCase() === 'same day';
-  let deliveryDate = now;
+  const isSchedule = (request.priority || '').toLowerCase() === 'schedule';
+  let expectedDate;
   let pickupTime = '12:00:00';
   let deliveryTime = '13:00:00';
+
   if (isImmediate) {
-    deliveryDate = now;
+    expectedDate = now.toISOString().slice(0, 10);
     const p = new Date(now.getTime() + 30 * 60 * 1000);
     const d = new Date(now.getTime() + 60 * 60 * 1000);
-    pickupTime = `${String(p.getHours()).padStart(2, '0')}:${String(p.getMinutes()).padStart(2, '0')}:00`;
-    deliveryTime = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:00`;
+    pickupTime = `${String(p.getUTCHours()).padStart(2, '0')}:${String(p.getUTCMinutes()).padStart(2, '0')}:00`;
+    deliveryTime = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:00`;
   } else if (isSameDay) {
-    deliveryDate = now;
+    expectedDate = todayInTz(businessTimezone);
     pickupTime = '14:00:00';
     deliveryTime = '15:00:00';
+  } else if (isSchedule && request.scheduled_date && String(request.scheduled_date).trim()) {
+    // User chose a delivery date (and optionally time). Interpret in business timezone.
+    expectedDate = String(request.scheduled_date).trim().slice(0, 10);
+    const normalized = toHHmmss(request.scheduled_time);
+    if (normalized) {
+      deliveryTime = normalized;
+      // Pickup 1 hour before delivery (simple string math for HH:mm:ss).
+      const [h, m] = deliveryTime.split(':').map(Number);
+      const pickupH = h - 1 >= 0 ? h - 1 : 23;
+      pickupTime = `${String(pickupH).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    }
   } else {
-    deliveryDate = new Date(now.getTime() + 24 * 60 * 60 * 1000);
+    // Schedule without scheduled_date: tomorrow in business timezone at 12:00 / 13:00
+    expectedDate = tomorrowInTz(businessTimezone);
+    pickupTime = '12:00:00';
+    deliveryTime = '13:00:00';
   }
-  const expectedDate = deliveryDate.toISOString().slice(0, 10);
 
   const orderPayload = buildShipdayOrderPayload({
     orderNumber: (request.reference_number && String(request.reference_number).trim()) || `tavari-${deliveryRequestId.slice(0, 8)}`,

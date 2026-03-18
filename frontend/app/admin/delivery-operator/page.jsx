@@ -48,6 +48,11 @@ function AdminDeliveryOperatorPage() {
   // Add delivery (manual) state
   const [businesses, setBusinesses] = useState([]);
   const [businessesLoading, setBusinessesLoading] = useState(false);
+  const getTomorrowLocal = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
   const [addDeliveryForm, setAddDeliveryForm] = useState({
     business_id: '',
     callback_phone: '',
@@ -56,6 +61,8 @@ function AdminDeliveryOperatorPage() {
     recipient_name: '',
     package_description: '',
     priority: 'Schedule',
+    scheduled_date: getTomorrowLocal(),
+    scheduled_time: '13:00',
   });
   const [addDeliverySubmitting, setAddDeliverySubmitting] = useState(false);
   const [addDeliverySuccess, setAddDeliverySuccess] = useState(null);
@@ -422,6 +429,10 @@ function AdminDeliveryOperatorPage() {
           recipient_name: addDeliveryForm.recipient_name?.trim() || undefined,
           package_description: addDeliveryForm.package_description?.trim() || undefined,
           priority: addDeliveryForm.priority,
+          ...(addDeliveryForm.priority === 'Schedule' && {
+            scheduled_date: addDeliveryForm.scheduled_date?.trim() || undefined,
+            scheduled_time: addDeliveryForm.scheduled_time?.trim() || undefined,
+          }),
         }),
       });
       const data = await res.json();
@@ -880,6 +891,28 @@ function AdminDeliveryOperatorPage() {
                     <option value="Immediate">Immediate</option>
                   </select>
                 </div>
+                {addDeliveryForm.priority === 'Schedule' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Delivery date</label>
+                      <input
+                        type="date"
+                        value={addDeliveryForm.scheduled_date || ''}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, scheduled_date: e.target.value }))}
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Delivery time (in business timezone)</label>
+                      <input
+                        type="time"
+                        value={addDeliveryForm.scheduled_time || '13:00'}
+                        onChange={(e) => setAddDeliveryForm(f => ({ ...f, scheduled_time: e.target.value }))}
+                        className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="flex flex-wrap gap-3 items-center pt-2">
                   <button
                     type="submit"

@@ -38,6 +38,11 @@ export default function DeliveryDispatchPage() {
   const [requests, setRequests] = useState([]);
   const [savedLocations, setSavedLocations] = useState([]);
 
+  const getTomorrowLocal = () => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
   // Request form
   const [pickup_address, setPickupAddress] = useState('');
   const [delivery_address, setDeliveryAddress] = useState('');
@@ -45,6 +50,8 @@ export default function DeliveryDispatchPage() {
   const [recipient_name, setRecipientName] = useState('');
   const [package_description, setPackageDescription] = useState('');
   const [priority, setPriority] = useState('Schedule');
+  const [scheduled_date, setScheduledDate] = useState(getTomorrowLocal());
+  const [scheduled_time, setScheduledTime] = useState('13:00');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
   const [submitSuccess, setSubmitSuccess] = useState(null);
@@ -89,6 +96,10 @@ export default function DeliveryDispatchPage() {
         recipient_name: recipient_name.trim() || undefined,
         package_description: package_description.trim() || undefined,
         priority,
+        ...(priority === 'Schedule' && {
+          scheduled_date: scheduled_date?.trim() || undefined,
+          scheduled_time: scheduled_time?.trim() || undefined,
+        }),
       });
       setSubmitSuccess(res.data?.reference_number ? `Delivery scheduled. Reference: ${res.data.reference_number}` : 'Delivery scheduled.');
       setPickupAddress('');
@@ -247,6 +258,28 @@ export default function DeliveryDispatchPage() {
                     ))}
                   </select>
                 </div>
+                {priority === 'Schedule' && (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Delivery date</label>
+                      <input
+                        type="date"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        value={scheduled_date || ''}
+                        onChange={(e) => setScheduledDate(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Delivery time</label>
+                      <input
+                        type="time"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        value={scheduled_time || '13:00'}
+                        onChange={(e) => setScheduledTime(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
                 {submitError && <p className="text-red-600 text-sm">{submitError}</p>}
                 {submitSuccess && <p className="text-emerald-600 text-sm">{submitSuccess}</p>}
                 <button type="submit" disabled={submitting} className="px-6 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60">

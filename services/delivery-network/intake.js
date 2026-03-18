@@ -24,7 +24,7 @@ function generateReferenceNumber() {
 
 /**
  * Create a delivery request.
- * @param {Object} params - business_id (optional for individuals), caller_phone, callback_phone, pickup/delivery/package fields, priority, intake_channel, intake_transcript, etc.
+ * @param {Object} params - business_id (optional for individuals), caller_phone, callback_phone, pickup/delivery/package fields, priority, scheduled_date (YYYY-MM-DD), scheduled_time (HH:mm or HH:mm:ss), intake_channel, intake_transcript, etc.
  */
 export async function createDeliveryRequest(params) {
   const {
@@ -46,6 +46,8 @@ export async function createDeliveryRequest(params) {
     package_weight = null,
     special_instructions = null,
     priority = 'Schedule',
+    scheduled_date = null,
+    scheduled_time = null,
     intake_channel = 'form',
     payment_status = null,
     intake_transcript = null,
@@ -77,6 +79,8 @@ export async function createDeliveryRequest(params) {
     package_weight: package_weight?.trim() || null,
     special_instructions: special_instructions?.trim() || null,
     priority: clampPriority(priority),
+    scheduled_date: scheduled_date && String(scheduled_date).trim() ? String(scheduled_date).trim().slice(0, 10) : null,
+    scheduled_time: scheduled_time && String(scheduled_time).trim() ? String(scheduled_time).trim().slice(0, 10) : null,
     status: 'New',
     intake_channel: ['phone', 'sms', 'form', 'chat', 'api'].includes(intake_channel) ? intake_channel : 'form',
     payment_status: payment_status || null,
