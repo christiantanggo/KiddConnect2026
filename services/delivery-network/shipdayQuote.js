@@ -72,6 +72,9 @@ export async function getQuoteFromShipday(params) {
     totalOrderCost: 0,
     paymentMethod: 'credit_card',
   });
+  // Omit cost fields so Shipday may calculate and return delivery fee (instead of echoing 0)
+  delete orderPayload.deliveryFee;
+  delete orderPayload.totalOrderCost;
 
   const headers = {
     Accept: 'application/json',
@@ -112,8 +115,8 @@ export async function getQuoteFromShipday(params) {
     const hasCosting = costing && (Number(costing.totalCost) > 0 || Number(costing.deliveryFee) > 0);
     if (!hasCosting) {
       console.log('[ShipdayQuote] first GET: costing missing or zero', JSON.stringify(costing ?? order?.costing));
-      // Shipday may populate costing asynchronously; wait and retry once
-      await new Promise((r) => setTimeout(r, 2500));
+      // Shipday may populate costing asynchronously when we omit deliveryFee/totalOrderCost; wait and retry once
+      await new Promise((r) => setTimeout(r, 5000));
       getRes = await axios.get(`${baseUrl}/orders/${encodeURIComponent(orderNumber)}`, {
         headers: { Accept: 'application/json', Authorization: headers.Authorization },
         timeout: 10000,
@@ -122,7 +125,7 @@ export async function getQuoteFromShipday(params) {
       if (getRes.status === 200 && Array.isArray(getRes.data) && getRes.data.length > 0) {
         order = getRes.data[0];
         costing = order?.costing;
-        console.log('[ShipdayQuote] after 2.5s retry: costing', JSON.stringify(costing));
+        console.log('[ShipdayQuote] after 5s retry: costing', JSON.stringify(costing));
       }
     }
 

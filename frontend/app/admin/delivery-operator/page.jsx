@@ -918,7 +918,11 @@ function AdminDeliveryOperatorPage() {
                           {addDeliveryQuote.amount_cents != null
                             ? `Est. ${(addDeliveryQuote.amount_cents / 100).toFixed(2)} ${addDeliveryQuote.currency || 'CAD'}`
                             : ''}
-                          <span className="text-slate-500"> (from Settings → Billing). Fill both pickup and delivery addresses and click Quote for a live Shipday estimate.</span>
+                          <span className="text-slate-500">
+                            {addDeliveryQuote.shipday_tried_no_cost
+                              ? ' Shipday was contacted but did not return a price for this route (cost may only be set at dispatch). Showing your configured rate.'
+                              : ' (from Settings → Billing). Fill both pickup and delivery addresses and click Quote for a live Shipday estimate.'}
+                          </span>
                         </span>
                       )}
                       {addDeliveryQuote.disclaimer && (

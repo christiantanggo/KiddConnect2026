@@ -677,7 +677,8 @@ router.get('/delivery-operator/quote', async (req, res) => {
     }
     const { getQuote } = await import('../../services/delivery-network/pricing.js');
     const quote = await getQuote(businessId);
-    res.json(quote);
+    const didTryShipday = !!(pickup_address && delivery_address);
+    res.json({ ...quote, shipday_tried_no_cost: didTryShipday });
   } catch (err) {
     console.error('[Admin delivery-operator] quote error:', err?.message || err);
     res.status(500).json({ amount_cents: 2000, disclaimer: 'Final cost may vary.', currency: 'CAD' });
