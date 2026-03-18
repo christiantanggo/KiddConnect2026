@@ -1,21 +1,29 @@
 import axios from 'axios';
 import Cookies from 'js-cookie';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, ''); // Remove trailing slash (production: Tavari backend; local: set NEXT_PUBLIC_API_URL=http://localhost:5001)
+const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+/** Runtime override: set window.__TAVARI_API_URL__ before app loads to point to your backend without redeploy. */
+export function getApiBaseUrl() {
+  if (typeof window !== 'undefined' && window.__TAVARI_API_URL__) {
+    return String(window.__TAVARI_API_URL__).replace(/\/$/, '');
+  }
+  return DEFAULT_API_URL;
+}
 
-console.log('[API] Initializing API client with URL:', API_URL);
+console.log('[API] Initializing API client with URL:', getApiBaseUrl());
 
 const api = axios.create({
-  baseURL: `${API_URL}/api`,
+  baseURL: `${getApiBaseUrl()}/api`,
   headers: {
     'Content-Type': 'application/json',
   },
   timeout: 30000, // 30 second timeout
-  withCredentials: true, // send cookies cross-origin (e.g. kiddconnect.com -> api.kiddconnect.com)
+  withCredentials: true, // send cookies cross-origin (e.g. tavarios.com -> api.tavarios.com)
 });
 
-// Add auth token to requests
+// Use current API URL on every request (so runtime override works)
 api.interceptors.request.use((config) => {
+  config.baseURL = `${getApiBaseUrl()}/api`;
   const token = Cookies.get('token');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -65,9 +73,10 @@ api.interceptors.response.use(
       const now = Date.now();
       if (now - lastNetworkErrorLog >= NETWORK_ERROR_LOG_INTERVAL_MS) {
         lastNetworkErrorLog = now;
-        console.error('[API] Network error: backend unreachable at', API_URL, '-', error.message);
+        console.error('[API] Network error: backend unreachable at', getApiBaseUrl(), '-', error.message);
       }
-      return Promise.reject(new Error(`Unable to connect to server. Please check that the backend is running at ${API_URL}`));
+      const url = getApiBaseUrl();
+      return Promise.reject(new Error(`Unable to connect to server. FIX: In Vercel set NEXT_PUBLIC_API_URL to your backend URL (e.g. your Railway URL), then redeploy. Current: ${url}`));
     }
     
     if (error.response?.status === 401) {
@@ -256,14 +265,15 @@ const getAdminToken = () => {
 
 // Create an admin phone numbers API client that uses the regular API base but with admin token
 const adminPhoneNumbersApiClient = axios.create({
-  baseURL: API_URL,
+  baseURL: getApiBaseUrl(),
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Add admin token interceptor
+// Add admin token interceptor and dynamic base URL
 adminPhoneNumbersApiClient.interceptors.request.use((config) => {
+  config.baseURL = getApiBaseUrl();
   const token = getAdminToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -279,14 +289,15 @@ export const adminPhoneNumbersAPI = {
 
 // Admin API (uses admin token from cookie)
 const adminApi = axios.create({
-  baseURL: `${API_URL}/api/admin`,
+  baseURL: `${getApiBaseUrl()}/api/admin`,
   headers: {
     'Content-Type': 'application/json',
   },
 });
 
-// Add admin auth token to requests
+// Add dynamic base URL and admin auth token to requests
 adminApi.interceptors.request.use((config) => {
+  config.baseURL = `${getApiBaseUrl()}/api/admin`;
   if (typeof document !== 'undefined') {
     const cookies = document.cookie.split(';');
     const tokenCookie = cookies.find(c => c.trim().startsWith('admin_token='));
@@ -592,7 +603,7 @@ export const contactsAPI = {
 // Kiosk API - uses token from URL query parameter
 export const createKioskAPI = (token) => {
   const kioskApi = axios.create({
-    baseURL: `${API_URL}/api/kiosk`,
+    baseURL: `${getApiBaseUrl()}/api/kiosk`,
     headers: {
       'Content-Type': 'application/json',
     },

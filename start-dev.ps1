@@ -1,43 +1,18 @@
-# PowerShell script to start dev server (kills old process first)
-Write-Host "🚀 Starting development server..." -ForegroundColor Cyan
-
-# Kill any process on port 5001
-$port = 5001
-$connections = netstat -ano | findstr ":$port"
-if ($connections) {
-    $processIds = $connections | ForEach-Object {
-        if ($_ -match '\s+(\d+)$') {
-            $matches[1]
-        }
-    } | Select-Object -Unique
-    
-    foreach ($processId in $processIds) {
-        if ($processId) {
-            Write-Host "Killing old process $processId on port $port..." -ForegroundColor Yellow
-            taskkill /F /PID $processId 2>$null | Out-Null
+# Kill processes on 5001 and 5002, then start dev server (backend listens on 5002)
+Write-Host "Killing any process on port 5001 and 5002..." -ForegroundColor Yellow
+foreach ($port in @(5001, 5002)) {
+    $connections = netstat -ano | findstr ":$port "
+    if ($connections) {
+        $connections | ForEach-Object {
+            if ($_ -match '\s+(\d+)\s*$') { $matches[1] }
+        } | Select-Object -Unique | ForEach-Object {
+            if ($_) {
+                Write-Host "  Killing PID $_ on port $port" -ForegroundColor Red
+                taskkill /F /PID $_ 2>$null | Out-Null
+            }
         }
     }
-    Start-Sleep -Seconds 2
 }
-
-# Verify port is free
-$stillRunning = netstat -ano | findstr ":$port"
-if ($stillRunning) {
-    Write-Host "⚠️  Warning: Port $port may still be in use. Trying again..." -ForegroundColor Yellow
-    $processIds = $stillRunning | ForEach-Object {
-        if ($_ -match '\s+(\d+)$') {
-            $matches[1]
-        }
-    } | Select-Object -Unique
-    foreach ($processId in $processIds) {
-        if ($processId) {
-            taskkill /F /PID $processId 2>$null | Out-Null
-        }
-    }
-    Start-Sleep -Seconds 2
-}
-
-# Start the dev server
-Write-Host "Starting npm run dev..." -ForegroundColor Green
-npm run dev
-
+Start-Sleep -Seconds 2
+Write-Host "Starting server (will listen on 5002)..." -ForegroundColor Green
+node --watch server.js

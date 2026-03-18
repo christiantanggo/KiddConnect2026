@@ -9,7 +9,7 @@ let cachedConfig = null;
 let cacheTime = 0;
 const CACHE_MS = 30 * 1000; // 30s
 
-function normalizePhone(phone) {
+export function normalizePhone(phone) {
   if (!phone || typeof phone !== 'string') return '';
   let digits = String(phone).replace(/[^0-9+]/g, '').trim();
   if (!digits) return '';
@@ -162,7 +162,9 @@ export async function updateDeliveryConfig(updates) {
     brokers,
   } = updates || {};
   const merged = {};
-  if (Array.isArray(delivery_phone_numbers)) merged.delivery_phone_numbers = delivery_phone_numbers;
+  if (Array.isArray(delivery_phone_numbers)) {
+    merged.delivery_phone_numbers = delivery_phone_numbers.map((n) => normalizePhone(n)).filter(Boolean);
+  }
   if (delivery_vapi_assistant_id !== undefined) merged.delivery_vapi_assistant_id = delivery_vapi_assistant_id || null;
   if (typeof max_dispatch_attempts === 'number') merged.max_dispatch_attempts = max_dispatch_attempts;
   if (notification_email !== undefined) merged.notification_email = notification_email ? String(notification_email).trim() || null : null;

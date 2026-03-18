@@ -1,8 +1,15 @@
 'use client';
 
 import { useState, useEffect, useMemo } from 'react';
+import { getApiBaseUrl } from '@/lib/api';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
+/** Normalize to E.164 with leading + so save/load/compare are consistent. */
+function normalizeE164(value) {
+  if (value == null || typeof value !== 'string') return '';
+  const d = String(value).replace(/[^0-9+]/g, '').trim();
+  if (!d) return '';
+  return d.startsWith('+') ? d : `+${d}`;
+}
 
 function getAdminToken() {
   if (typeof document === 'undefined') return null;
@@ -96,7 +103,7 @@ function AdminDeliveryOperatorPage() {
       setLoading(true);
       const params = new URLSearchParams({ limit: '100' });
       if (statusFilter) params.set('status', statusFilter);
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/requests?${params}`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/requests?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) throw new Error(res.statusText);
@@ -119,7 +126,7 @@ function AdminDeliveryOperatorPage() {
       const token = getAdminToken();
       if (!token) return;
       setBusinessesLoading(true);
-      fetch(`${API_URL}/api/admin/accounts?limit=200`, {
+      fetch(`${getApiBaseUrl()}/api/admin/accounts?limit=200`, {
         headers: { Authorization: `Bearer ${token}` },
       })
         .then((res) => res.ok ? res.json() : { businesses: [] })
@@ -139,15 +146,17 @@ function AdminDeliveryOperatorPage() {
     setConfigLoading(true);
     try {
       const [configRes, numbersRes] = await Promise.all([
-        fetch(`${API_URL}/api/v2/admin/delivery-operator/config`, { headers: { Authorization: `Bearer ${token}` } }),
-        fetch(`${API_URL}/api/v2/admin/delivery-operator/phone-numbers`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/config`, { headers: { Authorization: `Bearer ${token}` } }),
+        fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/phone-numbers`, { headers: { Authorization: `Bearer ${token}` } }),
       ]);
       const configData = configRes.ok ? await configRes.json() : {};
       const numbersData = numbersRes.ok ? await numbersRes.json() : {};
       setConfig(configData);
       setPhoneNumbers(numbersData.phone_numbers || []);
       setConfigForm({
-        delivery_phone_numbers: Array.isArray(configData.delivery_phone_numbers) ? configData.delivery_phone_numbers : [],
+        delivery_phone_numbers: (Array.isArray(configData.delivery_phone_numbers) ? configData.delivery_phone_numbers : [])
+          .map(normalizeE164)
+          .filter(Boolean),
         notification_email: configData.notification_email || '',
         notification_sms_number: configData.notification_sms_number || '',
         email_enabled: configData.email_enabled !== false,
@@ -182,7 +191,7 @@ function AdminDeliveryOperatorPage() {
     setConfigSaving(true);
     try {
       const body = {
-        delivery_phone_numbers: configForm.delivery_phone_numbers,
+        delivery_phone_numbers: (configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean),
         notification_email: configForm.notification_email || null,
         notification_sms_number: configForm.notification_sms_number || null,
         email_enabled: configForm.email_enabled,
@@ -200,7 +209,7 @@ function AdminDeliveryOperatorPage() {
         },
         brokers: configForm.brokers && typeof configForm.brokers === 'object' ? configForm.brokers : {},
       };
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/config`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify(body),
@@ -219,7 +228,7 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setAgentLoading('create');
     try {
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/create-agent`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/create-agent`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -246,7 +255,7 @@ function AdminDeliveryOperatorPage() {
     setTestingBrokerId(brokerId);
     try {
       const token = getAdminToken();
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/test-broker-connection`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/test-broker-connection`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -273,7 +282,7 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setAgentLoading('link');
     try {
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/link-agent`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/link-agent`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -294,7 +303,7 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setActionLoadingId(id);
     try {
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/requests/${id}/retry-dispatch`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/requests/${id}/retry-dispatch`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -312,7 +321,7 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setActionLoadingId(id);
     try {
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/requests/${id}`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/requests/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ status }),
@@ -348,9 +357,13 @@ function AdminDeliveryOperatorPage() {
   const displayRequests = baseDisplayRequests.filter(matchSearch);
 
   const toggleDeliveryNumber = (num) => {
-    const list = configForm.delivery_phone_numbers || [];
-    const next = list.includes(num) ? list.filter(n => n !== num) : [...list, num];
-    setConfigForm(f => ({ ...f, delivery_phone_numbers: next }));
+    const canonical = normalizeE164(num);
+    if (!canonical) return;
+    const list = (configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean);
+    const set = new Set(list);
+    if (set.has(canonical)) set.delete(canonical);
+    else set.add(canonical);
+    setConfigForm(f => ({ ...f, delivery_phone_numbers: Array.from(set) }));
   };
 
   const handleAddDeliverySubmit = async (e) => {
@@ -371,7 +384,7 @@ function AdminDeliveryOperatorPage() {
     setAddDeliverySubmitting(true);
     try {
       const token = getAdminToken();
-      const res = await fetch(`${API_URL}/api/v2/admin/delivery-operator/requests`, {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/requests`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
@@ -462,7 +475,8 @@ function AdminDeliveryOperatorPage() {
                         <div className="flex flex-wrap gap-2">
                           {phoneNumbers.map((pn) => {
                             const n = pn.number || pn.e164;
-                            const selected = (configForm.delivery_phone_numbers || []).includes(n);
+                            const savedNormalized = new Set((configForm.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean));
+                            const selected = savedNormalized.has(normalizeE164(n));
                             return (
                               <button
                                 key={n}

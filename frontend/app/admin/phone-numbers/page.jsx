@@ -184,7 +184,6 @@ function AdminPhoneNumbersPage() {
           )}
         </main>
       </div>
-    </AdminGuard>
   );
 
   function getAdminToken() {

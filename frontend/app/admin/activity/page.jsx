@@ -94,7 +94,6 @@ function AdminActivityPage() {
           </div>
         </main>
       </div>
-    </AdminGuard>
   );
 
   function getAdminToken() {

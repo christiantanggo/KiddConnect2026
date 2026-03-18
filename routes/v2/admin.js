@@ -9,7 +9,7 @@ import { OrganizationUser } from '../../models/v2/OrganizationUser.js';
 import { AdminActivityLog } from '../../models/AdminActivityLog.js';
 import { applyImpersonation } from '../../middleware/v2/applyImpersonation.js';
 import { supabaseClient } from '../../config/database.js';
-import { getDeliveryConfig, getDeliveryConfigFull, updateDeliveryConfig } from '../../services/delivery-network/config.js';
+import { getDeliveryConfig, getDeliveryConfigFull, updateDeliveryConfig, normalizePhone } from '../../services/delivery-network/config.js';
 import { createDeliveryNetworkAssistant } from '../../services/delivery-network/create-vapi-assistant.js';
 import { linkDeliveryAssistantToNumbers } from '../../services/delivery-network/linkAgent.js';
 import { getTavariOwnedPhoneNumbers } from '../../utils/tavariPhoneNumbers.js';
@@ -641,6 +641,10 @@ router.get('/delivery-operator/phone-numbers', async (req, res) => {
 router.get('/delivery-operator/config', async (req, res) => {
   try {
     const config = await getDeliveryConfigFull();
+    // Normalize so frontend selection compare/save is consistent (E.164 with +)
+    if (Array.isArray(config.delivery_phone_numbers)) {
+      config.delivery_phone_numbers = config.delivery_phone_numbers.map(normalizePhone).filter(Boolean);
+    }
     res.json(config);
   } catch (err) {
     console.error('[Admin delivery-operator] config get error:', err?.message || err);
