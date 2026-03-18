@@ -646,8 +646,11 @@ router.get('/delivery-operator/quote', async (req, res) => {
     const businessId = (req.query.business_id && String(req.query.business_id).trim()) || null;
     const pickup_address = (req.query.pickup_address && String(req.query.pickup_address).trim()) || null;
     const delivery_address = (req.query.delivery_address && String(req.query.delivery_address).trim()) || null;
+    const pickup_phone = (req.query.pickup_phone && String(req.query.pickup_phone).trim()) || null;
+    const pickup_name = (req.query.pickup_name && String(req.query.pickup_name).trim()) || null;
     const customer_phone = (req.query.customer_phone && String(req.query.customer_phone).trim()) || null;
     const recipient_name = (req.query.recipient_name && String(req.query.recipient_name).trim()) || null;
+    const customer_email = (req.query.customer_email && String(req.query.customer_email).trim()) || null;
 
     if (pickup_address && delivery_address) {
       console.log('[Admin delivery-operator] Quote: requesting delivery cost from Shipday (pickup + delivery addresses provided)');
@@ -655,16 +658,23 @@ router.get('/delivery-operator/quote', async (req, res) => {
       const shipdayQuote = await getQuoteFromShipday({
         pickup_address,
         delivery_address,
+        pickup_phone,
+        pickup_name,
         customer_phone,
         recipient_name,
+        customer_email,
       });
       if (shipdayQuote) {
         console.log('[Admin delivery-operator] Quote: returning Shipday-based quote (total_cents=%s)', shipdayQuote.total_cents ?? shipdayQuote.amount_cents);
         return res.json(shipdayQuote);
       }
+      console.log('[Admin delivery-operator] Quote: Shipday returned no quote; using configured rate');
+    } else {
+      const reason = !pickup_address && !delivery_address ? 'no pickup or delivery address'
+        : !pickup_address ? 'no pickup address'
+        : 'no delivery address';
+      console.log('[Admin delivery-operator] Quote: using configured rate (%s). Fill both addresses and click Quote to get a Shipday estimate.', reason);
     }
-
-    console.log('[Admin delivery-operator] Quote: using configured rate (Shipday not used or unavailable)');
     const { getQuote } = await import('../../services/delivery-network/pricing.js');
     const quote = await getQuote(businessId);
     res.json(quote);

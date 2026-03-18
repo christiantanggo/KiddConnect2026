@@ -2,8 +2,10 @@
  * Get a delivery quote from Shipday by creating a scheduled order (7 days out),
  * retrieving the order to read costing, then deleting the order.
  * Uses Shipday's Insert Order, Retrieve Order Details, and Delete Order APIs.
+ * Order payload matches Shipday dashboard: Order Number, Pick-up From (name, phone, address, time), Deliver to (name, phone, address, date, time), Payment Method, etc.
  */
 import { getDeliveryConfigFull } from './config.js';
+import { buildShipdayOrderPayload } from './shipdayOrder.js';
 
 /**
  * Get Shipday API key and base URL from config or env.
@@ -24,12 +26,15 @@ export async function getShipdayCredentials() {
  * @param {Object} params
  * @param {string} params.pickup_address - Pickup address (required for Shipday quote)
  * @param {string} params.delivery_address - Delivery address (required)
+ * @param {string} [params.pickup_phone] - Pick-up from phone (Shipday required); falls back to first delivery line number.
+ * @param {string} [params.pickup_name] - Pick-up from name (store name); default "Pickup".
  * @param {string} [params.customer_phone] - Customer/recipient phone
  * @param {string} [params.recipient_name] - Recipient name
+ * @param {string} [params.customer_email] - Customer email (optional)
  * @returns {Promise<{ amount_cents: number, source: 'shipday', disclaimer?: string } | null>}
  */
 export async function getQuoteFromShipday(params) {
-  const { pickup_address, delivery_address, customer_phone, recipient_name } = params || {};
+  const { pickup_address, delivery_address, pickup_phone, pickup_name, customer_phone, recipient_name, customer_email } = params || {};
   const pickup = (pickup_address && String(pickup_address).trim()) || null;
   const delivery = (delivery_address && String(delivery_address).trim()) || null;
   if (!pickup || !delivery) return null;
@@ -46,6 +51,28 @@ export async function getQuoteFromShipday(params) {
   const sevenDays = new Date();
   sevenDays.setDate(sevenDays.getDate() + 7);
   const expectedDate = sevenDays.toISOString().slice(0, 10); // YYYY-MM-DD
+
+  const config = await getDeliveryConfigFull();
+  const pickupPhone = (pickup_phone && String(pickup_phone).trim()) || (Array.isArray(config?.delivery_phone_numbers) && config.delivery_phone_numbers.length > 0 ? String(config.delivery_phone_numbers[0]).trim() : null);
+  const restaurantName = (pickup_name && String(pickup_name).trim()) || 'Pickup';
+
+  const orderPayload = buildShipdayOrderPayload({
+    orderNumber,
+    customerName: (recipient_name && String(recipient_name).trim()) || 'Quote Customer',
+    customerAddress: delivery,
+    customerPhoneNumber: (customer_phone && String(customer_phone).trim()) || null,
+    customerEmail: customer_email && String(customer_email).trim() ? String(customer_email).trim() : undefined,
+    restaurantName,
+    restaurantAddress: pickup,
+    restaurantPhoneNumber: pickupPhone,
+    expectedDeliveryDate: expectedDate,
+    expectedPickupTime: '12:00:00',
+    expectedDeliveryTime: '13:00:00',
+    deliveryFee: 0,
+    totalOrderCost: 0,
+    paymentMethod: 'credit_card',
+  });
+
   const headers = {
     Accept: 'application/json',
     'Content-Type': 'application/json',
@@ -57,19 +84,7 @@ export async function getQuoteFromShipday(params) {
     // 1. Create a scheduled order (7 days out) so it is not dispatched immediately
     const createRes = await axios.post(
       `${baseUrl}/orders`,
-      {
-        orderNumber,
-        customerName: (recipient_name && String(recipient_name).trim()) || 'Quote Customer',
-        customerAddress: delivery,
-        customerPhoneNumber: (customer_phone && String(customer_phone).trim()) || '+10000000000',
-        restaurantName: 'Pickup',
-        restaurantAddress: pickup,
-        expectedDeliveryDate: expectedDate,
-        expectedPickupTime: '12:00:00',
-        expectedDeliveryTime: '13:00:00',
-        deliveryFee: 0,
-        totalOrderCost: 0,
-      },
+      orderPayload,
       { headers, timeout: 15000, validateStatus: (s) => s < 500 }
     );
 
@@ -80,31 +95,47 @@ export async function getQuoteFromShipday(params) {
     orderId = createRes.data.orderId;
     console.log('[ShipdayQuote] created order', orderId, 'for quote; retrieving costing...');
 
-    // 2. Retrieve order details to get costing (Shipday may populate deliveryFee/totalCost)
-    const getRes = await axios.get(`${baseUrl}/orders/${encodeURIComponent(orderNumber)}`, {
+    // 2. Retrieve order details to get costing (Shipday may populate deliveryFee/totalCost; sometimes after a short delay)
+    let getRes = await axios.get(`${baseUrl}/orders/${encodeURIComponent(orderNumber)}`, {
       headers: { Accept: 'application/json', Authorization: headers.Authorization },
       timeout: 10000,
       validateStatus: (s) => s < 500,
     });
 
     if (getRes.status !== 200 || !Array.isArray(getRes.data) || getRes.data.length === 0) {
-      console.warn('[ShipdayQuote] retrieve order failed', getRes.status);
+      console.warn('[ShipdayQuote] retrieve order failed', getRes.status, Array.isArray(getRes.data) ? `array length ${getRes.data?.length}` : typeof getRes.data);
       return null;
     }
 
-    const order = getRes.data[0];
-    const costing = order?.costing;
+    let order = getRes.data[0];
+    let costing = order?.costing;
+    const hasCosting = costing && (Number(costing.totalCost) > 0 || Number(costing.deliveryFee) > 0);
+    if (!hasCosting) {
+      console.log('[ShipdayQuote] first GET: costing missing or zero', JSON.stringify(costing ?? order?.costing));
+      // Shipday may populate costing asynchronously; wait and retry once
+      await new Promise((r) => setTimeout(r, 2500));
+      getRes = await axios.get(`${baseUrl}/orders/${encodeURIComponent(orderNumber)}`, {
+        headers: { Accept: 'application/json', Authorization: headers.Authorization },
+        timeout: 10000,
+        validateStatus: (s) => s < 500,
+      });
+      if (getRes.status === 200 && Array.isArray(getRes.data) && getRes.data.length > 0) {
+        order = getRes.data[0];
+        costing = order?.costing;
+        console.log('[ShipdayQuote] after 2.5s retry: costing', JSON.stringify(costing));
+      }
+    }
+
     const deliveryFee = costing?.deliveryFee != null ? Number(costing.deliveryFee) : null;
     const totalCost = costing?.totalCost != null ? Number(costing.totalCost) : null;
     const amount = totalCost != null && totalCost > 0 ? totalCost : (deliveryFee != null && deliveryFee > 0 ? deliveryFee : null);
     const shipday_cost_cents = amount != null ? Math.round(amount * 100) : null;
 
     if (shipday_cost_cents == null || shipday_cost_cents <= 0) {
-      console.log('[ShipdayQuote] no costing from Shipday (they may echo what we sent); falling back to config');
+      console.log('[ShipdayQuote] no valid costing from Shipday (costing=%s); falling back to config', JSON.stringify(costing));
       return null;
     }
 
-    const config = await getDeliveryConfigFull();
     const margin_cents = Math.max(0, Math.round(Number(config?.billing?.quote_margin_cents) || 0));
     const total_cents = shipday_cost_cents + margin_cents;
 
