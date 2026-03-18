@@ -650,6 +650,7 @@ router.get('/delivery-operator/quote', async (req, res) => {
     const recipient_name = (req.query.recipient_name && String(req.query.recipient_name).trim()) || null;
 
     if (pickup_address && delivery_address) {
+      console.log('[Admin delivery-operator] Quote: requesting delivery cost from Shipday (pickup + delivery addresses provided)');
       const { getQuoteFromShipday } = await import('../../services/delivery-network/shipdayQuote.js');
       const shipdayQuote = await getQuoteFromShipday({
         pickup_address,
@@ -657,9 +658,13 @@ router.get('/delivery-operator/quote', async (req, res) => {
         customer_phone,
         recipient_name,
       });
-      if (shipdayQuote) return res.json(shipdayQuote);
+      if (shipdayQuote) {
+        console.log('[Admin delivery-operator] Quote: returning Shipday-based quote (total_cents=%s)', shipdayQuote.total_cents ?? shipdayQuote.amount_cents);
+        return res.json(shipdayQuote);
+      }
     }
 
+    console.log('[Admin delivery-operator] Quote: using configured rate (Shipday not used or unavailable)');
     const { getQuote } = await import('../../services/delivery-network/pricing.js');
     const quote = await getQuote(businessId);
     res.json(quote);

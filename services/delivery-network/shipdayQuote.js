@@ -35,8 +35,12 @@ export async function getQuoteFromShipday(params) {
   if (!pickup || !delivery) return null;
 
   const { apiKey, baseUrl } = await getShipdayCredentials();
-  if (!apiKey) return null;
+  if (!apiKey) {
+    console.log('[ShipdayQuote] Skipping: Shipday not configured (no API key)');
+    return null;
+  }
 
+  console.log('[ShipdayQuote] Calling Shipday for delivery cost (create → costing → delete)');
   const axios = (await import('axios')).default;
   const orderNumber = `tavari-quote-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
   const sevenDays = new Date();
