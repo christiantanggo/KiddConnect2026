@@ -1,6 +1,10 @@
 /**
  * Delivery pricing: quote before dispatch. Supports flat rate (MVP), optional min price and platform fee.
  * Config in delivery_network_config (global) or delivery_business_config (per-business).
+ *
+ * NOTE: This does NOT call Shipday. Shipday's public API does not expose a standalone "get quote" or
+ * "estimate" endpoint. Quotes are from your configured rates (Admin → Settings → Dispatch rate / Billing).
+ * For accurate real-time quotes we would need Shipday (or another broker) to provide a quote API.
  */
 import { supabaseClient } from '../../config/database.js';
 
@@ -44,6 +48,7 @@ export async function getPricingConfig(businessId = null) {
 
 /**
  * Return quote in cents and disclaimer for a delivery (MVP: flat rate + optional platform fee).
+ * Source: config only. Does not call Shipday or any broker.
  */
 export async function getQuote(businessId = null, _options = {}) {
   const config = await getPricingConfig(businessId);

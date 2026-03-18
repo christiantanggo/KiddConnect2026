@@ -636,11 +636,30 @@ router.get('/delivery-operator/phone-numbers', async (req, res) => {
 
 /**
  * GET /api/v2/admin/delivery-operator/quote
- * Estimated cost for a delivery (optional business_id for per-business pricing). Query: business_id
+ * Estimated cost for a delivery. Query: business_id (optional), pickup_address, delivery_address (optional),
+ * customer_phone, recipient_name. When pickup_address and delivery_address are provided and Shipday is
+ * configured, we try to get a quote from Shipday (create scheduled order → get costing → delete order).
+ * Otherwise uses configured rates (Settings → Billing).
  */
 router.get('/delivery-operator/quote', async (req, res) => {
   try {
     const businessId = (req.query.business_id && String(req.query.business_id).trim()) || null;
+    const pickup_address = (req.query.pickup_address && String(req.query.pickup_address).trim()) || null;
+    const delivery_address = (req.query.delivery_address && String(req.query.delivery_address).trim()) || null;
+    const customer_phone = (req.query.customer_phone && String(req.query.customer_phone).trim()) || null;
+    const recipient_name = (req.query.recipient_name && String(req.query.recipient_name).trim()) || null;
+
+    if (pickup_address && delivery_address) {
+      const { getQuoteFromShipday } = await import('../../services/delivery-network/shipdayQuote.js');
+      const shipdayQuote = await getQuoteFromShipday({
+        pickup_address,
+        delivery_address,
+        customer_phone,
+        recipient_name,
+      });
+      if (shipdayQuote) return res.json(shipdayQuote);
+    }
+
     const { getQuote } = await import('../../services/delivery-network/pricing.js');
     const quote = await getQuote(businessId);
     res.json(quote);

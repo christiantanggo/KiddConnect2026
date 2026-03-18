@@ -451,6 +451,10 @@ function AdminDeliveryOperatorPage() {
       if (!token) return;
       const params = new URLSearchParams();
       if (addDeliveryForm.business_id?.trim()) params.set('business_id', addDeliveryForm.business_id.trim());
+      if (addDeliveryForm.delivery_address?.trim()) params.set('delivery_address', addDeliveryForm.delivery_address.trim());
+      if (addDeliveryForm.pickup_address?.trim()) params.set('pickup_address', addDeliveryForm.pickup_address.trim());
+      if (addDeliveryForm.callback_phone?.trim()) params.set('customer_phone', addDeliveryForm.callback_phone.trim());
+      if (addDeliveryForm.recipient_name?.trim()) params.set('recipient_name', addDeliveryForm.recipient_name.trim());
       const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/quote?${params.toString()}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -750,7 +754,8 @@ function AdminDeliveryOperatorPage() {
           {activeTab === 'add-delivery' && (
             <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-2xl">
               <h2 className="text-lg font-semibold text-slate-800 mb-2">Add delivery for a business</h2>
-              <p className="text-sm text-slate-600 mb-6">Create a delivery request on behalf of a business when needed (e.g. account issues). Dispatch will run automatically after creation.</p>
+              <p className="text-sm text-slate-600 mb-2">Create a delivery request on behalf of a business when needed (e.g. account issues). Dispatch will run automatically after creation.</p>
+              <p className="text-xs text-slate-500 mb-6">Fill delivery and pickup addresses, then click Quote to get a live estimate from Shipday (create-then-cancel); otherwise the quote uses your configured rates.</p>
               {addDeliverySuccess && (
                 <div className="mb-4 p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-sm">
                   Delivery created. Reference: <strong>{addDeliverySuccess.reference_number}</strong>. You can find it in the Deliveries tab.
@@ -896,6 +901,9 @@ function AdminDeliveryOperatorPage() {
                       {addDeliveryQuote.amount_cents != null
                         ? `Est. ${(addDeliveryQuote.amount_cents / 100).toFixed(2)} ${addDeliveryQuote.currency || 'CAD'}`
                         : ''}
+                      {addDeliveryQuote.source === 'shipday'
+                        ? <span className="text-slate-500"> (from Shipday)</span>
+                        : <span className="text-slate-500"> (from Settings → Billing)</span>}
                       {addDeliveryQuote.disclaimer && (
                         <span className="text-slate-500"> — {addDeliveryQuote.disclaimer}</span>
                       )}
