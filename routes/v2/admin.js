@@ -697,7 +697,11 @@ router.post('/delivery-operator/test-broker-connection', express.json(), async (
         validateStatus: () => true,
       });
       if (response.status === 200) {
-        return res.json({ success: true, message: 'Connection successful.' });
+        const count = response.data?.content?.length ?? response.data?.length;
+        const detail = typeof count === 'number'
+          ? `Called Shipday API (GET ${baseUrl}/orders). Returned 200; your key is valid. (Sample: ${count} order(s) in response.)`
+          : `Called Shipday API (GET ${baseUrl}/orders). Returned 200; your API key was accepted.`;
+        return res.json({ success: true, message: 'Connection successful.', detail });
       }
       if (response.status === 401 || response.status === 403) {
         return res.json({ success: false, error: 'Invalid API key or access denied.' });

@@ -80,6 +80,7 @@ function AdminDeliveryOperatorPage() {
   const [phoneNumbers, setPhoneNumbers] = useState([]);
   const [agentLoading, setAgentLoading] = useState(null); // 'create' | 'link'
   const [testingBrokerId, setTestingBrokerId] = useState(null); // broker id while testing connection
+  const [brokerTestResult, setBrokerTestResult] = useState(null); // { brokerId, success, message, detail } after Test connection
   const [configForm, setConfigForm] = useState({
     delivery_phone_numbers: [],
     notification_email: '',
@@ -280,12 +281,15 @@ function AdminDeliveryOperatorPage() {
         }),
       });
       const data = await res.json();
-      if (data.success) {
-        alert('Connection successful. The API key is valid.');
-      } else {
-        alert(data.error || 'Connection test failed.');
-      }
+      setBrokerTestResult({
+        brokerId,
+        success: !!data.success,
+        message: data.success ? (data.message || 'Connection successful.') : (data.error || 'Connection test failed.'),
+        detail: data.detail || null,
+      });
+      if (!data.success) alert(data.error || 'Connection test failed.');
     } catch (e) {
+      setBrokerTestResult({ brokerId, success: false, message: e.message || 'Connection test failed.', detail: null });
       alert(e.message || 'Connection test failed.');
     } finally {
       setTestingBrokerId(null);
@@ -598,6 +602,14 @@ function AdminDeliveryOperatorPage() {
                               >
                                 {testingBrokerId === broker.id ? 'Testing…' : 'Test connection'}
                               </button>
+                              {brokerTestResult?.brokerId === broker.id && (
+                                <div className={`mt-2 p-2 rounded text-sm ${brokerTestResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
+                                  <p className="font-medium">{brokerTestResult.message}</p>
+                                  {brokerTestResult.detail && (
+                                    <p className="mt-1 text-xs opacity-90">{brokerTestResult.detail}</p>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         );
