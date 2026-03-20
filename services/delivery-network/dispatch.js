@@ -247,12 +247,14 @@ export async function startDispatch(deliveryRequestId) {
         .eq('id', deliveryRequestId);
       console.log('[DeliveryNetwork] startDispatch: Shipday order created', shipdayOrderId, '— request', deliveryRequestId, 'Dispatched');
 
-      // Assign to preferred provider and store quoted amount: on-demand (DoorDash/Uber) takes precedence, else carrier.
+      // Assign to preferred provider and store quoted amount.
+      // If "Use on-demand delivery" is ON in Tavari, never auto-assign fleet carriers (e.g. Tavari OS)—only DoorDash/Uber via on-demand API.
       const shipdayConfig = config?.brokers?.shipday;
+      const onDemandEnabled = shipdayConfig?.on_demand_enabled === true;
       const preferredOnDemand = typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : null;
       const preferredIds = Array.isArray(shipdayConfig?.preferred_carrier_ids) ? shipdayConfig.preferred_carrier_ids : [];
 
-      if (preferredOnDemand) {
+      if (onDemandEnabled && preferredOnDemand) {
         const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
         if (onDemandBase) {
           try {
@@ -288,7 +290,9 @@ export async function startDispatch(deliveryRequestId) {
             console.warn('[DeliveryNetwork] startDispatch: on-demand estimate/assign failed', onDemandErr?.message || onDemandErr);
           }
         }
-      } else if (preferredIds.length > 0) {
+      } else if (onDemandEnabled && !preferredOnDemand) {
+        console.warn('[DeliveryNetwork] startDispatch: on-demand enabled but no preferred_on_demand_provider (DoorDash/Uber)—not assigning fleet carrier. Set provider in Admin → Delivery APIs → Shipday.');
+      } else if (!onDemandEnabled && preferredIds.length > 0) {
         const carrierId = preferredIds[0];
         try {
           const assignUrl = `${baseUrl}/orders/assign/${encodeURIComponent(shipdayOrderId)}/${encodeURIComponent(carrierId)}`;
