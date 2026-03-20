@@ -6,6 +6,7 @@
 import { supabaseClient } from '../../config/database.js';
 import { getDeliveryConfigFull } from './config.js';
 import { buildShipdayOrderPayload } from './shipdayOrder.js';
+import { collectOnDemandEstimates, pickOnDemandEstimate, isCheapestMode } from './shipdayOnDemand.js';
 
 const DEFAULT_BROKER_ID = 'shipday'; // or 'stub' when no API key
 
@@ -258,33 +259,27 @@ export async function startDispatch(deliveryRequestId) {
         const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
         if (onDemandBase) {
           try {
-            const estimateUrl = `${onDemandBase}/estimate/${encodeURIComponent(shipdayOrderId)}`;
-            const estRes = await axios.get(estimateUrl, {
-              headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: headers.Authorization },
-              timeout: 15000,
-              validateStatus: (s) => s < 500,
-            });
-            let estimateId = null;
-            if (estRes.status === 200 && estRes.data && !estRes.data.error) {
-              const raw = estRes.data;
-              const list = Array.isArray(raw) ? raw : (raw.id != null || raw.fee != null ? [raw] : []);
-              const match = list.find((e) => e && String(e.name || '').toLowerCase() === String(preferredOnDemand).toLowerCase()) || list[0];
-              if (match && (match.id != null || match.fee != null)) estimateId = String(match.id ?? '');
-            }
-            const assignUrl = `${onDemandBase}/assign`;
-            const assignBody = { name: preferredOnDemand, orderId: Number(shipdayOrderId) };
-            if (estimateId) assignBody.estimateReference = estimateId;
-            const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
-            if (assignRes.status === 200 && assignRes.data) {
-              const totalBillable = assignRes.data.totalBillableAmount != null ? Number(assignRes.data.totalBillableAmount) : null;
-              const amount = totalBillable != null && totalBillable > 0 ? totalBillable : (assignRes.data.thirdPartyFee != null ? Number(assignRes.data.thirdPartyFee) : null);
-              if (amount != null && amount > 0) {
-                const amountCents = Math.round(amount * 100);
-                await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
-                console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', preferredOnDemand, '— amount_quoted_cents', amountCents);
-              }
+            const authH = { Authorization: headers.Authorization };
+            const estimates = await collectOnDemandEstimates(shipdayOrderId, onDemandBase, authH);
+            const match = pickOnDemandEstimate(estimates, preferredOnDemand);
+            if (!match || !match.name) {
+              console.warn('[DeliveryNetwork] startDispatch: no on-demand estimate for', preferredOnDemand, 'estimates count', estimates?.length);
             } else {
-              console.warn('[DeliveryNetwork] startDispatch: on-demand assign failed', assignRes.status, assignRes.data);
+              const assignUrl = `${onDemandBase}/assign`;
+              const assignBody = { name: match.name, orderId: Number(shipdayOrderId) };
+              if (match.id) assignBody.estimateReference = String(match.id);
+              const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
+              if (assignRes.status === 200 && assignRes.data) {
+                const totalBillable = assignRes.data.totalBillableAmount != null ? Number(assignRes.data.totalBillableAmount) : null;
+                const amount = totalBillable != null && totalBillable > 0 ? totalBillable : (assignRes.data.thirdPartyFee != null ? Number(assignRes.data.thirdPartyFee) : null);
+                if (amount != null && amount > 0) {
+                  const amountCents = Math.round(amount * 100);
+                  await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
+                  console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', match.name, isCheapestMode(preferredOnDemand) ? '(cheapest)' : '', '— amount_quoted_cents', amountCents);
+                }
+              } else {
+                console.warn('[DeliveryNetwork] startDispatch: on-demand assign failed', assignRes.status, assignRes.data);
+              }
             }
           } catch (onDemandErr) {
             console.warn('[DeliveryNetwork] startDispatch: on-demand estimate/assign failed', onDemandErr?.message || onDemandErr);

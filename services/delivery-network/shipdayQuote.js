@@ -6,6 +6,7 @@
  */
 import { getDeliveryConfigFull } from './config.js';
 import { buildShipdayOrderPayload } from './shipdayOrder.js';
+import { collectOnDemandEstimates, pickOnDemandEstimate, isCheapestMode } from './shipdayOnDemand.js';
 
 /**
  * Get Shipday API key and base URL from config or env.
@@ -118,37 +119,27 @@ export async function getQuoteFromShipday(params) {
       const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
       if (onDemandBase) {
         try {
-          const estimateUrl = `${onDemandBase}/estimate/${encodeURIComponent(orderId)}`;
-          console.log('[ShipdayQuote] GET', estimateUrl, '→ on-demand estimate for', preferredProvider);
-          const estRes = await axios.get(estimateUrl, {
-            headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: headers.Authorization },
-            timeout: 15000,
-            validateStatus: (s) => s < 500,
-          });
-          if (estRes.status === 200 && estRes.data && !estRes.data.error) {
-            const raw = estRes.data;
-            const list = Array.isArray(raw) ? raw : (raw.id != null || raw.fee != null ? [raw] : []);
-            const match = list.find((e) => e && String(e.name || '').toLowerCase() === String(preferredProvider).toLowerCase())
-              || list[0];
-            const fee = match && (match.fee != null) ? Number(match.fee) : null;
-            if (fee != null && fee > 0) {
-              const shipday_cost_cents = Math.round(fee * 100);
-              const margin_cents = Math.max(0, Math.round(Number(config?.billing?.quote_margin_cents) || 0));
-              const total_cents = shipday_cost_cents + margin_cents;
-              console.log('[ShipdayQuote] on-demand quote:', match.name || preferredProvider, 'fee', fee, '→ total', total_cents, 'cents');
-              return {
-                source: 'shipday',
-                shipday_cost_cents,
-                margin_cents,
-                total_cents,
-                amount_cents: total_cents,
-                disclaimer: `Quote from ${match.name || preferredProvider} via Shipday. Final cost may vary.`,
-                currency: 'CAD',
-              };
-            }
-          } else {
-            console.log('[ShipdayQuote] on-demand estimate failed or no fee', estRes.status, estRes.data?.errorMessage || '');
+          const authHeaders = { Authorization: headers.Authorization };
+          const estimates = await collectOnDemandEstimates(orderId, onDemandBase, authHeaders);
+          const match = pickOnDemandEstimate(estimates, preferredProvider);
+          const fee = match?.fee != null ? Number(match.fee) : null;
+          if (fee != null && fee > 0) {
+            const shipday_cost_cents = Math.round(fee * 100);
+            const margin_cents = Math.max(0, Math.round(Number(config?.billing?.quote_margin_cents) || 0));
+            const total_cents = shipday_cost_cents + margin_cents;
+            const label = isCheapestMode(preferredProvider) ? `${match.name} (cheapest)` : (match.name || preferredProvider);
+            console.log('[ShipdayQuote] on-demand quote:', label, 'fee', fee, '→ total', total_cents, 'cents');
+            return {
+              source: 'shipday',
+              shipday_cost_cents,
+              margin_cents,
+              total_cents,
+              amount_cents: total_cents,
+              disclaimer: `Quote from ${match.name || 'provider'} via Shipday${isCheapestMode(preferredProvider) ? ' (lowest of available estimates)' : ''}. Final cost may vary.`,
+              currency: 'CAD',
+            };
           }
+          console.log('[ShipdayQuote] on-demand: no usable fee from estimates', estimates?.length);
         } catch (onDemandErr) {
           console.warn('[ShipdayQuote] on-demand estimate error', onDemandErr?.message || onDemandErr);
         }

@@ -893,8 +893,9 @@ function AdminDeliveryOperatorPage() {
                                     className="w-full max-w-xs px-3 py-2 border border-slate-300 rounded text-sm"
                                   >
                                     <option value="">— Select —</option>
-                                    <option value="DoorDash">DoorDash</option>
-                                    <option value="Uber">Uber</option>
+                                    <option value="cheapest">Cheapest (DoorDash or Uber)</option>
+                                    <option value="DoorDash">DoorDash only</option>
+                                    <option value="Uber">Uber only</option>
                                   </select>
                                 </div>
                               </div>
