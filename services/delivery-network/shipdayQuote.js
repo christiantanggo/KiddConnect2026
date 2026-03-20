@@ -21,6 +21,14 @@ export async function getShipdayCredentials() {
   return { apiKey, baseUrl: baseUrl.replace(/\/$/, '') };
 }
 
+/** On-demand API base (DoorDash/Uber etc.). Default: main base + /on-demand. */
+export function getShipdayOnDemandBaseUrl(baseUrl) {
+  const env = process.env.SHIPDAY_ON_DEMAND_BASE_URL && String(process.env.SHIPDAY_ON_DEMAND_BASE_URL).trim();
+  if (env) return env.replace(/\/$/, '');
+  if (!baseUrl) return null;
+  return `${baseUrl.replace(/\/$/, '')}/on-demand`;
+}
+
 /**
  * Attempt to get a quote from Shipday via create → retrieve (costing) → delete.
  * @param {Object} params
@@ -100,6 +108,52 @@ export async function getQuoteFromShipday(params) {
     }
     orderId = createRes.data.orderId;
     console.log('[ShipdayQuote] Shipday responded 200, orderId', orderId, '— order exists on Shipday; retrieving costing...');
+
+    const shipdayConfig = config?.brokers?.shipday;
+    const onDemandEnabled = shipdayConfig?.on_demand_enabled === true;
+    const preferredProvider = typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : null;
+
+    // If on-demand (DoorDash/Uber) is enabled, get quote from 3rd party estimate API first
+    if (onDemandEnabled && preferredProvider) {
+      const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
+      if (onDemandBase) {
+        try {
+          const estimateUrl = `${onDemandBase}/estimate/${encodeURIComponent(orderId)}`;
+          console.log('[ShipdayQuote] GET', estimateUrl, '→ on-demand estimate for', preferredProvider);
+          const estRes = await axios.get(estimateUrl, {
+            headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: headers.Authorization },
+            timeout: 15000,
+            validateStatus: (s) => s < 500,
+          });
+          if (estRes.status === 200 && estRes.data && !estRes.data.error) {
+            const raw = estRes.data;
+            const list = Array.isArray(raw) ? raw : (raw.id != null || raw.fee != null ? [raw] : []);
+            const match = list.find((e) => e && String(e.name || '').toLowerCase() === String(preferredProvider).toLowerCase())
+              || list[0];
+            const fee = match && (match.fee != null) ? Number(match.fee) : null;
+            if (fee != null && fee > 0) {
+              const shipday_cost_cents = Math.round(fee * 100);
+              const margin_cents = Math.max(0, Math.round(Number(config?.billing?.quote_margin_cents) || 0));
+              const total_cents = shipday_cost_cents + margin_cents;
+              console.log('[ShipdayQuote] on-demand quote:', match.name || preferredProvider, 'fee', fee, '→ total', total_cents, 'cents');
+              return {
+                source: 'shipday',
+                shipday_cost_cents,
+                margin_cents,
+                total_cents,
+                amount_cents: total_cents,
+                disclaimer: `Quote from ${match.name || preferredProvider} via Shipday. Final cost may vary.`,
+                currency: 'CAD',
+              };
+            }
+          } else {
+            console.log('[ShipdayQuote] on-demand estimate failed or no fee', estRes.status, estRes.data?.errorMessage || '');
+          }
+        } catch (onDemandErr) {
+          console.warn('[ShipdayQuote] on-demand estimate error', onDemandErr?.message || onDemandErr);
+        }
+      }
+    }
 
     // 2. Retrieve order details to get costing (Shipday may populate deliveryFee/totalCost; sometimes after a short delay)
     const getUrl = `${baseUrl}/orders/${encodeURIComponent(orderNumber)}`;

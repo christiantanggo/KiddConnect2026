@@ -497,7 +497,7 @@ router.get('/delivery-operator/requests', async (req, res) => {
   try {
     const status = req.query.status; // e.g. Needs Manual Assist
     const limit = Math.min(parseInt(req.query.limit) || 100, 200);
-    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, created_at, updated_at, pickup_address, caller_phone';
+    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
     let q = supabaseClient
       .from('delivery_requests')
       .select(`${cols}, businesses(name)`)
@@ -529,6 +529,27 @@ router.get('/delivery-operator/requests', async (req, res) => {
   } catch (err) {
     console.error('[Admin delivery-operator] list error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load requests' });
+  }
+});
+
+/**
+ * GET /api/v2/admin/delivery-operator/requests/:id
+ * Fetch a single delivery request for viewing/editing (includes business name).
+ */
+router.get('/delivery-operator/requests/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data, error } = await supabaseClient
+      .from('delivery_requests')
+      .select('*, businesses(name)')
+      .eq('id', id)
+      .single();
+    if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
+    const { businesses, ...request } = data || {};
+    res.json({ ...request, business_name: businesses?.name ?? null });
+  } catch (err) {
+    console.error('[Admin delivery-operator] get request error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load request' });
   }
 });
 
@@ -612,19 +633,36 @@ router.post('/delivery-operator/requests/:id/retry-dispatch', async (req, res) =
 
 /**
  * PATCH /api/v2/admin/delivery-operator/requests/:id
- * Operator override: status, amount_quoted_cents. Use to cancel or set Needs Manual Assist, override price.
+ * Operator edit: status, amount_quoted_cents, address fields, recipient, package, priority, scheduled date/time.
  */
 router.patch('/delivery-operator/requests/:id', express.json(), async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, amount_quoted_cents } = req.body || {};
+    const body = req.body || {};
     const updates = { updated_at: new Date().toISOString() };
     const allowedStatuses = ['New', 'Contacting', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'];
-    if (status && allowedStatuses.includes(status)) updates.status = status;
-    if (amount_quoted_cents !== undefined && Number.isFinite(amount_quoted_cents)) updates.amount_quoted_cents = Math.max(0, Math.round(amount_quoted_cents));
+    if (body.status && allowedStatuses.includes(body.status)) updates.status = body.status;
+    if (body.amount_quoted_cents !== undefined && Number.isFinite(body.amount_quoted_cents)) updates.amount_quoted_cents = Math.max(0, Math.round(body.amount_quoted_cents));
+    const stringFields = [
+      'callback_phone', 'recipient_name', 'recipient_phone', 'delivery_address', 'delivery_city', 'delivery_province', 'delivery_postal_code',
+      'pickup_address', 'pickup_city', 'pickup_province', 'pickup_postal_code', 'package_description', 'special_instructions',
+      'scheduled_date', 'scheduled_time',
+    ];
+    for (const key of stringFields) {
+      if (body[key] !== undefined) updates[key] = body[key] === null || body[key] === '' ? null : String(body[key]).trim();
+    }
+    if (body.priority === 'Immediate' || body.priority === 'Same Day' || body.priority === 'Schedule') updates.priority = body.priority;
     if (Object.keys(updates).length <= 1) return res.status(400).json({ error: 'No valid updates' });
     const { data, error } = await supabaseClient.from('delivery_requests').update(updates).eq('id', id).select().single();
     if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
+    // Sync to Shipday when date/time or other Shipday-relevant fields change so Shipday shows the same data.
+    const syncRelevant = ['scheduled_date', 'scheduled_time', 'priority', 'delivery_address', 'delivery_city', 'delivery_province', 'delivery_postal_code', 'pickup_address', 'pickup_city', 'pickup_province', 'pickup_postal_code', 'recipient_name', 'callback_phone', 'special_instructions', 'package_description'].some((k) => updates[k] !== undefined);
+    if (syncRelevant && data) {
+      const { syncDeliveryRequestToShipday } = await import('../../services/delivery-network/shipdayEdit.js');
+      syncDeliveryRequestToShipday(id, data).then((r) => {
+        if (!r.success) console.warn('[Admin delivery-operator] Shipday sync after PATCH:', r.error);
+      }).catch((e) => console.warn('[Admin delivery-operator] Shipday sync error:', e?.message || e));
+    }
     res.json(data);
   } catch (err) {
     console.error('[Admin delivery-operator] patch error:', err?.message || err);
@@ -645,6 +683,30 @@ router.get('/delivery-operator/phone-numbers', async (req, res) => {
   } catch (err) {
     console.error('[Admin delivery-operator] phone-numbers error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load numbers', phone_numbers: [] });
+  }
+});
+
+/**
+ * GET /api/v2/admin/delivery-operator/carriers
+ * List Shipday carriers (drivers/companies). Use IDs in Preferred carrier IDs to assign orders and get delivery cost.
+ */
+router.get('/delivery-operator/carriers', async (req, res) => {
+  try {
+    const { getShipdayCredentials } = await import('../../services/delivery-network/shipdayQuote.js');
+    const { apiKey, baseUrl } = await getShipdayCredentials();
+    if (!apiKey) return res.status(400).json({ error: 'Shipday not configured', carriers: [] });
+    const axios = (await import('axios')).default;
+    const r = await axios.get(`${baseUrl.replace(/\/$/, '')}/carriers`, {
+      headers: { Accept: 'application/json', Authorization: `Basic ${apiKey}` },
+      timeout: 10000,
+      validateStatus: (s) => s < 500,
+    });
+    if (r.status !== 200) return res.status(r.status).json({ error: 'Shipday carriers request failed', carriers: [] });
+    const list = Array.isArray(r.data) ? r.data : [];
+    res.json({ carriers: list.map((c) => ({ id: c.id, name: c.name, companyId: c.companyId, isActive: c.isActive, isOnShift: c.isOnShift })) });
+  } catch (err) {
+    console.error('[Admin delivery-operator] carriers error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load carriers', carriers: [] });
   }
 });
 

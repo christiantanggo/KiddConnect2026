@@ -16,6 +16,22 @@ function getAdminToken() {
   return document.cookie.split(';').find(c => c.trim().startsWith('admin_token='))?.split('=')[1]?.trim() || null;
 }
 
+/** Format scheduled pickup date and time for display. scheduled_date: YYYY-MM-DD, scheduled_time: HH:mm or HH:mm:ss. */
+function formatScheduled(scheduled_date, scheduled_time) {
+  const d = scheduled_date && String(scheduled_date).trim();
+  const t = scheduled_time && String(scheduled_time).trim();
+  if (!d) return null;
+  const [year, month, day] = d.slice(0, 10).split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const timeParts = t ? t.split(':').map((x) => parseInt(x, 10) || 0) : [0, 0, 0];
+  const hour = timeParts[0] ?? 0;
+  const min = timeParts[1] ?? 0;
+  const sec = timeParts[2] ?? 0;
+  const date = new Date(year, month - 1, day, hour, min, sec);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'medium' });
+}
+
 const TABS = [
   { key: 'deliveries', label: 'Deliveries' },
   { key: 'add-delivery', label: 'Add delivery' },
@@ -44,6 +60,11 @@ function AdminDeliveryOperatorPage() {
   const [statusFilter, setStatusFilter] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [actionLoadingId, setActionLoadingId] = useState(null);
+  const [editDeliveryId, setEditDeliveryId] = useState(null);
+  const [editDelivery, setEditDelivery] = useState(null);
+  const [editDeliveryLoading, setEditDeliveryLoading] = useState(false);
+  const [editDeliverySaving, setEditDeliverySaving] = useState(false);
+  const [editForm, setEditForm] = useState({});
 
   // Add delivery (manual) state
   const [businesses, setBusinesses] = useState([]);
@@ -96,6 +117,8 @@ function AdminDeliveryOperatorPage() {
   const [agentLoading, setAgentLoading] = useState(null); // 'create' | 'link'
   const [testingBrokerId, setTestingBrokerId] = useState(null); // broker id while testing connection
   const [brokerTestResult, setBrokerTestResult] = useState(null); // { brokerId, success, message, detail?, request_url?, response_status?, response_summary? } after Test connection
+  const [shipdayCarriers, setShipdayCarriers] = useState([]); // { id, name, companyId, isActive, isOnShift } from GET carriers
+  const [shipdayCarriersLoading, setShipdayCarriersLoading] = useState(false);
   const [configForm, setConfigForm] = useState({
     delivery_phone_numbers: [],
     notification_email: '',
@@ -374,6 +397,96 @@ function AdminDeliveryOperatorPage() {
     }
   };
 
+  const openEdit = async (id) => {
+    setEditDeliveryId(id);
+    setEditDelivery(null);
+    setEditForm({});
+    setEditDeliveryLoading(true);
+    const token = getAdminToken();
+    if (!token) return setEditDeliveryLoading(false);
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/requests/${id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error((await res.json())?.error || res.statusText);
+      const data = await res.json();
+      setEditDelivery(data);
+      setEditForm({
+        status: data.status || '',
+        amount_quoted_cents: data.amount_quoted_cents ?? '',
+        callback_phone: data.callback_phone || '',
+        recipient_name: data.recipient_name || '',
+        recipient_phone: data.recipient_phone || '',
+        delivery_address: data.delivery_address || '',
+        delivery_city: data.delivery_city || '',
+        delivery_province: data.delivery_province || '',
+        delivery_postal_code: data.delivery_postal_code || '',
+        pickup_address: data.pickup_address || '',
+        pickup_city: data.pickup_city || '',
+        pickup_province: data.pickup_province || '',
+        pickup_postal_code: data.pickup_postal_code || '',
+        package_description: data.package_description || '',
+        special_instructions: data.special_instructions || '',
+        priority: data.priority || 'Schedule',
+        scheduled_date: data.scheduled_date || '',
+        scheduled_time: data.scheduled_time || '',
+      });
+    } catch (e) {
+      alert(e.message || 'Failed to load delivery');
+      setEditDeliveryId(null);
+    } finally {
+      setEditDeliveryLoading(false);
+    }
+  };
+
+  const saveEdit = async () => {
+    if (!editDeliveryId || !editDelivery) return;
+    const token = getAdminToken();
+    if (!token) return;
+    setEditDeliverySaving(true);
+    try {
+      const payload = {
+        status: editForm.status || undefined,
+        amount_quoted_cents: editForm.amount_quoted_cents === '' || editForm.amount_quoted_cents == null ? undefined : Number(editForm.amount_quoted_cents),
+        callback_phone: editForm.callback_phone || undefined,
+        recipient_name: editForm.recipient_name || undefined,
+        recipient_phone: editForm.recipient_phone || undefined,
+        delivery_address: editForm.delivery_address || undefined,
+        delivery_city: editForm.delivery_city || undefined,
+        delivery_province: editForm.delivery_province || undefined,
+        delivery_postal_code: editForm.delivery_postal_code || undefined,
+        pickup_address: editForm.pickup_address || undefined,
+        pickup_city: editForm.pickup_city || undefined,
+        pickup_province: editForm.pickup_province || undefined,
+        pickup_postal_code: editForm.pickup_postal_code || undefined,
+        package_description: editForm.package_description || undefined,
+        special_instructions: editForm.special_instructions || undefined,
+        priority: editForm.priority || undefined,
+        scheduled_date: editForm.scheduled_date || undefined,
+        scheduled_time: editForm.scheduled_time || undefined,
+      };
+      Object.keys(payload).forEach((k) => payload[k] === undefined && delete payload[k]);
+      if (Object.keys(payload).length === 0) {
+        setEditDeliverySaving(false);
+        return;
+      }
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/requests/${editDeliveryId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error((await res.json())?.error || res.statusText);
+      await load();
+      setEditDeliveryId(null);
+      setEditDelivery(null);
+      setEditForm({});
+    } catch (e) {
+      alert(e.message || 'Save failed');
+    } finally {
+      setEditDeliverySaving(false);
+    }
+  };
+
   const escalated = requests.filter(r => r.status === 'Needs Manual Assist');
   const rest = requests.filter(r => r.status !== 'Needs Manual Assist');
   const baseDisplayRequests = statusFilter ? requests : rest;
@@ -515,6 +628,7 @@ function AdminDeliveryOperatorPage() {
   };
 
   return (
+    <>
     <div className="min-h-screen bg-slate-50 p-6">
       <div className="max-w-6xl mx-auto">
         <div className="mb-6">
@@ -614,7 +728,9 @@ function AdminDeliveryOperatorPage() {
                     <p className="text-sm text-slate-600 mb-6">Connect courier or delivery networks. When a delivery is requested, the system will use these APIs to dispatch to the connected providers. Add API keys from each provider’s dashboard.</p>
                     <div className="space-y-6">
                       {BROKER_OPTIONS.map((broker) => {
-                        const entry = configForm.brokers?.[broker.id] || { enabled: false, api_key: '', base_url: '' };
+                        const entry = configForm.brokers?.[broker.id] || { enabled: false, api_key: '', base_url: '', preferred_carrier_ids: '', on_demand_enabled: false, preferred_on_demand_provider: '' };
+                        const preferredDisplay = Array.isArray(entry.preferred_carrier_ids) ? entry.preferred_carrier_ids.join(', ') : (entry.preferred_carrier_ids ?? '');
+                        const onDemandProvider = entry.preferred_on_demand_provider ?? '';
                         return (
                           <div key={broker.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50/50">
                             <div className="flex items-center gap-2 mb-2">
@@ -669,6 +785,120 @@ function AdminDeliveryOperatorPage() {
                                 />
                               </div>
                             </div>
+                            {broker.id === 'shipday' && (
+                              <div className="mt-3">
+                                <label className="block text-sm text-slate-700 mb-1">Preferred carrier IDs (optional)</label>
+                                <p className="text-xs text-slate-500 mb-1">Assign new orders to the first ID so Shipday returns delivery cost. Use the cheapest driver/company ID. Comma-separated for fallback order.</p>
+                                <div className="flex gap-2 flex-wrap items-center">
+                                  <input
+                                    type="text"
+                                    value={preferredDisplay}
+                                    onChange={(e) => setConfigForm(f => ({
+                                      ...f,
+                                      brokers: {
+                                        ...(f.brokers || {}),
+                                        [broker.id]: { ...(f.brokers?.[broker.id] || {}), preferred_carrier_ids: e.target.value },
+                                      },
+                                    }))}
+                                    placeholder="e.g. 7735 or 7735, 1234"
+                                    className="flex-1 min-w-[120px] px-3 py-2 border border-slate-300 rounded text-sm font-mono"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={async () => {
+                                      setShipdayCarriersLoading(true);
+                                      setShipdayCarriers([]);
+                                      try {
+                                        const token = getAdminToken();
+                                        if (!token) return;
+                                        const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/carriers`, { headers: { Authorization: `Bearer ${token}` } });
+                                        const data = await res.json();
+                                        setShipdayCarriers(Array.isArray(data.carriers) ? data.carriers : []);
+                                        if (!res.ok) throw new Error(data.error || 'Failed to load carriers');
+                                      } catch (e) {
+                                        setShipdayCarriers([]);
+                                        console.error(e);
+                                      } finally {
+                                        setShipdayCarriersLoading(false);
+                                      }
+                                    }}
+                                    disabled={shipdayCarriersLoading || !(entry.api_key || '').trim()}
+                                    className="px-3 py-1.5 rounded border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50"
+                                  >
+                                    {shipdayCarriersLoading ? 'Loading…' : 'Load carriers'}
+                                  </button>
+                                </div>
+                                {shipdayCarriers.length > 0 && (
+                                  <div className="mt-2 max-h-40 overflow-auto rounded border border-slate-200 bg-white p-2 text-xs">
+                                    <p className="font-medium text-slate-600 mb-1">Carriers (ID — Name). Click to copy ID.</p>
+                                    <ul className="space-y-0.5">
+                                      {shipdayCarriers.map((c) => (
+                                        <li key={c.id}>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const current = configForm.brokers?.shipday?.preferred_carrier_ids;
+                                              const str = Array.isArray(current) ? current.join(', ') : (current ?? '');
+                                              const add = str ? `${str}, ${c.id}` : String(c.id);
+                                              setConfigForm(f => ({
+                                                ...f,
+                                                brokers: {
+                                                  ...(f.brokers || {}),
+                                                  shipday: { ...(f.brokers?.shipday || {}), preferred_carrier_ids: add },
+                                                },
+                                              }));
+                                            }}
+                                            className="text-left w-full px-2 py-0.5 rounded hover:bg-slate-100 font-mono"
+                                          >
+                                            {c.id} — {c.name || '—'} {c.isOnShift ? '(on shift)' : ''}
+                                          </button>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {broker.id === 'shipday' && (
+                              <div className="mt-3 border-t border-slate-200 pt-3">
+                                <p className="text-sm font-medium text-slate-700 mb-2">On-demand (DoorDash / Uber)</p>
+                                <p className="text-xs text-slate-500 mb-2">Use Shipday’s on-demand API for quotes and dispatch. Requires Shipday Professional plan and US location.</p>
+                                <div className="flex items-center gap-2 mb-2">
+                                  <input
+                                    type="checkbox"
+                                    id="shipday-on-demand-enabled"
+                                    checked={!!entry.on_demand_enabled}
+                                    onChange={(e) => setConfigForm(f => ({
+                                      ...f,
+                                      brokers: {
+                                        ...(f.brokers || {}),
+                                        shipday: { ...(f.brokers?.shipday || {}), on_demand_enabled: e.target.checked },
+                                      },
+                                    }))}
+                                    className="rounded border-slate-300"
+                                  />
+                                  <label htmlFor="shipday-on-demand-enabled" className="text-sm text-slate-700">Use on-demand delivery for quotes and dispatch</label>
+                                </div>
+                                <div>
+                                  <label className="block text-sm text-slate-700 mb-1">Preferred on-demand provider</label>
+                                  <select
+                                    value={onDemandProvider}
+                                    onChange={(e) => setConfigForm(f => ({
+                                      ...f,
+                                      brokers: {
+                                        ...(f.brokers || {}),
+                                        shipday: { ...(f.brokers?.shipday || {}), preferred_on_demand_provider: e.target.value },
+                                      },
+                                    }))}
+                                    className="w-full max-w-xs px-3 py-2 border border-slate-300 rounded text-sm"
+                                  >
+                                    <option value="">— Select —</option>
+                                    <option value="DoorDash">DoorDash</option>
+                                    <option value="Uber">Uber</option>
+                                  </select>
+                                </div>
+                              </div>
+                            )}
                             <div className="mt-3">
                               <button
                                 type="button"
@@ -1118,20 +1348,20 @@ function AdminDeliveryOperatorPage() {
                               <th className="p-2">Callback</th>
                               <th className="p-2">Delivery address</th>
                               <th className="p-2">Status</th>
-                              <th className="p-2">Created</th>
+                              <th className="p-2">Scheduled</th>
                               <th className="p-2">Actions</th>
                             </tr>
                           </thead>
                           <tbody>
                             {filteredEscalated.map((r) => (
-                              <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
+                              <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => openEdit(r.id)}>
                                 <td className="p-2 font-mono">{r.reference_number}</td>
                                 <td className="p-2 max-w-[140px] truncate" title={r.business_name || '—'}>{r.business_name || '—'}</td>
                                 <td className="p-2">{r.callback_phone}</td>
                                 <td className="p-2 max-w-[200px] truncate" title={r.delivery_address}>{r.delivery_address}</td>
                                 <td className="p-2">{r.status}</td>
-                                <td className="p-2 text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
-                                <td className="p-2 flex flex-wrap gap-1">
+                                <td className="p-2 text-slate-500">{formatScheduled(r.scheduled_date, r.scheduled_time) || '—'}</td>
+                                <td className="p-2 flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
                                   <button type="button" onClick={() => retryDispatch(r.id)} disabled={actionLoadingId === r.id} className="px-2 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-700 disabled:opacity-50">Retry dispatch</button>
                                   <button type="button" onClick={() => updateStatus(r.id, 'Cancelled')} disabled={actionLoadingId === r.id} className="px-2 py-1 rounded bg-red-100 text-red-700 text-xs hover:bg-red-200 disabled:opacity-50">Cancel</button>
                                 </td>
@@ -1155,21 +1385,21 @@ function AdminDeliveryOperatorPage() {
                             <th className="p-2">Delivery address</th>
                             <th className="p-2">Status</th>
                             <th className="p-2">Payment</th>
-                            <th className="p-2">Created</th>
+                            <th className="p-2">Scheduled</th>
                             <th className="p-2">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
                           {displayRequests.map((r) => (
-                            <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50">
+                            <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => openEdit(r.id)}>
                               <td className="p-2 font-mono">{r.reference_number}</td>
                               <td className="p-2 max-w-[140px] truncate" title={r.business_name || '—'}>{r.business_name || '—'}</td>
                               <td className="p-2">{r.callback_phone}</td>
                               <td className="p-2 max-w-[200px] truncate" title={r.delivery_address}>{r.delivery_address}</td>
                               <td className="p-2">{r.status}</td>
                               <td className="p-2">{r.payment_status || '—'}</td>
-                              <td className="p-2 text-slate-500">{r.created_at ? new Date(r.created_at).toLocaleString() : '—'}</td>
-                              <td className="p-2 flex flex-wrap gap-1">
+                              <td className="p-2 text-slate-500">{formatScheduled(r.scheduled_date, r.scheduled_time) || '—'}</td>
+                              <td className="p-2 flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
                                 {['New', 'Contacting', 'Needs Manual Assist'].includes(r.status) && (
                                   <button type="button" onClick={() => retryDispatch(r.id)} disabled={actionLoadingId === r.id} className="px-2 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-700 disabled:opacity-50">Retry</button>
                                 )}
@@ -1190,6 +1420,108 @@ function AdminDeliveryOperatorPage() {
           )}
         </div>
       </div>
+      {/* Delivery edit panel (slide-over) */}
+      {editDeliveryId ? (
+        <div className="fixed inset-0 z-50 flex items-stretch">
+          <div className="absolute inset-0 z-0 bg-slate-900/50" onClick={() => { if (!editDeliverySaving) { setEditDeliveryId(null); setEditDelivery(null); setEditForm({}); } }} aria-hidden />
+          <div className="relative z-10 ml-auto w-full max-w-lg bg-white shadow-xl flex flex-col max-h-screen overflow-hidden">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-slate-800">
+                {editDelivery?.reference_number ? `Delivery ${editDelivery.reference_number}` : 'Delivery details'}
+              </h2>
+              <button type="button" onClick={() => { if (!editDeliverySaving) { setEditDeliveryId(null); setEditDelivery(null); setEditForm({}); } }} className="p-2 rounded text-slate-500 hover:bg-slate-100">✕</button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-4">
+              {editDeliveryLoading ? (
+                <p className="text-slate-500">Loading…</p>
+              ) : editDelivery ? (
+                <div className="space-y-4">
+                  <div className="rounded-lg bg-slate-100 p-4">
+                    <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-1">Cost (quoted)</p>
+                    <p className="text-2xl font-semibold text-slate-800">
+                      {editForm.amount_quoted_cents != null && editForm.amount_quoted_cents !== '' ? `$${(Number(editForm.amount_quoted_cents) / 100).toFixed(2)}` : '—'}
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">CAD (amount_quoted_cents). Edit below to override.</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Business</label>
+                    <p className="text-slate-800">{editDelivery.business_name || '—'}</p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
+                    <select value={editForm.status} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+                      {['New', 'Contacting', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'].map((s) => (
+                        <option key={s} value={s}>{s}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Quoted amount (cents)</label>
+                    <input type="number" min={0} value={editForm.amount_quoted_cents === '' ? '' : editForm.amount_quoted_cents} onChange={(e) => setEditForm((f) => ({ ...f, amount_quoted_cents: e.target.value === '' ? '' : e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" placeholder="e.g. 1500" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Callback phone</label>
+                    <input type="text" value={editForm.callback_phone} onChange={(e) => setEditForm((f) => ({ ...f, callback_phone: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Recipient name</label>
+                    <input type="text" value={editForm.recipient_name} onChange={(e) => setEditForm((f) => ({ ...f, recipient_name: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Delivery address</label>
+                    <input type="text" value={editForm.delivery_address} onChange={(e) => setEditForm((f) => ({ ...f, delivery_address: e.target.value }))} placeholder="Street" className="w-full px-3 py-2 border border-slate-300 rounded text-sm mb-1" />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="text" value={editForm.delivery_city} onChange={(e) => setEditForm((f) => ({ ...f, delivery_city: e.target.value }))} placeholder="City" className="px-3 py-2 border border-slate-300 rounded text-sm" />
+                      <input type="text" value={editForm.delivery_province} onChange={(e) => setEditForm((f) => ({ ...f, delivery_province: e.target.value }))} placeholder="Province" className="px-3 py-2 border border-slate-300 rounded text-sm" />
+                      <input type="text" value={editForm.delivery_postal_code} onChange={(e) => setEditForm((f) => ({ ...f, delivery_postal_code: e.target.value }))} placeholder="Postal" className="px-3 py-2 border border-slate-300 rounded text-sm" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Pickup address</label>
+                    <input type="text" value={editForm.pickup_address} onChange={(e) => setEditForm((f) => ({ ...f, pickup_address: e.target.value }))} placeholder="Street" className="w-full px-3 py-2 border border-slate-300 rounded text-sm mb-1" />
+                    <div className="grid grid-cols-3 gap-2">
+                      <input type="text" value={editForm.pickup_city} onChange={(e) => setEditForm((f) => ({ ...f, pickup_city: e.target.value }))} placeholder="City" className="px-3 py-2 border border-slate-300 rounded text-sm" />
+                      <input type="text" value={editForm.pickup_province} onChange={(e) => setEditForm((f) => ({ ...f, pickup_province: e.target.value }))} placeholder="Province" className="px-3 py-2 border border-slate-300 rounded text-sm" />
+                      <input type="text" value={editForm.pickup_postal_code} onChange={(e) => setEditForm((f) => ({ ...f, pickup_postal_code: e.target.value }))} placeholder="Postal" className="px-3 py-2 border border-slate-300 rounded text-sm" />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Package / instructions</label>
+                    <input type="text" value={editForm.package_description} onChange={(e) => setEditForm((f) => ({ ...f, package_description: e.target.value }))} placeholder="Package description" className="w-full px-3 py-2 border border-slate-300 rounded text-sm mb-1" />
+                    <input type="text" value={editForm.special_instructions} onChange={(e) => setEditForm((f) => ({ ...f, special_instructions: e.target.value }))} placeholder="Special instructions" className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Priority</label>
+                    <select value={editForm.priority} onChange={(e) => setEditForm((f) => ({ ...f, priority: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+                      <option value="Schedule">Schedule</option>
+                      <option value="Same Day">Same Day</option>
+                      <option value="Immediate">Immediate</option>
+                    </select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Scheduled date</label>
+                      <input type="date" value={editForm.scheduled_date} onChange={(e) => setEditForm((f) => ({ ...f, scheduled_date: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Scheduled time</label>
+                      <input type="time" value={editForm.scheduled_time ? editForm.scheduled_time.slice(0, 5) : ''} onChange={(e) => setEditForm((f) => ({ ...f, scheduled_time: e.target.value || '' }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            {editDelivery && (
+              <div className="p-4 border-t border-slate-200">
+                <button type="button" onClick={saveEdit} disabled={editDeliverySaving} className="w-full py-2 rounded bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-50">
+                  {editDeliverySaving ? 'Saving…' : 'Save changes'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

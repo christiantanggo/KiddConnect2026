@@ -123,7 +123,7 @@ export async function startDispatch(deliveryRequestId) {
   }
 
   // Call Shipday API to create the delivery order so it appears in Shipday (scheduled or immediate).
-  const { getShipdayCredentials } = await import('./shipdayQuote.js');
+  const { getShipdayCredentials, getShipdayOnDemandBaseUrl } = await import('./shipdayQuote.js');
   const axios = (await import('axios')).default;
   const { apiKey, baseUrl } = await getShipdayCredentials();
   if (!apiKey) {
@@ -232,6 +232,7 @@ export async function startDispatch(deliveryRequestId) {
     const createRes = await axios.post(createUrl, orderPayload, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
     if (createRes.status === 200 && createRes.data?.orderId) {
       const shipdayOrderId = String(createRes.data.orderId);
+      const orderNumber = orderPayload.orderNumber;
       await supabaseClient
         .from('delivery_dispatch_log')
         .update({
@@ -245,6 +246,77 @@ export async function startDispatch(deliveryRequestId) {
         .update({ status: 'Dispatched', updated_at: new Date().toISOString() })
         .eq('id', deliveryRequestId);
       console.log('[DeliveryNetwork] startDispatch: Shipday order created', shipdayOrderId, '— request', deliveryRequestId, 'Dispatched');
+
+      // Assign to preferred provider and store quoted amount: on-demand (DoorDash/Uber) takes precedence, else carrier.
+      const shipdayConfig = config?.brokers?.shipday;
+      const preferredOnDemand = typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : null;
+      const preferredIds = Array.isArray(shipdayConfig?.preferred_carrier_ids) ? shipdayConfig.preferred_carrier_ids : [];
+
+      if (preferredOnDemand) {
+        const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
+        if (onDemandBase) {
+          try {
+            const estimateUrl = `${onDemandBase}/estimate/${encodeURIComponent(shipdayOrderId)}`;
+            const estRes = await axios.get(estimateUrl, {
+              headers: { Accept: 'application/json', 'Content-Type': 'application/json', Authorization: headers.Authorization },
+              timeout: 15000,
+              validateStatus: (s) => s < 500,
+            });
+            let estimateId = null;
+            if (estRes.status === 200 && estRes.data && !estRes.data.error) {
+              const raw = estRes.data;
+              const list = Array.isArray(raw) ? raw : (raw.id != null || raw.fee != null ? [raw] : []);
+              const match = list.find((e) => e && String(e.name || '').toLowerCase() === String(preferredOnDemand).toLowerCase()) || list[0];
+              if (match && (match.id != null || match.fee != null)) estimateId = String(match.id ?? '');
+            }
+            const assignUrl = `${onDemandBase}/assign`;
+            const assignBody = { name: preferredOnDemand, orderId: Number(shipdayOrderId) };
+            if (estimateId) assignBody.estimateReference = estimateId;
+            const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
+            if (assignRes.status === 200 && assignRes.data) {
+              const totalBillable = assignRes.data.totalBillableAmount != null ? Number(assignRes.data.totalBillableAmount) : null;
+              const amount = totalBillable != null && totalBillable > 0 ? totalBillable : (assignRes.data.thirdPartyFee != null ? Number(assignRes.data.thirdPartyFee) : null);
+              if (amount != null && amount > 0) {
+                const amountCents = Math.round(amount * 100);
+                await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
+                console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', preferredOnDemand, '— amount_quoted_cents', amountCents);
+              }
+            } else {
+              console.warn('[DeliveryNetwork] startDispatch: on-demand assign failed', assignRes.status, assignRes.data);
+            }
+          } catch (onDemandErr) {
+            console.warn('[DeliveryNetwork] startDispatch: on-demand estimate/assign failed', onDemandErr?.message || onDemandErr);
+          }
+        }
+      } else if (preferredIds.length > 0) {
+        const carrierId = preferredIds[0];
+        try {
+          const assignUrl = `${baseUrl}/orders/assign/${encodeURIComponent(shipdayOrderId)}/${encodeURIComponent(carrierId)}`;
+          const assignRes = await axios.put(assignUrl, null, { headers, timeout: 10000, validateStatus: (s) => s < 500 });
+          if (assignRes.status === 204 || assignRes.status === 200) {
+            console.log('[DeliveryNetwork] startDispatch: assigned order to carrier', carrierId);
+            await new Promise((r) => setTimeout(r, 1500));
+            const getUrl = `${baseUrl}/orders/${encodeURIComponent(orderNumber)}`;
+            const getRes = await axios.get(getUrl, { headers: { Accept: 'application/json', Authorization: headers.Authorization }, timeout: 10000, validateStatus: (s) => s < 500 });
+            if (getRes.status === 200 && Array.isArray(getRes.data) && getRes.data.length > 0) {
+              const orderDetail = getRes.data[0];
+              const costing = orderDetail?.costing;
+              const totalCost = costing?.totalCost != null ? Number(costing.totalCost) : null;
+              const deliveryFee = costing?.deliveryFee != null ? Number(costing.deliveryFee) : null;
+              const amount = totalCost != null && totalCost > 0 ? totalCost : (deliveryFee != null && deliveryFee > 0 ? deliveryFee : null);
+              if (amount != null && amount > 0) {
+                const amountCents = Math.round(amount * 100);
+                await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
+                console.log('[DeliveryNetwork] startDispatch: updated amount_quoted_cents from Shipday costing:', amountCents, 'cents');
+              }
+            }
+          } else {
+            console.warn('[DeliveryNetwork] startDispatch: assign to carrier failed', assignRes.status, assignRes.data);
+          }
+        } catch (assignErr) {
+          console.warn('[DeliveryNetwork] startDispatch: assign or fetch costing failed', assignErr?.message || assignErr);
+        }
+      }
     } else {
       console.warn('[DeliveryNetwork] startDispatch: Shipday create failed', createRes.status, createRes.data);
       await supabaseClient.from('delivery_dispatch_log').update({ result: 'error', attempted_at: new Date().toISOString() }).eq('id', logRow.id);

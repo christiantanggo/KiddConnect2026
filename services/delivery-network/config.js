@@ -208,6 +208,17 @@ export async function updateDeliveryConfig(updates) {
         api_key: typeof entry.api_key === 'string' ? entry.api_key.trim() || null : null,
         base_url: typeof entry.base_url === 'string' ? entry.base_url.trim() || null : null,
       };
+      if (Array.isArray(entry.preferred_carrier_ids)) {
+        merged.brokers[id].preferred_carrier_ids = entry.preferred_carrier_ids.filter((n) => Number.isInteger(n) && n > 0);
+      } else if (entry.preferred_carrier_ids !== undefined && entry.preferred_carrier_ids !== null) {
+        const raw = String(entry.preferred_carrier_ids).split(/[\s,]+/).map((s) => parseInt(s, 10)).filter((n) => !Number.isNaN(n) && n > 0);
+        if (raw.length) merged.brokers[id].preferred_carrier_ids = raw;
+      }
+      if (id === 'shipday') {
+        merged.brokers[id].on_demand_enabled = entry.on_demand_enabled === true;
+        const provider = typeof entry.preferred_on_demand_provider === 'string' ? entry.preferred_on_demand_provider.trim() || null : null;
+        merged.brokers[id].preferred_on_demand_provider = provider || null;
+      }
     }
   }
   if (Object.keys(merged).length === 0) return await getDeliveryConfigFull();
