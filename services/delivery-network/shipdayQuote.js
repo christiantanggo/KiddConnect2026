@@ -124,19 +124,18 @@ export async function getQuoteFromShipday(params) {
           const match = pickOnDemandEstimate(estimates, preferredProvider);
           const fee = match?.fee != null ? Number(match.fee) : null;
           if (fee != null && fee > 0) {
-            const shipday_cost_cents = Math.round(fee * 100);
-            const margin_cents = Math.max(0, Math.round(Number(config?.billing?.quote_margin_cents) || 0));
-            const total_cents = shipday_cost_cents + margin_cents;
             const label = isCheapestMode(preferredProvider) ? `${match.name} (cheapest)` : (match.name || preferredProvider);
-            console.log('[ShipdayQuote] on-demand quote:', label, 'fee', fee, '→ total', total_cents, 'cents');
+            if (isCheapestMode(preferredProvider) && estimates.length < 2) {
+              console.warn(
+                '[ShipdayQuote] Cheapest mode: API returned only one provider estimate; cannot compare DoorDash vs Uber. If Shipday UI shows a lower Uber price, the estimate API may not expose all providers—confirm in Shipday or upgrade plan if assign fails.'
+              );
+            }
+            console.log('[ShipdayQuote] on-demand quote:', label, 'cost_usd', fee);
+            // Return cost in USD for pricing engine: Final = CEIL(MAX(cost_usd * rate * margin, minimum)).
             return {
               source: 'shipday',
-              shipday_cost_cents,
-              margin_cents,
-              total_cents,
-              amount_cents: total_cents,
-              disclaimer: `Quote from ${match.name || 'provider'} via Shipday${isCheapestMode(preferredProvider) ? ' (lowest of available estimates)' : ''}. Final cost may vary.`,
-              currency: 'CAD',
+              cost_usd: fee,
+              provider_name: match.name || null,
             };
           }
           console.log('[ShipdayQuote] on-demand: no usable fee from estimates', estimates?.length);
@@ -182,25 +181,17 @@ export async function getQuoteFromShipday(params) {
     const deliveryFee = costing?.deliveryFee != null ? Number(costing.deliveryFee) : null;
     const totalCost = costing?.totalCost != null ? Number(costing.totalCost) : null;
     const amount = totalCost != null && totalCost > 0 ? totalCost : (deliveryFee != null && deliveryFee > 0 ? deliveryFee : null);
-    const shipday_cost_cents = amount != null ? Math.round(amount * 100) : null;
-
-    if (shipday_cost_cents == null || shipday_cost_cents <= 0) {
+    // Shipday costing is in USD (deliveryFee/totalCost).
+    if (amount == null || amount <= 0) {
       console.log('[ShipdayQuote] no valid costing from Shipday (costing=%s); falling back to config', JSON.stringify(costing));
       return null;
     }
 
-    const margin_cents = Math.max(0, Math.round(Number(config?.billing?.quote_margin_cents) || 0));
-    const total_cents = shipday_cost_cents + margin_cents;
-
-    console.log('[ShipdayQuote] got quote: Shipday', shipday_cost_cents, 'cents, margin', margin_cents, 'cents, total', total_cents);
+    console.log('[ShipdayQuote] got quote: Shipday cost_usd', amount);
     return {
       source: 'shipday',
-      shipday_cost_cents,
-      margin_cents,
-      total_cents,
-      amount_cents: total_cents,
-      disclaimer: 'Quote from Shipday. Final cost may vary.',
-      currency: 'CAD',
+      cost_usd: amount,
+      provider_name: null,
     };
   } catch (err) {
     console.warn('[ShipdayQuote] error', err?.message || err);

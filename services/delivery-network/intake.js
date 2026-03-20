@@ -57,6 +57,8 @@ export async function createDeliveryRequest(params) {
     intake_channel = 'form',
     payment_status = null,
     intake_transcript = null,
+    amount_quoted_cents = null,
+    quoted_on_demand_provider = null,
   } = params;
 
   if (!callback_phone || !String(callback_phone).trim()) {
@@ -98,6 +100,12 @@ export async function createDeliveryRequest(params) {
     payment_status: payment_status || null,
     updated_at: new Date().toISOString(),
   };
+  if (amount_quoted_cents != null && Number.isFinite(amount_quoted_cents) && amount_quoted_cents >= 0) {
+    payload.amount_quoted_cents = Math.round(amount_quoted_cents);
+  }
+  if (quoted_on_demand_provider != null && String(quoted_on_demand_provider).trim()) {
+    payload.quoted_on_demand_provider = String(quoted_on_demand_provider).trim().slice(0, 50);
+  }
   if (intake_transcript != null && String(intake_transcript).trim()) {
     payload.intake_transcript = String(intake_transcript).trim().slice(0, 50000);
     payload.transcript_access_token = crypto.randomBytes(32).toString('hex');

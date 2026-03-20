@@ -188,6 +188,12 @@ export async function updateDeliveryConfig(updates) {
       price_premium_cents: typeof billing.price_premium_cents === 'number' ? billing.price_premium_cents : undefined,
       sms_fee_cents: typeof billing.sms_fee_cents === 'number' ? billing.sms_fee_cents : undefined,
       quote_margin_cents: typeof billing.quote_margin_cents === 'number' ? billing.quote_margin_cents : undefined,
+      // Pricing engine: Shipday cost USD → CAD → margin → minimum → CEIL
+      margin_multiplier: typeof billing.margin_multiplier === 'number' && billing.margin_multiplier > 0 ? billing.margin_multiplier : undefined,
+      minimum_delivery_price_cad: typeof billing.minimum_delivery_price_cad === 'number' && billing.minimum_delivery_price_cad >= 0 ? billing.minimum_delivery_price_cad : undefined,
+      minimum_enabled: billing.minimum_enabled === true ? true : billing.minimum_enabled === false ? false : undefined,
+      exchange_rate_source: billing.exchange_rate_source === 'automatic' || billing.exchange_rate_source === 'manual' ? billing.exchange_rate_source : undefined,
+      manual_exchange_rate_cad_per_usd: typeof billing.manual_exchange_rate_cad_per_usd === 'number' && billing.manual_exchange_rate_cad_per_usd > 0 ? billing.manual_exchange_rate_cad_per_usd : undefined,
     };
     Object.keys(merged.billing).forEach((k) => { if (merged.billing[k] === undefined) delete merged.billing[k]; });
   }

@@ -131,7 +131,17 @@ function AdminDeliveryOperatorPage() {
     customer_sms_message: '',
     customer_sms_legal: '',
     service_line_name: 'Last-Mile Delivery',
-    billing: { price_basic_cents: '', price_priority_cents: '', sms_fee_cents: '', quote_margin_cents: '' },
+    billing: {
+      price_basic_cents: '',
+      price_priority_cents: '',
+      sms_fee_cents: '',
+      quote_margin_cents: '',
+      margin_multiplier: 1.4,
+      minimum_delivery_price_cad: 15,
+      minimum_enabled: true,
+      exchange_rate_source: 'manual',
+      manual_exchange_rate_cad_per_usd: 1.35,
+    },
     brokers: {},
   });
   /** Ref so Save always sends the latest selection (avoids stale state / closure). */
@@ -222,6 +232,11 @@ function AdminDeliveryOperatorPage() {
           price_priority_cents: configData.billing?.price_priority_cents ?? '',
           sms_fee_cents: configData.billing?.sms_fee_cents ?? '',
           quote_margin_cents: configData.billing?.quote_margin_cents ?? '',
+          margin_multiplier: configData.billing?.margin_multiplier ?? 1.4,
+          minimum_delivery_price_cad: configData.billing?.minimum_delivery_price_cad ?? 15,
+          minimum_enabled: configData.billing?.minimum_enabled !== false,
+          exchange_rate_source: configData.billing?.exchange_rate_source === 'automatic' ? 'automatic' : 'manual',
+          manual_exchange_rate_cad_per_usd: configData.billing?.manual_exchange_rate_cad_per_usd ?? 1.35,
         },
         brokers: configData.brokers && typeof configData.brokers === 'object' ? configData.brokers : {},
       });
@@ -259,6 +274,11 @@ function AdminDeliveryOperatorPage() {
           price_priority_cents: typeof configForm.billing.price_priority_cents === 'number' ? configForm.billing.price_priority_cents : (configForm.billing.price_priority_cents === '' ? undefined : Math.round(Number(configForm.billing.price_priority_cents))),
           sms_fee_cents: typeof configForm.billing.sms_fee_cents === 'number' ? configForm.billing.sms_fee_cents : (configForm.billing.sms_fee_cents === '' ? undefined : Math.round(Number(configForm.billing.sms_fee_cents))),
           quote_margin_cents: typeof configForm.billing.quote_margin_cents === 'number' ? configForm.billing.quote_margin_cents : (configForm.billing.quote_margin_cents === '' ? undefined : Math.round(Number(configForm.billing.quote_margin_cents))),
+          margin_multiplier: typeof configForm.billing.margin_multiplier === 'number' ? configForm.billing.margin_multiplier : (configForm.billing.margin_multiplier === '' ? undefined : Number(configForm.billing.margin_multiplier)),
+          minimum_delivery_price_cad: typeof configForm.billing.minimum_delivery_price_cad === 'number' ? configForm.billing.minimum_delivery_price_cad : (configForm.billing.minimum_delivery_price_cad === '' ? undefined : Number(configForm.billing.minimum_delivery_price_cad)),
+          minimum_enabled: configForm.billing.minimum_enabled,
+          exchange_rate_source: configForm.billing.exchange_rate_source,
+          manual_exchange_rate_cad_per_usd: typeof configForm.billing.manual_exchange_rate_cad_per_usd === 'number' ? configForm.billing.manual_exchange_rate_cad_per_usd : (configForm.billing.manual_exchange_rate_cad_per_usd === '' ? undefined : Number(configForm.billing.manual_exchange_rate_cad_per_usd)),
         },
         brokers: configForm.brokers && typeof configForm.brokers === 'object' ? configForm.brokers : {},
       };
@@ -565,6 +585,8 @@ function AdminDeliveryOperatorPage() {
             scheduled_date: addDeliveryForm.scheduled_date?.trim() || undefined,
             scheduled_time: addDeliveryForm.scheduled_time?.trim() || undefined,
           }),
+          ...(addDeliveryQuote?.amount_cents != null && { amount_quoted_cents: addDeliveryQuote.amount_cents }),
+          ...(addDeliveryQuote?.provider_name && addDeliveryQuote?.source === 'shipday' && { quoted_on_demand_provider: addDeliveryQuote.provider_name }),
         }),
       });
       const data = await res.json();
@@ -897,6 +919,9 @@ function AdminDeliveryOperatorPage() {
                                     <option value="DoorDash">DoorDash only</option>
                                     <option value="Uber">Uber only</option>
                                   </select>
+                                  <p className="mt-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-100 rounded px-2 py-1.5 max-w-xl">
+                                    When on-demand is on, pick <strong>Cheapest</strong> or a provider—leaving &quot;Select&quot; skips the on-demand quote API and quotes may fall back to your configured rate if Shipday doesn&apos;t return main costing for this route.
+                                  </p>
                                 </div>
                               </div>
                             )}
@@ -1008,7 +1033,39 @@ function AdminDeliveryOperatorPage() {
                       <div>
                         <label className="block text-sm text-slate-700 mb-1">Quote margin (cents)</label>
                         <input type="number" value={configForm.billing.quote_margin_cents} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, quote_margin_cents: e.target.value } }))} placeholder="e.g. 300" className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
-                        <p className="text-xs text-slate-500 mt-0.5">Added on top of Shipday cost when showing quote (e.g. 300 = $3)</p>
+                        <p className="text-xs text-slate-500 mt-0.5">Legacy: added on top when not using pricing engine. Prefer pricing engine below for Shipday quotes.</p>
+                      </div>
+                    </div>
+                    <div className="mt-6 pt-6 border-t border-slate-200">
+                      <h3 className="text-sm font-semibold text-slate-800 mb-3">Pricing engine (Shipday quotes)</h3>
+                      <p className="text-xs text-slate-600 mb-3">Final price = CEIL(MAX(Shipday cost USD × exchange rate × margin, minimum)) in CAD. Exchange rate is applied before margin.</p>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        <div>
+                          <label className="block text-sm text-slate-700 mb-1">Margin multiplier</label>
+                          <input type="number" step="0.01" min="1" value={configForm.billing.margin_multiplier} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, margin_multiplier: e.target.value } }))} placeholder="1.40" className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                          <p className="text-xs text-slate-500 mt-0.5">Default 1.40 (40% margin)</p>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-700 mb-1">Minimum delivery price (CAD)</label>
+                          <input type="number" step="1" min="0" value={configForm.billing.minimum_delivery_price_cad} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, minimum_delivery_price_cad: e.target.value } }))} placeholder="15" className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                          <p className="text-xs text-slate-500 mt-0.5">Default $15 CAD</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input type="checkbox" id="billing-minimum-enabled" checked={!!configForm.billing.minimum_enabled} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, minimum_enabled: e.target.checked } }))} className="rounded border-slate-300" />
+                          <label htmlFor="billing-minimum-enabled" className="text-sm text-slate-700">Use minimum price (when calculated &lt; minimum)</label>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-700 mb-1">Exchange rate source</label>
+                          <select value={configForm.billing.exchange_rate_source} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, exchange_rate_source: e.target.value } }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
+                            <option value="manual">Manual (set below)</option>
+                            <option value="automatic">Automatic (env DELIVERY_USD_TO_CAD_RATE or fallback to manual)</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-sm text-slate-700 mb-1">Manual exchange rate (CAD per 1 USD)</label>
+                          <input type="number" step="0.01" min="0.01" value={configForm.billing.manual_exchange_rate_cad_per_usd} onChange={(e) => setConfigForm(f => ({ ...f, billing: { ...f.billing, manual_exchange_rate_cad_per_usd: e.target.value } }))} placeholder="1.35" className="w-full px-3 py-2 border border-slate-300 rounded text-sm" />
+                          <p className="text-xs text-slate-500 mt-0.5">Used when source is Manual or when Automatic has no env rate</p>
+                        </div>
                       </div>
                     </div>
                   </section>
@@ -1274,15 +1331,29 @@ function AdminDeliveryOperatorPage() {
                     View deliveries
                   </button>
                   {addDeliveryQuote && (
-                    <div className="ml-2 text-sm text-slate-600">
-                      {addDeliveryQuote.source === 'shipday' && addDeliveryQuote.shipday_cost_cents != null ? (
-                        <span>
-                          <span className="font-medium">Shipday:</span> {(addDeliveryQuote.shipday_cost_cents / 100).toFixed(2)} {addDeliveryQuote.currency || 'CAD'}
-                          {' · '}
-                          <span className="font-medium">Our margin:</span> {((addDeliveryQuote.margin_cents ?? 0) / 100).toFixed(2)} {addDeliveryQuote.currency || 'CAD'}
-                          {' · '}
-                          <span className="font-medium">Total for customer:</span> {((addDeliveryQuote.total_cents ?? addDeliveryQuote.amount_cents) / 100).toFixed(2)} {addDeliveryQuote.currency || 'CAD'}
-                        </span>
+                    <div className="ml-2 text-sm text-slate-600 space-y-1">
+                      {addDeliveryQuote.source === 'shipday' && (addDeliveryQuote.shipday_cost_cents != null || addDeliveryQuote.base_cost_cad != null) ? (
+                        <>
+                          <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+                            {addDeliveryQuote.provider_name && (
+                              <span><span className="font-medium">Provider:</span> {addDeliveryQuote.provider_name}</span>
+                            )}
+                            {addDeliveryQuote.exchange_rate_used != null && (
+                              <span><span className="font-medium">Exchange rate:</span> {Number(addDeliveryQuote.exchange_rate_used).toFixed(2)} CAD per 1 USD</span>
+                            )}
+                            {addDeliveryQuote.margin_multiplier != null && (
+                              <span><span className="font-medium">Margin multiplier:</span> {Number(addDeliveryQuote.margin_multiplier).toFixed(2)}×</span>
+                            )}
+                          </div>
+                          <div>
+                            <span className="font-medium">Base (CAD):</span> ${(addDeliveryQuote.base_cost_cad ?? (addDeliveryQuote.shipday_cost_cents / 100))?.toFixed(2)}
+                            {' · '}
+                            <span className="font-medium">Margin amount:</span> ${(addDeliveryQuote.margin_amount_cad ?? (addDeliveryQuote.margin_cents / 100))?.toFixed(2)}
+                            {addDeliveryQuote.applied_minimum && <span className="text-amber-700"> (min applied)</span>}
+                            {' · '}
+                            <span className="font-medium">Customer cost:</span> ${(addDeliveryQuote.final_price_cad ?? (addDeliveryQuote.total_cents != null ? addDeliveryQuote.total_cents / 100 : addDeliveryQuote.amount_cents / 100))?.toFixed(2)} {addDeliveryQuote.currency || 'CAD'}
+                          </div>
+                        </>
                       ) : (
                         <span>
                           {addDeliveryQuote.amount_cents != null

@@ -497,7 +497,7 @@ router.get('/delivery-operator/requests', async (req, res) => {
   try {
     const status = req.query.status; // e.g. Needs Manual Assist
     const limit = Math.min(parseInt(req.query.limit) || 100, 200);
-    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
+    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, quoted_on_demand_provider, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
     let q = supabaseClient
       .from('delivery_requests')
       .select(`${cols}, businesses(name)`)
@@ -599,6 +599,8 @@ router.post('/delivery-operator/requests', express.json(), async (req, res) => {
       scheduled_date: body.scheduled_date?.trim() || null,
       scheduled_time: body.scheduled_time?.trim() || null,
       intake_channel: 'admin',
+      amount_quoted_cents: body.amount_quoted_cents != null && Number.isFinite(Number(body.amount_quoted_cents)) ? Math.round(Number(body.amount_quoted_cents)) : null,
+      quoted_on_demand_provider: body.quoted_on_demand_provider != null && String(body.quoted_on_demand_provider).trim() ? String(body.quoted_on_demand_provider).trim() : null,
     });
     startDispatch(request.id).catch((err) =>
       console.error('[Admin delivery-operator] startDispatch after create error:', err?.message || err)
@@ -646,7 +648,7 @@ router.patch('/delivery-operator/requests/:id', express.json(), async (req, res)
     const stringFields = [
       'callback_phone', 'recipient_name', 'recipient_phone', 'delivery_address', 'delivery_city', 'delivery_province', 'delivery_postal_code',
       'pickup_address', 'pickup_city', 'pickup_province', 'pickup_postal_code', 'package_description', 'special_instructions',
-      'scheduled_date', 'scheduled_time',
+      'scheduled_date', 'scheduled_time', 'quoted_on_demand_provider',
     ];
     for (const key of stringFields) {
       if (body[key] !== undefined) updates[key] = body[key] === null || body[key] === '' ? null : String(body[key]).trim();
@@ -760,9 +762,20 @@ router.get('/delivery-operator/quote', async (req, res) => {
         recipient_name,
         customer_email,
       });
-      if (shipdayQuote) {
-        console.log('[Admin delivery-operator] Quote: returning Shipday-based quote (total_cents=%s)', shipdayQuote.total_cents ?? shipdayQuote.amount_cents);
-        return res.json(shipdayQuote);
+      if (shipdayQuote && shipdayQuote.cost_usd != null) {
+        const { calculateDeliveryPrice } = await import('../../services/delivery-network/pricingEngine.js');
+        const pricing = await calculateDeliveryPrice({
+          cost_usd: shipdayQuote.cost_usd,
+          business_id: businessId,
+        });
+        const out = {
+          ...pricing,
+          total_cents: pricing.amount_cents,
+          source: shipdayQuote.source,
+          provider_name: shipdayQuote.provider_name ?? undefined,
+        };
+        console.log('[Admin delivery-operator] Quote: pricing engine → final_price_cad=%s, amount_cents=%s', pricing.final_price_cad, pricing.amount_cents);
+        return res.json(out);
       }
       console.log('[Admin delivery-operator] Quote: Shipday returned no quote; using configured rate');
     } else {

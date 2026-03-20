@@ -26,6 +26,4 @@ The workflow deploys from `working-directory: ./frontend` and uses repo secrets.
 
 If the Action deploys to the wrong project, the secrets are for a different Vercel project; update them to the IDs for **kidd-connect** (under christian-fourniers-projects).
 
-## IMPORTANT: Vercel Dashboard Settings
-
-**Project Settings → General → Root Directory** can be `frontend` if you deploy from repo root via Git; if you deploy via CLI from `frontend/`, the uploaded root is already the app. Build should show "Route (app)" and 104 routes, not 2.
+## IMPORTANT: Vercel Dashboard Settings**Project Settings → General → Root Directory** can be `frontend` if you deploy from repo root via Git; if you deploy via CLI from `frontend/`, the uploaded root is already the app. Build should show "Route (app)" and 104 routes, not 2.

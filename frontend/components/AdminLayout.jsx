@@ -70,7 +70,10 @@ export default function AdminLayout({ children }) {
               </div>
             </div>
           </nav>
-          <div className="p-3 border-t border-gray-200">
+          <div className="p-3 border-t border-gray-200 space-y-2">
+            <p className="px-3 text-[10px] leading-tight text-gray-400" title="Bump this string when you deploy the admin UI">
+              Deployed March 20 2026 V1
+            </p>
             <button
               onClick={handleLogout}
               className="w-full px-3 py-2 text-left text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md"

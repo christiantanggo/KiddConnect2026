@@ -16,11 +16,25 @@ export function isDoorDashOrUberName(name) {
 
 /**
  * Normalize Shipday estimate response to a list of { name, fee, id }.
+ * Handles: top-level array, single object, or nested arrays (estimates, providers, results, data).
  * @param {object|array} raw
  */
 export function normalizeEstimateList(raw) {
   if (!raw || raw.error) return [];
-  const list = Array.isArray(raw) ? raw : raw.id != null || raw.fee != null ? [raw] : [];
+  if (Array.isArray(raw)) {
+    return raw.flatMap((x) => normalizeEstimateList(x)).filter(Boolean);
+  }
+  const nested = raw.estimates || raw.providers || raw.results || raw.thirdPartyEstimates || raw.data;
+  if (Array.isArray(nested)) {
+    return nested.flatMap((x) => normalizeEstimateList(x)).filter(Boolean);
+  }
+  if (nested && typeof nested === 'object' && nested.fee != null) {
+    return normalizeEstimateList([nested]);
+  }
+  if (nested && typeof nested === 'object') {
+    return Object.values(nested).flatMap((x) => normalizeEstimateList(x)).filter(Boolean);
+  }
+  const list = raw.id != null || raw.fee != null ? [raw] : [];
   return list
     .filter((e) => e && e.fee != null && Number(e.fee) > 0)
     .map((e) => ({
@@ -35,29 +49,65 @@ export function normalizeEstimateList(raw) {
  * so we can compare DoorDash vs Uber when Shipday returns one provider per call.
  * @returns {Promise<Array<{ name: string, fee: number, id: string }>>}
  */
+function buildEstimateQueryUrls(onDemandBase, orderIdEncoded) {
+  const b = `${onDemandBase}/estimate/${orderIdEncoded}`;
+  const pairs = [
+    '',
+    'name=DoorDash',
+    'name=Uber',
+    'provider=DoorDash',
+    'provider=Uber',
+    'thirdPartyName=DoorDash',
+    'thirdPartyName=Uber',
+    'serviceName=DoorDash',
+    'serviceName=Uber',
+    'partner=DoorDash',
+    'partner=Uber',
+    'deliveryPartner=DoorDash',
+    'deliveryPartner=Uber',
+  ];
+  return pairs.map((q) => (q ? `${b}?${q}` : b));
+}
+
+/**
+ * Fetch on-demand estimates for an order. Tries many GET query variants + optional POST
+ * (Shipday may ignore unknown params but different deployments return different providers).
+ */
 export async function collectOnDemandEstimates(orderId, onDemandBase, headers) {
   const axios = (await import('axios')).default;
   const id = encodeURIComponent(orderId);
-  const urls = [
-    `${onDemandBase}/estimate/${id}`,
-    `${onDemandBase}/estimate/${id}?name=DoorDash`,
-    `${onDemandBase}/estimate/${id}?name=Uber`,
-  ];
+  const hdr = { Accept: 'application/json', 'Content-Type': 'application/json', ...headers };
   const merged = [];
-  for (const url of urls) {
+
+  for (const url of buildEstimateQueryUrls(onDemandBase, id)) {
     try {
-      const res = await axios.get(url, {
-        headers: { Accept: 'application/json', 'Content-Type': 'application/json', ...headers },
-        timeout: 15000,
-        validateStatus: (s) => s < 500,
-      });
+      const res = await axios.get(url, { headers: hdr, timeout: 15000, validateStatus: (s) => s < 500 });
       if (res.status !== 200 || !res.data || res.data.error) continue;
       merged.push(...normalizeEstimateList(res.data));
     } catch (_) {
       /* ignore */
     }
   }
-  // Keep lowest fee per provider name
+
+  // Some Shipday setups accept POST estimate with explicit third-party name
+  const postBodies = [
+    { orderId: Number(orderId), name: 'DoorDash' },
+    { orderId: Number(orderId), name: 'Uber' },
+  ];
+  for (const body of postBodies) {
+    try {
+      const res = await axios.post(`${onDemandBase}/estimate`, body, {
+        headers: hdr,
+        timeout: 15000,
+        validateStatus: (s) => s < 500,
+      });
+      if (res.status !== 200 || !res.data || res.data.error) continue;
+      merged.push(...normalizeEstimateList(res.data));
+    } catch (_) {
+      /* endpoint may not exist */
+    }
+  }
+
   const byName = new Map();
   for (const e of merged) {
     const key = String(e.name || '').toLowerCase().trim();
@@ -65,7 +115,11 @@ export async function collectOnDemandEstimates(orderId, onDemandBase, headers) {
     const prev = byName.get(key);
     if (!prev || e.fee < prev.fee) byName.set(key, e);
   }
-  return [...byName.values()];
+  const out = [...byName.values()];
+  if (out.length > 0) {
+    console.log('[ShipdayOnDemand] collected estimates:', out.map((e) => `${e.name}=$${e.fee.toFixed(2)}`).join(' | '));
+  }
+  return out;
 }
 
 /**

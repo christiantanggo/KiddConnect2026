@@ -261,9 +261,32 @@ export async function startDispatch(deliveryRequestId) {
           try {
             const authH = { Authorization: headers.Authorization };
             const estimates = await collectOnDemandEstimates(shipdayOrderId, onDemandBase, authH);
-            const match = pickOnDemandEstimate(estimates, preferredOnDemand);
+            // Use quoted provider from the request when set (so we assign to the same provider we quoted).
+            const quotedProvider = request.quoted_on_demand_provider && String(request.quoted_on_demand_provider).trim();
+            const match = quotedProvider
+              ? estimates.find((e) => e.name && String(e.name).toLowerCase() === String(quotedProvider).toLowerCase()) || estimates.find((e) => e.name && String(e.name).toLowerCase().includes(String(quotedProvider).toLowerCase()))
+              : pickOnDemandEstimate(estimates, preferredOnDemand);
             if (!match || !match.name) {
-              console.warn('[DeliveryNetwork] startDispatch: no on-demand estimate for', preferredOnDemand, 'estimates count', estimates?.length);
+              if (quotedProvider) {
+                console.warn('[DeliveryNetwork] startDispatch: quoted provider', quotedProvider, 'not in estimates; trying assign with name anyway. estimates:', estimates?.length);
+                // Try assign with quoted provider name even if not in current estimates (e.g. Shipday may still accept it).
+                const assignUrl = `${onDemandBase}/assign`;
+                const assignBody = { name: quotedProvider, orderId: Number(shipdayOrderId) };
+                const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
+                if (assignRes.status === 200 && assignRes.data) {
+                  const totalBillable = assignRes.data.totalBillableAmount != null ? Number(assignRes.data.totalBillableAmount) : null;
+                  const amount = totalBillable != null && totalBillable > 0 ? totalBillable : (assignRes.data.thirdPartyFee != null ? Number(assignRes.data.thirdPartyFee) : null);
+                  if (amount != null && amount > 0) {
+                    const amountCents = Math.round(amount * 100);
+                    await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
+                  }
+                  console.log('[DeliveryNetwork] startDispatch: assigned to quoted provider', quotedProvider);
+                } else {
+                  console.warn('[DeliveryNetwork] startDispatch: on-demand assign with quoted provider failed', assignRes.status, assignRes.data);
+                }
+              } else {
+                console.warn('[DeliveryNetwork] startDispatch: no on-demand estimate for', preferredOnDemand, 'estimates count', estimates?.length);
+              }
             } else {
               const assignUrl = `${onDemandBase}/assign`;
               const assignBody = { name: match.name, orderId: Number(shipdayOrderId) };
@@ -275,7 +298,7 @@ export async function startDispatch(deliveryRequestId) {
                 if (amount != null && amount > 0) {
                   const amountCents = Math.round(amount * 100);
                   await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
-                  console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', match.name, isCheapestMode(preferredOnDemand) ? '(cheapest)' : '', '— amount_quoted_cents', amountCents);
+                  console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', match.name, quotedProvider ? '(quoted)' : (isCheapestMode(preferredOnDemand) ? '(cheapest)' : ''), '— amount_quoted_cents', amountCents);
                 }
               } else {
                 console.warn('[DeliveryNetwork] startDispatch: on-demand assign failed', assignRes.status, assignRes.data);

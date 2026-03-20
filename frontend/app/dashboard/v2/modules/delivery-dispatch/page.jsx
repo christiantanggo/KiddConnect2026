@@ -171,9 +171,9 @@ export default function DeliveryDispatchPage() {
     }
   };
 
-  return (
-    <AuthGuard>
-      <V2AppShell>
+    return (
+      <AuthGuard>
+        <V2AppShell>
         <div className="p-4 md:p-6 max-w-4xl mx-auto">
           <div className="flex items-center gap-4 mb-4">
             <Link href="/dashboard/v2/settings/modules" className="text-slate-600 hover:text-slate-900">
@@ -211,11 +211,11 @@ export default function DeliveryDispatchPage() {
           {loading && (
             <div className="flex items-center justify-center py-12">
               <Loader className="w-8 h-8 animate-spin text-slate-400" />
-            </div>
+                </div>
           )}
 
           {!loading && activeTab === 'request' && (
-            <section className="bg-white rounded-xl border border-slate-200 p-6">
+              <section className="bg-white rounded-xl border border-slate-200 p-6">
               <h2 className="text-lg font-semibold text-slate-800 mb-4">Request a pickup</h2>
               <p className="text-slate-600 text-sm mb-6">Enter pickup and delivery addresses. We’ll schedule a driver for you.</p>
               <form onSubmit={handleSubmitRequest} className="space-y-4 max-w-xl">
@@ -223,43 +223,43 @@ export default function DeliveryDispatchPage() {
                   <label className="block text-sm font-medium text-slate-700 mb-1">Pickup address (optional — enter all for accurate distance)</label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
                     <div className="sm:col-span-2">
-                      <input
-                        type="text"
+                    <input
+                      type="text"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="Street address"
                         value={pickup_address}
                         onChange={(e) => setPickupAddress(e.target.value)}
                       />
-                    </div>
+                  </div>
                     <div>
-                      <input
-                        type="text"
+                          <input
+                            type="text"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="City"
                         value={pickup_city}
                         onChange={(e) => setPickupCity(e.target.value)}
                       />
-                    </div>
-                    <div>
+                        </div>
+                <div>
                       <input
                         type="text"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="Province (e.g. ON)"
                         value={pickup_province}
                         onChange={(e) => setPickupProvince(e.target.value)}
-                      />
-                    </div>
-                    <div>
-                      <input
-                        type="text"
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <input
+                    type="text"
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="Postal code"
                         value={pickup_postal_code}
                         onChange={(e) => setPickupPostalCode(e.target.value)}
-                      />
-                    </div>
-                  </div>
+                  />
                 </div>
+                </div>
+              </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Delivery address <span className="text-red-600">*</span></label>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-1">
@@ -271,10 +271,10 @@ export default function DeliveryDispatchPage() {
                         value={delivery_address}
                         onChange={(e) => setDeliveryAddress(e.target.value)}
                         required
-                      />
-                    </div>
-                    <div>
-                      <input
+                  />
+                </div>
+                <div>
+                            <input
                         type="text"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="City"
@@ -282,77 +282,77 @@ export default function DeliveryDispatchPage() {
                         onChange={(e) => setDeliveryCity(e.target.value)}
                         required
                       />
-                    </div>
-                    <div>
-                      <input
-                        type="text"
+                      </div>
+                      <div>
+                        <input
+                          type="text"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="Province (e.g. ON)"
                         value={delivery_province}
                         onChange={(e) => setDeliveryProvince(e.target.value)}
                         required
-                      />
-                    </div>
-                    <div>
-                      <input
-                        type="text"
+                        />
+                      </div>
+                      <div>
+                            <input
+                              type="text"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         placeholder="Postal code"
                         value={delivery_postal_code}
                         onChange={(e) => setDeliveryPostalCode(e.target.value)}
                         required
-                      />
-                    </div>
-                  </div>
+                            />
+                          </div>
+                      </div>
                 </div>
-                <div>
+                      <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Contact phone <span className="text-red-600">*</span></label>
-                  <input
+                        <input
                     type="tel"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                     placeholder="+1 555 123 4567"
                     value={callback_phone}
                     onChange={(e) => setCallbackPhone(e.target.value)}
                     required
-                  />
-                </div>
-                <div>
+                        />
+                      </div>
+                      <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Recipient name (optional)</label>
-                  <input
-                    type="text"
+                        <input
+                          type="text"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                     placeholder="Name"
                     value={recipient_name}
                     onChange={(e) => setRecipientName(e.target.value)}
-                  />
-                </div>
-                <div>
+                        />
+                      </div>
+                      <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Package description (optional)</label>
-                  <input
-                    type="text"
+                            <input
+                              type="text"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                     placeholder="e.g. Box, envelope"
                     value={package_description}
                     onChange={(e) => setPackageDescription(e.target.value)}
-                  />
-                </div>
+                            />
+                          </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">When</label>
-                  <select
+                              <select
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
                     value={priority}
                     onChange={(e) => setPriority(e.target.value)}
                   >
                     {PRIORITY_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>{o.label}</option>
-                    ))}
-                  </select>
-                </div>
+                                ))}
+                              </select>
+              </div>
                 {priority === 'Schedule' && (
                   <>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Delivery date</label>
-                      <input
+                    <input
                         type="date"
                         className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                         value={scheduled_date || ''}
@@ -367,7 +367,7 @@ export default function DeliveryDispatchPage() {
                         value={scheduled_time || '13:00'}
                         onChange={(e) => setScheduledTime(e.target.value)}
                       />
-                    </div>
+                  </div>
                   </>
                 )}
                 {submitError && <p className="text-red-600 text-sm">{submitError}</p>}
@@ -386,29 +386,29 @@ export default function DeliveryDispatchPage() {
               {requests.length === 0 ? (
                 <p className="text-slate-500 py-8 text-center">No deliveries yet. Use “Request a pickup” to schedule one.</p>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-left text-slate-600">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-600">
                         <th className="pb-2 pr-2">Reference</th>
                         <th className="pb-2 pr-2">Pickup</th>
                         <th className="pb-2 pr-2">Delivery</th>
-                        <th className="pb-2 pr-2">Status</th>
+                      <th className="pb-2 pr-2">Status</th>
                         <th className="pb-2">Date</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                    </tr>
+                  </thead>
+                  <tbody>
                       {requests.map((r) => (
-                        <tr key={r.id} className="border-b border-slate-100">
+                          <tr key={r.id} className="border-b border-slate-100">
                           <td className="py-2 pr-2 font-mono">{r.reference_number || '—'}</td>
                           <td className="py-2 pr-2 max-w-[140px] truncate" title={r.pickup_address}>{r.pickup_address || '—'}</td>
                           <td className="py-2 pr-2 max-w-[140px] truncate" title={r.delivery_address}>{r.delivery_address || '—'}</td>
-                          <td className="py-2 pr-2">{r.status}</td>
+                            <td className="py-2 pr-2">{r.status}</td>
                           <td className="py-2">{formatDate(r.created_at)}</td>
-                        </tr>
+                          </tr>
                       ))}
-                    </tbody>
-                  </table>
+                  </tbody>
+                </table>
                 </div>
               )}
             </section>
@@ -421,7 +421,7 @@ export default function DeliveryDispatchPage() {
 
               <form onSubmit={handleAddSavedLocation} className="space-y-4 max-w-xl mb-8">
                 <h3 className="text-sm font-medium text-slate-700">Add address</h3>
-                <div>
+                        <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Type</label>
                   <select
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
@@ -432,7 +432,7 @@ export default function DeliveryDispatchPage() {
                       <option key={o.value} value={o.value}>{o.label}</option>
                     ))}
                   </select>
-                </div>
+                                  </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Name (optional)</label>
                   <input
@@ -442,7 +442,7 @@ export default function DeliveryDispatchPage() {
                     value={newLocName}
                     onChange={(e) => setNewLocName(e.target.value)}
                   />
-                </div>
+                                  </div>
                 <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Address <span className="text-red-600">*</span></label>
                   <input
@@ -453,8 +453,8 @@ export default function DeliveryDispatchPage() {
                     onChange={(e) => setNewLocAddress(e.target.value)}
                     required
                   />
-                </div>
-                <div>
+                        </div>
+                        <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Contact (optional)</label>
                   <input
                     type="text"
@@ -490,12 +490,12 @@ export default function DeliveryDispatchPage() {
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
             </section>
-          )}
+                    )}
         </div>
       </V2AppShell>
     </AuthGuard>
