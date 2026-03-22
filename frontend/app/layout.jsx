@@ -3,8 +3,8 @@ import { ToastProvider } from '@/components/ToastProvider';
 import Script from 'next/script';
 
 export const metadata = {
-  title: 'KiddConnect',
-  description: 'Self-serve AI phone answering service',
+  title: 'Tavari Ai',
+  description: 'Tavari Ai — AI communications, phone agents, and business tools',
 };
 
 export default function RootLayout({ children }) {

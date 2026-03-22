@@ -105,7 +105,7 @@ export default function V2DashboardHeader({ onMobileMenuToggle, mobileMenuOpen }
           </button>
 
           <Link href="/dashboard/v2" className="flex items-center">
-            <h1 className="text-xl font-semibold" style={{ color: 'var(--color-primary)' }}>KiddConnect</h1>
+            <h1 className="text-xl font-semibold" style={{ color: 'var(--color-primary)' }}>Tavari Ai</h1>
           </Link>
         </div>
 
