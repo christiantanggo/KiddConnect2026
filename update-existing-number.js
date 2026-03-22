@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import { TelnyxService } from './services/telnyx.js';
+import { DEFAULT_API_PUBLIC_BASE } from './config/public-urls.js';
 
 dotenv.config();
 
@@ -13,7 +14,7 @@ async function updateExistingNumber() {
   // Get environment variables
   const voiceAppId = process.env.TELNYX_VOICE_APPLICATION_ID;
   const messagingProfileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
-  const webhookUrl = process.env.WEBHOOK_URL || `${process.env.SERVER_URL || 'https://api.kiddconnect.com'}/api/calls/webhook`;
+  const webhookUrl = process.env.WEBHOOK_URL || `${process.env.SERVER_URL || DEFAULT_API_PUBLIC_BASE}/api/calls/webhook`;
   
   console.log('Configuration:');
   console.log('  TELNYX_VOICE_APPLICATION_ID:', voiceAppId || 'NOT SET');

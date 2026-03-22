@@ -3,6 +3,7 @@
 
 import axios from "axios";
 import { supabaseClient } from "../config/database.js";
+import { getApiPublicBaseUrl } from "../config/public-urls.js";
 
 // Lazy client creation to ensure env vars are loaded
 let vapiClient = null;
@@ -113,7 +114,7 @@ export async function createAssistant(businessData) {
                           process.env.RAILWAY_PUBLIC_DOMAIN || 
                           process.env.VERCEL_URL || 
                           process.env.SERVER_URL ||
-                          "https://api.kiddconnect.com";
+                          getApiPublicBaseUrl();
         
         // Ensure URL has https:// protocol
         if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {
@@ -1534,7 +1535,7 @@ export async function rebuildAssistant(businessId) {
                           process.env.RAILWAY_PUBLIC_DOMAIN || 
                           process.env.VERCEL_URL || 
                           process.env.SERVER_URL ||
-                          "https://api.kiddconnect.com";
+                          getApiPublicBaseUrl();
         
         // Ensure URL has https:// protocol
         if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {

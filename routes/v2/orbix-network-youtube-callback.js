@@ -1,11 +1,12 @@
 import express from 'express';
 import { google } from 'googleapis';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { defaultOrbixYoutubeCallbackUrl, getFrontendPublicBaseUrl } from '../../config/public-urls.js';
 
 const router = express.Router();
 
 const MODULE_KEY = 'orbix-network';
-const DEFAULT_FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000';
+const DEFAULT_FRONTEND = getFrontendPublicBaseUrl();
 
 function getRedirectBase(stateStr) {
   if (!stateStr || !stateStr.includes('|')) return DEFAULT_FRONTEND;
@@ -68,8 +69,10 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${redirectBase}/modules/orbix-network/setup?error=invalid_state`);
     }
 
-    const raw = process.env.YOUTUBE_REDIRECT_URI || '';
-    const redirectUri = raw.startsWith('http') ? raw : `https://${raw}`;
+    const raw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
+    const redirectUri = raw
+      ? (raw.startsWith('http') ? raw : `https://${raw}`)
+      : defaultOrbixYoutubeCallbackUrl();
     if (!redirectUri || redirectUri === 'https://') {
       return res.redirect(`${redirectBase}/modules/orbix-network/setup?error=youtube_not_configured`);
     }

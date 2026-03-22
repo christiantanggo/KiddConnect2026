@@ -1,25 +1,25 @@
 /**
  * Riddle (per-channel) YouTube OAuth callback — PUBLIC route, no auth.
- * Used when a channel has a custom OAuth app (separate quota). Redirect URI in Google must be
- * https://api.kiddconnect.com/api/v2/riddle/youtube/callback
+ * Redirect URI in Google Cloud must match getRiddleYoutubeRedirectUri() for your API host
+ * (e.g. https://api.tavarios.com/api/v2/riddle/youtube/callback).
  * State = businessId:orbixChannelId or businessId:orbixChannelId:setup
  */
 import express from 'express';
 import { google } from 'googleapis';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { defaultOrbixYoutubeCallbackUrl, getFrontendPublicBaseUrl } from '../../config/public-urls.js';
 
 const router = express.Router();
 const MODULE_KEY = 'orbix-network';
-const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000';
+const FRONTEND = getFrontendPublicBaseUrl();
 
 /** Single source of truth for per-channel (custom) OAuth redirect URI. Used by auth-url and by this callback so they always match. */
 export function getRiddleYoutubeRedirectUri() {
-  if (process.env.NODE_ENV === 'production' && (process.env.YOUTUBE_REDIRECT_URI || '').includes('api.kiddconnect.com')) {
-    return 'https://api.kiddconnect.com/api/v2/riddle/youtube/callback';
+  const template = (process.env.YOUTUBE_REDIRECT_URI || '').trim() || defaultOrbixYoutubeCallbackUrl();
+  let base = template.replace(/\/api\/v2\/.*$/, '').replace(/\/$/, '');
+  if (!base.startsWith('http')) {
+    base = (base.startsWith('localhost') ? 'http://' : 'https://') + base;
   }
-  const raw = (process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback').trim();
-  let base = raw.replace(/\/api\/v2\/.*$/, '').replace(/\/$/, '');
-  if (!base.startsWith('http')) base = (base.startsWith('localhost') ? 'http://' : 'https://') + base;
   return `${base}/api/v2/riddle/youtube/callback`;
 }
 

@@ -1,7 +1,7 @@
 import axios from 'axios';
 import Cookies from 'js-cookie';
 
-const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001').replace(/\/$/, '');
+const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5003').replace(/\/$/, '');
 /** Runtime override: set window.__TAVARI_API_URL__ before app loads to point to your backend without redeploy. */
 export function getApiBaseUrl() {
   if (typeof window !== 'undefined' && window.__TAVARI_API_URL__) {

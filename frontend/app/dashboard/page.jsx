@@ -7,8 +7,7 @@ import AuthGuard from '@/components/AuthGuard';
 import V2DashboardHeader from '@/components/V2DashboardHeader';
 import V2Sidebar from '@/components/V2Sidebar';
 import { ArrowLeft, ArrowRight, CheckCircle2, Lock, Archive, ChevronDown, ChevronRight } from 'lucide-react';
-
-const ARCHIVED_MODULE_KEYS = ['phone-agent', 'reviews', 'emergency-dispatch', 'delivery-dispatch'];
+import { ARCHIVED_MODULE_KEYS } from '@/lib/archived-module-keys';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 

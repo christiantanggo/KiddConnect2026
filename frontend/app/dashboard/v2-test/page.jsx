@@ -153,7 +153,7 @@ export default function V2TestPage() {
                 <strong>API Base:</strong> {(process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '')}
               </p>
               <p className="text-xs text-blue-600 mt-2">
-                ⚠️ If API Base shows production URL but you're testing locally, set NEXT_PUBLIC_API_URL=http://localhost:5001 in your .env file
+                ⚠️ Local API URL defaults from repo <code className="text-xs">config/dev-ports.json</code> (see <code className="text-xs">PORTS.md</code>). Override with <code className="text-xs">NEXT_PUBLIC_API_URL</code> in <code className="text-xs">.env.local</code> if needed.
               </p>
             </div>
 
@@ -290,8 +290,8 @@ export default function V2TestPage() {
             <div className="bg-red-50 border border-red-200 rounded p-4">
               <h3 className="font-semibold text-red-800 mb-2">🔧 Troubleshooting HTML Errors:</h3>
               <ul className="text-sm text-red-700 space-y-1 list-disc list-inside">
-                <li><strong>If API Base shows production URL:</strong> Create/update <code>.env.local</code> in frontend with <code>NEXT_PUBLIC_API_URL=http://localhost:5001</code></li>
-                <li><strong>If server not running:</strong> Make sure backend is running on port 5001</li>
+                <li><strong>If API Base shows production URL:</strong> Set <code>NEXT_PUBLIC_API_URL=http://localhost:5003</code> in <code>.env.local</code> or fix <code>config/dev-ports.json</code> / <code>PORTS.md</code></li>
+                <li><strong>If server not running:</strong> Start the API (default local port <strong>5003</strong> per <code>dev-ports.json</code>)</li>
                 <li><strong>If routes don't exist:</strong> Check server console for v2 route loading errors</li>
                 <li><strong>Quick test:</strong> Try "Test V2 Health" button first - it should work if routes are loaded</li>
                 <li><strong>Check server logs:</strong> Look for "✅ Tavari AI Core v2 routes loaded" message</li>

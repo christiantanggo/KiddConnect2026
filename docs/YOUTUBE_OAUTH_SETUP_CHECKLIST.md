@@ -37,8 +37,8 @@ Use this **every time** you add a new YouTube-connected channel (main app or per
   - **Per-channel (Custom OAuth in app — Riddle, Trick Question, etc.):**  
     `https://api.tavarios.com/api/v2/riddle/youtube/callback`
 - For local dev only, you can also add:  
-  `http://localhost:5001/api/v2/orbix-network/youtube/callback` or  
-  `http://localhost:5001/api/v2/riddle/youtube/callback` as appropriate.
+  `http://localhost:5003/api/v2/orbix-network/youtube/callback` or  
+  `http://localhost:5003/api/v2/riddle/youtube/callback` as appropriate (backend port from `config/dev-ports.json`).
 - Click **Create**. Copy the **Client ID** and **Client secret** (you’ll need them below).
 
 ---

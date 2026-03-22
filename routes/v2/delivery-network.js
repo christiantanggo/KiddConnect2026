@@ -17,6 +17,7 @@ import { getPhoneNumbersForBusiness } from '../../utils/businessPhoneNumbersForD
 import { createDeliveryNetworkAssistant } from '../../services/delivery-network/create-vapi-assistant.js';
 import { linkDeliveryAssistantToNumbers } from '../../services/delivery-network/linkAgent.js';
 import { getAllVapiPhoneNumbers } from '../../services/vapi.js';
+import { getApiPublicBaseUrl, getFrontendPublicBaseUrl } from '../../config/public-urls.js';
 
 const router = express.Router();
 
@@ -346,7 +347,7 @@ router.post('/request', express.json(), async (req, res) => {
     if (isIndividual) {
       try {
         const { createPaymentLinkForDelivery, DEFAULT_AMOUNT_CENTS } = await import('../../services/delivery-network/payment.js');
-        const baseUrl = process.env.FRONTEND_URL || process.env.BACKEND_URL || 'https://api.kiddconnect.com';
+        const baseUrl = getFrontendPublicBaseUrl();
         const successUrl = `${baseUrl.replace(/\/$/, '')}/deliverydispatch?paid=1&ref=${encodeURIComponent(request.reference_number)}`;
         const cancelUrl = `${baseUrl.replace(/\/$/, '')}/deliverydispatch?cancel=1`;
         const amountCents = body.amount_quoted_cents != null ? Math.max(50, parseInt(body.amount_quoted_cents, 10)) : DEFAULT_AMOUNT_CENTS;
@@ -397,9 +398,9 @@ router.use((req, res, next) => {
 router.use(verifySubscriptionWithStripe);
 
 function getVapiWebhookUrl() {
-  let base = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.kiddconnect.com';
+  let base = getApiPublicBaseUrl();
   if (base && !base.startsWith('http')) base = `https://${base}`;
-  return `${base}/api/vapi/webhook`;
+  return `${base.replace(/\/$/, '')}/api/vapi/webhook`;
 }
 
 /**

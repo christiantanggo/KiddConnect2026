@@ -4,6 +4,7 @@
 
 import express from 'express';
 import { processClickBankOrder } from '../services/clickbank.js';
+import { getApiPublicBaseUrl } from '../config/public-urls.js';
 
 const router = express.Router();
 
@@ -12,7 +13,7 @@ const router = express.Router();
  * 
  * ClickBank v8.0 sends plain JSON (no encryption, no decryption needed).
  * 
- * URL to configure in ClickBank: https://api.kiddconnect.com/api/clickbank/webhook
+ * URL to configure in ClickBank: https://api.tavarios.com/api/clickbank/webhook (or your Railway API host)
  * Version: 8.0
  */
 router.post('/webhook', express.json(), async (req, res) => {
@@ -101,11 +102,7 @@ router.post('/webhook', express.json(), async (req, res) => {
  * GET /api/clickbank/webhook - Verify endpoint is accessible
  */
 router.get('/webhook', (_req, res) => {
-  const backendUrl = process.env.BACKEND_URL || 
-                    process.env.RAILWAY_PUBLIC_DOMAIN || 
-                    process.env.VERCEL_URL || 
-                    process.env.SERVER_URL ||
-                    'https://api.kiddconnect.com';
+  const backendUrl = getApiPublicBaseUrl();
   
   const webhookUrl = `${backendUrl}/api/clickbank/webhook`;
   

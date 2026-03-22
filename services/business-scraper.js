@@ -82,7 +82,7 @@ async function fetchWebsiteContent(url) {
       const response = await fetch(fullUrl, {
         signal: controller.signal,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (compatible; KiddConnect/1.0; +https://www.kiddconnect.com)'
+          'User-Agent': 'Mozilla/5.0 (compatible; TavariAi/1.0; +https://www.tavarios.com)'
         }
       });
 

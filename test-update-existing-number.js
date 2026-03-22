@@ -9,7 +9,7 @@ async function testUpdateExistingNumber() {
   // Get environment variables
   const voiceAppId = process.env.TELNYX_VOICE_APPLICATION_ID;
   const messagingProfileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
-  const webhookUrl = process.env.WEBHOOK_URL || `${process.env.SERVER_URL || 'https://api.kiddconnect.com'}/api/calls/webhook`;
+  const webhookUrl = process.env.WEBHOOK_URL || `${process.env.SERVER_URL || 'https://api.tavarios.com'}/api/calls/webhook`;
   
   console.log('Environment variables:');
   console.log('  TELNYX_VOICE_APPLICATION_ID:', voiceAppId || 'NOT SET');

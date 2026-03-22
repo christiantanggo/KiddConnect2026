@@ -14,6 +14,7 @@ import {
   sendEmergencyEscalationEmail,
   sendEmergencyEscalationSMS,
 } from '../notifications.js';
+import { getApiPublicBaseUrl } from '../../config/public-urls.js';
 
 function normalizeE164(value) {
   if (!value || typeof value !== 'string') return '';
@@ -123,11 +124,11 @@ function getWebhookUrl() {
     process.env.RAILWAY_PUBLIC_DOMAIN ||
     process.env.VERCEL_URL ||
     process.env.SERVER_URL ||
-    'https://api.kiddconnect.com';
+    getApiPublicBaseUrl();
   if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {
     backendUrl = `https://${backendUrl}`;
   }
-  return `${backendUrl}/api/vapi/webhook`;
+  return `${backendUrl.replace(/\/$/, '')}/api/vapi/webhook`;
 }
 
 export function buildDispatchAssistantConfig(firstMessage) {

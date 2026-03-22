@@ -6,12 +6,14 @@
  */
 
 import dotenv from 'dotenv';
+import { DEFAULT_API_PUBLIC_BASE } from './config/public-urls.js';
+
 dotenv.config();
 
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY?.trim();
 const TELNYX_VOICE_APPLICATION_ID = process.env.TELNYX_VOICE_APPLICATION_ID?.trim();
 const TELNYX_MESSAGING_PROFILE_ID = process.env.TELNYX_MESSAGING_PROFILE_ID?.trim();
-const WEBHOOK_URL = process.env.WEBHOOK_URL || process.env.WEBHOOK_BASE_URL || 'https://api.kiddconnect.com/api/calls/webhook';
+const WEBHOOK_URL = process.env.WEBHOOK_URL || process.env.WEBHOOK_BASE_URL || `${DEFAULT_API_PUBLIC_BASE}/api/calls/webhook`;
 
 console.log('🔍 Telnyx Configuration Verification\n');
 console.log('='.repeat(60));
@@ -66,7 +68,7 @@ try {
       const webhookUrl = voiceApp.data.webhook_event_url || voiceApp.data.webhook_api_version || 'NOT SET';
       console.log('  Webhook URL:', webhookUrl);
       
-      if (webhookUrl === WEBHOOK_URL || webhookUrl.includes('kiddconnect.com')) {
+      if (webhookUrl === WEBHOOK_URL || webhookUrl.includes('tavarios.com')) {
         console.log('  ✅ Webhook URL is configured correctly');
       } else {
         console.log('  ⚠️  Webhook URL may not match expected:', WEBHOOK_URL);
@@ -154,7 +156,7 @@ try {
         const webhookUrl = number.webhook_url || 'NOT SET';
         console.log(`     Webhook URL: ${webhookUrl}`);
         
-        if (webhookUrl === WEBHOOK_URL || webhookUrl.includes('kiddconnect.com')) {
+        if (webhookUrl === WEBHOOK_URL || webhookUrl.includes('tavarios.com')) {
           console.log(`     ✅ Webhook URL is configured`);
         } else if (webhookUrl === 'NOT SET') {
           console.log(`     ⚠️  Webhook URL NOT SET - webhooks won't work!`);

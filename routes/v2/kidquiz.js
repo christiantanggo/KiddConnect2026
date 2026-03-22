@@ -8,6 +8,7 @@ import { authenticate } from '../../middleware/auth.js';
 import { requireBusinessContext } from '../../middleware/v2/requireBusinessContext.js';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { defaultOrbixYoutubeCallbackUrl } from '../../config/public-urls.js';
 import { google } from 'googleapis';
 import OpenAI from 'openai';
 import multer from 'multer';
@@ -133,7 +134,7 @@ router.get('/youtube/auth-url', async (req, res) => {
   try {
     const businessId = req.active_business_id;
     const usageManual = (req.query.usage || '').toLowerCase() === 'manual';
-    const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
+    const raw = process.env.YOUTUBE_REDIRECT_URI || defaultOrbixYoutubeCallbackUrl();
     const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
     const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 

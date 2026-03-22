@@ -23,7 +23,7 @@ export default function ReviewReplyAIClickBankPaymentPage() {
   const generatePaymentLink = (id) => {
     if (!id) return;
     
-    // Format: https://www.kiddconnect.com/review-reply-ai/landing?clickbank_id=YOUR_ID
+    // Format: https://www.tavarios.com/review-reply-ai/landing?clickbank_id=YOUR_ID
     const baseUrl = window.location.origin;
     const link = `${baseUrl}/review-reply-ai/landing?clickbank_id=${id}`;
     setPaymentLink(link);

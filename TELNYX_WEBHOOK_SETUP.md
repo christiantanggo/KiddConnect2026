@@ -21,7 +21,7 @@ https://api.tavarios.com/api/bulk-sms/webhook
 **Perfect! You're already on the Messaging Profiles page!** 
 
 You should see a table with your messaging profiles. Each profile has:
-- **Name** (e.g., "Tavari-Communication-Agent", "KiddConnect")
+- **Name** (e.g., "Tavari-Communication-Agent")
 - **Status** (green dot = active)
 - **Webhook URL** (currently shows "-" or an existing URL)
 - **Failover URL**

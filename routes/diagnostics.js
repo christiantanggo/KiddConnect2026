@@ -3,6 +3,7 @@
 
 import express from 'express';
 import { authenticate } from '../middleware/auth.js';
+import { getApiPublicBaseUrl } from '../config/public-urls.js';
 import { Business } from '../models/Business.js';
 import { CallSession } from '../models/CallSession.js';
 import { Message } from '../models/Message.js';
@@ -154,11 +155,7 @@ router.get('/check-webhook', authenticate, async (req, res) => {
     const assistant = assistantResponse.data;
 
     // Expected webhook URL
-    let backendUrl = process.env.BACKEND_URL || 
-                      process.env.RAILWAY_PUBLIC_DOMAIN || 
-                      process.env.VERCEL_URL || 
-                      process.env.SERVER_URL ||
-                      "https://api.kiddconnect.com";
+    let backendUrl = getApiPublicBaseUrl();
     
     // Ensure URL has https:// protocol
     if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {
@@ -265,11 +262,7 @@ router.get('/dashboard', authenticate, async (req, res) => {
     }
 
     // Check webhook endpoint accessibility
-    const backendUrl = process.env.BACKEND_URL || 
-                      process.env.RAILWAY_PUBLIC_DOMAIN || 
-                      process.env.VERCEL_URL || 
-                      process.env.SERVER_URL ||
-                      "https://api.kiddconnect.com";
+    const backendUrl = getApiPublicBaseUrl();
     const expectedWebhookUrl = `${backendUrl}/api/vapi/webhook`;
 
     res.json({

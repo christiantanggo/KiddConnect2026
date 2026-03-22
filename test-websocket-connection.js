@@ -5,7 +5,7 @@
 
 import WebSocket from 'ws';
 
-const testUrl = 'wss://api.kiddconnect.com/api/calls/test-connection/audio';
+const testUrl = 'wss://api.tavarios.com/api/calls/test-connection/audio';
 
 console.log('🔵 Testing WebSocket connection to:', testUrl);
 console.log('🔵 This should connect and receive a test response...\n');

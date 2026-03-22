@@ -6,9 +6,9 @@ import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { ArrowRight, AlertTriangle, Archive, ChevronDown, ChevronRight } from 'lucide-react';
+import { ARCHIVED_MODULE_KEYS } from '@/lib/archived-module-keys';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
-const ARCHIVED_MODULE_KEYS = ['phone-agent', 'reviews', 'emergency-dispatch', 'delivery-dispatch'];
 
 export default function V2DashboardPage() {
   const router = useRouter();

@@ -12,6 +12,7 @@ import { sendCallSummaryEmail, sendSMSNotification, sendMissedCallEmail, sendEme
 import { isBusinessOpenAtTime } from "../utils/businessHours.js";
 import { AIAgent } from "../models/AIAgent.js";
 import { Notification } from "../models/v2/Notification.js";
+import { getApiPublicBaseUrl, DEFAULT_API_PUBLIC_BASE } from "../config/public-urls.js";
 
 const router = express.Router();
 
@@ -25,7 +26,7 @@ router.get("/webhook", (_req, res) => {
                     process.env.RAILWAY_PUBLIC_DOMAIN || 
                     process.env.VERCEL_URL || 
                     process.env.SERVER_URL ||
-                    "https://api.kiddconnect.com";
+                    getApiPublicBaseUrl();
   
   const webhookUrl = `${backendUrl}/api/vapi/webhook`;
   
@@ -106,7 +107,7 @@ router.get("/webhook/check", async (req, res) => {
                       process.env.RAILWAY_PUBLIC_DOMAIN || 
                       process.env.VERCEL_URL || 
                       process.env.SERVER_URL ||
-                      "https://api.kiddconnect.com";
+                      getApiPublicBaseUrl();
     
     const expectedWebhookUrl = `${backendUrl}/api/vapi/webhook`;
     
@@ -323,7 +324,7 @@ router.get("/webhook/diagnostic", async (req, res) => {
                       process.env.RAILWAY_PUBLIC_DOMAIN || 
                       process.env.VERCEL_URL || 
                       process.env.SERVER_URL ||
-                      "https://api.kiddconnect.com";
+                      getApiPublicBaseUrl();
     
     const webhookUrl = `${backendUrl}/api/vapi/webhook`;
     
@@ -400,7 +401,7 @@ router.get("/webhook/diagnostic", async (req, res) => {
     const webhookUrlStatus = (process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || 
                               process.env.VERCEL_URL || process.env.SERVER_URL) 
       ? "✅ Webhook URL can be determined" 
-      : "❌ CRITICAL: No webhook URL environment variable set! Using default: https://api.kiddconnect.com";
+      : `❌ CRITICAL: No webhook URL environment variable set! Using default: ${DEFAULT_API_PUBLIC_BASE}`;
     
     // Test VAPI API connection
     let vapiConnectionTest = { status: "⚠️ Not tested" };
@@ -537,7 +538,7 @@ router.get("/webhook/diagnostic", async (req, res) => {
           determinedFrom: process.env.BACKEND_URL ? "BACKEND_URL" :
                          process.env.RAILWAY_PUBLIC_DOMAIN ? "RAILWAY_PUBLIC_DOMAIN" :
                          process.env.VERCEL_URL ? "VERCEL_URL" :
-                         process.env.SERVER_URL ? "SERVER_URL" : "default (https://api.kiddconnect.com)"
+                         process.env.SERVER_URL ? "SERVER_URL" : `default (${DEFAULT_API_PUBLIC_BASE})`
         },
         environmentVariables: envChecks,
         vapiConnection: vapiConnectionTest,
@@ -2394,7 +2395,7 @@ async function handleDispatchEmailDetails(event) {
   }
   try {
     const baseUrl = (() => {
-      let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.kiddconnect.com';
+      let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || getApiPublicBaseUrl();
       if (u && !u.startsWith('http')) u = `https://${u}`;
       return u;
     })();
@@ -2446,7 +2447,7 @@ async function handleDispatchSmsDetails(event) {
   const fromE164 = fromDigits.length === 10 ? `+1${fromDigits}` : fromDigits.length === 11 && fromDigits.startsWith('1') ? `+${fromDigits}` : `+${fromDigits}`;
   const toE164 = toNumber.length === 10 ? `+1${toNumber}` : toNumber.startsWith('+') ? toNumber : `+${toNumber}`;
   const baseUrl = (() => {
-    let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.kiddconnect.com';
+    let u = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || getApiPublicBaseUrl();
     if (u && !u.startsWith('http')) u = `https://${u}`;
     return u;
   })();

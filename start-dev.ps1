@@ -1,18 +1,24 @@
-# Kill processes on 5001 and 5002, then start dev server (backend listens on 5002)
-Write-Host "Killing any process on port 5001 and 5002..." -ForegroundColor Yellow
-foreach ($port in @(5001, 5002)) {
-    $connections = netstat -ano | findstr ":$port "
-    if ($connections) {
-        $connections | ForEach-Object {
-            if ($_ -match '\s+(\d+)\s*$') { $matches[1] }
-        } | Select-Object -Unique | ForEach-Object {
-            if ($_) {
-                Write-Host "  Killing PID $_ on port $port" -ForegroundColor Red
-                taskkill /F /PID $_ 2>$null | Out-Null
-            }
+# Kill process on backend dev port, then start API (port from config/dev-ports.json)
+$portsPath = Join-Path $PSScriptRoot "config\dev-ports.json"
+if (-not (Test-Path $portsPath)) {
+    Write-Host "Missing $portsPath" -ForegroundColor Red
+    exit 1
+}
+$ports = Get-Content $portsPath -Raw | ConvertFrom-Json
+$backendPort = [int]$ports.backend
+Write-Host "Killing any process on backend port $backendPort (from dev-ports.json)..." -ForegroundColor Yellow
+
+$connections = netstat -ano | findstr ":$backendPort "
+if ($connections) {
+    $connections | ForEach-Object {
+        if ($_ -match '\s+(\d+)\s*$') { $matches[1] }
+    } | Select-Object -Unique | ForEach-Object {
+        if ($_) {
+            Write-Host "  Killing PID $_ on port $backendPort" -ForegroundColor Red
+            taskkill /F /PID $_ 2>$null | Out-Null
         }
     }
 }
 Start-Sleep -Seconds 2
-Write-Host "Starting server (will listen on 5002)..." -ForegroundColor Green
+Write-Host "Starting server (PORT env or port $backendPort from dev-ports.json)..." -ForegroundColor Green
 node --watch server.js

@@ -14,6 +14,7 @@ import { getEmergencyConfig, invalidateEmergencyConfigCache } from '../../servic
 import { createEmergencyNetworkAssistant } from '../../services/emergency-network/create-vapi-assistant.js';
 import { getAllVapiPhoneNumbers, checkIfNumberProvisionedInVAPI, linkAssistantToNumber, provisionPhoneNumber, getVapiPhoneNumberId } from '../../services/vapi.js';
 import { getPhoneNumbersForBusiness } from '../../utils/businessPhoneNumbersForDropdown.js';
+import { getApiPublicBaseUrl } from '../../config/public-urls.js';
 
 const router = express.Router();
 
@@ -310,9 +311,9 @@ router.use(authenticate);
 router.use(requireBusinessContext);
 
 function getVapiWebhookUrl() {
-  let base = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || 'https://api.kiddconnect.com';
+  let base = process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.VERCEL_URL || process.env.SERVER_URL || getApiPublicBaseUrl();
   if (base && !base.startsWith('http')) base = `https://${base}`;
-  return `${base}/api/vapi/webhook`;
+  return `${base.replace(/\/$/, '')}/api/vapi/webhook`;
 }
 
 /**

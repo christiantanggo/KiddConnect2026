@@ -9,7 +9,7 @@ import { supabaseClient } from "../config/database.js";
 
 const VAPI_API_KEY = process.env.VAPI_API_KEY;
 const VAPI_BASE_URL = process.env.VAPI_BASE_URL || "https://api.vapi.ai";
-const WEBHOOK_URL = `${process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || "https://api.kiddconnect.com"}/api/vapi/webhook`;
+const WEBHOOK_URL = `${process.env.BACKEND_URL || process.env.RAILWAY_PUBLIC_DOMAIN || "https://api.tavarios.com"}/api/vapi/webhook`;
 
 if (!VAPI_API_KEY) {
   console.error("❌ VAPI_API_KEY not set");

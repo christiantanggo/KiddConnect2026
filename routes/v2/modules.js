@@ -8,6 +8,7 @@ import { Business } from '../../models/Business.js';
 import { AIAgent } from '../../models/AIAgent.js';
 import { getStripeInstance } from '../../services/stripe.js';
 import { calculateBillingCycle } from '../../services/billing.js';
+import { getFrontendPublicBaseUrl } from '../../config/public-urls.js';
 
 const router = express.Router();
 
@@ -18,7 +19,7 @@ const router = express.Router();
  */
 router.get('/list', authenticate, async (req, res) => {
   try {
-    const modules = await Module.findAll();
+    const modules = filterModulesForCustomerCatalog(await Module.findAll());
     res.json({ modules });
   } catch (error) {
     console.error('[GET /api/v2/modules/list] Error:', error);
@@ -89,7 +90,7 @@ router.get('/', authenticate, requireBusinessContext, async (req, res) => {
 router.get('/:moduleKey', authenticate, requireBusinessContext, async (req, res) => {
   try {
     const { moduleKey } = req.params;
-    
+
     const module = await Module.findByKey(moduleKey);
     if (!module) {
       return res.status(404).json({ error: 'Module not found' });
@@ -642,7 +643,7 @@ router.post('/:moduleKey/activate',
         'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
       };
       const dashboardPath = moduleDashboards[moduleKey] || `/modules/${moduleKey}/setup`;
-      const successUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}${dashboardPath}`;
+      const successUrl = `${getFrontendPublicBaseUrl()}${dashboardPath}`;
       
       res.json({
         success: true,

@@ -8,7 +8,7 @@
    - **Root Directory:** `frontend` (set to `frontend`).
    - **Framework:** Next.js.
 4. **Environment Variables:** Add:
-   - `NEXT_PUBLIC_API_URL` = your backend URL (e.g. `https://api.kiddconnect.com` or your Railway URL).
+   - `NEXT_PUBLIC_API_URL` = your backend URL (e.g. `https://api.tavarios.com` or your Railway URL).
 5. Click **Deploy**. Future pushes to `main` will auto-deploy.
 
 ## Option B: Deploy from your machine (CLI)
@@ -20,7 +20,7 @@ npx vercel login
 npx vercel link
 npx vercel env add NEXT_PUBLIC_API_URL production
 ```
-When prompted for the value, enter your backend URL (e.g. `https://api.kiddconnect.com`).
+When prompted for the value, enter your backend URL (e.g. `https://api.tavarios.com`).
 
 Then:
 

@@ -1214,7 +1214,7 @@ export default function EmergencyDispatchPage() {
                   </label>
                   <div className="mb-3">
                     <label className="block text-xs text-slate-600 mb-1">Terms of Service URL (used for {'{{terms_url}}'} in SMS)</label>
-                    <input type="url" className="w-full max-w-2xl rounded border border-slate-300 px-3 py-2 text-sm" placeholder="https://www.kiddconnect.com/termsofservice" value={config.terms_of_service_url || ''} onChange={(e) => { setConfig((c) => ({ ...c, terms_of_service_url: e.target.value })); setConfigDirty(true); }} />
+                    <input type="url" className="w-full max-w-2xl rounded border border-slate-300 px-3 py-2 text-sm" placeholder="https://www.tavarios.com/termsofservice" value={config.terms_of_service_url || ''} onChange={(e) => { setConfig((c) => ({ ...c, terms_of_service_url: e.target.value })); setConfigDirty(true); }} />
                   </div>
                   <div className="mb-3">
                     <label className="block text-xs text-slate-600 mb-1">Message to customer (placeholders: {'{{caller_name}}'}, {'{{service_category}}'}, {'{{urgency_level}}'}, {'{{location}}'}, {'{{issue_summary}}'}, {'{{terms_url}}'})</label>

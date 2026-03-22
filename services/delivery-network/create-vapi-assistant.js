@@ -4,6 +4,7 @@
  */
 import { getVapiClient, PHONE_AGENT_MODEL } from '../vapi.js';
 import { getDeliveryConfig } from './config.js';
+import { getApiPublicBaseUrl } from '../../config/public-urls.js';
 
 const ASSISTANT_NAME = 'Delivery Network - Tavari';
 
@@ -34,11 +35,11 @@ function getWebhookUrl() {
     process.env.RAILWAY_PUBLIC_DOMAIN ||
     process.env.VERCEL_URL ||
     process.env.SERVER_URL ||
-    'https://api.kiddconnect.com';
+    getApiPublicBaseUrl();
   if (backendUrl && !backendUrl.startsWith('http://') && !backendUrl.startsWith('https://')) {
     backendUrl = `https://${backendUrl}`;
   }
-  return `${backendUrl}/api/vapi/webhook`;
+  return `${backendUrl.replace(/\/$/, '')}/api/vapi/webhook`;
 }
 
 /**

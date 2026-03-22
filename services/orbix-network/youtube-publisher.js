@@ -8,6 +8,7 @@ import axios from 'axios';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { writeProgressLog } from '../../utils/crash-and-progress-log.js';
+import { defaultOrbixYoutubeCallbackUrl } from '../../config/public-urls.js';
 
 /** Error code used when YouTube upload should be skipped (env missing or not connected). Callers must treat as non-fatal. */
 export const SKIP_YOUTUBE_UPLOAD_CODE = 'SKIP_YOUTUBE_UPLOAD';
@@ -71,9 +72,6 @@ function getYtFromChannelEntry(entry, useManual) {
   }
   return null;
 }
-
-/** Redirect URI used when per-channel OAuth is set and env YOUTUBE_REDIRECT_URI is not (token refresh does not send redirect_uri to Google). */
-const DEFAULT_REDIRECT_URI = 'https://api.kiddconnect.com/api/v2/orbix-network/youtube/callback';
 
 async function getYouTubeClient(businessId, orbixChannelId = null, options = {}) {
   const useManual = !!options.useManual;
@@ -156,7 +154,7 @@ async function getYouTubeClient(businessId, orbixChannelId = null, options = {})
       throw err;
     }
     let raw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
-    let redirectUri = raw.startsWith('http') ? raw : (raw ? `https://${raw}` : (usePerChannel ? DEFAULT_REDIRECT_URI : ''));
+    let redirectUri = raw.startsWith('http') ? raw : (raw ? `https://${raw}` : (usePerChannel ? defaultOrbixYoutubeCallbackUrl() : ''));
     if (usePerChannel && orbixChannelId) {
       const { getRiddleYoutubeRedirectUri } = await import('../../routes/v2/riddle-youtube-callback.js');
       redirectUri = getRiddleYoutubeRedirectUri();

@@ -28,12 +28,17 @@ import cors from "cors";
 import helmet from "helmet";
 import fs from "fs";
 import path from "path";
+import { getDevBackendPort, getDevFrontendPort } from "./config/load-dev-ports.js";
 
 // Load environment variables FIRST (use .env only - old communications app DB)
 dotenv.config();
 
-// Port: use Railway/PaaS PORT when set, else 5002 for local (avoids EADDRINUSE with 5001)
-const __SERVER_PORT__ = Number(process.env.PORT) || 5002;
+// Port: In production, Railway/PaaS sets PORT (required). In local dev, always use
+// config/dev-ports.json (5003) so a stale PORT=5001 in .env does not override.
+const isProd = process.env.NODE_ENV === 'production';
+const paasPort = Number(process.env.PORT);
+const __SERVER_PORT__ =
+  isProd && Number.isFinite(paasPort) && paasPort > 0 ? paasPort : getDevBackendPort();
 console.log('[Server] LOADED:', path.resolve(process.cwd(), 'server.js'));
 console.log('[Server] WILL LISTEN ON PORT:', __SERVER_PORT__);
 
@@ -98,20 +103,22 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 const app = express();
-// Listen port: Railway/production set PORT; local defaults to 5002 (avoid 5001 EADDRINUSE)
+// Listen port: same as __SERVER_PORT__ (PORT env or dev-ports.json backend)
 const LISTEN_PORT = __SERVER_PORT__;
 
 // Trust proxy for Railway/behind reverse proxy (fixes rate limiter warnings)
 app.set('trust proxy', true);
 
-// CORS configuration - allow requests from frontend
+// CORS configuration - allow requests from frontend (dev ports from config/dev-ports.json)
+const __DEV_FE__ = getDevFrontendPort();
 const allowedOrigins = [
-  'https://www.kiddconnect.com',
-  'https://www.kiddconnect.ca',
-  'https://kiddconnect.com',
-  'https://kiddconnect.ca',
+  'https://www.tavarios.com',
+  'https://tavarios.com',
+  `http://localhost:${__DEV_FE__}`,
+  `http://127.0.0.1:${__DEV_FE__}`,
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://127.0.0.1:3000',
   process.env.FRONTEND_URL,
 ].filter(Boolean); // Remove undefined values
 
@@ -839,7 +846,6 @@ try {
   console.warn('⚠️  Could not start Orbix Network scheduled jobs:', error.message);
 }
 
-// Start server on 5002 (hardcoded so .env PORT=5001 cannot cause EADDRINUSE)
 const server = app.listen(__SERVER_PORT__, '0.0.0.0', () => {
   const localUrl = `http://localhost:${__SERVER_PORT__}`;
   console.log('\n' + '='.repeat(60));

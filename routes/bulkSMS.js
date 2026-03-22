@@ -24,6 +24,7 @@ import {
 import { validatePhoneNumbersForBulk, formatPhoneNumberE164 } from '../utils/phoneFormatter.js';
 import { supabaseClient } from '../config/database.js';
 import { sendSMSDirect } from '../services/notifications.js';
+import { getApiPublicBaseUrl } from '../config/public-urls.js';
 
 const router = express.Router();
 
@@ -1186,9 +1187,10 @@ router.post('/test', authenticate, async (req, res) => {
  * GET /api/bulk-sms/webhook
  */
 router.get('/webhook', (req, res) => {
+  const apiBase = getApiPublicBaseUrl();
   res.status(200).json({
     status: '✅ Webhook endpoint is accessible',
-    url: 'https://www.kiddconnect.com/api/bulk-sms/webhook',
+    url: `${apiBase.replace(/\/$/, '')}/api/bulk-sms/webhook`,
     message: 'This endpoint receives incoming SMS messages from Telnyx for STOP/START opt-out handling',
     test: 'Send a POST request with Telnyx webhook format to test',
   });
@@ -1725,7 +1727,7 @@ router.get('/diagnose', authenticate, async (req, res) => {
         count: optOuts.length,
         recent: optOuts.slice(0, 5),
       },
-      webhookUrl: `https://api.kiddconnect.com/api/bulk-sms/webhook`,
+      webhookUrl: `${getApiPublicBaseUrl().replace(/\/$/, '')}/api/bulk-sms/webhook`,
       message: 'Use this to diagnose why opt-outs might not be working',
     });
   } catch (error) {

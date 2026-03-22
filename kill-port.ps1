@@ -1,8 +1,14 @@
-# PowerShell script to kill process on port 5001
-$port = 5001
-Write-Host "Looking for process using port $port..." -ForegroundColor Yellow
+# Kill process on backend dev port (reads config/dev-ports.json)
+$portsPath = Join-Path $PSScriptRoot "config\dev-ports.json"
+if (-not (Test-Path $portsPath)) {
+    Write-Host "Missing $portsPath" -ForegroundColor Red
+    exit 1
+}
+$ports = Get-Content $portsPath -Raw | ConvertFrom-Json
+$port = [int]$ports.backend
 
-# Method 1: Use Get-NetTCPConnection (more reliable)
+Write-Host "Looking for process using backend dev port $port (from dev-ports.json)..." -ForegroundColor Yellow
+
 $connections = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
 if ($connections) {
     $processIds = $connections | Select-Object -ExpandProperty OwningProcess -Unique
@@ -15,15 +21,12 @@ if ($connections) {
     Start-Sleep -Seconds 2
 }
 
-# Method 2: Fallback to netstat method
 $netstatConnections = netstat -ano | findstr ":$port"
 if ($netstatConnections) {
     $processIds = $netstatConnections | ForEach-Object {
-        if ($_ -match '\s+(\d+)$') {
-            $matches[1]
-        }
+        if ($_ -match '\s+(\d+)$') { $matches[1] }
     } | Select-Object -Unique
-    
+
     foreach ($processId in $processIds) {
         if ($processId) {
             Write-Host "Killing process $processId (netstat method)..." -ForegroundColor Red
@@ -34,20 +37,17 @@ if ($netstatConnections) {
     Start-Sleep -Seconds 2
 }
 
-# Verify port is free
 $stillInUse = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
 if ($stillInUse) {
-    Write-Host "⚠️  Port $port is still in use. Trying one more time..." -ForegroundColor Yellow
+    Write-Host "Port $port is still in use. Trying one more time..." -ForegroundColor Yellow
     $stillInUse | ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Seconds 2
 }
 
 $finalCheck = Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue
 if ($finalCheck) {
-    Write-Host "❌ Port $port is still in use. Please manually kill the process." -ForegroundColor Red
+    Write-Host "Port $port is still in use. Please manually kill the process." -ForegroundColor Red
     $finalCheck | ForEach-Object { Write-Host "  Process ID: $($_.OwningProcess)" -ForegroundColor Red }
 } else {
-    Write-Host "✅ Port $port is now free!" -ForegroundColor Green
+    Write-Host "Port $port is now free." -ForegroundColor Green
 }
-
-

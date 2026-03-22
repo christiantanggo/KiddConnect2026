@@ -1,13 +1,13 @@
 // Test production health endpoint to see what version is running
 import https from 'https';
 
-const PRODUCTION_URL = 'https://api.kiddconnect.com';
+const PRODUCTION_URL = 'https://api.tavarios.com';
 
 console.log('🔍 Testing Production Server...\n');
 console.log(`URL: ${PRODUCTION_URL}/health\n`);
 
 const options = {
-  hostname: 'api.kiddconnect.com',
+  hostname: 'api.tavarios.com',
   path: '/health',
   method: 'GET',
   headers: {

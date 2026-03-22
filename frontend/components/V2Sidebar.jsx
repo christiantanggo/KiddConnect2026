@@ -4,8 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { CheckCircle2, Lock, AlertTriangle, Layout, Archive, ChevronDown, ChevronRight } from 'lucide-react';
-
-const ARCHIVED_MODULE_KEYS = ['phone-agent', 'reviews', 'emergency-dispatch', 'delivery-dispatch'];
+import { ARCHIVED_MODULE_KEYS } from '@/lib/archived-module-keys';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 

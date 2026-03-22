@@ -6,6 +6,7 @@
 import { google } from 'googleapis';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { defaultOrbixYoutubeCallbackUrl } from '../../config/public-urls.js';
 
 const MODULE_KEY = 'kidquiz';
 const STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS || 'kidquiz-videos';
@@ -45,7 +46,7 @@ async function getYouTubeClient(businessId) {
     persistSlot = 'youtube';
   }
 
-  const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5001/api/v2/orbix-network/youtube/callback';
+  const raw = process.env.YOUTUBE_REDIRECT_URI || defaultOrbixYoutubeCallbackUrl();
   const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
   const redirectUri = `${baseUrl}/api/v2/kidquiz/youtube/callback`;
 

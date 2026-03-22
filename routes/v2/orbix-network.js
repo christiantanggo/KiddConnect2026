@@ -3224,8 +3224,10 @@ router.get('/youtube/auth-url', async (req, res) => {
       const { getRiddleYoutubeRedirectUri } = await import('./riddle-youtube-callback.js');
       redirectUri = getRiddleYoutubeRedirectUri();
     } else {
-      const redirectUriRaw = process.env.YOUTUBE_REDIRECT_URI || '';
-      redirectUri = redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`;
+      const redirectUriRaw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();
+      redirectUri = redirectUriRaw
+        ? (redirectUriRaw.startsWith('http') ? redirectUriRaw : `https://${redirectUriRaw}`)
+        : defaultOrbixYoutubeCallbackUrl();
     }
     if (!redirectUri || redirectUri === 'https://') {
       const instructions = getYouTubeSetupInstructions(req);
@@ -3419,7 +3421,7 @@ router.get('/youtube/diagnostic', async (req, res) => {
     if (!result.has_access_token) result.errors.push('Channel has no access_token. Connect YouTube in Settings, or disconnect and connect again to re-authorize.');
     if (!result.has_refresh_token) result.errors.push('No refresh_token — long-lived uploads may fail. Disconnect YouTube and connect again, and approve all permissions.');
     if (result.client_credentials_source === 'none') result.errors.push('No OAuth client: set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET in env, or add a custom OAuth app for this channel in Settings.');
-    if (!result.redirect_uri_configured) result.errors.push('YOUTUBE_REDIRECT_URI is not set in server env (e.g. https://api.kiddconnect.com or full callback URL).');
+    if (!result.redirect_uri_configured) result.errors.push('YOUTUBE_REDIRECT_URI is not set in server env (e.g. https://api.tavarios.com/api/v2/orbix-network/youtube/callback).');
 
     result.ready_for_upload =
       result.module_settings_exists &&

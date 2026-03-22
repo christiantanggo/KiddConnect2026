@@ -416,7 +416,7 @@ export async function processClickBankOrder(params) {
   }
   
   // Send welcome email with login credentials
-  const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'https://www.kiddconnect.com';
+  const frontendUrl = process.env.FRONTEND_URL || process.env.NEXT_PUBLIC_API_URL?.replace('/api', '') || 'https://www.tavarios.com';
   const loginUrl = `${frontendUrl}/login`;
   
   const moduleName = moduleKey === 'reviews' ? 'Review Reply' : 'Phone Agent';
