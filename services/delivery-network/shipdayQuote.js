@@ -112,9 +112,11 @@ export async function getQuoteFromShipday(params) {
 
     const shipdayConfig = config?.brokers?.shipday;
     const onDemandEnabled = shipdayConfig?.on_demand_enabled === true;
-    const preferredProvider = typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : null;
+    const preferredProviderRaw =
+      typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : '';
+    const preferredProvider = onDemandEnabled ? (preferredProviderRaw || 'cheapest') : null;
 
-    // If on-demand (DoorDash/Uber) is enabled, get quote from 3rd party estimate API first
+    // If on-demand is enabled, get quote from 3rd party estimate API first (defaults to cheapest = lowest fee).
     if (onDemandEnabled && preferredProvider) {
       const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
       if (onDemandBase) {
@@ -127,7 +129,7 @@ export async function getQuoteFromShipday(params) {
             const label = isCheapestMode(preferredProvider) ? `${match.name} (cheapest)` : (match.name || preferredProvider);
             if (isCheapestMode(preferredProvider) && estimates.length < 2) {
               console.warn(
-                '[ShipdayQuote] Cheapest mode: API returned only one provider estimate; cannot compare DoorDash vs Uber. If Shipday UI shows a lower Uber price, the estimate API may not expose all providers—confirm in Shipday or upgrade plan if assign fails.'
+                '[ShipdayQuote] Cheapest mode: only one estimate returned; using that. If prices differ in Shipday, the estimate API may not expose every provider yet.'
               );
             }
             console.log('[ShipdayQuote] on-demand quote:', label, 'cost_usd', fee);

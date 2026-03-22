@@ -497,17 +497,29 @@ router.get('/delivery-operator/requests', async (req, res) => {
   try {
     const status = req.query.status; // e.g. Needs Manual Assist
     const limit = Math.min(parseInt(req.query.limit) || 100, 200);
-    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, quoted_on_demand_provider, pod_captured_at, pod_signature_url, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
-    let q = supabaseClient
-      .from('delivery_requests')
-      .select(`${cols}, businesses(name)`)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (status) q = q.eq('status', status);
-    let { data, error } = await q;
+    const colsBase = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, quoted_on_demand_provider, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
+    const colsWithPod = `${colsBase}, pod_captured_at, pod_signature_url`;
+    const runListQuery = async (cols) => {
+      let q = supabaseClient
+        .from('delivery_requests')
+        .select(`${cols}, businesses(name)`)
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (status) q = q.eq('status', status);
+      return q;
+    };
+    let effectiveCols = colsWithPod;
+    let { data, error } = await runListQuery(colsWithPod);
+    if (error && /pod_captured_at|pod_signature|column .* does not exist/i.test(String(error.message || ''))) {
+      console.warn('[Admin delivery-operator] POD columns missing — run migrations/add_delivery_proof_of_delivery.sql; listing without POD fields.');
+      effectiveCols = colsBase;
+      const retry = await runListQuery(colsBase);
+      data = retry.data;
+      error = retry.error;
+    }
     if (error) {
       // Fallback if relation "businesses" not available: fetch requests then look up names
-      q = supabaseClient.from('delivery_requests').select(cols).order('created_at', { ascending: false }).limit(limit);
+      let q = supabaseClient.from('delivery_requests').select(effectiveCols).order('created_at', { ascending: false }).limit(limit);
       if (status) q = q.eq('status', status);
       const res2 = await q;
       if (res2.error) throw res2.error;

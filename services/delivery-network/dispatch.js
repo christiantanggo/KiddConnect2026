@@ -6,7 +6,7 @@
 import { supabaseClient } from '../../config/database.js';
 import { getDeliveryConfigFull } from './config.js';
 import { buildShipdayOrderPayload } from './shipdayOrder.js';
-import { collectOnDemandEstimates, pickOnDemandEstimate, isCheapestMode } from './shipdayOnDemand.js';
+import { collectOnDemandEstimates, isCheapestMode, resolveOnDemandAssignEstimate } from './shipdayOnDemand.js';
 import { localToUTC, toHHmmss } from './shipdayTime.js';
 
 const DEFAULT_BROKER_ID = 'shipday'; // or 'stub' when no API key
@@ -22,6 +22,35 @@ function coalescePreferredCarrierIds(raw) {
   return parts
     .map((x) => (x === null || x === undefined ? '' : String(x).trim()))
     .filter(Boolean);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * POST Shipday on-demand /assign. Retries on 429/503 — estimate polling fires many GETs and can exhaust rate limits.
+ */
+async function postOnDemandAssignWithRetry(axios, assignUrl, assignBody, headers) {
+  const maxAttempts = Math.min(8, Math.max(1, Number(process.env.SHIPDAY_ASSIGN_MAX_RETRIES) || 5));
+  const baseDelayMs = Math.max(500, Number(process.env.SHIPDAY_ASSIGN_RETRY_BASE_MS) || 2500);
+  let lastRes = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    lastRes = await axios.post(assignUrl, assignBody, {
+      headers,
+      timeout: 25000,
+      validateStatus: (s) => s < 600,
+    });
+    if (lastRes.status === 200 && lastRes.data) return lastRes;
+    if ((lastRes.status === 429 || lastRes.status === 503) && attempt < maxAttempts) {
+      const wait = Math.min(45000, baseDelayMs * 2 ** (attempt - 1));
+      console.warn('[DeliveryNetwork] on-demand assign HTTP', lastRes.status, `— rate limit or overload; waiting ${wait}ms then retry ${attempt + 1}/${maxAttempts}`);
+      await sleep(wait);
+      continue;
+    }
+    return lastRes;
+  }
+  return lastRes;
 }
 
 /** Build full address for Shipday from structured fields (street, city, province, postal code). */
@@ -282,10 +311,15 @@ export async function startDispatch(deliveryRequestId) {
       // On-demand first when enabled; fleet carrier (preferred_carrier_ids) as fallback when on-demand returns nothing or fails (e.g. Canada / non-US).
       const shipdayConfig = config?.brokers?.shipday;
       const onDemandEnabled = shipdayConfig?.on_demand_enabled === true;
-      const preferredOnDemand = typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : null;
+      const preferredOnDemandRaw =
+        typeof shipdayConfig?.preferred_on_demand_provider === 'string'
+          ? shipdayConfig.preferred_on_demand_provider.trim()
+          : '';
+      // Default to cheapest when on-demand is on but no provider chosen (lowest fee among all estimates).
+      const preferredOnDemand = onDemandEnabled ? (preferredOnDemandRaw || 'cheapest') : null;
       const preferredIds = coalescePreferredCarrierIds(shipdayConfig?.preferred_carrier_ids);
 
-      if (onDemandEnabled && preferredOnDemand) {
+      if (onDemandEnabled) {
         const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
         if (!onDemandBase) {
           console.error('[DeliveryNetwork] startDispatch: on-demand enabled but on-demand base URL missing (set SHIPDAY_ON_DEMAND_BASE_URL or use default api.shipday.com/on-demand). Skipping third-party assign.');
@@ -296,58 +330,25 @@ export async function startDispatch(deliveryRequestId) {
           try {
             const authH = { Authorization: headers.Authorization };
             const estimates = await collectOnDemandEstimates(shipdayOrderId, onDemandBase, authH);
+            // Brief pause: collectOnDemandEstimates hits many GETs; immediate POST /assign often gets HTTP 429.
+            const postEstimateDelay = Number(process.env.SHIPDAY_POST_ESTIMATE_DELAY_MS);
+            const pauseMs = Number.isFinite(postEstimateDelay) && postEstimateDelay >= 0 ? postEstimateDelay : 1500;
+            if (pauseMs > 0) await sleep(pauseMs);
             // Use quoted provider from the request when set (so we assign to the same provider we quoted).
-            const quotedProvider = request.quoted_on_demand_provider && String(request.quoted_on_demand_provider).trim();
-            const match = quotedProvider
-              ? estimates.find((e) => e.name && String(e.name).toLowerCase() === String(quotedProvider).toLowerCase()) || estimates.find((e) => e.name && String(e.name).toLowerCase().includes(String(quotedProvider).toLowerCase()))
-              : pickOnDemandEstimate(estimates, preferredOnDemand);
+            // Assign uses THIS order's estimates + estimateReference (quote was on a deleted temp order).
+            const quotedRaw = request.quoted_on_demand_provider != null ? String(request.quoted_on_demand_provider).trim() : '';
+            const match = resolveOnDemandAssignEstimate(estimates, quotedRaw || null, preferredOnDemand);
             if (!match || !match.name) {
-              if (quotedProvider) {
-                console.warn('[DeliveryNetwork] startDispatch: quoted provider', quotedProvider, 'not in estimates; trying assign with name anyway. estimates:', estimates?.length);
-                // Try assign with quoted provider name even if not in current estimates (e.g. Shipday may still accept it).
-                const assignUrl = `${onDemandBase}/assign`;
-                const assignBody = { name: quotedProvider, orderId: Number(shipdayOrderId), podTypes: ['SIGNATURE', 'PHOTO'] };
-                const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
-                if (assignRes.status === 200 && assignRes.data) {
-                  onDemandOrThirdPartyAssigned = true;
-                  const totalBillable = assignRes.data.totalBillableAmount != null ? Number(assignRes.data.totalBillableAmount) : null;
-                  const amount = totalBillable != null && totalBillable > 0 ? totalBillable : (assignRes.data.thirdPartyFee != null ? Number(assignRes.data.thirdPartyFee) : null);
-                  if (amount != null && amount > 0) {
-                    const amountCents = Math.round(amount * 100);
-                    await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
-                  }
-                  console.log('[DeliveryNetwork] startDispatch: assigned to quoted provider', quotedProvider);
-                } else {
-                  const errMsg = (assignRes.data?.errorMessage || assignRes.data?.message || JSON.stringify(assignRes.data || '')).toLowerCase();
-                  console.error('[DeliveryNetwork] startDispatch: on-demand assign (quoted provider) HTTP', assignRes.status, assignRes.data);
-                  if ((errMsg.includes('paid plan') || errMsg.includes('third party')) && preferredIds.length > 0) {
-                    const carrierId = preferredIds[0];
-                    try {
-                      const assignUrl = `${baseUrl}/orders/assign/${encodeURIComponent(shipdayOrderId)}/${encodeURIComponent(carrierId)}`;
-                      const fleetRes = await axios.put(assignUrl, null, { headers, timeout: 10000, validateStatus: (s) => s < 500 });
-                      if (fleetRes.status === 204 || fleetRes.status === 200) {
-                        onDemandOrThirdPartyAssigned = true;
-                        console.log('[DeliveryNetwork] startDispatch: assigned to fleet carrier', carrierId, '(quoted provider blocked; Shipday paid plan required for third-party)');
-                      } else {
-                        console.error('[DeliveryNetwork] startDispatch: fleet fallback failed', fleetRes.status, fleetRes.data);
-                      }
-                    } catch (e) {
-                      console.error('[DeliveryNetwork] startDispatch: fleet fallback error', e?.message || e);
-                    }
-                  } else if (preferredIds.length === 0) {
-                    console.error('[DeliveryNetwork] startDispatch: on-demand assign failed and no preferred_carrier_ids for fleet fallback. Save carrier IDs in Admin → Shipday (click carrier to add ID).');
-                  } else {
-                    console.warn('[DeliveryNetwork] startDispatch: on-demand assign with quoted provider failed', assignRes.status, assignRes.data);
-                  }
-                }
-              } else {
-                console.warn('[DeliveryNetwork] startDispatch: no on-demand estimate for', preferredOnDemand, 'estimates count', estimates?.length);
-              }
+              console.warn('[DeliveryNetwork] startDispatch: no on-demand estimate for assign', {
+                preferredOnDemand,
+                quotedRaw: quotedRaw || '(none)',
+                estimateCount: estimates?.length ?? 0,
+              });
             } else {
               const assignUrl = `${onDemandBase}/assign`;
               const assignBody = { name: match.name, orderId: Number(shipdayOrderId), podTypes: ['SIGNATURE', 'PHOTO'] };
               if (match.id) assignBody.estimateReference = String(match.id);
-              const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
+              const assignRes = await postOnDemandAssignWithRetry(axios, assignUrl, assignBody, headers);
               if (assignRes.status === 200 && assignRes.data) {
                 onDemandOrThirdPartyAssigned = true;
                 const totalBillable = assignRes.data.totalBillableAmount != null ? Number(assignRes.data.totalBillableAmount) : null;
@@ -355,8 +356,9 @@ export async function startDispatch(deliveryRequestId) {
                 if (amount != null && amount > 0) {
                   const amountCents = Math.round(amount * 100);
                   await supabaseClient.from('delivery_requests').update({ amount_quoted_cents: amountCents, updated_at: new Date().toISOString() }).eq('id', deliveryRequestId);
-                  console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', match.name, quotedProvider ? '(quoted)' : (isCheapestMode(preferredOnDemand) ? '(cheapest)' : ''), '— amount_quoted_cents', amountCents);
                 }
+                const quotedHint = quotedRaw && !/^cheapest$/i.test(quotedRaw) ? `(matched quote: ${quotedRaw})` : (isCheapestMode(preferredOnDemand) ? '(cheapest)' : '');
+                console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', match.name, quotedHint, 'estimateRef:', match.id || '—');
               } else {
                 const errMsg = (assignRes.data?.errorMessage || assignRes.data?.message || JSON.stringify(assignRes.data || '')).toLowerCase();
                 const isPaidPlanError = errMsg.includes('paid plan') || errMsg.includes('third party');
@@ -365,8 +367,8 @@ export async function startDispatch(deliveryRequestId) {
                   console.log('[DeliveryNetwork] startDispatch: on-demand assign blocked (paid plan); falling back to fleet carrier', preferredIds[0]);
                   const carrierId = preferredIds[0];
                   try {
-                    const assignUrl = `${baseUrl}/orders/assign/${encodeURIComponent(shipdayOrderId)}/${encodeURIComponent(carrierId)}`;
-                    const fleetRes = await axios.put(assignUrl, null, { headers, timeout: 10000, validateStatus: (s) => s < 500 });
+                    const fleetAssignUrl = `${baseUrl}/orders/assign/${encodeURIComponent(shipdayOrderId)}/${encodeURIComponent(carrierId)}`;
+                    const fleetRes = await axios.put(fleetAssignUrl, null, { headers, timeout: 10000, validateStatus: (s) => s < 500 });
                     if (fleetRes.status === 204 || fleetRes.status === 200) {
                       onDemandOrThirdPartyAssigned = true;
                       console.log('[DeliveryNetwork] startDispatch: assigned to fleet carrier', carrierId, '(on-demand requires Shipday paid plan)');
@@ -421,8 +423,6 @@ export async function startDispatch(deliveryRequestId) {
               console.error('[DeliveryNetwork] startDispatch: on-demand did not assign and preferred_carrier_ids is empty — order stays Unassigned in Shipday. For Canada: turn off on-demand OR add Tavari OS carrier ID under Shipday settings.');
             }
         }
-      } else if (onDemandEnabled && !preferredOnDemand) {
-        console.warn('[DeliveryNetwork] startDispatch: on-demand enabled but no preferred_on_demand_provider (DoorDash/Uber)—not assigning fleet carrier. Set provider in Admin → Delivery APIs → Shipday.');
       } else if (!onDemandEnabled && preferredIds.length > 0) {
         const carrierId = preferredIds[0];
         try {

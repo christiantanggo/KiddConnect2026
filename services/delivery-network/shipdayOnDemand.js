@@ -123,7 +123,7 @@ export async function collectOnDemandEstimates(orderId, onDemandBase, headers) {
 }
 
 /**
- * Pick estimate for a fixed provider name, or cheapest among DoorDash/Uber-like names.
+ * Pick estimate for a fixed provider name, or lowest fee among all returned estimates (cheapest mode).
  * @param {Array<{ name: string, fee: number, id: string }>} estimates
  * @param {string} preferred - 'DoorDash' | 'Uber' | 'cheapest'
  */
@@ -131,11 +131,11 @@ export function pickOnDemandEstimate(estimates, preferred) {
   if (!estimates || estimates.length === 0) return null;
   const pref = String(preferred || '').trim();
   if (isCheapestMode(pref)) {
-    const candidates = estimates.filter((e) => isDoorDashOrUberName(e.name));
-    const pool = candidates.length > 0 ? candidates : estimates;
-    let best = pool[0];
-    for (const e of pool) {
-      if (e.fee < best.fee) best = e;
+    const valid = estimates.filter((e) => e && Number.isFinite(Number(e.fee)) && Number(e.fee) >= 0);
+    if (valid.length === 0) return estimates[0] || null;
+    let best = valid[0];
+    for (const e of valid) {
+      if (Number(e.fee) < Number(best.fee)) best = e;
     }
     return best;
   }
@@ -144,4 +144,34 @@ export function pickOnDemandEstimate(estimates, preferred) {
   if (exact) return exact;
   const fuzzy = estimates.find((e) => e && String(e.name || '').toLowerCase().includes(pl));
   return fuzzy || estimates[0];
+}
+
+/**
+ * Pick which estimate to assign for a **new** Shipday order. Quote used a different temp order; we must use
+ * this order's estimates + estimateReference. Treat DB value "cheapest" as unset (not a Shipday provider name).
+ *
+ * @param {Array<{ name: string, fee: number, id: string }>} estimates
+ * @param {string|null|undefined} quotedFromRequest - delivery_requests.quoted_on_demand_provider
+ * @param {string} preferredOnDemand - config e.g. 'cheapest' | 'DoorDash'
+ */
+export function resolveOnDemandAssignEstimate(estimates, quotedFromRequest, preferredOnDemand) {
+  const raw = quotedFromRequest != null ? String(quotedFromRequest).trim() : '';
+  const pref = String(preferredOnDemand || 'cheapest').trim() || 'cheapest';
+  if (!estimates || estimates.length === 0) return null;
+
+  // Literal "cheapest" in DB is not assignable — recompute lowest fee on this order.
+  if (!raw || /^cheapest$/i.test(raw)) {
+    return pickOnDemandEstimate(estimates, pref);
+  }
+
+  const ql = raw.toLowerCase();
+  const exact = estimates.find((e) => e?.name && String(e.name).toLowerCase() === ql);
+  if (exact) return exact;
+
+  const fuzzy = estimates.filter((e) => e?.name && String(e.name).toLowerCase().includes(ql));
+  if (fuzzy.length === 1) return fuzzy[0];
+  if (fuzzy.length > 1) return pickOnDemandEstimate(fuzzy, 'cheapest');
+
+  console.warn('[ShipdayOnDemand] quoted provider not in estimates for this order:', raw, '— using', pref);
+  return pickOnDemandEstimate(estimates, pref);
 }
