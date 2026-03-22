@@ -64,6 +64,7 @@ function AdminDeliveryOperatorPage() {
   const [editDelivery, setEditDelivery] = useState(null);
   const [editDeliveryLoading, setEditDeliveryLoading] = useState(false);
   const [editDeliverySaving, setEditDeliverySaving] = useState(false);
+  const [editPodSyncLoading, setEditPodSyncLoading] = useState(false);
   const [editForm, setEditForm] = useState({});
 
   // Add delivery (manual) state
@@ -430,7 +431,15 @@ function AdminDeliveryOperatorPage() {
       });
       if (!res.ok) throw new Error((await res.json())?.error || res.statusText);
       const data = await res.json();
-      setEditDelivery(data);
+      let podPhotos = data.pod_photo_urls;
+      if (typeof podPhotos === 'string') {
+        try {
+          podPhotos = JSON.parse(podPhotos);
+        } catch {
+          podPhotos = [];
+        }
+      }
+      setEditDelivery({ ...data, pod_photo_urls: Array.isArray(podPhotos) ? podPhotos : [] });
       setEditForm({
         status: data.status || '',
         amount_quoted_cents: data.amount_quoted_cents ?? '',
@@ -456,6 +465,29 @@ function AdminDeliveryOperatorPage() {
       setEditDeliveryId(null);
     } finally {
       setEditDeliveryLoading(false);
+    }
+  };
+
+  const syncPodFromShipday = async () => {
+    if (!editDeliveryId) return;
+    const token = getAdminToken();
+    if (!token) return;
+    setEditPodSyncLoading(true);
+    try {
+      const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/requests/${editDeliveryId}/sync-pod`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Sync failed');
+      setEditDelivery((d) => (d && data.stored ? { ...d, ...data.stored } : d));
+      if (!data.updated && data.proof && !data.proof.signature_url && (!data.proof.photo_urls || data.proof.photo_urls.length === 0)) {
+        alert('Shipday has no proof of delivery yet for this order. Try again after the driver completes delivery.');
+      }
+    } catch (e) {
+      alert(e.message || 'Sync failed');
+    } finally {
+      setEditPodSyncLoading(false);
     }
   };
 
@@ -1420,6 +1452,7 @@ function AdminDeliveryOperatorPage() {
                               <th className="p-2">Callback</th>
                               <th className="p-2">Delivery address</th>
                               <th className="p-2">Status</th>
+                              <th className="p-2">POD</th>
                               <th className="p-2">Scheduled</th>
                               <th className="p-2">Actions</th>
                             </tr>
@@ -1432,6 +1465,9 @@ function AdminDeliveryOperatorPage() {
                                 <td className="p-2">{r.callback_phone}</td>
                                 <td className="p-2 max-w-[200px] truncate" title={r.delivery_address}>{r.delivery_address}</td>
                                 <td className="p-2">{r.status}</td>
+                                <td className="p-2 text-center" title={r.pod_captured_at ? 'Proof of delivery on file' : ''}>
+                                  {r.pod_captured_at ? <span className="text-emerald-600 font-medium">✓</span> : '—'}
+                                </td>
                                 <td className="p-2 text-slate-500">{formatScheduled(r.scheduled_date, r.scheduled_time) || '—'}</td>
                                 <td className="p-2 flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
                                   <button type="button" onClick={() => retryDispatch(r.id)} disabled={actionLoadingId === r.id} className="px-2 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-700 disabled:opacity-50">Retry dispatch</button>
@@ -1457,6 +1493,7 @@ function AdminDeliveryOperatorPage() {
                             <th className="p-2">Delivery address</th>
                             <th className="p-2">Status</th>
                             <th className="p-2">Payment</th>
+                            <th className="p-2">POD</th>
                             <th className="p-2">Scheduled</th>
                             <th className="p-2">Actions</th>
                           </tr>
@@ -1470,6 +1507,9 @@ function AdminDeliveryOperatorPage() {
                               <td className="p-2 max-w-[200px] truncate" title={r.delivery_address}>{r.delivery_address}</td>
                               <td className="p-2">{r.status}</td>
                               <td className="p-2">{r.payment_status || '—'}</td>
+                              <td className="p-2 text-center" title={r.pod_captured_at ? 'Proof of delivery on file' : ''}>
+                                {r.pod_captured_at ? <span className="text-emerald-600 font-medium">✓</span> : '—'}
+                              </td>
                               <td className="p-2 text-slate-500">{formatScheduled(r.scheduled_date, r.scheduled_time) || '—'}</td>
                               <td className="p-2 flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
                                 {['New', 'Contacting', 'Needs Manual Assist'].includes(r.status) && (
@@ -1514,6 +1554,58 @@ function AdminDeliveryOperatorPage() {
                       {editForm.amount_quoted_cents != null && editForm.amount_quoted_cents !== '' ? `$${(Number(editForm.amount_quoted_cents) / 100).toFixed(2)}` : '—'}
                     </p>
                     <p className="text-xs text-slate-500 mt-1">CAD (amount_quoted_cents). Edit below to override.</p>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div>
+                        <p className="text-sm font-medium text-slate-800">Proof of delivery</p>
+                        <p className="text-xs text-slate-500">Signature &amp; photos from Shipday (driver completes in carrier app).</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={syncPodFromShipday}
+                        disabled={editPodSyncLoading}
+                        className="shrink-0 px-3 py-1.5 rounded border border-slate-300 bg-white text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        {editPodSyncLoading ? 'Syncing…' : 'Sync from Shipday'}
+                      </button>
+                    </div>
+                    {editDelivery.pod_captured_at && (
+                      <p className="text-xs text-slate-500">Last synced: {new Date(editDelivery.pod_captured_at).toLocaleString()}</p>
+                    )}
+                    {editDelivery.pod_signature_url ? (
+                      <div>
+                        <p className="text-xs font-medium text-slate-600 mb-1">Signature</p>
+                        <a href={editDelivery.pod_signature_url} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 underline">Open full size</a>
+                        <div className="mt-2 rounded border border-slate-200 overflow-hidden bg-slate-50 max-h-48">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={editDelivery.pod_signature_url} alt="Delivery signature" className="max-w-full max-h-48 object-contain" />
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-500">No signature on file yet.</p>
+                    )}
+                    {Array.isArray(editDelivery.pod_photo_urls) && editDelivery.pod_photo_urls.length > 0 ? (
+                      <div>
+                        <p className="text-xs font-medium text-slate-600 mb-1">Photos ({editDelivery.pod_photo_urls.length})</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {editDelivery.pod_photo_urls.map((url, i) => (
+                            <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="block rounded border border-slate-200 overflow-hidden bg-slate-50">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={url} alt={`POD ${i + 1}`} className="w-full h-28 object-cover" />
+                            </a>
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-sm text-slate-500">No delivery photos on file yet.</p>
+                    )}
+                    {(editDelivery.pod_latitude != null && editDelivery.pod_longitude != null) && (
+                      <p className="text-xs text-slate-600">
+                        GPS at completion: {Number(editDelivery.pod_latitude).toFixed(5)}, {Number(editDelivery.pod_longitude).toFixed(5)}{' '}
+                        <a className="text-blue-600 underline" href={`https://www.google.com/maps?q=${editDelivery.pod_latitude},${editDelivery.pod_longitude}`} target="_blank" rel="noopener noreferrer">Map</a>
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Business</label>

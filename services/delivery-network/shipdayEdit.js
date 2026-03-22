@@ -39,30 +39,23 @@ function buildFullDeliveryAddress(request) {
 }
 
 /**
- * Resolve expectedDeliveryDate, expectedPickupTime, expectedDeliveryTime for Shipday from request.
+ * Resolve expectedDeliveryDate, expectedPickupTime, expectedDeliveryTime for Shipday (all in UTC).
  */
 async function resolveShipdayDateTimes(request) {
+  const { localToUTC, toHHmmss } = await import('./shipdayTime.js');
   let businessTimezone = 'America/New_York';
   if (request.business_id) {
     const { data: biz } = await supabaseClient.from('businesses').select('timezone').eq('id', request.business_id).single();
     if (biz?.timezone && String(biz.timezone).trim()) businessTimezone = String(biz.timezone).trim();
   }
 
-  function toHHmmss(s) {
-    if (!s || typeof s !== 'string') return null;
-    const t = s.trim();
-    const parts = t.split(':').map((x) => x.padStart(2, '0'));
-    if (parts.length >= 2) return `${parts[0]}:${parts[1]}:${(parts[2] || '00').slice(0, 2)}`;
-    return null;
-  }
-
   function tomorrowInTz(timezone) {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow).replace(/\//g, '-');
   }
 
   function todayInTz(timezone) {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).replace(/\//g, '-');
   }
 
   const now = new Date();
@@ -82,22 +75,45 @@ async function resolveShipdayDateTimes(request) {
     pickupTime = `${String(p.getUTCHours()).padStart(2, '0')}:${String(p.getUTCMinutes()).padStart(2, '0')}:00`;
     deliveryTime = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:00`;
   } else if (isSameDay) {
-    expectedDate = todayInTz(businessTimezone);
-    pickupTime = '14:00:00';
-    deliveryTime = '15:00:00';
+    const today = todayInTz(businessTimezone);
+    const utc = localToUTC(today, '15:00', businessTimezone);
+    if (utc) {
+      expectedDate = utc.date;
+      deliveryTime = utc.time;
+      const [h, m] = deliveryTime.split(':').map(Number);
+      pickupTime = `${String(h - 1 >= 0 ? h - 1 : 23).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    } else {
+      expectedDate = today;
+      pickupTime = '18:00:00';
+      deliveryTime = '19:00:00';
+    }
   } else if (isSchedule && request.scheduled_date && String(request.scheduled_date).trim()) {
     expectedDate = String(request.scheduled_date).trim().slice(0, 10);
-    const normalized = toHHmmss(request.scheduled_time);
-    if (normalized) {
-      deliveryTime = normalized;
+    const deliveryLocal = toHHmmss(request.scheduled_time) || '13:00:00';
+    const utc = localToUTC(expectedDate, deliveryLocal, businessTimezone);
+    if (utc) {
+      expectedDate = utc.date;
+      deliveryTime = utc.time;
       const [h, m] = deliveryTime.split(':').map(Number);
-      const pickupH = h - 1 >= 0 ? h - 1 : 23;
-      pickupTime = `${String(pickupH).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+      pickupTime = `${String(h - 1 >= 0 ? h - 1 : 23).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    } else {
+      deliveryTime = deliveryLocal;
+      const [h, m] = deliveryTime.split(':').map(Number);
+      pickupTime = `${String(h - 1 >= 0 ? h - 1 : 23).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
     }
   } else {
-    expectedDate = tomorrowInTz(businessTimezone);
-    pickupTime = '12:00:00';
-    deliveryTime = '13:00:00';
+    const tomorrow = tomorrowInTz(businessTimezone);
+    const utc = localToUTC(tomorrow, '13:00', businessTimezone);
+    if (utc) {
+      expectedDate = utc.date;
+      deliveryTime = utc.time;
+      const [h, m] = deliveryTime.split(':').map(Number);
+      pickupTime = `${String(h - 1 >= 0 ? h - 1 : 23).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    } else {
+      expectedDate = tomorrow;
+      pickupTime = '12:00:00';
+      deliveryTime = '13:00:00';
+    }
   }
 
   return { expectedDate, pickupTime, deliveryTime };

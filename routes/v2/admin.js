@@ -497,7 +497,7 @@ router.get('/delivery-operator/requests', async (req, res) => {
   try {
     const status = req.query.status; // e.g. Needs Manual Assist
     const limit = Math.min(parseInt(req.query.limit) || 100, 200);
-    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, quoted_on_demand_provider, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
+    const cols = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, quoted_on_demand_provider, pod_captured_at, pod_signature_url, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
     let q = supabaseClient
       .from('delivery_requests')
       .select(`${cols}, businesses(name)`)
@@ -630,6 +630,30 @@ router.post('/delivery-operator/requests/:id/retry-dispatch', async (req, res) =
   } catch (err) {
     console.error('[Admin delivery-operator] retry error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Retry failed' });
+  }
+});
+
+/**
+ * POST /api/v2/admin/delivery-operator/requests/:id/sync-pod
+ * Pull proof of delivery (signature + photos) from Shipday into Tavari.
+ */
+router.post('/delivery-operator/requests/:id/sync-pod', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { syncProofOfDeliveryFromShipday } = await import('../../services/delivery-network/shipdayPod.js');
+    const result = await syncProofOfDeliveryFromShipday(id);
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error || 'Sync failed' });
+    }
+    const { data: row } = await supabaseClient
+      .from('delivery_requests')
+      .select('pod_signature_url, pod_photo_urls, pod_latitude, pod_longitude, pod_captured_at, pod_source')
+      .eq('id', id)
+      .single();
+    res.json({ success: true, updated: result.updated, proof: result.proof, stored: row || null });
+  } catch (err) {
+    console.error('[Admin delivery-operator] sync-pod error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Sync failed' });
   }
 });
 

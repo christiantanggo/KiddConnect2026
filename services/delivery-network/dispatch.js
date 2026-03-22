@@ -7,8 +7,22 @@ import { supabaseClient } from '../../config/database.js';
 import { getDeliveryConfigFull } from './config.js';
 import { buildShipdayOrderPayload } from './shipdayOrder.js';
 import { collectOnDemandEstimates, pickOnDemandEstimate, isCheapestMode } from './shipdayOnDemand.js';
+import { localToUTC, toHHmmss } from './shipdayTime.js';
 
 const DEFAULT_BROKER_ID = 'shipday'; // or 'stub' when no API key
+
+/**
+ * Shipday assign uses carrier id in the URL. IDs from API/JSON may be numbers or strings;
+ * config merge used to drop string IDs (Number.isInteger only). Accept both + comma-separated strings.
+ * @returns {string[]}
+ */
+function coalescePreferredCarrierIds(raw) {
+  if (raw == null || raw === '') return [];
+  const parts = Array.isArray(raw) ? raw : String(raw).split(/[\s,]+/);
+  return parts
+    .map((x) => (x === null || x === undefined ? '' : String(x).trim()))
+    .filter(Boolean);
+}
 
 /** Build full address for Shipday from structured fields (street, city, province, postal code). */
 function buildFullAddress(street, city, province, postalCode) {
@@ -147,24 +161,15 @@ export async function startDispatch(deliveryRequestId) {
     if (biz?.timezone && String(biz.timezone).trim()) businessTimezone = String(biz.timezone).trim();
   }
 
-  /** Normalize time string to HH:mm:ss for Shipday. */
-  function toHHmmss(s) {
-    if (!s || typeof s !== 'string') return null;
-    const t = s.trim();
-    const parts = t.split(':').map((x) => x.padStart(2, '0'));
-    if (parts.length >= 2) return `${parts[0]}:${parts[1]}:${(parts[2] || '00').slice(0, 2)}`;
-    return null;
-  }
-
   /** Tomorrow's date (YYYY-MM-DD) in the given IANA timezone. */
   function tomorrowInTz(timezone) {
     const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow);
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(tomorrow).replace(/\//g, '-');
   }
 
   /** Today's date (YYYY-MM-DD) in the given IANA timezone. */
   function todayInTz(timezone) {
-    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date()).replace(/\//g, '-');
   }
 
   const now = new Date();
@@ -175,6 +180,7 @@ export async function startDispatch(deliveryRequestId) {
   let pickupTime = '12:00:00';
   let deliveryTime = '13:00:00';
 
+  // Shipday API expects expectedDeliveryDate and expectedPickupTime/expectedDeliveryTime in UTC.
   if (isImmediate) {
     expectedDate = now.toISOString().slice(0, 10);
     const p = new Date(now.getTime() + 30 * 60 * 1000);
@@ -182,25 +188,49 @@ export async function startDispatch(deliveryRequestId) {
     pickupTime = `${String(p.getUTCHours()).padStart(2, '0')}:${String(p.getUTCMinutes()).padStart(2, '0')}:00`;
     deliveryTime = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:00`;
   } else if (isSameDay) {
-    expectedDate = todayInTz(businessTimezone);
-    pickupTime = '14:00:00';
-    deliveryTime = '15:00:00';
+    const today = todayInTz(businessTimezone);
+    const utc = localToUTC(today, '15:00', businessTimezone);
+    if (utc) {
+      expectedDate = utc.date;
+      deliveryTime = utc.time;
+      const [h, m] = deliveryTime.split(':').map(Number);
+      const pickupH = h - 1 >= 0 ? h - 1 : 23;
+      pickupTime = `${String(pickupH).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    } else {
+      expectedDate = today;
+      pickupTime = '18:00:00';
+      deliveryTime = '19:00:00';
+    }
   } else if (isSchedule && request.scheduled_date && String(request.scheduled_date).trim()) {
-    // User chose a delivery date (and optionally time). Interpret in business timezone.
     expectedDate = String(request.scheduled_date).trim().slice(0, 10);
     const normalized = toHHmmss(request.scheduled_time);
-    if (normalized) {
-      deliveryTime = normalized;
-      // Pickup 1 hour before delivery (simple string math for HH:mm:ss).
+    const deliveryLocal = normalized || '13:00:00';
+    const utc = localToUTC(expectedDate, deliveryLocal, businessTimezone);
+    if (utc) {
+      expectedDate = utc.date;
+      deliveryTime = utc.time;
+      const [h, m] = deliveryTime.split(':').map(Number);
+      const pickupH = h - 1 >= 0 ? h - 1 : 23;
+      pickupTime = `${String(pickupH).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    } else {
+      deliveryTime = deliveryLocal;
       const [h, m] = deliveryTime.split(':').map(Number);
       const pickupH = h - 1 >= 0 ? h - 1 : 23;
       pickupTime = `${String(pickupH).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
     }
   } else {
-    // Schedule without scheduled_date: tomorrow in business timezone at 12:00 / 13:00
-    expectedDate = tomorrowInTz(businessTimezone);
-    pickupTime = '12:00:00';
-    deliveryTime = '13:00:00';
+    const tomorrow = tomorrowInTz(businessTimezone);
+    const utc = localToUTC(tomorrow, '13:00', businessTimezone);
+    if (utc) {
+      expectedDate = utc.date;
+      deliveryTime = utc.time;
+      const [h, m] = deliveryTime.split(':').map(Number);
+      pickupTime = `${String(h - 1 >= 0 ? h - 1 : 23).padStart(2, '0')}:${String(m).padStart(2, '0')}:00`;
+    } else {
+      expectedDate = tomorrow;
+      pickupTime = '12:00:00';
+      deliveryTime = '13:00:00';
+    }
   }
 
   const deliveryAddress = buildFullDeliveryAddress(request);
@@ -253,10 +283,13 @@ export async function startDispatch(deliveryRequestId) {
       const shipdayConfig = config?.brokers?.shipday;
       const onDemandEnabled = shipdayConfig?.on_demand_enabled === true;
       const preferredOnDemand = typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : null;
-      const preferredIds = Array.isArray(shipdayConfig?.preferred_carrier_ids) ? shipdayConfig.preferred_carrier_ids : [];
+      const preferredIds = coalescePreferredCarrierIds(shipdayConfig?.preferred_carrier_ids);
 
       if (onDemandEnabled && preferredOnDemand) {
         const onDemandBase = getShipdayOnDemandBaseUrl(baseUrl);
+        if (!onDemandBase) {
+          console.error('[DeliveryNetwork] startDispatch: on-demand enabled but on-demand base URL missing (set SHIPDAY_ON_DEMAND_BASE_URL or use default api.shipday.com/on-demand). Skipping third-party assign.');
+        }
         if (onDemandBase) {
           try {
             const authH = { Authorization: headers.Authorization };
@@ -271,7 +304,7 @@ export async function startDispatch(deliveryRequestId) {
                 console.warn('[DeliveryNetwork] startDispatch: quoted provider', quotedProvider, 'not in estimates; trying assign with name anyway. estimates:', estimates?.length);
                 // Try assign with quoted provider name even if not in current estimates (e.g. Shipday may still accept it).
                 const assignUrl = `${onDemandBase}/assign`;
-                const assignBody = { name: quotedProvider, orderId: Number(shipdayOrderId) };
+                const assignBody = { name: quotedProvider, orderId: Number(shipdayOrderId), podTypes: ['SIGNATURE', 'PHOTO'] };
                 const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
                 if (assignRes.status === 200 && assignRes.data) {
                   const totalBillable = assignRes.data.totalBillableAmount != null ? Number(assignRes.data.totalBillableAmount) : null;
@@ -282,14 +315,33 @@ export async function startDispatch(deliveryRequestId) {
                   }
                   console.log('[DeliveryNetwork] startDispatch: assigned to quoted provider', quotedProvider);
                 } else {
-                  console.warn('[DeliveryNetwork] startDispatch: on-demand assign with quoted provider failed', assignRes.status, assignRes.data);
+                  const errMsg = (assignRes.data?.errorMessage || assignRes.data?.message || JSON.stringify(assignRes.data || '')).toLowerCase();
+                  console.error('[DeliveryNetwork] startDispatch: on-demand assign (quoted provider) HTTP', assignRes.status, assignRes.data);
+                  if ((errMsg.includes('paid plan') || errMsg.includes('third party')) && preferredIds.length > 0) {
+                    const carrierId = preferredIds[0];
+                    try {
+                      const assignUrl = `${baseUrl}/orders/assign/${encodeURIComponent(shipdayOrderId)}/${encodeURIComponent(carrierId)}`;
+                      const fleetRes = await axios.put(assignUrl, null, { headers, timeout: 10000, validateStatus: (s) => s < 500 });
+                      if (fleetRes.status === 204 || fleetRes.status === 200) {
+                        console.log('[DeliveryNetwork] startDispatch: assigned to fleet carrier', carrierId, '(quoted provider blocked; Shipday paid plan required for third-party)');
+                      } else {
+                        console.error('[DeliveryNetwork] startDispatch: fleet fallback failed', fleetRes.status, fleetRes.data);
+                      }
+                    } catch (e) {
+                      console.error('[DeliveryNetwork] startDispatch: fleet fallback error', e?.message || e);
+                    }
+                  } else if (preferredIds.length === 0) {
+                    console.error('[DeliveryNetwork] startDispatch: on-demand assign failed and no preferred_carrier_ids for fleet fallback. Save carrier IDs in Admin → Shipday (click carrier to add ID).');
+                  } else {
+                    console.warn('[DeliveryNetwork] startDispatch: on-demand assign with quoted provider failed', assignRes.status, assignRes.data);
+                  }
                 }
               } else {
                 console.warn('[DeliveryNetwork] startDispatch: no on-demand estimate for', preferredOnDemand, 'estimates count', estimates?.length);
               }
             } else {
               const assignUrl = `${onDemandBase}/assign`;
-              const assignBody = { name: match.name, orderId: Number(shipdayOrderId) };
+              const assignBody = { name: match.name, orderId: Number(shipdayOrderId), podTypes: ['SIGNATURE', 'PHOTO'] };
               if (match.id) assignBody.estimateReference = String(match.id);
               const assignRes = await axios.post(assignUrl, assignBody, { headers, timeout: 15000, validateStatus: (s) => s < 500 });
               if (assignRes.status === 200 && assignRes.data) {
@@ -301,7 +353,28 @@ export async function startDispatch(deliveryRequestId) {
                   console.log('[DeliveryNetwork] startDispatch: assigned to on-demand', match.name, quotedProvider ? '(quoted)' : (isCheapestMode(preferredOnDemand) ? '(cheapest)' : ''), '— amount_quoted_cents', amountCents);
                 }
               } else {
-                console.warn('[DeliveryNetwork] startDispatch: on-demand assign failed', assignRes.status, assignRes.data);
+                const errMsg = (assignRes.data?.errorMessage || assignRes.data?.message || JSON.stringify(assignRes.data || '')).toLowerCase();
+                const isPaidPlanError = errMsg.includes('paid plan') || errMsg.includes('third party');
+                console.error('[DeliveryNetwork] startDispatch: on-demand assign HTTP', assignRes.status, assignRes.data, '| preferred_carrier_ids:', preferredIds.length ? preferredIds.join(',') : '(none)');
+                if (isPaidPlanError && preferredIds.length > 0) {
+                  console.log('[DeliveryNetwork] startDispatch: on-demand assign blocked (paid plan); falling back to fleet carrier', preferredIds[0]);
+                  const carrierId = preferredIds[0];
+                  try {
+                    const assignUrl = `${baseUrl}/orders/assign/${encodeURIComponent(shipdayOrderId)}/${encodeURIComponent(carrierId)}`;
+                    const fleetRes = await axios.put(assignUrl, null, { headers, timeout: 10000, validateStatus: (s) => s < 500 });
+                    if (fleetRes.status === 204 || fleetRes.status === 200) {
+                      console.log('[DeliveryNetwork] startDispatch: assigned to fleet carrier', carrierId, '(on-demand requires Shipday paid plan)');
+                    } else {
+                      console.error('[DeliveryNetwork] startDispatch: fleet fallback assign failed', fleetRes.status, fleetRes.data);
+                    }
+                  } catch (e) {
+                    console.error('[DeliveryNetwork] startDispatch: fleet fallback error', e?.message || e);
+                  }
+                } else if (preferredIds.length === 0) {
+                  console.error('[DeliveryNetwork] startDispatch: on-demand assign failed; set preferred_carrier_ids in Admin for fleet fallback, or fix Shipday/on-demand error above.');
+                } else {
+                  console.warn('[DeliveryNetwork] startDispatch: on-demand assign failed', assignRes.status, assignRes.data);
+                }
               }
             }
           } catch (onDemandErr) {
@@ -333,11 +406,13 @@ export async function startDispatch(deliveryRequestId) {
               }
             }
           } else {
-            console.warn('[DeliveryNetwork] startDispatch: assign to carrier failed', assignRes.status, assignRes.data);
+            console.error('[DeliveryNetwork] startDispatch: fleet assign to carrier failed', assignRes.status, assignRes.data, '| carrierId:', carrierId, 'orderId:', shipdayOrderId);
           }
         } catch (assignErr) {
-          console.warn('[DeliveryNetwork] startDispatch: assign or fetch costing failed', assignErr?.message || assignErr);
+          console.error('[DeliveryNetwork] startDispatch: assign or fetch costing failed', assignErr?.message || assignErr);
         }
+      } else if (!onDemandEnabled && preferredIds.length === 0) {
+        console.error('[DeliveryNetwork] startDispatch: order created on Shipday but no assignment ran — on-demand is off and preferred_carrier_ids is empty. Add carrier ID(s) in Admin → Shipday or enable on-demand + provider.');
       }
     } else {
       console.warn('[DeliveryNetwork] startDispatch: Shipday create failed', createRes.status, createRes.data);

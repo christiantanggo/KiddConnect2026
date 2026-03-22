@@ -215,7 +215,18 @@ export async function updateDeliveryConfig(updates) {
         base_url: typeof entry.base_url === 'string' ? entry.base_url.trim() || null : null,
       };
       if (Array.isArray(entry.preferred_carrier_ids)) {
-        merged.brokers[id].preferred_carrier_ids = entry.preferred_carrier_ids.filter((n) => Number.isInteger(n) && n > 0);
+        // Keep numeric IDs; JSON may deserialize as strings — old code used Number.isInteger only and dropped them.
+        const ids = entry.preferred_carrier_ids
+          .map((n) => {
+            if (typeof n === 'number' && Number.isInteger(n) && n > 0) return n;
+            if (typeof n === 'string' && n.trim()) {
+              const p = parseInt(n.trim(), 10);
+              if (!Number.isNaN(p) && p > 0 && String(p) === n.trim()) return p;
+            }
+            return null;
+          })
+          .filter((x) => x != null);
+        if (ids.length) merged.brokers[id].preferred_carrier_ids = ids;
       } else if (entry.preferred_carrier_ids !== undefined && entry.preferred_carrier_ids !== null) {
         const raw = String(entry.preferred_carrier_ids).split(/[\s,]+/).map((s) => parseInt(s, 10)).filter((n) => !Number.isNaN(n) && n > 0);
         if (raw.length) merged.brokers[id].preferred_carrier_ids = raw;
