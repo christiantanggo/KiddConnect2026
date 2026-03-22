@@ -955,6 +955,47 @@ function AdminDeliveryOperatorPage() {
                                     <strong>Cheapest</strong> is the default: we assign the provider with the lowest quoted fee among all estimates Shipday returns. Use DoorDash/Uber only if you need to lock a brand.
                                   </p>
                                 </div>
+                                <div className="flex items-center gap-2 mt-3">
+                                  <input
+                                    type="checkbox"
+                                    id="shipday-on-demand-contactless"
+                                    checked={!!entry.on_demand_contactless}
+                                    onChange={(e) => setConfigForm((f) => ({
+                                      ...f,
+                                      brokers: {
+                                        ...(f.brokers || {}),
+                                        shipday: { ...(f.brokers?.shipday || {}), on_demand_contactless: e.target.checked },
+                                      },
+                                    }))}
+                                    className="rounded border-slate-300"
+                                  />
+                                  <label htmlFor="shipday-on-demand-contactless" className="text-sm text-slate-700">Contactless delivery (sent to Shipday <code className="text-xs bg-slate-100 px-1 rounded">/on-demand/assign</code>)</label>
+                                </div>
+                                <div className="mt-2 max-w-xs">
+                                  <label className="block text-sm text-slate-700 mb-1">Optional tip (currency units, e.g. USD)</label>
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    step="0.01"
+                                    placeholder="0"
+                                    value={entry.on_demand_tip != null && entry.on_demand_tip !== '' ? String(entry.on_demand_tip) : ''}
+                                    onChange={(e) => {
+                                      const v = e.target.value;
+                                      setConfigForm((f) => ({
+                                        ...f,
+                                        brokers: {
+                                          ...(f.brokers || {}),
+                                          shipday: {
+                                            ...(f.brokers?.shipday || {}),
+                                            on_demand_tip: v === '' ? undefined : Number(v),
+                                          },
+                                        },
+                                      }));
+                                    }}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                                  />
+                                  <p className="mt-1 text-xs text-slate-500">Only positive values are sent. Leave empty for no tip.</p>
+                                </div>
                               </div>
                             )}
                             <div className="mt-3">

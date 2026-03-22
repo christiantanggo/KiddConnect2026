@@ -545,6 +545,8 @@ export const deliveryNetworkAPI = {
   linkAgent: () => api.post('/v2/delivery-network/link-agent', {}, { headers: deliveryNetworkHeaders() }),
   updateConfig: (data) => api.put('/v2/delivery-network/config', data, { headers: deliveryNetworkHeaders() }),
   getRequests: () => api.get('/v2/delivery-network/requests', { headers: deliveryNetworkHeaders() }),
+  /** Pull latest proof of delivery from Shipday for this request (customer dashboard). */
+  syncRequestPod: (id) => api.post(`/v2/delivery-network/requests/${id}/sync-pod`, {}, { headers: deliveryNetworkHeaders() }),
   createRequest: (data) => api.post('/v2/delivery-network/requests', data, { headers: deliveryNetworkHeaders() }),
   updateRequest: (id, data) => api.patch(`/v2/delivery-network/requests/${id}`, data, { headers: deliveryNetworkHeaders() }),
   deleteRequest: (requestId) => api.delete(`/v2/delivery-network/requests/${requestId}`, { headers: deliveryNetworkHeaders() }),

@@ -8,18 +8,33 @@ import { getShipdayCredentials } from './shipdayQuote.js';
 /**
  * @param {object} order - Single order object from Shipday GET /orders/{orderNumber}
  * @returns {{ signatureUrl: string|null, photoUrls: string[], latitude: number|null, longitude: number|null }}
+ * @see https://docs.shipday.com/reference/shipday-api — proofOfDelivery; support also cites assignedCarrier.carrierPhoto for driver POD image.
  */
 export function extractProofOfDelivery(order) {
+  let signatureUrl = null;
+  let photoUrls = [];
+  let latitude = null;
+  let longitude = null;
+
   const pod = order?.proofOfDelivery;
-  if (!pod || typeof pod !== 'object') {
-    return { signatureUrl: null, photoUrls: [], latitude: null, longitude: null };
+  if (pod && typeof pod === 'object') {
+    signatureUrl = typeof pod.signaturePath === 'string' && pod.signaturePath.trim() ? pod.signaturePath.trim() : null;
+    photoUrls = Array.isArray(pod.imageUrls)
+      ? pod.imageUrls.filter((u) => typeof u === 'string' && u.trim()).map((u) => u.trim())
+      : [];
+    latitude = pod.latitude != null && Number.isFinite(Number(pod.latitude)) ? Number(pod.latitude) : null;
+    longitude = pod.longitude != null && Number.isFinite(Number(pod.longitude)) ? Number(pod.longitude) : null;
   }
-  const signatureUrl = typeof pod.signaturePath === 'string' && pod.signaturePath.trim() ? pod.signaturePath.trim() : null;
-  const photoUrls = Array.isArray(pod.imageUrls)
-    ? pod.imageUrls.filter((u) => typeof u === 'string' && u.trim()).map((u) => u.trim())
-    : [];
-  const latitude = pod.latitude != null && Number.isFinite(Number(pod.latitude)) ? Number(pod.latitude) : null;
-  const longitude = pod.longitude != null && Number.isFinite(Number(pod.longitude)) ? Number(pod.longitude) : null;
+
+  const carrier = order?.assignedCarrier && typeof order.assignedCarrier === 'object' ? order.assignedCarrier : null;
+  const carrierPhoto =
+    (typeof carrier?.carrierPhoto === 'string' && carrier.carrierPhoto.trim()) ||
+    (typeof carrier?.carrier_photo === 'string' && carrier.carrier_photo.trim()) ||
+    '';
+  if (carrierPhoto && !photoUrls.includes(carrierPhoto)) {
+    photoUrls = [...photoUrls, carrierPhoto];
+  }
+
   return { signatureUrl, photoUrls, latitude, longitude };
 }
 

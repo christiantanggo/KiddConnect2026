@@ -18,8 +18,29 @@ import { createDeliveryNetworkAssistant } from '../../services/delivery-network/
 import { linkDeliveryAssistantToNumbers } from '../../services/delivery-network/linkAgent.js';
 import { getAllVapiPhoneNumbers } from '../../services/vapi.js';
 import { getApiPublicBaseUrl, getFrontendPublicBaseUrl } from '../../config/public-urls.js';
+import {
+  hydrateSavedLocationStructuredFields,
+  savedLocationRowToParts,
+} from '../../services/delivery-network/canadianAddressParts.js';
 
 const router = express.Router();
+
+/** Normalize saved_locations row for API (fix legacy single-string `address` rows). */
+function formatSavedLocationRow(row) {
+  if (!row) return row;
+  const parts = savedLocationRowToParts(row);
+  if (!parts) return row;
+  const tail = [parts.province, parts.postal].filter(Boolean).join(' ');
+  const address = [parts.street, parts.city, tail].filter(Boolean).join(', ') || row.address;
+  return {
+    ...row,
+    address_line: parts.street || row.address_line,
+    city: parts.city || row.city,
+    province: parts.province || row.province,
+    postal_code: parts.postal || row.postal_code,
+    address,
+  };
+}
 
 /** Normalize to E.164 for display/dedupe. */
 function normalizeE164(value) {
@@ -745,18 +766,72 @@ router.put('/config', express.json(), async (req, res) => {
 router.get('/requests', async (req, res) => {
   try {
     const businessId = req.active_business_id;
-    let query = supabaseClient
-      .from('delivery_requests')
-      .select('id, reference_number, caller_phone, callback_phone, pickup_address, delivery_address, recipient_name, package_description, priority, intake_channel, status, created_at, updated_at')
-      .order('created_at', { ascending: false })
-      .limit(200);
+    const colsBase =
+      'id, reference_number, caller_phone, callback_phone, pickup_address, delivery_address, recipient_name, package_description, priority, intake_channel, status, created_at, updated_at';
+    const colsWithPod = `${colsBase}, pod_signature_url, pod_photo_urls, pod_captured_at`;
+
+    let query = supabaseClient.from('delivery_requests').select(colsWithPod).order('created_at', { ascending: false }).limit(200);
     if (businessId) query = query.eq('business_id', businessId);
-    const { data, error } = await query;
+    let { data, error } = await query;
+
+    if (error && /pod_|column .* does not exist/i.test(String(error.message || ''))) {
+      console.warn('[DeliveryNetwork] POD columns missing for customer list — run migrations/add_delivery_proof_of_delivery.sql');
+      query = supabaseClient.from('delivery_requests').select(colsBase).order('created_at', { ascending: false }).limit(200);
+      if (businessId) query = query.eq('business_id', businessId);
+      const retry = await query;
+      data = retry.data;
+      error = retry.error;
+    }
+
     if (error) return res.status(500).json({ error: error.message });
     res.json({ requests: data || [] });
   } catch (err) {
     console.error('[DeliveryNetwork] requests list error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load requests' });
+  }
+});
+
+/**
+ * POST /api/v2/delivery-network/requests/:id/sync-pod
+ * Customer dashboard: pull latest POD from Shipday (same as admin sync; scoped to this business).
+ */
+router.post('/requests/:id/sync-pod', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const businessId = req.active_business_id;
+    const { data: row, error: fetchErr } = await supabaseClient
+      .from('delivery_requests')
+      .select('id, business_id')
+      .eq('id', id)
+      .single();
+    if (fetchErr || !row) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    if (businessId && row.business_id !== businessId) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const { syncProofOfDeliveryFromShipday } = await import('../../services/delivery-network/shipdayPod.js');
+    const result = await syncProofOfDeliveryFromShipday(id);
+    if (!result.success) {
+      return res.status(400).json({ success: false, error: result.error || 'Sync failed' });
+    }
+    const { data: podRow, error: podErr } = await supabaseClient
+      .from('delivery_requests')
+      .select('pod_signature_url, pod_photo_urls, pod_latitude, pod_longitude, pod_captured_at, pod_source')
+      .eq('id', id)
+      .single();
+    if (podErr && !/pod_/i.test(String(podErr.message || ''))) {
+      return res.status(500).json({ error: podErr.message });
+    }
+    res.json({
+      success: true,
+      updated: result.updated,
+      proof: result.proof,
+      pod: podRow || null,
+    });
+  } catch (err) {
+    console.error('[DeliveryNetwork] customer sync-pod error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Sync failed' });
   }
 });
 
@@ -1047,7 +1122,8 @@ router.get('/saved-locations', async (req, res) => {
       .eq('business_id', businessId)
       .order('created_at', { ascending: false });
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ saved_locations: data || [] });
+    const rows = (data || []).map(formatSavedLocationRow);
+    res.json({ saved_locations: rows });
   } catch (err) {
     console.error('[DeliveryNetwork] saved-locations list error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load saved locations' });
@@ -1061,20 +1137,43 @@ router.post('/saved-locations', express.json(), async (req, res) => {
   try {
     const businessId = req.active_business_id;
     if (!businessId) return res.status(400).json({ error: 'Business context required' });
-    const { type, name, address, contact } = req.body || {};
+    const { type, name, address, contact, address_line, city, province, postal_code } = req.body || {};
     if (!type || !['default_pickup', 'named_pickup', 'frequent_delivery'].includes(type)) {
       return res.status(400).json({ error: 'type must be default_pickup, named_pickup, or frequent_delivery' });
     }
+    const line = address_line != null ? String(address_line).trim() || null : null;
+    const c = city != null ? String(city).trim() || null : null;
+    const prov = province != null ? String(province).trim() || null : null;
+    const pc = postal_code != null ? String(postal_code).trim() || null : null;
+    let addr = address != null ? String(address).trim() || null : null;
+    if (!addr && (line || c || prov || pc)) {
+      const tail = [prov, pc].filter(Boolean).join(' ');
+      addr = [line, c, tail].filter(Boolean).join(', ') || null;
+    }
+    if (!addr) {
+      return res.status(400).json({ error: 'address is required (or fill street, city, province, and postal code)' });
+    }
+    const hydrated = hydrateSavedLocationStructuredFields({
+      address_line: line,
+      city: c,
+      province: prov,
+      postal_code: pc,
+      address: addr,
+    });
     const payload = {
       business_id: businessId,
       type,
       name: name ? String(name).trim() || null : null,
-      address: address ? String(address).trim() || null : null,
+      address: hydrated.address,
       contact: contact ? String(contact).trim() || null : null,
+      address_line: hydrated.address_line,
+      city: hydrated.city,
+      province: hydrated.province,
+      postal_code: hydrated.postal_code,
     };
     const { data, error } = await supabaseClient.from('delivery_saved_locations').insert(payload).select().single();
     if (error) return res.status(500).json({ error: error.message });
-    res.status(201).json(data);
+    res.status(201).json(formatSavedLocationRow(data));
   } catch (err) {
     console.error('[DeliveryNetwork] saved-locations create error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to add saved location' });
@@ -1089,23 +1188,66 @@ router.patch('/saved-locations/:id', express.json(), async (req, res) => {
     const businessId = req.active_business_id;
     if (!businessId) return res.status(400).json({ error: 'Business context required' });
     const { id } = req.params;
-    const { type, name, address, contact } = req.body || {};
+    const { type, name, address, contact, address_line, city, province, postal_code } = req.body || {};
     const updates = {};
     if (type && ['default_pickup', 'named_pickup', 'frequent_delivery'].includes(type)) updates.type = type;
     if (name !== undefined) updates.name = name ? String(name).trim() || null : null;
     if (address !== undefined) updates.address = address ? String(address).trim() || null : null;
     if (contact !== undefined) updates.contact = contact ? String(contact).trim() || null : null;
+    if (address_line !== undefined) updates.address_line = address_line ? String(address_line).trim() || null : null;
+    if (city !== undefined) updates.city = city ? String(city).trim() || null : null;
+    if (province !== undefined) updates.province = province ? String(province).trim() || null : null;
+    if (postal_code !== undefined) updates.postal_code = postal_code ? String(postal_code).trim() || null : null;
+    const structKeys = ['address_line', 'city', 'province', 'postal_code'];
+    const allStructInBody = structKeys.every((k) => Object.prototype.hasOwnProperty.call(req.body || {}, k));
+    if (allStructInBody && address === undefined) {
+      const al = address_line != null ? String(address_line).trim() || null : null;
+      const ci = city != null ? String(city).trim() || null : null;
+      const pr = province != null ? String(province).trim() || null : null;
+      const po = postal_code != null ? String(postal_code).trim() || null : null;
+      const tail = [pr, po].filter(Boolean).join(' ');
+      const built = [al, ci, tail].filter(Boolean).join(', ');
+      if (built) updates.address = built;
+    }
     if (Object.keys(updates).length === 0) return res.status(400).json({ error: 'No updates provided' });
-    updates.updated_at = new Date().toISOString();
+
+    const { data: existing, error: fetchErr } = await supabaseClient
+      .from('delivery_saved_locations')
+      .select('*')
+      .eq('id', id)
+      .eq('business_id', businessId)
+      .single();
+    if (fetchErr || !existing) {
+      return res.status(fetchErr?.code === 'PGRST116' ? 404 : 500).json({ error: fetchErr?.message || 'Not found' });
+    }
+
+    const merged = { ...existing, ...updates };
+    const hydrated = hydrateSavedLocationStructuredFields({
+      address_line: merged.address_line,
+      city: merged.city,
+      province: merged.province,
+      postal_code: merged.postal_code,
+      address: merged.address,
+    });
+    const finalUpdates = {
+      ...updates,
+      address: hydrated.address,
+      address_line: hydrated.address_line,
+      city: hydrated.city,
+      province: hydrated.province,
+      postal_code: hydrated.postal_code,
+      updated_at: new Date().toISOString(),
+    };
+
     const { data, error } = await supabaseClient
       .from('delivery_saved_locations')
-      .update(updates)
+      .update(finalUpdates)
       .eq('id', id)
       .eq('business_id', businessId)
       .select()
       .single();
     if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
-    res.json(data);
+    res.json(formatSavedLocationRow(data));
   } catch (err) {
     console.error('[DeliveryNetwork] saved-locations patch error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to update' });

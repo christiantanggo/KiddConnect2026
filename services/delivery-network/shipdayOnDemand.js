@@ -1,5 +1,16 @@
 /**
- * Helpers for Shipday on-demand (DoorDash / Uber) estimate + cheapest selection.
+ * Shipday on-demand (3rd-party) delivery: estimates + assign.
+ *
+ * Official API (same host as main API, path prefix /on-demand):
+ * - GET  /on-demand/services           — enabled providers (name, status, prod)
+ * - GET  /on-demand/estimate/{orderId} — quote for an existing order (optionally ?name=Provider)
+ * - POST /on-demand/assign             — assign to provider (name, orderId, estimateReference?, tip?, contactlessDelivery?, podType | podTypes)
+ * - PUT  /orders/assign/{orderId}/{carrierId} — own fleet (see dispatch.js)
+ *
+ * @see https://docs.shipday.com/reference/on-demand-delivery
+ * @see https://docs.shipday.com/reference/services
+ * @see https://docs.shipday.com/reference/estimate
+ * @see https://docs.shipday.com/reference/assign
  */
 
 const CHEAPEST_MODE = 'cheapest';
@@ -14,13 +25,17 @@ export function isDoorDashOrUberName(name) {
   return n.includes('door') || n.includes('dash') || n.includes('uber');
 }
 
+function isEstimateErrorResponse(data) {
+  return data && typeof data === 'object' && data.error === true;
+}
+
 /**
  * Normalize Shipday estimate response to a list of { name, fee, id }.
- * Handles: top-level array, single object, or nested arrays (estimates, providers, results, data).
+ * Per docs, a successful estimate object has id, name, fee, error: false.
  * @param {object|array} raw
  */
 export function normalizeEstimateList(raw) {
-  if (!raw || raw.error) return [];
+  if (!raw || isEstimateErrorResponse(raw)) return [];
   if (Array.isArray(raw)) {
     return raw.flatMap((x) => normalizeEstimateList(x)).filter(Boolean);
   }
@@ -36,23 +51,46 @@ export function normalizeEstimateList(raw) {
   }
   const list = raw.id != null || raw.fee != null ? [raw] : [];
   return list
-    .filter((e) => e && e.fee != null && Number(e.fee) > 0)
+    .filter(
+      (e) =>
+        e &&
+        !isEstimateErrorResponse(e) &&
+        e.name &&
+        String(e.name).trim() &&
+        e.fee != null &&
+        Number.isFinite(Number(e.fee)) &&
+        Number(e.fee) >= 0
+    )
     .map((e) => ({
-      name: e.name,
+      name: String(e.name).trim(),
       fee: Number(e.fee),
       id: e.id != null ? String(e.id) : '',
     }));
 }
 
 /**
- * Fetch on-demand estimates for an order. Tries base URL and optional ?name= queries
- * so we can compare DoorDash vs Uber when Shipday returns one provider per call.
- * @returns {Promise<Array<{ name: string, fee: number, id: string }>>}
+ * GET /on-demand/services — providers enabled for the account (per Shipday docs).
+ * @returns {Promise<string[]>} service names with status === true
  */
-function buildEstimateQueryUrls(onDemandBase, orderIdEncoded) {
+export async function fetchEnabledOnDemandServiceNames(onDemandBase, headers) {
+  const axios = (await import('axios')).default;
+  const hdr = { Accept: 'application/json', 'Content-Type': 'application/json', ...headers };
+  const url = `${String(onDemandBase).replace(/\/$/, '')}/services`;
+  try {
+    const res = await axios.get(url, { headers: hdr, timeout: 12000, validateStatus: (s) => s < 500 });
+    if (res.status !== 200 || !Array.isArray(res.data)) return [];
+    return res.data
+      .filter((s) => s && s.status === true && s.name && String(s.name).trim())
+      .map((s) => String(s.name).trim());
+  } catch (e) {
+    console.warn('[ShipdayOnDemand] GET /services failed:', e?.message || e);
+    return [];
+  }
+}
+
+function buildLegacyEstimateQueryUrls(onDemandBase, orderIdEncoded) {
   const b = `${onDemandBase}/estimate/${orderIdEncoded}`;
   const pairs = [
-    '',
     'name=DoorDash',
     'name=Uber',
     'provider=DoorDash',
@@ -66,43 +104,87 @@ function buildEstimateQueryUrls(onDemandBase, orderIdEncoded) {
     'deliveryPartner=DoorDash',
     'deliveryPartner=Uber',
   ];
-  return pairs.map((q) => (q ? `${b}?${q}` : b));
+  return pairs.map((q) => `${b}?${q}`);
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 /**
- * Fetch on-demand estimates for an order. Tries many GET query variants + optional POST
- * (Shipday may ignore unknown params but different deployments return different providers).
+ * Collect estimates per Shipday flow: services list + GET /estimate/{orderId} for each enabled name,
+ * plus unqualified estimate and legacy query variants.
+ * @returns {Promise<Array<{ name: string, fee: number, id: string }>>}
  */
 export async function collectOnDemandEstimates(orderId, onDemandBase, headers) {
   const axios = (await import('axios')).default;
   const id = encodeURIComponent(orderId);
   const hdr = { Accept: 'application/json', 'Content-Type': 'application/json', ...headers };
   const merged = [];
+  const base = String(onDemandBase).replace(/\/$/, '');
 
-  for (const url of buildEstimateQueryUrls(onDemandBase, id)) {
+  const ingest = (data) => {
+    if (!data || isEstimateErrorResponse(data)) return;
+    merged.push(...normalizeEstimateList(data));
+  };
+
+  const gapMs = Math.min(2000, Math.max(0, Number(process.env.SHIPDAY_ESTIMATE_STAGGER_MS) || 250));
+
+  // 1) Canonical: GET /estimate/{orderId} (all providers Shipday returns in one call, if supported)
+  try {
+    const res = await axios.get(`${base}/estimate/${id}`, {
+      headers: hdr,
+      timeout: 15000,
+      validateStatus: (s) => s < 500,
+    });
+    if (res.status === 200) ingest(res.data);
+  } catch (_) {
+    /* ignore */
+  }
+
+  // 2) GET /services then GET /estimate/{orderId}?name=<exact name> for each enabled provider (documented pattern)
+  const serviceNames = await fetchEnabledOnDemandServiceNames(base, headers);
+  if (serviceNames.length > 0) {
+    console.log('[ShipdayOnDemand] enabled on-demand services from API:', serviceNames.join(', '));
+  }
+  for (const svcName of serviceNames) {
+    if (gapMs) await sleep(gapMs);
     try {
-      const res = await axios.get(url, { headers: hdr, timeout: 15000, validateStatus: (s) => s < 500 });
-      if (res.status !== 200 || !res.data || res.data.error) continue;
-      merged.push(...normalizeEstimateList(res.data));
+      const res = await axios.get(`${base}/estimate/${id}?name=${encodeURIComponent(svcName)}`, {
+        headers: hdr,
+        timeout: 15000,
+        validateStatus: (s) => s < 500,
+      });
+      if (res.status === 200) ingest(res.data);
     } catch (_) {
       /* ignore */
     }
   }
 
-  // Some Shipday setups accept POST estimate with explicit third-party name
-  const postBodies = [
-    { orderId: Number(orderId), name: 'DoorDash' },
-    { orderId: Number(orderId), name: 'Uber' },
-  ];
-  for (const body of postBodies) {
+  // 3) Legacy hard-coded provider query strings (accounts that don’t expose /services)
+  for (const url of buildLegacyEstimateQueryUrls(base, id)) {
+    if (gapMs) await sleep(gapMs);
     try {
-      const res = await axios.post(`${onDemandBase}/estimate`, body, {
+      const res = await axios.get(url, { headers: hdr, timeout: 15000, validateStatus: (s) => s < 500 });
+      if (res.status === 200) ingest(res.data);
+    } catch (_) {
+      /* ignore */
+    }
+  }
+
+  // 4) POST /estimate with orderId + name (some tenants support this)
+  const postNames = [...new Set([...serviceNames, 'DoorDash', 'Uber'])];
+  for (const name of postNames) {
+    if (gapMs) await sleep(gapMs);
+    try {
+      const oid = Number(orderId);
+      const body = Number.isFinite(oid) ? { orderId: oid, name } : { name };
+      const res = await axios.post(`${base}/estimate`, body, {
         headers: hdr,
         timeout: 15000,
         validateStatus: (s) => s < 500,
       });
-      if (res.status !== 200 || !res.data || res.data.error) continue;
-      merged.push(...normalizeEstimateList(res.data));
+      if (res.status === 200) ingest(res.data);
     } catch (_) {
       /* endpoint may not exist */
     }
@@ -117,7 +199,7 @@ export async function collectOnDemandEstimates(orderId, onDemandBase, headers) {
   }
   const out = [...byName.values()];
   if (out.length > 0) {
-    console.log('[ShipdayOnDemand] collected estimates:', out.map((e) => `${e.name}=$${e.fee.toFixed(2)}`).join(' | '));
+    console.log('[ShipdayOnDemand] collected estimates:', out.map((e) => `${e.name}=$${Number(e.fee).toFixed(2)}`).join(' | '));
   }
   return out;
 }
@@ -174,4 +256,34 @@ export function resolveOnDemandAssignEstimate(estimates, quotedFromRequest, pref
 
   console.warn('[ShipdayOnDemand] quoted provider not in estimates for this order:', raw, '— using', pref);
   return pickOnDemandEstimate(estimates, pref);
+}
+
+/**
+ * Build POST /on-demand/assign body per https://docs.shipday.com/reference/assign
+ * Required: name, orderId (integer). Optional: estimateReference, tip, contactlessDelivery, podType | podTypes.
+ */
+export function buildOnDemandAssignBody(match, shipdayOrderId, options = {}) {
+  const oid = Number(shipdayOrderId);
+  if (!Number.isFinite(oid) || oid <= 0) {
+    throw new Error(`Invalid Shipday orderId for on-demand assign: ${shipdayOrderId}`);
+  }
+  const name = match?.name && String(match.name).trim();
+  if (!name) {
+    throw new Error('On-demand assign requires estimate.name (3rd party service provider name)');
+  }
+  const body = {
+    name,
+    orderId: oid,
+    contactlessDelivery: options.contactlessDelivery === true,
+    // Docs: podTypes array e.g. ["PHOTO","PIN"]; we request signature + photo for POD.
+    podTypes: Array.isArray(options.podTypes) && options.podTypes.length ? options.podTypes : ['SIGNATURE', 'PHOTO'],
+  };
+  if (match.id != null && String(match.id).trim()) {
+    body.estimateReference = String(match.id).trim();
+  }
+  const tip = options.tip != null ? Number(options.tip) : NaN;
+  if (Number.isFinite(tip) && tip > 0) {
+    body.tip = tip;
+  }
+  return body;
 }

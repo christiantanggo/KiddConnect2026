@@ -6,7 +6,12 @@
 import { supabaseClient } from '../../config/database.js';
 import { getDeliveryConfigFull } from './config.js';
 import { buildShipdayOrderPayload } from './shipdayOrder.js';
-import { collectOnDemandEstimates, isCheapestMode, resolveOnDemandAssignEstimate } from './shipdayOnDemand.js';
+import {
+  buildOnDemandAssignBody,
+  collectOnDemandEstimates,
+  isCheapestMode,
+  resolveOnDemandAssignEstimate,
+} from './shipdayOnDemand.js';
 import { localToUTC, toHHmmss } from './shipdayTime.js';
 
 const DEFAULT_BROKER_ID = 'shipday'; // or 'stub' when no API key
@@ -345,9 +350,22 @@ export async function startDispatch(deliveryRequestId) {
                 estimateCount: estimates?.length ?? 0,
               });
             } else {
-              const assignUrl = `${onDemandBase}/assign`;
-              const assignBody = { name: match.name, orderId: Number(shipdayOrderId), podTypes: ['SIGNATURE', 'PHOTO'] };
-              if (match.id) assignBody.estimateReference = String(match.id);
+              // POST https://api.shipday.com/on-demand/assign — @see https://docs.shipday.com/reference/assign
+              const assignUrl = `${String(onDemandBase).replace(/\/$/, '')}/assign`;
+              let assignBody;
+              try {
+                assignBody = buildOnDemandAssignBody(match, shipdayOrderId, {
+                  contactlessDelivery: shipdayConfig?.on_demand_contactless === true,
+                  tip: shipdayConfig?.on_demand_tip,
+                  podTypes: ['SIGNATURE', 'PHOTO'],
+                });
+              } catch (buildErr) {
+                console.error('[DeliveryNetwork] startDispatch: invalid on-demand assign payload', buildErr?.message || buildErr);
+                assignBody = null;
+              }
+              if (!assignBody) {
+                /* skip assign attempt */
+              } else {
               const assignRes = await postOnDemandAssignWithRetry(axios, assignUrl, assignBody, headers);
               if (assignRes.status === 200 && assignRes.data) {
                 onDemandOrThirdPartyAssigned = true;
@@ -383,6 +401,7 @@ export async function startDispatch(deliveryRequestId) {
                 } else {
                   console.warn('[DeliveryNetwork] startDispatch: on-demand assign failed', assignRes.status, assignRes.data);
                 }
+              }
               }
             }
           } catch (onDemandErr) {
