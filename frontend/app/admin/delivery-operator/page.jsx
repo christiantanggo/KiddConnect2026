@@ -916,7 +916,7 @@ function AdminDeliveryOperatorPage() {
                             {broker.id === 'shipday' && (
                               <div className="mt-3 border-t border-slate-200 pt-3">
                                 <p className="text-sm font-medium text-slate-700 mb-2">On-demand (DoorDash / Uber)</p>
-                                <p className="text-xs text-slate-500 mb-2">Use Shipday’s on-demand API for quotes and dispatch. Requires Shipday Professional plan and US location.</p>
+                                <p className="text-xs text-slate-500 mb-2">Use Shipday’s on-demand API for quotes and dispatch. Requires Shipday Professional plan; third-party partners are often US-only. For Canada, add your fleet carrier ID below — we fall back to it when on-demand has no estimates.</p>
                                 <div className="flex items-center gap-2 mb-2">
                                   <input
                                     type="checkbox"
