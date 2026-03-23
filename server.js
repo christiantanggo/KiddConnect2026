@@ -114,6 +114,10 @@ app.set('trust proxy', true);
 
 // CORS configuration - allow requests from frontend (dev ports from config/dev-ports.json)
 const __DEV_FE__ = getDevFrontendPort();
+const extraOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
+  .split(',')
+  .map((o) => String(o).trim())
+  .filter(Boolean);
 const allowedOrigins = [
   'https://www.tavarios.com',
   'https://tavarios.com',
@@ -123,32 +127,56 @@ const allowedOrigins = [
   'http://localhost:3001',
   'http://127.0.0.1:3000',
   process.env.FRONTEND_URL,
+  ...extraOrigins,
 ].filter(Boolean); // Remove undefined values
+
+function isTavariosProductionOrigin(origin) {
+  try {
+    const u = new URL(origin);
+    return u.hostname === 'tavarios.com' || u.hostname.endsWith('.tavarios.com');
+  } catch {
+    return false;
+  }
+}
 
 function isOriginAllowed(origin) {
   if (!origin) return true;
   if (allowedOrigins.includes(origin)) return true;
   if (process.env.FRONTEND_URL === '*') return true;
   if (process.env.NODE_ENV !== 'production') return true;
+  if (isTavariosProductionOrigin(origin) && (origin.startsWith('https://') || origin.startsWith('http://'))) return true;
   // Allow Vercel deployment URLs in production (deployed frontend)
   if (origin.endsWith('.vercel.app') && (origin.startsWith('https://') || origin.startsWith('http://'))) return true;
   return false;
 }
 
-// CRITICAL: Handle OPTIONS preflight requests FIRST, before any other middleware
-app.options('*', (req, res) => {
+/** Apply preflight headers; echo Access-Control-Request-Headers so custom client headers pass preflight. */
+function applyCorsPreflightHeaders(req, res) {
   const origin = req.headers.origin;
-  const isAllowed = isOriginAllowed(origin);
-  
-  if (isAllowed && origin) {
-    res.header('Access-Control-Allow-Origin', origin);
-    res.header('Access-Control-Allow-Credentials', 'true');
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, X-Active-Business-Id');
-    res.header('Access-Control-Max-Age', '86400'); // 24 hours
+  if (!origin || !isOriginAllowed(origin)) return false;
+  res.setHeader('Access-Control-Allow-Origin', origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
+  const requested = req.headers['access-control-request-headers'];
+  if (requested) {
+    res.setHeader('Access-Control-Allow-Headers', requested);
+  } else {
+    res.setHeader(
+      'Access-Control-Allow-Headers',
+      'Content-Type, Authorization, X-Requested-With, X-Active-Business-Id, Accept, Cookie'
+    );
   }
-  
-  res.status(204).end();
+  res.setHeader('Access-Control-Max-Age', '86400');
+  return true;
+}
+
+// CRITICAL: handle OPTIONS for every path (Express route '*' does not match /api/... in all versions)
+app.use((req, res, next) => {
+  if (req.method !== 'OPTIONS') return next();
+  if (applyCorsPreflightHeaders(req, res)) {
+    return res.status(204).end();
+  }
+  return next();
 });
 
 // Basic middleware - configure helmet to not interfere with CORS
@@ -167,7 +195,20 @@ const corsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Active-Business-Id'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'X-Active-Business-Id',
+    'Accept',
+    'Cookie',
+    'Origin',
+    'Sec-Fetch-Mode',
+    'Sec-Fetch-Site',
+    'Sec-Fetch-Dest',
+    'baggage',
+    'sentry-trace',
+  ],
   exposedHeaders: ['Content-Range', 'X-Content-Range'],
   preflightContinue: false,
   optionsSuccessStatus: 204,

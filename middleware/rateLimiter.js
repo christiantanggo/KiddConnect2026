@@ -76,6 +76,7 @@ export const adminLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   keyGenerator, // Use custom key generator
+  skip: (req) => req.method === 'OPTIONS',
 });
 
 // Webhook rate limiter (more lenient)
