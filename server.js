@@ -130,30 +130,71 @@ const allowedOrigins = [
   ...extraOrigins,
 ].filter(Boolean); // Remove undefined values
 
-function isTavariosProductionOrigin(origin) {
+/** Normalize browser Origin header (trim, first value if array). */
+function readRequestOrigin(req) {
+  const raw = req.headers.origin;
+  if (raw == null) return '';
+  const s = Array.isArray(raw) ? raw[0] : raw;
+  return String(s).trim();
+}
+
+function parsedOriginOrigin(originStr) {
   try {
-    const u = new URL(origin);
-    return u.hostname === 'tavarios.com' || u.hostname.endsWith('.tavarios.com');
+    return new URL(originStr).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isTavariosHost(hostname) {
+  const h = String(hostname || '')
+    .replace(/\.$/, '')
+    .toLowerCase();
+  return h === 'tavarios.com' || h.endsWith('.tavarios.com');
+}
+
+function isTavariosProductionOrigin(originStr) {
+  try {
+    const u = new URL(originStr);
+    return isTavariosHost(u.hostname);
   } catch {
     return false;
   }
 }
 
-function isOriginAllowed(origin) {
+function isOriginAllowed(originRaw) {
+  const origin = originRaw == null ? '' : String(originRaw).trim();
   if (!origin) return true;
-  if (allowedOrigins.includes(origin)) return true;
   if (process.env.FRONTEND_URL === '*') return true;
   if (process.env.NODE_ENV !== 'production') return true;
-  if (isTavariosProductionOrigin(origin) && (origin.startsWith('https://') || origin.startsWith('http://'))) return true;
-  // Allow Vercel deployment URLs in production (deployed frontend)
+
+  if (allowedOrigins.includes(origin)) return true;
+  const reqOrigin = parsedOriginOrigin(origin);
+  if (reqOrigin && allowedOrigins.some((a) => parsedOriginOrigin(a) === reqOrigin)) return true;
+
+  if (isTavariosProductionOrigin(origin)) {
+    try {
+      const u = new URL(origin);
+      if (process.env.NODE_ENV === 'production' && u.protocol !== 'https:') return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   if (origin.endsWith('.vercel.app') && (origin.startsWith('https://') || origin.startsWith('http://'))) return true;
   return false;
 }
 
 /** Apply preflight headers; echo Access-Control-Request-Headers so custom client headers pass preflight. */
 function applyCorsPreflightHeaders(req, res) {
-  const origin = req.headers.origin;
-  if (!origin || !isOriginAllowed(origin)) return false;
+  const origin = readRequestOrigin(req);
+  if (!origin || !isOriginAllowed(origin)) {
+    if (process.env.CORS_DEBUG_LOG === '1' && origin) {
+      console.warn('[CORS] preflight denied for Origin:', JSON.stringify(origin));
+    }
+    return false;
+  }
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Access-Control-Allow-Credentials', 'true');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
@@ -167,6 +208,7 @@ function applyCorsPreflightHeaders(req, res) {
     );
   }
   res.setHeader('Access-Control-Max-Age', '86400');
+  res.setHeader('Vary', 'Origin');
   return true;
 }
 
@@ -187,9 +229,13 @@ app.use(helmet({
 
 // CORS middleware configuration - must come after OPTIONS handler
 const corsOptions = {
-  origin: function (origin, callback) {
-    if (isOriginAllowed(origin)) {
+  origin: function (incoming, callback) {
+    const o = incoming == null ? '' : String(incoming).trim();
+    if (isOriginAllowed(o)) {
       return callback(null, true);
+    }
+    if (process.env.CORS_DEBUG_LOG === '1') {
+      console.warn('[CORS] cors() denied Origin:', JSON.stringify(incoming));
     }
     callback(new Error('Not allowed by CORS'));
   },
@@ -218,10 +264,11 @@ app.use(cors(corsOptions));
 
 // Additional CORS headers middleware - ensures headers are set on all responses
 app.use((req, res, next) => {
-  const origin = req.headers.origin;
+  const origin = readRequestOrigin(req);
   if (origin && isOriginAllowed(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Credentials', 'true');
+    res.header('Vary', 'Origin');
   }
   next();
 });
@@ -232,6 +279,7 @@ const jsonParser = express.json({ limit: "10mb", strict: false });
 const urlencodedParser = express.urlencoded({ extended: true });
 
 app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return next();
   // Skip body parsing for Stripe webhooks (they need raw body for signature verification)
   // ClickBank v8 uses express.json() in the route itself, so we don't skip it here
   if (req.path.includes('/api/billing/webhook')) {
@@ -242,6 +290,7 @@ app.use((req, res, next) => {
 });
 
 app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return next();
   // Skip URL-encoded parsing for Stripe webhooks
   if (req.path.includes('/api/billing/webhook')) {
     return next();
