@@ -150,3 +150,27 @@ export function savedLocationRowToParts(loc) {
     postal: postalOut || '',
   };
 }
+
+/**
+ * Pull a single E.164-style phone from free text (e.g. saved location "contact" = name + number).
+ * @param {string|null|undefined} s
+ * @returns {string|null}
+ */
+export function extractPhoneFromContact(s) {
+  const raw = String(s || '').trim();
+  if (!raw) return null;
+  const compact = raw.replace(/\s+/g, ' ');
+  const chunk = compact.match(/\+?[\d][\d\s\-().]{7,}\d/);
+  const toScan = chunk ? chunk[0] : raw;
+  const digits = toScan.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  if (digits.length >= 10 && digits.length <= 15 && raw.includes('+')) return `+${digits}`;
+  if (digits.length >= 10 && digits.length <= 15 && chunk) return digits.length === 10 ? `+1${digits}` : `+${digits}`;
+  return null;
+}
+
+/** Contact phone stored on delivery_saved_locations.contact for quick-fill (frequent delivery). */
+export function savedLocationContactPhone(loc) {
+  return extractPhoneFromContact(loc?.contact);
+}

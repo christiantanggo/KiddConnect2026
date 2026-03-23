@@ -29,6 +29,31 @@ function isEstimateErrorResponse(data) {
   return data && typeof data === 'object' && data.error === true;
 }
 
+/** Shipday estimate docs use name + fee; some responses use aliases. */
+function estimateDisplayName(e) {
+  if (!e || typeof e !== 'object') return '';
+  const n =
+    e.name ??
+    e.serviceName ??
+    e.thirdPartyName ??
+    e.providerName ??
+    e.provider ??
+    e.partner ??
+    e.deliveryPartner;
+  return typeof n === 'string' ? n.trim() : String(n || '').trim();
+}
+
+function estimateFeeValue(e) {
+  if (!e || typeof e !== 'object') return null;
+  const keys = ['fee', 'thirdPartyFee', 'deliveryFee', 'price', 'amount', 'estimatedFee', 'totalFee'];
+  for (const k of keys) {
+    if (e[k] == null) continue;
+    const v = Number(e[k]);
+    if (Number.isFinite(v) && v >= 0) return v;
+  }
+  return null;
+}
+
 /**
  * Normalize Shipday estimate response to a list of { name, fee, id }.
  * Per docs, a successful estimate object has id, name, fee, error: false.
@@ -43,28 +68,24 @@ export function normalizeEstimateList(raw) {
   if (Array.isArray(nested)) {
     return nested.flatMap((x) => normalizeEstimateList(x)).filter(Boolean);
   }
-  if (nested && typeof nested === 'object' && nested.fee != null) {
+  if (nested && typeof nested === 'object' && (nested.fee != null || estimateFeeValue(nested) != null)) {
     return normalizeEstimateList([nested]);
   }
   if (nested && typeof nested === 'object') {
     return Object.values(nested).flatMap((x) => normalizeEstimateList(x)).filter(Boolean);
   }
-  const list = raw.id != null || raw.fee != null ? [raw] : [];
+  const list = raw.id != null || raw.fee != null || estimateFeeValue(raw) != null ? [raw] : [];
   return list
-    .filter(
-      (e) =>
-        e &&
-        !isEstimateErrorResponse(e) &&
-        e.name &&
-        String(e.name).trim() &&
-        e.fee != null &&
-        Number.isFinite(Number(e.fee)) &&
-        Number(e.fee) >= 0
-    )
+    .filter((e) => {
+      if (!e || isEstimateErrorResponse(e)) return false;
+      const name = estimateDisplayName(e);
+      const fee = estimateFeeValue(e);
+      return Boolean(name) && fee != null;
+    })
     .map((e) => ({
-      name: String(e.name).trim(),
-      fee: Number(e.fee),
-      id: e.id != null ? String(e.id) : '',
+      name: estimateDisplayName(e),
+      fee: estimateFeeValue(e),
+      id: e.id != null ? String(e.id) : e.referenceId != null ? String(e.referenceId) : e.estimateId != null ? String(e.estimateId) : '',
     }));
 }
 
@@ -205,6 +226,49 @@ export async function collectOnDemandEstimates(orderId, onDemandBase, headers) {
 }
 
 /**
+ * Fast path before on-demand assign: two parallel GETs (all estimates + provider-specific).
+ * Avoids /services crawl, legacy query strings, and POST /estimate — saves ~10–20s vs collectOnDemandEstimates.
+ */
+export async function fetchOnDemandEstimatesForConfirm(orderId, onDemandBase, headers, providerName) {
+  const axios = (await import('axios')).default;
+  const id = encodeURIComponent(String(orderId));
+  const base = String(onDemandBase).replace(/\/$/, '');
+  const hdr = { Accept: 'application/json', 'Content-Type': 'application/json', ...headers };
+  const timeout = 15000;
+  const name = String(providerName || '').trim();
+
+  const tryGet = async (querySuffix) => {
+    const url = querySuffix ? `${base}/estimate/${id}${querySuffix}` : `${base}/estimate/${id}`;
+    try {
+      const res = await axios.get(url, {
+        headers: hdr,
+        timeout,
+        validateStatus: (s) => s < 500,
+      });
+      if (res.status === 200) return normalizeEstimateList(res.data);
+    } catch (_) {
+      /* ignore */
+    }
+    return [];
+  };
+
+  const [fromBroad, fromNamed] = await Promise.all([
+    tryGet(''),
+    name ? tryGet(`?name=${encodeURIComponent(name)}`) : Promise.resolve([]),
+  ]);
+
+  const merged = [...fromBroad, ...fromNamed];
+  const byName = new Map();
+  for (const e of merged) {
+    const key = String(e.name || '').toLowerCase().trim();
+    if (!key) continue;
+    const prev = byName.get(key);
+    if (!prev || Number(e.fee) < Number(prev.fee)) byName.set(key, e);
+  }
+  return [...byName.values()];
+}
+
+/**
  * Pick estimate for a fixed provider name, or lowest fee among all returned estimates (cheapest mode).
  * @param {Array<{ name: string, fee: number, id: string }>} estimates
  * @param {string} preferred - 'DoorDash' | 'Uber' | 'cheapest'
@@ -275,10 +339,13 @@ export function buildOnDemandAssignBody(match, shipdayOrderId, options = {}) {
     name,
     orderId: oid,
     contactlessDelivery: options.contactlessDelivery === true,
-    // Docs: podTypes array e.g. ["PHOTO","PIN"]; we request signature + photo for POD.
-    podTypes: Array.isArray(options.podTypes) && options.podTypes.length ? options.podTypes : ['SIGNATURE', 'PHOTO'],
   };
-  if (match.id != null && String(match.id).trim()) {
+  if (!options.omitPodTypes) {
+    const pt =
+      Array.isArray(options.podTypes) && options.podTypes.length ? options.podTypes : ['SIGNATURE', 'PHOTO'];
+    body.podTypes = pt;
+  }
+  if (!options.omitEstimateReference && match.id != null && String(match.id).trim()) {
     body.estimateReference = String(match.id).trim();
   }
   const tip = options.tip != null ? Number(options.tip) : NaN;

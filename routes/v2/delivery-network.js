@@ -11,6 +11,11 @@ import { verifySubscriptionWithStripe } from '../../middleware/v2/verifySubscrip
 import { supabaseClient } from '../../config/database.js';
 import { createDeliveryRequest } from '../../services/delivery-network/intake.js';
 import { startDispatch } from '../../services/delivery-network/dispatch.js';
+import {
+  confirmFleetCarrierForRequest,
+  confirmOnDemandCarrierForRequest,
+  getCarrierOptionsForRequest,
+} from '../../services/delivery-network/carrierChoice.js';
 import { getDeliveryConfig, invalidateDeliveryConfigCache } from '../../services/delivery-network/config.js';
 import { getEmergencyConfig } from '../../services/emergency-network/config.js';
 import { getPhoneNumbersForBusiness } from '../../utils/businessPhoneNumbersForDropdown.js';
@@ -285,7 +290,7 @@ router.post('/public/cancel', express.json(), async (req, res) => {
     const { data: rows, error } = await supabaseClient
       .from('delivery_requests')
       .select('id, reference_number, callback_phone, delivery_address, status, created_at')
-      .in('status', ['New', 'Contacting', 'Dispatched', 'Assigned', 'PickedUp'])
+      .in('status', ['New', 'Contacting', 'ChoosingCarrier', 'Dispatched', 'Assigned', 'PickedUp'])
       .gte('created_at', start)
       .lte('created_at', end)
       .limit(50);
@@ -836,6 +841,72 @@ router.post('/requests/:id/sync-pod', async (req, res) => {
 });
 
 /**
+ * GET /api/v2/delivery-network/requests/:id/carrier-options
+ * On-demand estimates for this Shipday order, priced for the customer (pricing engine). No raw Shipday cost in response.
+ */
+router.get('/requests/:id/carrier-options', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const businessId = req.active_business_id;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    const result = await getCarrierOptionsForRequest(id, businessId);
+    if (!result.success) {
+      const code = result.error === 'Forbidden' ? 403 : result.error === 'Request not found' ? 404 : 400;
+      return res.status(code).json({ error: result.error || 'Failed to load options' });
+    }
+    res.json({
+      estimates: result.estimates,
+      disclaimer: result.disclaimer,
+      fleet_fallback_available: result.fleet_fallback_available,
+    });
+  } catch (err) {
+    console.error('[DeliveryNetwork] carrier-options error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load carrier options' });
+  }
+});
+
+/**
+ * POST /api/v2/delivery-network/requests/:id/confirm-carrier
+ * Body: { provider_name, estimate_id? } for third-party, or { mode: "fleet" } for fleet fallback when no quotes.
+ */
+router.post('/requests/:id/confirm-carrier', express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const businessId = req.active_business_id;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    const body = req.body || {};
+    if (body.mode === 'fleet') {
+      const result = await confirmFleetCarrierForRequest(id, businessId);
+      if (!result.success) {
+        const code = result.error === 'Forbidden' ? 403 : 400;
+        return res.status(code).json({ error: result.error || 'Fleet assign failed' });
+      }
+      return res.json({ success: true, mode: 'fleet', amount_cents: result.amount_cents });
+    }
+
+    const result = await confirmOnDemandCarrierForRequest(id, businessId, {
+      provider_name: body.provider_name,
+      estimate_id: body.estimate_id,
+    });
+    if (!result.success) {
+      const code = result.error === 'Forbidden' ? 403 : 400;
+      console.warn('[DeliveryNetwork] confirm-carrier failed:', result.error || '(no message)');
+      return res.status(code).json({ error: result.error || 'Assign failed' });
+    }
+    res.json({
+      success: true,
+      provider_name: result.provider_name,
+      amount_cents: result.amount_cents,
+      final_price_cad: result.final_price_cad,
+      disclaimer: result.disclaimer,
+    });
+  } catch (err) {
+    console.error('[DeliveryNetwork] confirm-carrier error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to confirm carrier' });
+  }
+});
+
+/**
  * POST /api/v2/delivery-network/requests
  * Customer (business) creates a new delivery request from the dashboard. Authenticated; business_id = req.active_business_id.
  */
@@ -881,15 +952,29 @@ router.post('/requests', express.json(), async (req, res) => {
       intake_channel: 'dashboard',
     });
 
-    startDispatch(request.id).catch((err) =>
-      console.error('[DeliveryNetwork] startDispatch error:', err?.message || err)
-    );
+    try {
+      await startDispatch(request.id);
+    } catch (dispatchErr) {
+      console.error('[DeliveryNetwork] startDispatch error:', dispatchErr?.message || dispatchErr);
+    }
+
+    const { data: refreshed } = await supabaseClient
+      .from('delivery_requests')
+      .select('status')
+      .eq('id', request.id)
+      .single();
+    const finalStatus = refreshed?.status || request.status;
+    const needsCarrierChoice = finalStatus === 'ChoosingCarrier';
 
     res.status(201).json({
       success: true,
-      message: "We're scheduling your delivery. You'll get updates as it progresses.",
+      message: needsCarrierChoice
+        ? 'Choose a delivery service to finish scheduling.'
+        : "We're scheduling your delivery. You'll get updates as it progresses.",
       request_id: request.id,
       reference_number: request.reference_number,
+      status: finalStatus,
+      needs_carrier_choice: needsCarrierChoice,
     });
   } catch (err) {
     console.error('[DeliveryNetwork] create request error:', err?.message || err);
@@ -948,7 +1033,7 @@ router.post('/requests/:id/call-provider', async (req, res) => {
     if (fetchErr || !request) {
       return res.status(404).json({ error: 'Request not found' });
     }
-    if (!['New', 'Contacting'].includes(request.status)) {
+    if (!['New', 'Contacting', 'ChoosingCarrier'].includes(request.status)) {
       return res.status(400).json({ error: `Cannot retry dispatch when status is "${request.status}".` });
     }
     await startDispatch(requestId);
@@ -984,7 +1069,18 @@ router.delete('/requests/:id', async (req, res) => {
   }
 });
 
-const DELIVERY_ALLOWED_STATUSES = ['New', 'Contacting', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'];
+const DELIVERY_ALLOWED_STATUSES = [
+  'New',
+  'Contacting',
+  'ChoosingCarrier',
+  'Dispatched',
+  'Assigned',
+  'PickedUp',
+  'Completed',
+  'Failed',
+  'Cancelled',
+  'Needs Manual Assist',
+];
 
 /**
  * PATCH /api/v2/delivery-network/requests/:id

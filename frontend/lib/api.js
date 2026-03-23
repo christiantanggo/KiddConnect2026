@@ -547,6 +547,14 @@ export const deliveryNetworkAPI = {
   getRequests: () => api.get('/v2/delivery-network/requests', { headers: deliveryNetworkHeaders() }),
   /** Pull latest proof of delivery from Shipday for this request (customer dashboard). */
   syncRequestPod: (id) => api.post(`/v2/delivery-network/requests/${id}/sync-pod`, {}, { headers: deliveryNetworkHeaders() }),
+  getCarrierOptions: (id) =>
+    api.get(`/v2/delivery-network/requests/${id}/carrier-options`, { headers: deliveryNetworkHeaders() }),
+  /** Shipday on-demand assign can take 25s+; keep above default 30s axios timeout to avoid false failures and double-submit. */
+  confirmCarrier: (id, body) =>
+    api.post(`/v2/delivery-network/requests/${id}/confirm-carrier`, body, {
+      headers: deliveryNetworkHeaders(),
+      timeout: 120000,
+    }),
   createRequest: (data) => api.post('/v2/delivery-network/requests', data, { headers: deliveryNetworkHeaders() }),
   updateRequest: (id, data) => api.patch(`/v2/delivery-network/requests/${id}`, data, { headers: deliveryNetworkHeaders() }),
   deleteRequest: (requestId) => api.delete(`/v2/delivery-network/requests/${requestId}`, { headers: deliveryNetworkHeaders() }),

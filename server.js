@@ -3,6 +3,9 @@
 // BULLETPROOF VERSION - Won't crash on startup
 // trigger backend deploy on push
 
+/** Deployment identifier: returned by GET /health and printed at server start. */
+const DEPLOYMENT_VERSION = 'V2';
+
 // Polyfill for File API (required by undici/fetch in Node.js 18)
 // This must be done BEFORE any other imports
 // File API is available in Node.js 20+ but not in Node.js 18
@@ -233,8 +236,8 @@ app.get("/", (_req, res) => {
 app.get("/health", (_req, res) => {
   res.status(200).json({
     status: "ok",
-    version: "VAPI_VERSION",
-    server: "Tavari VAPI Server",
+    version: DEPLOYMENT_VERSION,
+    server: "Tavari Server",
     timestamp: new Date().toISOString(),
     webhook: "/api/vapi/webhook",
   });
@@ -550,7 +553,7 @@ try {
   app.get("/api/v2/health", (_req, res) => {
     res.json({
       status: "ok",
-      version: "v2",
+      version: DEPLOYMENT_VERSION,
       routes: {
         // organizations: "/api/v2/organizations", // Removed - will be added back later
         modules: "/api/v2/modules",
@@ -850,7 +853,7 @@ const server = app.listen(__SERVER_PORT__, '0.0.0.0', () => {
   const localUrl = `http://localhost:${__SERVER_PORT__}`;
   console.log('\n' + '='.repeat(60));
   writeCrashLog('SERVER_STARTED', localUrl);
-  console.log('🚀 TAVARI SERVER - VAPI VERSION');
+  console.log(`🚀 TAVARI SERVER - ${DEPLOYMENT_VERSION}`);
   console.log('='.repeat(60));
   console.log(`   LOCAL URL:  ${localUrl}`);
   console.log(`   Health:     ${localUrl}/health`);

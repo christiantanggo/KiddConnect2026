@@ -1469,6 +1469,7 @@ function AdminDeliveryOperatorPage() {
                   <option value="Needs Manual Assist">Needs Manual Assist</option>
                   <option value="New">New</option>
                   <option value="Contacting">Contacting</option>
+                  <option value="ChoosingCarrier">Choosing carrier</option>
                   <option value="Dispatched">Dispatched</option>
                   <option value="Completed">Completed</option>
                   <option value="Cancelled">Cancelled</option>
@@ -1553,7 +1554,7 @@ function AdminDeliveryOperatorPage() {
                               </td>
                               <td className="p-2 text-slate-500">{formatScheduled(r.scheduled_date, r.scheduled_time) || '—'}</td>
                               <td className="p-2 flex flex-wrap gap-1" onClick={(e) => e.stopPropagation()}>
-                                {['New', 'Contacting', 'Needs Manual Assist'].includes(r.status) && (
+                                {['New', 'Contacting', 'ChoosingCarrier', 'Needs Manual Assist'].includes(r.status) && (
                                   <button type="button" onClick={() => retryDispatch(r.id)} disabled={actionLoadingId === r.id} className="px-2 py-1 rounded bg-emerald-600 text-white text-xs hover:bg-emerald-700 disabled:opacity-50">Retry</button>
                                 )}
                                 {!['Cancelled', 'Completed'].includes(r.status) && (
@@ -1655,7 +1656,7 @@ function AdminDeliveryOperatorPage() {
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
                     <select value={editForm.status} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
-                      {['New', 'Contacting', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'].map((s) => (
+                      {['New', 'Contacting', 'ChoosingCarrier', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'].map((s) => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>

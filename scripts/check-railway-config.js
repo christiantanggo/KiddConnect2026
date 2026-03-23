@@ -44,10 +44,10 @@ try {
 console.log('\n📁 Server files:');
 try {
   const rootServer = readFileSync(resolve(rootDir, 'server.js'), 'utf8');
-  if (rootServer.includes('Tavari server running')) {
-    console.log('   ✅ Root server.js exists (VAPI version)');
-    if (rootServer.includes('[VAPI VERSION]')) {
-      console.log('      Contains VAPI version marker');
+  if (rootServer.includes('Tavari server running') || rootServer.includes('DEPLOYMENT_VERSION')) {
+    console.log('   ✅ Root server.js exists');
+    if (rootServer.includes("DEPLOYMENT_VERSION = 'V2'") || rootServer.includes('DEPLOYMENT_VERSION = "V2"')) {
+      console.log('      Deployment version constant V2 present');
     }
   }
 } catch (error) {
@@ -68,6 +68,6 @@ console.log('\n💡 Railway should be running:');
 console.log('   Command: npm start');
 console.log('   Which runs: node server.js');
 console.log('   From directory: / (project root)');
-console.log('   Expected output: "✅ Tavari server running on port 5001 [VAPI VERSION]"');
+console.log('   Expected startup banner: "🚀 TAVARI SERVER - V2"');
 console.log('\n❌ If logs show "✅ Ready to receive calls!" then Railway is running the WRONG file!');
 

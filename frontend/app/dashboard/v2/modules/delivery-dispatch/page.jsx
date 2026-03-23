@@ -5,14 +5,14 @@
  * Customers can: request a pickup (enter addresses), view their deliveries, manage saved addresses.
  * All admin functions (incoming Communication log, Dispatched view, phone numbers, email/SMS on new request, legal, agent rebuild) live in Tavari admin only.
  */
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { deliveryNetworkAPI } from '@/lib/api';
-import { savedLocationRowToParts } from '@/lib/canadianAddressParts';
+import { savedLocationRowToParts, savedLocationContactPhone } from '@/lib/canadianAddressParts';
 import { useBusinessTimezone } from '@/hooks/useBusinessTimezone';
-import { ArrowLeft, Loader, RefreshCw, Trash2, Truck, MapPin, Package, X, Camera, FileImage, BookmarkPlus } from 'lucide-react';
+import { ArrowLeft, Loader, RefreshCw, Trash2, Truck, MapPin, Package, X, Camera, FileImage, BookmarkPlus, Pencil } from 'lucide-react';
 
 const TABS = [
   { id: 'request', label: 'Request a pickup', icon: Package },
@@ -31,6 +31,55 @@ const SAVED_LOCATION_TYPES = [
   { value: 'named_pickup', label: 'Named pickup' },
   { value: 'frequent_delivery', label: 'Frequent delivery address' },
 ];
+
+/** My deliveries: column id → row field or special key */
+const DELIVERY_SORT = {
+  reference_number: { field: 'reference_number' },
+  recipient_name: { field: 'recipient_name' },
+  pickup_address: { field: 'pickup_address' },
+  delivery_address: { field: 'delivery_address' },
+  status: { field: 'status' },
+  pod: { special: 'pod' },
+  created_at: { special: 'date' },
+};
+
+function deliverySortHint(colKey, dir) {
+  if (colKey === 'created_at') return dir === 'desc' ? 'Newest first' : 'Oldest first';
+  if (colKey === 'pod') return dir === 'asc' ? 'No proof first' : 'Has proof first';
+  return dir === 'asc' ? 'A–Z' : 'Z–A';
+}
+
+function DeliverySortTh({ colKey, label, sort, onSort, className, align = 'left' }) {
+  const active = sort.key === colKey;
+  const alignCls = align === 'center' ? 'items-center text-center' : 'items-start text-left';
+  return (
+    <th scope="col" className={className}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSort(colKey);
+        }}
+        className={`group inline-flex flex-col text-sm font-medium text-slate-600 hover:text-slate-900 rounded-md px-1 py-0.5 -mx-1 w-full min-w-0 ${alignCls} ${active ? 'text-slate-900' : ''}`}
+        aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      >
+        <span className={`inline-flex items-center gap-1 ${align === 'center' ? 'justify-center' : ''}`}>
+          <span>{label}</span>
+          {active ? (
+            <span className="text-emerald-600 shrink-0" aria-hidden>{sort.dir === 'asc' ? '▲' : '▼'}</span>
+          ) : (
+            <span className="text-slate-300 group-hover:text-slate-400 text-xs shrink-0" aria-hidden>↕</span>
+          )}
+        </span>
+        {active && (
+          <span className="block text-[10px] font-normal text-slate-400 leading-tight mt-0.5">
+            {deliverySortHint(colKey, sort.dir)}
+          </span>
+        )}
+      </button>
+    </th>
+  );
+}
 
 const LAST_PICKUP_STORAGE_KEY = 'deliveryDashboard:lastPickup';
 const LAST_DELIVERY_STORAGE_KEY = 'deliveryDashboard:lastDelivery';
@@ -79,6 +128,17 @@ export default function DeliveryDispatchPage() {
   const [submitError, setSubmitError] = useState(null);
   const [submitSuccess, setSubmitSuccess] = useState(null);
 
+  /** On-demand: choose third-party carrier after Shipday order is created (Tavari customer price). */
+  const [carrierModal, setCarrierModal] = useState(null); // { requestId, referenceNumber } | null
+  const [carrierOptionsRefreshKey, setCarrierOptionsRefreshKey] = useState(0);
+  const [carrierOptionsLoading, setCarrierOptionsLoading] = useState(false);
+  const [carrierOptionsError, setCarrierOptionsError] = useState(null);
+  const [carrierEstimates, setCarrierEstimates] = useState([]);
+  const [carrierDisclaimer, setCarrierDisclaimer] = useState('');
+  const [carrierFleetFallback, setCarrierFleetFallback] = useState(false);
+  const [carrierPick, setCarrierPick] = useState(null); // { estimate_id, provider_name }
+  const [carrierConfirming, setCarrierConfirming] = useState(false);
+
   /** Quick-fill: '' = manual, '__lastPickup__' / '__lastDelivery__', or saved location id */
   const [pickupFillSource, setPickupFillSource] = useState('');
   const [deliveryFillSource, setDeliveryFillSource] = useState('');
@@ -108,6 +168,17 @@ export default function DeliveryDispatchPage() {
   const [newLocPostal, setNewLocPostal] = useState('');
   const [newLocContact, setNewLocContact] = useState('');
   const [addingLocation, setAddingLocation] = useState(false);
+
+  /** Inline edit for Saved addresses list */
+  const [editingSavedId, setEditingSavedId] = useState(null);
+  const [editLocType, setEditLocType] = useState('frequent_delivery');
+  const [editLocName, setEditLocName] = useState('');
+  const [editLocAddressLine, setEditLocAddressLine] = useState('');
+  const [editLocCity, setEditLocCity] = useState('');
+  const [editLocProvince, setEditLocProvince] = useState('');
+  const [editLocPostal, setEditLocPostal] = useState('');
+  const [editLocContact, setEditLocContact] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   /** Saving current request-form pickup/delivery into saved locations */
   const [savingFromRequest, setSavingFromRequest] = useState(null); // 'pickup-default' | 'pickup-named' | 'delivery'
@@ -193,6 +264,7 @@ export default function DeliveryDispatchPage() {
           city: delivery_city.trim(),
           province: delivery_province.trim(),
           postal_code: delivery_postal_code.trim(),
+          ...(callback_phone?.trim() ? { contact: callback_phone.trim() } : {}),
         });
         setRequestSaveNotice(
           label
@@ -242,6 +314,9 @@ export default function DeliveryDispatchPage() {
         setDeliveryCity(String(s.delivery_city || ''));
         setDeliveryProvince(String(s.delivery_province || ''));
         setDeliveryPostalCode(String(s.delivery_postal_code || ''));
+        if (s.callback_phone && String(s.callback_phone).trim()) {
+          setCallbackPhone(String(s.callback_phone).trim());
+        }
       }
       return;
     }
@@ -254,6 +329,8 @@ export default function DeliveryDispatchPage() {
       setDeliveryProvince(f.province);
       setDeliveryPostalCode(f.postal);
     }
+    const phone = savedLocationContactPhone(loc);
+    if (phone) setCallbackPhone(phone);
   };
 
   /** Selected row: proof of delivery (POD) from Shipday — tap row to open. */
@@ -266,11 +343,105 @@ export default function DeliveryDispatchPage() {
     return s === 'completed' || s === 'already_delivered' || s === 'delivered';
   };
 
-  const hasPodContent = (r) => {
+  const hasPodContent = useCallback((r) => {
     if (!r) return false;
     if (r.pod_signature_url && String(r.pod_signature_url).trim()) return true;
     const photos = r.pod_photo_urls;
     return Array.isArray(photos) && photos.some((u) => typeof u === 'string' && u.trim());
+  }, []);
+
+  /** My deliveries: default newest first */
+  const [deliveryListSort, setDeliveryListSort] = useState({ key: 'created_at', dir: 'desc' });
+  const [deliveryFilterStatus, setDeliveryFilterStatus] = useState('');
+  const [deliveryFilterPod, setDeliveryFilterPod] = useState(''); // '' | 'yes' | 'no'
+  const [deliverySearchQuery, setDeliverySearchQuery] = useState('');
+
+  const deliveryUniqueStatuses = useMemo(() => {
+    const set = new Set();
+    (requests || []).forEach((r) => {
+      if (r?.status != null && String(r.status).trim()) set.add(String(r.status).trim());
+    });
+    return Array.from(set).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+  }, [requests]);
+
+  const deliveriesSortedFiltered = useMemo(() => {
+    const compareRows = (a, b, sortKey, dir) => {
+      const spec = DELIVERY_SORT[sortKey];
+      if (!spec) return 0;
+      if (spec.special === 'date') {
+        const ta = new Date(a?.created_at || 0).getTime();
+        const tb = new Date(b?.created_at || 0).getTime();
+        return dir === 'asc' ? ta - tb : tb - ta;
+      }
+      if (spec.special === 'pod') {
+        const pa = hasPodContent(a) ? 1 : 0;
+        const pb = hasPodContent(b) ? 1 : 0;
+        return dir === 'asc' ? pa - pb : pb - pa;
+      }
+      const field = spec.field;
+      const va = a?.[field];
+      const vb = b?.[field];
+      const sa = String(va ?? '').toLowerCase();
+      const sb = String(vb ?? '').toLowerCase();
+      const c = sa.localeCompare(sb, undefined, { sensitivity: 'base', numeric: true });
+      return dir === 'asc' ? c : -c;
+    };
+
+    let list = Array.isArray(requests) ? [...requests] : [];
+    const q = deliverySearchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((r) => {
+        const blob = [
+          r.reference_number,
+          r.pickup_address,
+          r.delivery_address,
+          r.recipient_name,
+          r.status,
+          r.package_description,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return blob.includes(q);
+      });
+    }
+    if (deliveryFilterStatus) {
+      list = list.filter((r) => String(r.status || '') === deliveryFilterStatus);
+    }
+    if (deliveryFilterPod === 'yes') {
+      list = list.filter((r) => hasPodContent(r));
+    } else if (deliveryFilterPod === 'no') {
+      list = list.filter((r) => !hasPodContent(r));
+    }
+    const { key, dir } = deliveryListSort;
+    list.sort((a, b) => compareRows(a, b, key, dir));
+    return list;
+  }, [
+    requests,
+    deliverySearchQuery,
+    deliveryFilterStatus,
+    deliveryFilterPod,
+    deliveryListSort,
+    hasPodContent,
+  ]);
+
+  const handleDeliverySortClick = (columnKey) => {
+    setDeliveryListSort((prev) => {
+      if (prev.key === columnKey) {
+        return { key: columnKey, dir: prev.dir === 'asc' ? 'desc' : 'asc' };
+      }
+      const isDate = columnKey === 'created_at';
+      return { key: columnKey, dir: isDate ? 'desc' : 'asc' };
+    });
+  };
+
+  const deliveryFiltersActive =
+    Boolean(deliveryFilterStatus) || Boolean(deliveryFilterPod) || Boolean(deliverySearchQuery.trim());
+
+  const clearDeliveryFilters = () => {
+    setDeliveryFilterStatus('');
+    setDeliveryFilterPod('');
+    setDeliverySearchQuery('');
   };
 
   const mergeRequestInList = (patch) => {
@@ -321,6 +492,64 @@ export default function DeliveryDispatchPage() {
   };
 
   useEffect(() => { load(); }, []);
+
+  useEffect(() => {
+    if (!carrierModal?.requestId) return;
+    let cancelled = false;
+    (async () => {
+      setCarrierOptionsLoading(true);
+      setCarrierOptionsError(null);
+      setCarrierEstimates([]);
+      setCarrierDisclaimer('');
+      setCarrierFleetFallback(false);
+      setCarrierPick(null);
+      try {
+        const res = await deliveryNetworkAPI.getCarrierOptions(carrierModal.requestId);
+        if (cancelled) return;
+        const list = res.data?.estimates || [];
+        setCarrierEstimates(list);
+        setCarrierDisclaimer(res.data?.disclaimer || '');
+        setCarrierFleetFallback(!!res.data?.fleet_fallback_available);
+        const first = list[0];
+        if (first?.provider_name) {
+          setCarrierPick({
+            estimate_id: first.estimate_id != null ? String(first.estimate_id) : '',
+            provider_name: String(first.provider_name).trim(),
+          });
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setCarrierOptionsError(e.response?.data?.error || e.message || 'Failed to load delivery options.');
+        }
+      } finally {
+        if (!cancelled) setCarrierOptionsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [carrierModal?.requestId, carrierOptionsRefreshKey]);
+
+  const closeCarrierModal = useCallback(() => {
+    setCarrierModal(null);
+    setCarrierOptionsRefreshKey(0);
+    setCarrierOptionsLoading(false);
+    setCarrierOptionsError(null);
+    setCarrierEstimates([]);
+    setCarrierDisclaimer('');
+    setCarrierFleetFallback(false);
+    setCarrierPick(null);
+    setCarrierConfirming(false);
+  }, []);
+
+  const openCarrierChoice = useCallback((requestId, referenceNumber) => {
+    setCarrierModal({ requestId, referenceNumber: referenceNumber || '' });
+    setCarrierOptionsRefreshKey(0);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'addresses') setEditingSavedId(null);
+  }, [activeTab]);
 
   const handleSubmitRequest = async (e) => {
     e.preventDefault();
@@ -391,7 +620,13 @@ export default function DeliveryDispatchPage() {
           scheduled_time: scheduled_time?.trim() || undefined,
         }),
       });
-      setSubmitSuccess(res.data?.reference_number ? `Delivery scheduled. Reference: ${res.data.reference_number}` : 'Delivery scheduled.');
+      const msg =
+        res.data?.message ||
+        (res.data?.reference_number ? `Delivery scheduled. Reference: ${res.data.reference_number}` : 'Delivery scheduled.');
+      setSubmitSuccess(msg);
+      if (res.data?.needs_carrier_choice && res.data?.request_id) {
+        openCarrierChoice(res.data.request_id, res.data.reference_number || '');
+      }
       setPickupAddress('');
       setPickupCity('');
       setPickupProvince('');
@@ -444,8 +679,53 @@ export default function DeliveryDispatchPage() {
     }
   };
 
+  const cancelEditSavedLocation = () => {
+    setEditingSavedId(null);
+    setSavingEdit(false);
+  };
+
+  const beginEditSavedLocation = (loc) => {
+    const f = savedLocationRowToParts(loc);
+    setEditingSavedId(loc.id);
+    setEditLocType(loc.type || 'frequent_delivery');
+    setEditLocName(loc.name || '');
+    setEditLocAddressLine(f?.street || (loc.address_line != null ? String(loc.address_line) : '') || '');
+    setEditLocCity(f?.city || (loc.city != null ? String(loc.city) : '') || '');
+    setEditLocProvince(f?.province || (loc.province != null ? String(loc.province) : '') || '');
+    setEditLocPostal(f?.postal || (loc.postal_code != null ? String(loc.postal_code) : '') || '');
+    setEditLocContact(loc.contact != null ? String(loc.contact) : '');
+  };
+
+  const handleSaveEditedLocation = async (e) => {
+    e.preventDefault();
+    if (!editingSavedId) return;
+    if (!editLocAddressLine?.trim() || !editLocCity?.trim() || !editLocProvince?.trim() || !editLocPostal?.trim()) {
+      alert('Street, city, province, and postal code are required.');
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      await deliveryNetworkAPI.updateSavedLocation(editingSavedId, {
+        type: editLocType,
+        name: editLocName.trim() || null,
+        address_line: editLocAddressLine.trim(),
+        city: editLocCity.trim(),
+        province: editLocProvince.trim(),
+        postal_code: editLocPostal.trim(),
+        contact: editLocContact.trim() || null,
+      });
+      cancelEditSavedLocation();
+      await load();
+    } catch (err) {
+      alert(err.response?.data?.error || err.message || 'Could not update address.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handleDeleteSavedLocation = async (id) => {
     try {
+      if (editingSavedId === id) cancelEditSavedLocation();
       await deliveryNetworkAPI.deleteSavedLocation(id);
       load();
     } catch (err) {
@@ -606,7 +886,7 @@ export default function DeliveryDispatchPage() {
                       value={deliveryFillSource}
                       onChange={(e) => applyDeliveryFromSource(e.target.value)}
                     >
-                      <option value="">Type manually or choose a frequent delivery address…</option>
+                      <option value="">Type manually or choose a frequent delivery address (contact phone fills in when saved on the address)…</option>
                       {lastDeliverySnap?.delivery_address ? (
                         <option value="__lastDelivery__">Last used delivery</option>
                       ) : null}
@@ -671,7 +951,7 @@ export default function DeliveryDispatchPage() {
                       {savingFromRequest === 'delivery' ? 'Saving…' : 'Save as frequent delivery'}
                     </button>
                     <p className="text-xs text-slate-500 sm:w-full">
-                      Adds this drop-off to your saved list so you can auto-fill it on repeat runs.
+                      Adds this drop-off and the contact phone above (if filled) so both auto-fill next time.
                     </p>
                   </div>
                 </div>
@@ -685,6 +965,7 @@ export default function DeliveryDispatchPage() {
                     onChange={(e) => setCallbackPhone(e.target.value)}
                     required
                         />
+                  <p className="mt-1 text-xs text-slate-500">Choosing a <strong>frequent delivery</strong> address fills this if you saved a contact phone on that address.</p>
                       </div>
                       <div>
                   <label className="block text-sm font-medium text-slate-700 mb-1">Recipient name (optional)</label>
@@ -756,49 +1037,358 @@ export default function DeliveryDispatchPage() {
             <section className="bg-white rounded-xl border border-slate-200 p-6">
               <h2 className="text-lg font-semibold text-slate-800 mb-4">My deliveries</h2>
               <p className="text-slate-600 text-sm mb-4">
-                Tap a delivery to see details and proof of delivery (when the driver has finished drop-off).
+                Tap a row for details and proof of delivery. <strong>Tap a column header</strong> to sort (tap again to reverse). Use filters to narrow the list.
               </p>
               {requests.length === 0 ? (
                 <p className="text-slate-500 py-8 text-center">No deliveries yet. Use “Request a pickup” to schedule one.</p>
               ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-left text-slate-600">
-                        <th className="pb-2 pr-2">Reference</th>
-                        <th className="pb-2 pr-2">Pickup</th>
-                        <th className="pb-2 pr-2">Delivery</th>
-                      <th className="pb-2 pr-2">Status</th>
-                        <th className="pb-2 pr-2">POD</th>
-                        <th className="pb-2">Date</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                      {requests.map((r) => (
-                          <tr
-                            key={r.id}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => { setDetailRequest(r); setPodError(null); }}
-                            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetailRequest(r); setPodError(null); } }}
-                            className="border-b border-slate-100 cursor-pointer hover:bg-emerald-50/60 transition-colors"
-                          >
-                          <td className="py-2 pr-2 font-mono">{r.reference_number || '—'}</td>
-                          <td className="py-2 pr-2 max-w-[140px] truncate" title={r.pickup_address}>{r.pickup_address || '—'}</td>
-                          <td className="py-2 pr-2 max-w-[140px] truncate" title={r.delivery_address}>{r.delivery_address || '—'}</td>
-                            <td className="py-2 pr-2">{r.status}</td>
-                            <td className="py-2 pr-2 text-center" title={hasPodContent(r) ? 'Proof on file' : 'After delivery'}>
-                              {hasPodContent(r) ? (
-                                <span className="text-emerald-600 font-medium">✓</span>
-                              ) : (
-                                <span className="text-slate-400">—</span>
-                              )}
-                            </td>
-                          <td className="py-2">{formatDate(r.created_at)}</td>
+                <>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end mb-4">
+                    <div className="min-w-[160px]">
+                      <label htmlFor="delivery-filter-status" className="block text-xs font-medium text-slate-600 mb-1">Status</label>
+                      <select
+                        id="delivery-filter-status"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+                        value={deliveryFilterStatus}
+                        onChange={(e) => setDeliveryFilterStatus(e.target.value)}
+                      >
+                        <option value="">All statuses</option>
+                        {deliveryUniqueStatuses.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="min-w-[160px]">
+                      <label htmlFor="delivery-filter-pod" className="block text-xs font-medium text-slate-600 mb-1">Proof of delivery</label>
+                      <select
+                        id="delivery-filter-pod"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+                        value={deliveryFilterPod}
+                        onChange={(e) => setDeliveryFilterPod(e.target.value)}
+                      >
+                        <option value="">All</option>
+                        <option value="yes">Has proof</option>
+                        <option value="no">No proof yet</option>
+                      </select>
+                    </div>
+                    <div className="min-w-[200px] flex-1 max-w-md">
+                      <label htmlFor="delivery-filter-search" className="block text-xs font-medium text-slate-600 mb-1">Search</label>
+                      <input
+                        id="delivery-filter-search"
+                        type="search"
+                        placeholder="Reference, address, recipient, status…"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                        value={deliverySearchQuery}
+                        onChange={(e) => setDeliverySearchQuery(e.target.value)}
+                      />
+                    </div>
+                    {deliveryFiltersActive && (
+                      <button
+                        type="button"
+                        onClick={clearDeliveryFilters}
+                        className="text-sm text-emerald-700 font-medium hover:underline py-2 sm:py-0"
+                      >
+                        Clear filters
+                      </button>
+                    )}
+                  </div>
+                  {deliveriesSortedFiltered.length === 0 ? (
+                    <p className="text-slate-500 py-8 text-center">
+                      No deliveries match your filters.{' '}
+                      <button type="button" className="text-emerald-700 underline font-medium" onClick={clearDeliveryFilters}>
+                        Clear filters
+                      </button>
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-slate-200 text-left align-top">
+                            <DeliverySortTh
+                              colKey="reference_number"
+                              label="Reference"
+                              sort={deliveryListSort}
+                              onSort={handleDeliverySortClick}
+                              className="pb-2 pr-2 align-bottom"
+                            />
+                            <DeliverySortTh
+                              colKey="recipient_name"
+                              label="Recipient"
+                              sort={deliveryListSort}
+                              onSort={handleDeliverySortClick}
+                              className="pb-2 pr-2 align-bottom"
+                            />
+                            <DeliverySortTh
+                              colKey="pickup_address"
+                              label="Pickup"
+                              sort={deliveryListSort}
+                              onSort={handleDeliverySortClick}
+                              className="pb-2 pr-2 align-bottom"
+                            />
+                            <DeliverySortTh
+                              colKey="delivery_address"
+                              label="Delivery"
+                              sort={deliveryListSort}
+                              onSort={handleDeliverySortClick}
+                              className="pb-2 pr-2 align-bottom"
+                            />
+                            <DeliverySortTh
+                              colKey="status"
+                              label="Status"
+                              sort={deliveryListSort}
+                              onSort={handleDeliverySortClick}
+                              className="pb-2 pr-2 align-bottom"
+                            />
+                            <DeliverySortTh
+                              colKey="pod"
+                              label="POD"
+                              sort={deliveryListSort}
+                              onSort={handleDeliverySortClick}
+                              align="center"
+                              className="pb-2 pr-2 align-bottom"
+                            />
+                            <DeliverySortTh
+                              colKey="created_at"
+                              label="Date"
+                              sort={deliveryListSort}
+                              onSort={handleDeliverySortClick}
+                              className="pb-2 align-bottom"
+                            />
                           </tr>
-                      ))}
-                  </tbody>
-                </table>
+                        </thead>
+                        <tbody>
+                          {deliveriesSortedFiltered.map((r) => (
+                            <tr
+                              key={r.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => { setDetailRequest(r); setPodError(null); }}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetailRequest(r); setPodError(null); } }}
+                              className="border-b border-slate-100 cursor-pointer hover:bg-emerald-50/60 transition-colors"
+                            >
+                              <td className="py-2 pr-2 font-mono">{r.reference_number || '—'}</td>
+                              <td className="py-2 pr-2 max-w-[120px] truncate" title={r.recipient_name || ''}>{r.recipient_name?.trim() || '—'}</td>
+                              <td className="py-2 pr-2 max-w-[130px] truncate" title={r.pickup_address}>{r.pickup_address || '—'}</td>
+                              <td className="py-2 pr-2 max-w-[130px] truncate" title={r.delivery_address}>{r.delivery_address || '—'}</td>
+                              <td className="py-2 pr-2 align-top">
+                                <div>{r.status}</div>
+                                {r.status === 'ChoosingCarrier' && (
+                                  <button
+                                    type="button"
+                                    className="mt-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openCarrierChoice(r.id, r.reference_number || '');
+                                    }}
+                                  >
+                                    Choose service
+                                  </button>
+                                )}
+                              </td>
+                              <td className="py-2 pr-2 text-center" title={hasPodContent(r) ? 'Proof on file' : 'After delivery'}>
+                                {hasPodContent(r) ? (
+                                  <span className="text-emerald-600 font-medium">✓</span>
+                                ) : (
+                                  <span className="text-slate-400">—</span>
+                                )}
+                              </td>
+                              <td className="py-2 whitespace-nowrap">{formatDate(r.created_at)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {carrierModal && (
+                <div
+                  className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="carrier-choice-title"
+                >
+                  <button
+                    type="button"
+                    className="absolute inset-0 bg-slate-900/50"
+                    aria-label="Close"
+                    onClick={() => {
+                      if (!carrierConfirming) closeCarrierModal();
+                    }}
+                  />
+                  <div className="relative z-10 w-full max-w-md max-h-[min(90vh,640px)] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl p-5 md:p-6">
+                    <div className="flex items-start justify-between gap-2 mb-4">
+                      <div>
+                        <h3 id="carrier-choice-title" className="text-lg font-semibold text-slate-900">
+                          Choose a delivery service
+                        </h3>
+                        {carrierModal.referenceNumber ? (
+                          <p className="text-sm text-slate-600 mt-0.5 font-mono">Ref {carrierModal.referenceNumber}</p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={carrierConfirming}
+                        onClick={closeCarrierModal}
+                        className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 shrink-0 disabled:opacity-50"
+                        aria-label="Close"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+
+                    {carrierOptionsLoading && (
+                      <div className="flex items-center gap-2 text-slate-600 py-6">
+                        <Loader className="w-5 h-5 animate-spin shrink-0" />
+                        <span className="text-sm">Loading prices…</span>
+                      </div>
+                    )}
+
+                    {!carrierOptionsLoading && carrierOptionsError && (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 mb-3">
+                        {carrierOptionsError}
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            className="text-xs font-medium text-amber-900 underline"
+                            onClick={() => setCarrierOptionsRefreshKey((k) => k + 1)}
+                          >
+                            Try again
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {!carrierOptionsLoading && !carrierOptionsError && carrierEstimates.length === 0 && (
+                      <p className="text-sm text-slate-600 mb-4">
+                        No instant quotes are available right now. You can use your own fleet if it is configured, or close this and try again in a moment.
+                      </p>
+                    )}
+
+                    {!carrierOptionsLoading && carrierEstimates.length > 0 && (
+                      <ul className="space-y-2 mb-4" role="listbox" aria-label="Delivery options">
+                        {carrierEstimates.map((est, idx) => {
+                          const id = `carrier-opt-${idx}`;
+                          const selected =
+                            carrierPick &&
+                            carrierPick.provider_name === String(est.provider_name || '').trim() &&
+                            String(carrierPick.estimate_id || '') === String(est.estimate_id != null ? est.estimate_id : '');
+                          return (
+                            <li key={`${est.estimate_id}-${est.provider_name}-${idx}`}>
+                              <label
+                                htmlFor={id}
+                                className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-colors ${
+                                  selected ? 'border-emerald-500 bg-emerald-50/60' : 'border-slate-200 hover:border-slate-300'
+                                }`}
+                              >
+                                <input
+                                  id={id}
+                                  type="radio"
+                                  name="carrier-choice"
+                                  className="mt-1"
+                                  checked={!!selected}
+                                  onChange={() =>
+                                    setCarrierPick({
+                                      estimate_id: est.estimate_id != null ? String(est.estimate_id) : '',
+                                      provider_name: String(est.provider_name || '').trim(),
+                                    })
+                                  }
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-medium text-slate-900">{est.provider_name}</p>
+                                  <p className="text-lg font-semibold text-emerald-700 mt-0.5">
+                                    {est.price_cad != null && est.price_cad !== '' ? String(est.price_cad) : '—'}
+                                  </p>
+                                  {est.disclaimer ? (
+                                    <p className="text-xs text-slate-500 mt-1 leading-snug">{est.disclaimer}</p>
+                                  ) : null}
+                                </div>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+
+                    {carrierDisclaimer ? (
+                      <p className="text-xs text-slate-500 leading-relaxed mb-4 border-t border-slate-100 pt-3">{carrierDisclaimer}</p>
+                    ) : null}
+
+                    <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
+                      {carrierFleetFallback && (
+                        <button
+                          type="button"
+                          disabled={carrierConfirming || carrierOptionsLoading}
+                          onClick={async () => {
+                            setCarrierConfirming(true);
+                            setCarrierOptionsError(null);
+                            try {
+                              await deliveryNetworkAPI.confirmCarrier(carrierModal.requestId, { mode: 'fleet' });
+                              closeCarrierModal();
+                              await load();
+                              setSubmitSuccess(
+                                carrierModal.referenceNumber
+                                  ? `Fleet driver assigned for ${carrierModal.referenceNumber}.`
+                                  : 'Fleet driver assigned.',
+                              );
+                            } catch (e) {
+                              setCarrierOptionsError(
+                                e.response?.data?.error ||
+                                  e.response?.data?.message ||
+                                  e.message ||
+                                  'Could not assign fleet.',
+                              );
+                            } finally {
+                              setCarrierConfirming(false);
+                            }
+                          }}
+                          className="order-2 sm:order-1 px-4 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          {carrierConfirming ? 'Assigning…' : 'Use our fleet'}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={
+                          carrierConfirming ||
+                          carrierOptionsLoading ||
+                          !carrierPick ||
+                          carrierEstimates.length === 0
+                        }
+                        onClick={async () => {
+                          if (!carrierModal?.requestId || !carrierPick) return;
+                          setCarrierConfirming(true);
+                          setCarrierOptionsError(null);
+                          try {
+                            await deliveryNetworkAPI.confirmCarrier(carrierModal.requestId, {
+                              provider_name: carrierPick.provider_name,
+                              estimate_id: carrierPick.estimate_id,
+                            });
+                            closeCarrierModal();
+                            await load();
+                            setSubmitSuccess(
+                              carrierModal.referenceNumber
+                                ? `Carrier confirmed for ${carrierModal.referenceNumber}.`
+                                : 'Carrier confirmed.',
+                            );
+                          } catch (e) {
+                            setCarrierOptionsError(
+                              e.response?.data?.error ||
+                                e.response?.data?.message ||
+                                e.message ||
+                                'Could not confirm carrier.',
+                            );
+                          } finally {
+                            setCarrierConfirming(false);
+                          }
+                        }}
+                        className="order-1 sm:order-2 px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {carrierConfirming ? 'Confirming…' : 'Confirm this service'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 
@@ -981,14 +1571,19 @@ export default function DeliveryDispatchPage() {
                   </div>
                 </div>
                         <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Contact (optional)</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">
+                    {newLocType === 'frequent_delivery' ? 'Delivery contact phone (optional)' : 'Contact (optional)'}
+                  </label>
                   <input
-                    type="text"
+                    type="tel"
                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    placeholder="Phone or name"
+                    placeholder={newLocType === 'frequent_delivery' ? '+1 555 123 4567 — fills in when you pick this address' : 'Phone or name'}
                     value={newLocContact}
                     onChange={(e) => setNewLocContact(e.target.value)}
                   />
+                  {newLocType === 'frequent_delivery' && (
+                    <p className="mt-1 text-xs text-slate-500">Stored with this drop-off so the contact phone field auto-fills on “Request a pickup”.</p>
+                  )}
                 </div>
                 <button type="submit" disabled={addingLocation} className="px-6 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60">
                   {addingLocation ? 'Adding…' : 'Add address'}
@@ -1001,24 +1596,132 @@ export default function DeliveryDispatchPage() {
               ) : (
                 <ul className="space-y-3">
                   {savedLocations.map((loc) => (
-                    <li key={loc.id} className="flex items-start justify-between gap-4 p-3 rounded-lg border border-slate-200 bg-slate-50/50">
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium text-slate-800 truncate">{loc.name || (SAVED_LOCATION_TYPES.find(t => t.value === loc.type)?.label ?? loc.type)}</p>
-                        <p className="text-sm text-slate-600 truncate" title={loc.address}>{loc.address}</p>
-                        {loc.contact && <p className="text-xs text-slate-500">{loc.contact}</p>}
-                        <span className="inline-block mt-1 text-xs text-slate-400">{SAVED_LOCATION_TYPES.find(t => t.value === loc.type)?.label ?? loc.type}</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteSavedLocation(loc.id)}
-                        className="p-2 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 shrink-0"
-                        title="Remove"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                                </li>
+                    <li key={loc.id} className="p-3 rounded-lg border border-slate-200 bg-slate-50/50">
+                      {editingSavedId === loc.id ? (
+                        <form onSubmit={handleSaveEditedLocation} className="space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <span className="text-sm font-medium text-slate-800">Edit address</span>
+                            <button
+                              type="button"
+                              onClick={cancelEditSavedLocation}
+                              className="text-xs text-slate-600 hover:text-slate-900 underline"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-slate-600 mb-1">Type</label>
+                            <select
+                              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm bg-white"
+                              value={editLocType}
+                              onChange={(e) => setEditLocType(e.target.value)}
+                            >
+                              {SAVED_LOCATION_TYPES.map((o) => (
+                                <option key={o.value} value={o.value}>{o.label}</option>
                               ))}
-                            </ul>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-slate-600 mb-1">Name (optional)</label>
+                            <input
+                              type="text"
+                              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                              value={editLocName}
+                              onChange={(e) => setEditLocName(e.target.value)}
+                            />
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div className="sm:col-span-2">
+                              <label className="block text-xs font-medium text-slate-600 mb-1">Street <span className="text-red-600">*</span></label>
+                              <input
+                                type="text"
+                                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                                value={editLocAddressLine}
+                                onChange={(e) => setEditLocAddressLine(e.target.value)}
+                                required
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-slate-600 mb-1">City <span className="text-red-600">*</span></label>
+                              <input
+                                type="text"
+                                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                                value={editLocCity}
+                                onChange={(e) => setEditLocCity(e.target.value)}
+                                required
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs font-medium text-slate-600 mb-1">Province <span className="text-red-600">*</span></label>
+                              <input
+                                type="text"
+                                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                                value={editLocProvince}
+                                onChange={(e) => setEditLocProvince(e.target.value)}
+                                required
+                              />
+                            </div>
+                            <div className="sm:col-span-2">
+                              <label className="block text-xs font-medium text-slate-600 mb-1">Postal code <span className="text-red-600">*</span></label>
+                              <input
+                                type="text"
+                                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                                value={editLocPostal}
+                                onChange={(e) => setEditLocPostal(e.target.value)}
+                                required
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-medium text-slate-600 mb-1">
+                              {editLocType === 'frequent_delivery' ? 'Delivery contact phone (optional)' : 'Contact (optional)'}
+                            </label>
+                            <input
+                              type="tel"
+                              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                              value={editLocContact}
+                              onChange={(e) => setEditLocContact(e.target.value)}
+                            />
+                          </div>
+                          <button
+                            type="submit"
+                            disabled={savingEdit}
+                            className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 disabled:opacity-60"
+                          >
+                            {savingEdit ? 'Saving…' : 'Save changes'}
+                          </button>
+                        </form>
+                      ) : (
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-slate-800 truncate">{loc.name || (SAVED_LOCATION_TYPES.find((t) => t.value === loc.type)?.label ?? loc.type)}</p>
+                            <p className="text-sm text-slate-600 truncate" title={loc.address}>{loc.address}</p>
+                            {loc.contact && <p className="text-xs text-slate-500">{loc.contact}</p>}
+                            <span className="inline-block mt-1 text-xs text-slate-400">{SAVED_LOCATION_TYPES.find((t) => t.value === loc.type)?.label ?? loc.type}</span>
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => beginEditSavedLocation(loc)}
+                              className="p-2 rounded-lg text-slate-500 hover:text-emerald-700 hover:bg-emerald-50"
+                              title="Edit"
+                            >
+                              <Pencil className="w-4 h-4" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSavedLocation(loc.id)}
+                              className="p-2 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50"
+                              title="Remove"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
                           )}
             </section>
                     )}

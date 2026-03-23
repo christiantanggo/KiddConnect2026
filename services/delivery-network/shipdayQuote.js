@@ -4,7 +4,7 @@
  * Uses Shipday's Insert Order, Retrieve Order Details, and Delete Order APIs.
  * Order payload matches Shipday dashboard: Order Number, Pick-up From (name, phone, address, time), Deliver to (name, phone, address, date, time), Payment Method, etc.
  */
-import { getDeliveryConfigFull } from './config.js';
+import { getDeliveryConfigFull, isShipdayOnDemandEnabledFlag } from './config.js';
 import { buildShipdayOrderPayload } from './shipdayOrder.js';
 import { collectOnDemandEstimates, pickOnDemandEstimate, isCheapestMode } from './shipdayOnDemand.js';
 
@@ -111,7 +111,7 @@ export async function getQuoteFromShipday(params) {
     console.log('[ShipdayQuote] Shipday responded 200, orderId', orderId, '— order exists on Shipday; retrieving costing...');
 
     const shipdayConfig = config?.brokers?.shipday;
-    const onDemandEnabled = shipdayConfig?.on_demand_enabled === true;
+    const onDemandEnabled = isShipdayOnDemandEnabledFlag(shipdayConfig?.on_demand_enabled);
     const preferredProviderRaw =
       typeof shipdayConfig?.preferred_on_demand_provider === 'string' ? shipdayConfig.preferred_on_demand_provider.trim() : '';
     const preferredProvider = onDemandEnabled ? (preferredProviderRaw || 'cheapest') : null;

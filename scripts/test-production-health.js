@@ -31,13 +31,13 @@ const req = https.request(options, (res) => {
       console.log(JSON.stringify(json, null, 2));
       console.log('\n');
       
-      if (json.version === 'VAPI_VERSION') {
-        console.log('✅ CORRECT: Running VAPI version!');
-      } else if (json.message && json.message.includes('VAPI')) {
-        console.log('✅ CORRECT: Running VAPI version!');
+      if (json.version === 'V2') {
+        console.log('✅ CORRECT: Deployment version V2');
+      } else if (json.message && json.message.includes('V2')) {
+        console.log('✅ CORRECT: Deployment version V2');
       } else {
-        console.log('❌ WRONG: Not running VAPI version!');
-        console.log('   Railway is still running old code.');
+        console.log('❌ WRONG: Expected health.version === "V2"');
+        console.log('   Got:', json.version);
       }
     } catch (error) {
       console.log('Raw response:', data);

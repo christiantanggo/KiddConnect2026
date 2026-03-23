@@ -134,6 +134,13 @@ export async function getDeliveryConfigFull() {
   }
 }
 
+/** True when Shipday on-demand should run (JSON/legacy may store non-boolean). */
+export function isShipdayOnDemandEnabledFlag(raw) {
+  if (raw === true || raw === 1) return true;
+  if (typeof raw === 'string' && /^true$/i.test(raw.trim())) return true;
+  return false;
+}
+
 /**
  * Update global delivery config (admin or backend). Merges updates into current value.
  * @param {Object} updates - Same shape as PUT /config body
@@ -232,9 +239,15 @@ export async function updateDeliveryConfig(updates) {
         if (raw.length) merged.brokers[id].preferred_carrier_ids = raw;
       }
       if (id === 'shipday') {
-        merged.brokers[id].on_demand_enabled = entry.on_demand_enabled === true;
+        merged.brokers[id].on_demand_enabled = isShipdayOnDemandEnabledFlag(entry.on_demand_enabled);
         const provider = typeof entry.preferred_on_demand_provider === 'string' ? entry.preferred_on_demand_provider.trim() || null : null;
         merged.brokers[id].preferred_on_demand_provider = provider || null;
+        if (entry.on_demand_contactless === true) merged.brokers[id].on_demand_contactless = true;
+        else if (entry.on_demand_contactless === false) merged.brokers[id].on_demand_contactless = false;
+        if (entry.on_demand_tip != null && entry.on_demand_tip !== '') {
+          const t = Number(entry.on_demand_tip);
+          if (Number.isFinite(t) && t >= 0) merged.brokers[id].on_demand_tip = t;
+        }
       }
     }
   }

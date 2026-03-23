@@ -678,7 +678,18 @@ router.patch('/delivery-operator/requests/:id', express.json(), async (req, res)
     const { id } = req.params;
     const body = req.body || {};
     const updates = { updated_at: new Date().toISOString() };
-    const allowedStatuses = ['New', 'Contacting', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'];
+    const allowedStatuses = [
+      'New',
+      'Contacting',
+      'ChoosingCarrier',
+      'Dispatched',
+      'Assigned',
+      'PickedUp',
+      'Completed',
+      'Failed',
+      'Cancelled',
+      'Needs Manual Assist',
+    ];
     if (body.status && allowedStatuses.includes(body.status)) updates.status = body.status;
     if (body.amount_quoted_cents !== undefined && Number.isFinite(body.amount_quoted_cents)) updates.amount_quoted_cents = Math.max(0, Math.round(body.amount_quoted_cents));
     const stringFields = [
