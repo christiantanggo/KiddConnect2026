@@ -36,12 +36,16 @@ import { getDevBackendPort, getDevFrontendPort } from "./config/load-dev-ports.j
 // Load environment variables FIRST (use .env only - old communications app DB)
 dotenv.config();
 
-// Port: In production, Railway/PaaS sets PORT (required). In local dev, always use
-// config/dev-ports.json (5003) so a stale PORT=5001 in .env does not override.
+// Port: Railway (and similar) inject PORT; the proxy only forwards to that port.
+// We only read PORT when NODE_ENV=production OR Railway is detected — otherwise a stale
+// PORT=5001 in local .env would override dev-ports.json (5003).
 const isProd = process.env.NODE_ENV === 'production';
+const onRailway = Boolean(process.env.RAILWAY_ENVIRONMENT);
 const paasPort = Number(process.env.PORT);
 const __SERVER_PORT__ =
-  isProd && Number.isFinite(paasPort) && paasPort > 0 ? paasPort : getDevBackendPort();
+  (isProd || onRailway) && Number.isFinite(paasPort) && paasPort > 0
+    ? paasPort
+    : getDevBackendPort();
 console.log('[Server] LOADED:', path.resolve(process.cwd(), 'server.js'));
 console.log('[Server] WILL LISTEN ON PORT:', __SERVER_PORT__);
 
