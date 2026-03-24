@@ -9,6 +9,8 @@ import {
   buildOnDemandAssignBody,
   collectOnDemandEstimates,
   fetchOnDemandEstimatesForConfirm,
+  isCheapestMode,
+  pickOnDemandEstimate,
 } from './shipdayOnDemand.js';
 import { calculateDeliveryPrice, PRICE_DISCLAIMER } from './pricingEngine.js';
 
@@ -110,6 +112,28 @@ async function getShipdayOrderContext(deliveryRequestId) {
     shipdayConfig,
     preferredIds: coalescePreferredCarrierIds(shipdayConfig?.preferred_carrier_ids),
   };
+}
+
+/**
+ * Resolve the Shipday estimate row the customer selected (by estimate_id if present, else provider name).
+ * Does not fall back to an arbitrary first estimate — wrong match must yield null so the caller can retry full collect.
+ */
+function findOnDemandEstimateForConfirm(estimates, providerName, estimateId) {
+  if (!estimates || estimates.length === 0) return null;
+  const wantId = estimateId != null ? String(estimateId).trim() : '';
+  if (wantId) {
+    const byId = estimates.find((e) => e && String(e.id || '').trim() === wantId);
+    if (byId) return byId;
+  }
+  const pref = String(providerName || '').trim();
+  if (!pref) return null;
+  if (isCheapestMode(pref)) {
+    return pickOnDemandEstimate(estimates, 'cheapest');
+  }
+  const pl = pref.toLowerCase();
+  const exact = estimates.find((e) => e && String(e.name || '').toLowerCase() === pl);
+  if (exact) return exact;
+  return estimates.find((e) => e && String(e.name || '').toLowerCase().includes(pl)) || null;
 }
 
 async function collectEstimatesAfterCreate(shipdayOrderId, onDemandBase, authHeader) {
