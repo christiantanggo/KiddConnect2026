@@ -547,6 +547,9 @@ export const deliveryNetworkAPI = {
   getRequests: () => api.get('/v2/delivery-network/requests', { headers: deliveryNetworkHeaders() }),
   /** Pull latest proof of delivery from Shipday for this request (customer dashboard). */
   syncRequestPod: (id) => api.post(`/v2/delivery-network/requests/${id}/sync-pod`, {}, { headers: deliveryNetworkHeaders() }),
+  /** Live ETA / driver location for Shipday orders (Tavari UI only; no Shipday tracking page). */
+  getRequestLiveTracking: (id) =>
+    api.get(`/v2/delivery-network/requests/${id}/live-tracking`, { headers: deliveryNetworkHeaders() }),
   getCarrierOptions: (id) =>
     api.get(`/v2/delivery-network/requests/${id}/carrier-options`, { headers: deliveryNetworkHeaders() }),
   /** Shipday on-demand assign can take 25s+; keep above default 30s axios timeout to avoid false failures and double-submit. */
@@ -555,7 +558,15 @@ export const deliveryNetworkAPI = {
       headers: deliveryNetworkHeaders(),
       timeout: 120000,
     }),
-  createRequest: (data) => api.post('/v2/delivery-network/requests', data, { headers: deliveryNetworkHeaders() }),
+  createRequest: (data) =>
+    api.post('/v2/delivery-network/requests', data, {
+      headers: deliveryNetworkHeaders(),
+      timeout: 120000,
+    }),
+  confirmDeliveryQuote: (id) =>
+    api.post(`/v2/delivery-network/requests/${id}/confirm-delivery-quote`, {}, { headers: deliveryNetworkHeaders(), timeout: 120000 }),
+  rejectDeliveryQuote: (id) =>
+    api.post(`/v2/delivery-network/requests/${id}/reject-delivery-quote`, {}, { headers: deliveryNetworkHeaders(), timeout: 60000 }),
   updateRequest: (id, data) => api.patch(`/v2/delivery-network/requests/${id}`, data, { headers: deliveryNetworkHeaders() }),
   deleteRequest: (requestId) => api.delete(`/v2/delivery-network/requests/${requestId}`, { headers: deliveryNetworkHeaders() }),
   resetDispatch: (requestId) => api.post(`/v2/delivery-network/requests/${requestId}/reset-dispatch`, {}, { headers: deliveryNetworkHeaders() }),

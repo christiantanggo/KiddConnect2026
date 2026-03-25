@@ -49,7 +49,14 @@ const SETTINGS_SUB_TABS = [
 
 const BROKER_OPTIONS = [
   { id: 'shipday', name: 'Shipday', description: 'Connect your Shipday account to dispatch deliveries. API key from Shipday dashboard.', baseUrlPlaceholder: 'https://api.shipday.com (optional)' },
-  // Add more brokers here as needed, e.g. { id: 'doordash', name: 'DoorDash', description: '...', comingSoon: true }
+  {
+    id: 'doordash',
+    name: 'DoorDash Drive (direct)',
+    description:
+      'DoorDash Developer Portal access key (Drive API). Use Developer ID, Key ID, and signing secret from Credentials — not hardcoded. Dispatch via DoorDash will be wired in a follow-up; this stores credentials and tests the connection.',
+    useDoorDashDrive: true,
+    baseUrlPlaceholder: 'https://openapi.doordash.com (optional)',
+  },
 ];
 
 function AdminDeliveryOperatorPage() {
@@ -132,6 +139,7 @@ function AdminDeliveryOperatorPage() {
     customer_sms_message: '',
     customer_sms_legal: '',
     service_line_name: 'Last-Mile Delivery',
+    dispatch_broker: 'shipday',
     billing: {
       price_basic_cents: '',
       price_priority_cents: '',
@@ -228,6 +236,7 @@ function AdminDeliveryOperatorPage() {
         customer_sms_message: configData.customer_sms_message || '',
         customer_sms_legal: configData.customer_sms_legal || '',
         service_line_name: configData.service_line_name || 'Last-Mile Delivery',
+        dispatch_broker: configData.dispatch_broker === 'doordash' ? 'doordash' : 'shipday',
         billing: {
           price_basic_cents: configData.billing?.price_basic_cents ?? '',
           price_priority_cents: configData.billing?.price_priority_cents ?? '',
@@ -270,6 +279,7 @@ function AdminDeliveryOperatorPage() {
         customer_sms_message: configForm.customer_sms_message || null,
         customer_sms_legal: configForm.customer_sms_legal || null,
         service_line_name: configForm.service_line_name || null,
+        dispatch_broker: configForm.dispatch_broker === 'doordash' ? 'doordash' : 'shipday',
         billing: {
           price_basic_cents: typeof configForm.billing.price_basic_cents === 'number' ? configForm.billing.price_basic_cents : (configForm.billing.price_basic_cents === '' ? undefined : Math.round(Number(configForm.billing.price_basic_cents))),
           price_priority_cents: typeof configForm.billing.price_priority_cents === 'number' ? configForm.billing.price_priority_cents : (configForm.billing.price_priority_cents === '' ? undefined : Math.round(Number(configForm.billing.price_priority_cents))),
@@ -324,6 +334,48 @@ function AdminDeliveryOperatorPage() {
 
   const testBrokerConnection = async (brokerId) => {
     const entry = configForm.brokers?.[brokerId] || {};
+    if (brokerId === 'doordash') {
+      const developer_id = (entry.developer_id || '').trim();
+      const key_id = (entry.key_id || '').trim();
+      const signing_secret = (entry.signing_secret || '').trim();
+      if (!developer_id || !key_id || !signing_secret) {
+        alert('Enter Developer ID, Key ID, and signing secret to test DoorDash.');
+        return;
+      }
+      setTestingBrokerId(brokerId);
+      try {
+        const token = getAdminToken();
+        const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/test-broker-connection`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            broker_id: 'doordash',
+            developer_id,
+            key_id,
+            signing_secret,
+            base_url: (entry.base_url || '').trim() || undefined,
+          }),
+        });
+        const data = await res.json();
+        setBrokerTestResult({
+          brokerId,
+          success: !!data.success,
+          message: data.success ? (data.message || 'Connection successful.') : (data.error || 'Connection test failed.'),
+          detail: data.detail || null,
+          request_url: data.request_url || null,
+          http_method: data.http_method || 'POST',
+          response_status: data.response_status,
+          response_summary: data.response_summary || null,
+        });
+        if (!data.success) alert(data.error || 'Connection test failed.');
+      } catch (e) {
+        setBrokerTestResult({ brokerId, success: false, message: e.message || 'Connection test failed.', detail: null });
+        alert(e.message || 'Connection test failed.');
+      } finally {
+        setTestingBrokerId(null);
+      }
+      return;
+    }
     const apiKey = (entry.api_key || '').trim();
     if (!apiKey) {
       alert('Enter an API key first.');
@@ -348,6 +400,7 @@ function AdminDeliveryOperatorPage() {
         message: data.success ? (data.message || 'Connection successful.') : (data.error || 'Connection test failed.'),
         detail: data.detail || null,
         request_url: data.request_url || null,
+        http_method: data.http_method || 'GET',
         response_status: data.response_status,
         response_summary: data.response_summary || null,
       });
@@ -781,11 +834,48 @@ function AdminDeliveryOperatorPage() {
                   <section className="bg-white rounded-xl border border-slate-200 p-6">
                     <h2 className="text-lg font-semibold text-slate-800 mb-2">Delivery company APIs</h2>
                     <p className="text-sm text-slate-600 mb-6">Connect courier or delivery networks. When a delivery is requested, the system will use these APIs to dispatch to the connected providers. Add API keys from each provider’s dashboard.</p>
+                    <div className="mb-6 p-4 rounded-lg border border-slate-200 bg-slate-50/80">
+                      <label className="block text-sm font-medium text-slate-800 mb-1">Dispatch provider (new requests)</label>
+                      <p className="text-xs text-slate-600 mb-2">Which integration creates the live delivery when a request moves from intake to dispatch. DoorDash uses quote → accept in one step (no Shipday carrier picker).</p>
+                      <select
+                        value={configForm.dispatch_broker === 'doordash' ? 'doordash' : 'shipday'}
+                        onChange={(e) => setConfigForm((f) => ({ ...f, dispatch_broker: e.target.value }))}
+                        className="max-w-md w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                      >
+                        <option value="shipday">Shipday</option>
+                        <option value="doordash">DoorDash Drive (direct)</option>
+                      </select>
+                    </div>
                     <div className="space-y-6">
                       {BROKER_OPTIONS.map((broker) => {
-                        const entry = configForm.brokers?.[broker.id] || { enabled: false, api_key: '', base_url: '', preferred_carrier_ids: '', on_demand_enabled: false, preferred_on_demand_provider: '' };
+                        const entry = configForm.brokers?.[broker.id] || (
+                          broker.useDoorDashDrive
+                            ? {
+                                enabled: false,
+                                developer_id: '',
+                                key_id: '',
+                                signing_secret: '',
+                                environment: 'sandbox',
+                                base_url: '',
+                                signing_secret_configured: false,
+                              }
+                            : {
+                                enabled: false,
+                                api_key: '',
+                                base_url: '',
+                                preferred_carrier_ids: '',
+                                on_demand_enabled: false,
+                                on_demand_auto_assign: false,
+                                preferred_on_demand_provider: '',
+                              }
+                        );
                         const preferredDisplay = Array.isArray(entry.preferred_carrier_ids) ? entry.preferred_carrier_ids.join(', ') : (entry.preferred_carrier_ids ?? '');
                         const onDemandProvider = entry.preferred_on_demand_provider ?? '';
+                        const doorDashTestReady =
+                          broker.useDoorDashDrive &&
+                          (entry.developer_id || '').trim() &&
+                          (entry.key_id || '').trim() &&
+                          (entry.signing_secret || '').trim();
                         return (
                           <div key={broker.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50/50">
                             <div className="flex items-center gap-2 mb-2">
@@ -805,6 +895,104 @@ function AdminDeliveryOperatorPage() {
                               <label htmlFor={`broker-${broker.id}-enabled`} className="font-medium text-slate-800">{broker.name}</label>
                             </div>
                             <p className="text-sm text-slate-600 mb-3">{broker.description}</p>
+                            {broker.useDoorDashDrive ? (
+                              <div className="space-y-3">
+                                {entry.signing_secret_configured ? (
+                                  <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-100 rounded px-2 py-1.5">
+                                    Signing secret is saved. Leave the field empty to keep it; paste a new value only to rotate.
+                                  </p>
+                                ) : null}
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="block text-sm text-slate-700 mb-1">Developer ID</label>
+                                    <input
+                                      type="text"
+                                      autoComplete="off"
+                                      value={entry.developer_id || ''}
+                                      onChange={(e) => setConfigForm((f) => ({
+                                        ...f,
+                                        brokers: {
+                                          ...(f.brokers || {}),
+                                          doordash: { ...(f.brokers?.doordash || {}), developer_id: e.target.value },
+                                        },
+                                      }))}
+                                      placeholder="UUID from DoorDash portal"
+                                      className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
+                                    />
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm text-slate-700 mb-1">Key ID</label>
+                                    <input
+                                      type="text"
+                                      autoComplete="off"
+                                      value={entry.key_id || ''}
+                                      onChange={(e) => setConfigForm((f) => ({
+                                        ...f,
+                                        brokers: {
+                                          ...(f.brokers || {}),
+                                          doordash: { ...(f.brokers?.doordash || {}), key_id: e.target.value },
+                                        },
+                                      }))}
+                                      placeholder="UUID from DoorDash portal"
+                                      className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
+                                    />
+                                  </div>
+                                </div>
+                                <div>
+                                  <label className="block text-sm text-slate-700 mb-1">Signing secret</label>
+                                  <input
+                                    type="password"
+                                    autoComplete="off"
+                                    value={entry.signing_secret || ''}
+                                    onChange={(e) => setConfigForm((f) => ({
+                                      ...f,
+                                      brokers: {
+                                        ...(f.brokers || {}),
+                                        doordash: { ...(f.brokers?.doordash || {}), signing_secret: e.target.value },
+                                      },
+                                    }))}
+                                    placeholder={entry.signing_secret_configured ? 'Leave blank to keep saved secret' : 'Paste once from portal (base64)'}
+                                    className="w-full px-3 py-2 border border-slate-300 rounded text-sm font-mono"
+                                  />
+                                  <p className="text-xs text-slate-500 mt-1">DoorDash only shows this when the key is created. Store it here — never commit it to git.</p>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                  <div>
+                                    <label className="block text-sm text-slate-700 mb-1">Environment</label>
+                                    <select
+                                      value={entry.environment === 'production' ? 'production' : 'sandbox'}
+                                      onChange={(e) => setConfigForm((f) => ({
+                                        ...f,
+                                        brokers: {
+                                          ...(f.brokers || {}),
+                                          doordash: { ...(f.brokers?.doordash || {}), environment: e.target.value },
+                                        },
+                                      }))}
+                                      className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                                    >
+                                      <option value="sandbox">Sandbox</option>
+                                      <option value="production">Production</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="block text-sm text-slate-700 mb-1">API base URL (optional)</label>
+                                    <input
+                                      type="url"
+                                      value={entry.base_url || ''}
+                                      onChange={(e) => setConfigForm((f) => ({
+                                        ...f,
+                                        brokers: {
+                                          ...(f.brokers || {}),
+                                          doordash: { ...(f.brokers?.doordash || {}), base_url: e.target.value },
+                                        },
+                                      }))}
+                                      placeholder={broker.baseUrlPlaceholder || 'https://openapi.doordash.com'}
+                                      className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
+                                    />
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <div>
                                 <label className="block text-sm text-slate-700 mb-1">API key</label>
@@ -840,6 +1028,7 @@ function AdminDeliveryOperatorPage() {
                                 />
                               </div>
                             </div>
+                            )}
                             {broker.id === 'shipday' && (
                               <div className="mt-3">
                                 <label className="block text-sm text-slate-700 mb-1">Preferred carrier IDs (strongly recommended)</label>
@@ -934,6 +1123,29 @@ function AdminDeliveryOperatorPage() {
                                   />
                                   <label htmlFor="shipday-on-demand-enabled" className="text-sm text-slate-700">Use on-demand delivery for quotes and dispatch</label>
                                 </div>
+                                <div className="flex items-center gap-2 mb-2">
+                                  <input
+                                    type="checkbox"
+                                    id="shipday-on-demand-auto-assign"
+                                    checked={!!entry.on_demand_auto_assign}
+                                    onChange={(e) =>
+                                      setConfigForm((f) => ({
+                                        ...f,
+                                        brokers: {
+                                          ...(f.brokers || {}),
+                                          shipday: { ...(f.brokers?.shipday || {}), on_demand_auto_assign: e.target.checked },
+                                        },
+                                      }))
+                                    }
+                                    className="rounded border-slate-300"
+                                  />
+                                  <label htmlFor="shipday-on-demand-auto-assign" className="text-sm text-slate-700">
+                                    Quote best on-demand price automatically (user confirms cost before dispatch)
+                                  </label>
+                                </div>
+                                <p className="text-xs text-slate-500 mb-2 -mt-1">
+                                  When enabled, we fetch Shipday estimates after the order is created, show the customer price (not the courier name), and the user must <strong>confirm</strong> to assign or <strong>decline</strong> to delete the Shipday order. If quoting fails, status falls back to <strong>Choosing carrier</strong>.
+                                </p>
                                 <div>
                                   <label className="block text-sm text-slate-700 mb-1">On-demand provider</label>
                                   <select
@@ -952,7 +1164,7 @@ function AdminDeliveryOperatorPage() {
                                     <option value="Uber">Uber only</option>
                                   </select>
                                   <p className="mt-1.5 text-xs text-slate-500 max-w-xl">
-                                    <strong>Cheapest</strong> is the default: we assign the provider with the lowest quoted fee among all estimates Shipday returns. Use DoorDash/Uber only if you need to lock a brand.
+                                    Used for quotes and for <strong>automatic assign</strong> when the checkbox above is on: <strong>Cheapest</strong> picks the lowest Shipday fee; DoorDash/Uber lock that partner when quotes exist.
                                   </p>
                                 </div>
                                 <div className="flex items-center gap-2 mt-3">
@@ -1002,28 +1214,36 @@ function AdminDeliveryOperatorPage() {
                               <button
                                 type="button"
                                 onClick={() => testBrokerConnection(broker.id)}
-                                disabled={testingBrokerId !== null || !(entry.api_key || '').trim()}
+                                disabled={
+                                  testingBrokerId !== null ||
+                                  (broker.useDoorDashDrive ? !doorDashTestReady : !(entry.api_key || '').trim())
+                                }
                                 className="px-3 py-1.5 rounded border border-slate-300 bg-white text-slate-700 text-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
                                 {testingBrokerId === broker.id ? 'Testing…' : 'Test connection'}
                               </button>
+                              {broker.useDoorDashDrive && !doorDashTestReady ? (
+                                <p className="text-xs text-slate-500 mt-1">
+                                  Fill Developer ID, Key ID, and signing secret to test. After save, paste the secret again here to test — it is not returned from the server.
+                                </p>
+                              ) : null}
                               {brokerTestResult?.brokerId === broker.id && (
                                 <div className={`mt-2 p-3 rounded text-sm ${brokerTestResult.success ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-red-50 text-red-800 border border-red-200'}`}>
                                   <p className="font-medium">{brokerTestResult.message}</p>
-                                  {brokerTestResult.success && brokerTestResult.request_url != null && (
+                                  {brokerTestResult.request_url != null && (
                                     <p className="mt-2 text-xs font-mono opacity-90">
-                                      <span className="font-semibold">Request:</span> GET {brokerTestResult.request_url}
+                                      <span className="font-semibold">Request:</span> {brokerTestResult.http_method || 'GET'} {brokerTestResult.request_url}
                                     </p>
                                   )}
-                                  {brokerTestResult.success && brokerTestResult.response_status != null && (
+                                  {brokerTestResult.response_status != null && (
                                     <p className="mt-0.5 text-xs font-mono opacity-90">
                                       <span className="font-semibold">Response:</span> HTTP {brokerTestResult.response_status}
                                       {brokerTestResult.response_summary ? ` — ${brokerTestResult.response_summary}` : ''}
                                     </p>
                                   )}
-                                  {brokerTestResult.detail && !brokerTestResult.request_url && (
+                                  {brokerTestResult.detail ? (
                                     <p className="mt-1 text-xs opacity-90">{brokerTestResult.detail}</p>
-                                  )}
+                                  ) : null}
                                 </div>
                               )}
                             </div>
@@ -1031,7 +1251,7 @@ function AdminDeliveryOperatorPage() {
                         );
                       })}
                     </div>
-                    <p className="text-xs text-slate-500 mt-4">API keys are stored in the delivery config. For production, ensure your backend and database are secured. More delivery providers can be added here in future updates.</p>
+                    <p className="text-xs text-slate-500 mt-4">API keys and DoorDash signing secrets are stored in delivery config (Supabase). Restrict admin access and database policies in production. If a secret is ever exposed, revoke the key in the DoorDash portal and create a new one.</p>
                   </section>
                   )}
 
@@ -1041,7 +1261,7 @@ function AdminDeliveryOperatorPage() {
                     <div className="space-y-4">
                       <label className="flex items-center gap-2">
                         <input type="checkbox" checked={configForm.email_enabled} onChange={(e) => setConfigForm(f => ({ ...f, email_enabled: e.target.checked }))} className="rounded border-slate-300" />
-                        <span className="text-sm text-slate-700">Send email when new delivery request</span>
+                        <span className="text-sm text-slate-700">Send email on new requests and on status changes (dispatched, completed, etc.)</span>
                       </label>
                       <div>
                         <label className="block text-sm text-slate-700 mb-1">Notification email</label>
@@ -1049,7 +1269,7 @@ function AdminDeliveryOperatorPage() {
                       </div>
                       <label className="flex items-center gap-2">
                         <input type="checkbox" checked={configForm.sms_enabled} onChange={(e) => setConfigForm(f => ({ ...f, sms_enabled: e.target.checked }))} className="rounded border-slate-300" />
-                        <span className="text-sm text-slate-700">Send SMS when new request</span>
+                        <span className="text-sm text-slate-700">Send SMS on new requests and on status changes</span>
                       </label>
                       <div>
                         <label className="block text-sm text-slate-700 mb-1">SMS number</label>
@@ -1073,11 +1293,15 @@ function AdminDeliveryOperatorPage() {
                     <div className="space-y-4">
                       <label className="flex items-center gap-2">
                         <input type="checkbox" checked={configForm.customer_sms_enabled} onChange={(e) => setConfigForm(f => ({ ...f, customer_sms_enabled: e.target.checked }))} className="rounded border-slate-300" />
-                        <span className="text-sm text-slate-700">Send SMS to customer (e.g. confirmation)</span>
+                        <span className="text-sm text-slate-700">Send SMS to customer on status updates (dispatched, assigned, picked up, completed, etc.)</span>
                       </label>
                       <div>
                         <label className="block text-sm text-slate-700 mb-1">Customer SMS message template</label>
-                        <input type="text" value={configForm.customer_sms_message} onChange={(e) => setConfigForm(f => ({ ...f, customer_sms_message: e.target.value }))} placeholder="Optional default message" className="w-full max-w-md px-3 py-2 border border-slate-300 rounded text-sm" />
+                        <textarea value={configForm.customer_sms_message} onChange={(e) => setConfigForm(f => ({ ...f, customer_sms_message: e.target.value }))} placeholder="Leave blank for a default per status" rows={3} className="w-full max-w-2xl px-3 py-2 border border-slate-300 rounded text-xs font-mono" />
+                        <p className="text-xs text-slate-500 mt-1 max-w-2xl">
+                          Placeholders: {'{{reference_number}}'} {'{{status}}'} {'{{status_message}}'} {'{{tracking_url}}'} {'{{delivery_link}}'} (status + POD page){' '}
+                          {'{{pod_link}}'} {'{{pod_summary}}'} {'{{recipient_name}}'} {'{{delivery_address}}'} {'{{pickup_address}}'} {'{{caller_name}}'} {'{{terms_url}}'}
+                        </p>
                       </div>
                       <div>
                         <label className="block text-sm text-slate-700 mb-1">Legal / compliance text for SMS</label>
@@ -1470,6 +1694,7 @@ function AdminDeliveryOperatorPage() {
                   <option value="New">New</option>
                   <option value="Contacting">Contacting</option>
                   <option value="ChoosingCarrier">Choosing carrier</option>
+                  <option value="ConfirmingDelivery">Confirming delivery price</option>
                   <option value="Dispatched">Dispatched</option>
                   <option value="Completed">Completed</option>
                   <option value="Cancelled">Cancelled</option>
@@ -1656,7 +1881,7 @@ function AdminDeliveryOperatorPage() {
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Status</label>
                     <select value={editForm.status} onChange={(e) => setEditForm((f) => ({ ...f, status: e.target.value }))} className="w-full px-3 py-2 border border-slate-300 rounded text-sm">
-                      {['New', 'Contacting', 'ChoosingCarrier', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'].map((s) => (
+                      {['New', 'Contacting', 'ChoosingCarrier', 'ConfirmingDelivery', 'Dispatched', 'Assigned', 'PickedUp', 'Completed', 'Failed', 'Cancelled', 'Needs Manual Assist'].map((s) => (
                         <option key={s} value={s}>{s}</option>
                       ))}
                     </select>

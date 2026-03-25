@@ -14,9 +14,11 @@ import { startDispatch } from '../../services/delivery-network/dispatch.js';
 import {
   confirmFleetCarrierForRequest,
   confirmOnDemandCarrierForRequest,
+  confirmStagedOnDemandQuoteForRequest,
   getCarrierOptionsForRequest,
+  rejectStagedOnDemandQuoteForRequest,
 } from '../../services/delivery-network/carrierChoice.js';
-import { getDeliveryConfig, invalidateDeliveryConfigCache } from '../../services/delivery-network/config.js';
+import { getDeliveryConfig, getDeliveryConfigFull, invalidateDeliveryConfigCache } from '../../services/delivery-network/config.js';
 import { getEmergencyConfig } from '../../services/emergency-network/config.js';
 import { getPhoneNumbersForBusiness } from '../../utils/businessPhoneNumbersForDropdown.js';
 import { createDeliveryNetworkAssistant } from '../../services/delivery-network/create-vapi-assistant.js';
@@ -27,6 +29,10 @@ import {
   hydrateSavedLocationStructuredFields,
   savedLocationRowToParts,
 } from '../../services/delivery-network/canadianAddressParts.js';
+import {
+  handleDoorDashDriveWebhook,
+  handleShipdayBrokerWebhook,
+} from '../../services/delivery-network/deliveryBrokerWebhooks.js';
 
 const router = express.Router();
 
@@ -108,6 +114,11 @@ async function getOwnedPhoneNumbersForDropdown() {
 
 // ---------- PUBLIC (no auth) ----------
 
+/** DoorDash Drive: configure URL + Basic Auth in developer portal → match DOORDASH_WEBHOOK_BASIC_* env. */
+router.post('/webhooks/doordash', handleDoorDashDriveWebhook);
+/** Shipday: set SHIPDAY_WEBHOOK_SECRET (recommended) or rely on same Basic header as API (Basic + api key). */
+router.post('/webhooks/shipday', handleShipdayBrokerWebhook);
+
 /**
  * GET /api/v2/emergency-network/public/phone
  * Returns the primary emergency phone number for the customer-facing /emergency page (CALL NOW / TEXT US links).
@@ -124,10 +135,124 @@ router.get('/public/phone', async (req, res) => {
   }
 });
 
+/** Allowed keys for website_page_content (public + dashboard). */
+const WEBSITE_PAGE_KEYS = ['emergency-main', 'plumbing-main', 'delivery-main', 'terms-of-service'];
+const WEBSITE_HERO_PAGE_KEYS = ['emergency-main', 'plumbing-main', 'delivery-main'];
+
+/**
+ * GET /api/v2/delivery-network/public/branding
+ * Safe public strings for /deliverydispatch (no secrets).
+ */
+router.get('/public/branding', async (req, res) => {
+  try {
+    const full = await getDeliveryConfigFull();
+    const name = (full.service_line_name && String(full.service_line_name).trim()) || 'Last-Mile Delivery';
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({
+      service_line_name: name,
+      opening_greeting: (full.opening_greeting && String(full.opening_greeting).trim()) || null,
+    });
+  } catch (err) {
+    console.error('[DeliveryNetwork] public/branding error:', err?.message || err);
+    res.json({ service_line_name: 'Last-Mile Delivery', opening_greeting: null });
+  }
+});
+
 /**
  * GET /api/v2/emergency-network/public/transcript/:token
  * Public (no auth) view of the intake call transcript. Link is sent to providers via SMS/email after they accept.
  */
+/**
+ * GET /api/v2/delivery-network/public/delivery/:token
+ * Public status + proof of delivery (no auth). Link is included in customer SMS/email.
+ */
+router.get('/public/delivery/:token', async (req, res) => {
+  const token = req.params.token && String(req.params.token).trim();
+  if (!token) {
+    return res.status(404).send('Not found');
+  }
+  try {
+    const { data: row, error } = await supabaseClient
+      .from('delivery_requests')
+      .select(
+        'reference_number, status, pickup_address, delivery_address, recipient_name, pod_signature_url, pod_photo_urls, pod_captured_at, carrier_tracking_url',
+      )
+      .eq('customer_notify_token', token)
+      .single();
+    if (error || !row) {
+      return res.status(404).send('Not found');
+    }
+    let photos = row.pod_photo_urls;
+    if (typeof photos === 'string') {
+      try {
+        photos = JSON.parse(photos);
+      } catch {
+        photos = [];
+      }
+    }
+    if (!Array.isArray(photos)) photos = [];
+    const photoUrls = photos.filter((u) => typeof u === 'string' && u.trim()).map((u) => u.trim());
+    const track = row.carrier_tracking_url && String(row.carrier_tracking_url).trim();
+    const sig = row.pod_signature_url && String(row.pod_signature_url).trim();
+
+    const photoBlocks = photoUrls
+      .filter((u) => /^https?:\/\//i.test(u))
+      .slice(0, 8)
+      .map(
+        (u) =>
+          `<figure style="margin:12px 0;"><a href="${escapeHtml(u)}" target="_blank" rel="noopener noreferrer"><img src="${escapeHtml(u)}" alt="Proof of delivery" style="max-width:100%;border-radius:8px;border:1px solid #e2e8f0;" loading="lazy" /></a></figure>`,
+      )
+      .join('\n');
+
+    const sigBlock = sig && /^https?:\/\//i.test(sig)
+      ? `<p><strong>Signature</strong></p><p><a href="${escapeHtml(sig)}" target="_blank" rel="noopener noreferrer">View signature image</a></p>`
+      : '';
+
+    const trackBlock = track
+      ? `<p><a href="${escapeHtml(track)}" target="_blank" rel="noopener noreferrer">Track delivery</a></p>`
+      : '';
+
+    const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Delivery ${escapeHtml(row.reference_number || '')}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 24px auto; padding: 0 16px; color: #1e293b; }
+    h1 { font-size: 1.25rem; margin-bottom: 8px; }
+    .meta { color: #64748b; font-size: 14px; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Delivery ${escapeHtml(row.reference_number || '—')}</h1>
+  <p class="meta">Status: <strong>${escapeHtml(row.status || '—')}</strong></p>
+  ${trackBlock}
+  <p><strong>Pickup</strong><br>${escapeHtml(row.pickup_address || '—')}</p>
+  <p><strong>Deliver to</strong><br>${escapeHtml(row.delivery_address || '—')}</p>
+  ${row.recipient_name ? `<p><strong>Recipient</strong><br>${escapeHtml(row.recipient_name)}</p>` : ''}
+  <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;" />
+  <h2 style="font-size:1rem;">Proof of delivery</h2>
+  ${
+    sigBlock || photoBlocks
+      ? `${sigBlock}${photoBlocks}`
+      : '<p style="color:#64748b;">Photos or signature will appear here after the carrier uploads proof.</p>'
+  }
+  ${
+    row.pod_captured_at
+      ? `<p class="meta" style="margin-top:16px;">Updated ${escapeHtml(String(row.pod_captured_at))}</p>`
+      : ''
+  }
+</body>
+</html>`;
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    res.send(html);
+  } catch (err) {
+    console.error('[DeliveryNetwork] public/delivery error:', err?.message || err);
+    res.status(500).send('Something went wrong.');
+  }
+});
+
 router.get('/public/transcript/:token', async (req, res) => {
   const token = req.params.token && String(req.params.token).trim();
   if (!token) {
@@ -184,6 +309,16 @@ const uploadHero = multer({ storage: multer.memoryStorage(), limits: { fileSize:
 const DEFAULT_WEBSITE_PAGE = {
   'emergency-main': { hero_image_url: '', hero_header: 'Need Help Right Now?', hero_subtext: 'Call our 24/7 local emergency network.', buttons: [{ label: 'CALL NOW — AVAILABLE 24/7', url: 'tel' }, { label: 'Text Us', url: 'sms' }, { label: 'Request Help Online', url: '#form' }] },
   'plumbing-main': { hero_image_url: '', hero_header: '24/7 Emergency Plumbing', hero_subtext: 'Leaks, clogs, no hot water—we connect you with licensed local plumbers.', buttons: [{ label: 'Call now — 24/7', url: 'tel' }, { label: 'Text us', url: 'sms' }, { label: 'Request help online', url: '#form' }] },
+  'delivery-main': {
+    hero_image_url: '',
+    hero_header: 'Package pickup & delivery',
+    hero_subtext: 'Schedule a pickup and delivery online or by phone. Track your shipment and get proof of delivery when it arrives.',
+    buttons: [
+      { label: 'Call us', url: 'tel' },
+      { label: 'Text us', url: 'sms' },
+      { label: 'Request delivery online', url: '#form' },
+    ],
+  },
   'terms-of-service': { page_title: 'Terms of Service', page_subtext: 'Emergency Dispatch Service', sections: [{ id: '1', header: '', content: '' }] },
 };
 
@@ -194,7 +329,7 @@ const DEFAULT_WEBSITE_PAGE = {
  */
 router.get('/public/website-page/:key', async (req, res) => {
   const key = req.params.key && String(req.params.key).trim();
-  if (!key || !['emergency-main', 'plumbing-main', 'terms-of-service'].includes(key)) {
+  if (!key || !WEBSITE_PAGE_KEYS.includes(key)) {
     return res.status(404).json({ error: 'Not found' });
   }
   try {
@@ -290,7 +425,7 @@ router.post('/public/cancel', express.json(), async (req, res) => {
     const { data: rows, error } = await supabaseClient
       .from('delivery_requests')
       .select('id, reference_number, callback_phone, delivery_address, status, created_at')
-      .in('status', ['New', 'Contacting', 'ChoosingCarrier', 'Dispatched', 'Assigned', 'PickedUp'])
+      .in('status', ['New', 'Contacting', 'ChoosingCarrier', 'ConfirmingDelivery', 'Dispatched', 'Assigned', 'PickedUp'])
       .gte('created_at', start)
       .lte('created_at', end)
       .limit(50);
@@ -323,6 +458,15 @@ router.post('/public/cancel', express.json(), async (req, res) => {
       .update({ status: 'Cancelled', updated_at: new Date().toISOString() })
       .eq('id', target.id);
     if (updateErr) return res.status(500).json({ error: updateErr.message });
+    try {
+      const { queueDeliveryStatusNotifications } = await import('../../services/delivery-network/deliveryCustomerNotifications.js');
+      queueDeliveryStatusNotifications(target.status, 'Cancelled', target.id, null, {
+        source: 'system',
+        changed_by: 'Public cancel',
+      });
+    } catch (nErr) {
+      console.warn('[DeliveryNetwork] public/cancel notify:', nErr?.message || nErr);
+    }
     res.json({ success: true, message: 'Delivery cancelled.', reference_number: target.reference_number });
   } catch (err) {
     console.error('[DeliveryNetwork] public/cancel error:', err?.message || err);
@@ -614,7 +758,7 @@ router.get('/website-pages/:key', async (req, res) => {
  */
 router.put('/website-pages/:key', express.json(), async (req, res) => {
   const key = req.params.key && String(req.params.key).trim();
-  if (!key || !['emergency-main', 'plumbing-main', 'terms-of-service'].includes(key)) {
+  if (!key || !WEBSITE_PAGE_KEYS.includes(key)) {
     return res.status(400).json({ error: 'Invalid page key' });
   }
   const content = req.body?.content;
@@ -642,8 +786,8 @@ router.put('/website-pages/:key', express.json(), async (req, res) => {
  */
 router.post('/website-pages/upload-hero', uploadHero.single('file'), async (req, res) => {
   const pageKey = req.query?.page_key && String(req.query.page_key).trim();
-  if (!pageKey || !['emergency-main', 'plumbing-main'].includes(pageKey)) {
-    return res.status(400).json({ error: 'Query page_key required: emergency-main or plumbing-main' });
+  if (!pageKey || !WEBSITE_HERO_PAGE_KEYS.includes(pageKey)) {
+    return res.status(400).json({ error: `Query page_key required: ${WEBSITE_HERO_PAGE_KEYS.join(', ')}` });
   }
   if (!req.file || !req.file.buffer) {
     return res.status(400).json({ error: 'No file uploaded. Use multipart field "file".' });
@@ -771,13 +915,30 @@ router.put('/config', express.json(), async (req, res) => {
 router.get('/requests', async (req, res) => {
   try {
     const businessId = req.active_business_id;
+    const { syncInFlightShipdayOrders } = await import('../../services/delivery-network/shipdayPod.js');
+    const { synced } = await syncInFlightShipdayOrders(businessId).catch(() => ({ synced: 0 }));
+    if (synced > 0) {
+      console.log('[DeliveryNetwork] Synced', synced, 'Shipday order(s) before list');
+    }
     const colsBase =
-      'id, reference_number, caller_phone, callback_phone, pickup_address, delivery_address, recipient_name, package_description, priority, intake_channel, status, created_at, updated_at';
+      'id, reference_number, caller_phone, callback_phone, pickup_address, delivery_address, recipient_name, package_description, priority, intake_channel, status, created_at, updated_at, amount_quoted_cents, pending_on_demand_snapshot, carrier_tracking_url';
     const colsWithPod = `${colsBase}, pod_signature_url, pod_photo_urls, pod_captured_at`;
 
     let query = supabaseClient.from('delivery_requests').select(colsWithPod).order('created_at', { ascending: false }).limit(200);
     if (businessId) query = query.eq('business_id', businessId);
     let { data, error } = await query;
+
+    if (error && /carrier_tracking_url|column .* does not exist/i.test(String(error.message || ''))) {
+      console.warn('[DeliveryNetwork] carrier_tracking_url missing — run migrations/add_delivery_carrier_tracking_url.sql');
+      const colsBaseNoTrack =
+        'id, reference_number, caller_phone, callback_phone, pickup_address, delivery_address, recipient_name, package_description, priority, intake_channel, status, created_at, updated_at, amount_quoted_cents, pending_on_demand_snapshot';
+      const colsWithPodNoTrack = `${colsBaseNoTrack}, pod_signature_url, pod_photo_urls, pod_captured_at`;
+      query = supabaseClient.from('delivery_requests').select(colsWithPodNoTrack).order('created_at', { ascending: false }).limit(200);
+      if (businessId) query = query.eq('business_id', businessId);
+      const retryTrack = await query;
+      data = retryTrack.data;
+      error = retryTrack.error;
+    }
 
     if (error && /pod_|column .* does not exist/i.test(String(error.message || ''))) {
       console.warn('[DeliveryNetwork] POD columns missing for customer list — run migrations/add_delivery_proof_of_delivery.sql');
@@ -788,8 +949,45 @@ router.get('/requests', async (req, res) => {
       error = retry.error;
     }
 
+    if (error && /pending_on_demand_snapshot|column .* does not exist/i.test(String(error.message || ''))) {
+      console.warn('[DeliveryNetwork] pending_on_demand_snapshot missing — run migrations/add_delivery_confirming_quote.sql');
+      const colsNoSnap =
+        'id, reference_number, caller_phone, callback_phone, pickup_address, delivery_address, recipient_name, package_description, priority, intake_channel, status, created_at, updated_at, amount_quoted_cents';
+      const noSnapPod = `${colsNoSnap}, pod_signature_url, pod_photo_urls, pod_captured_at`;
+      query = supabaseClient.from('delivery_requests').select(noSnapPod).order('created_at', { ascending: false }).limit(200);
+      if (businessId) query = query.eq('business_id', businessId);
+      const retry2 = await query;
+      data = retry2.data;
+      error = retry2.error;
+      if (error && /pod_|column .* does not exist/i.test(String(error.message || ''))) {
+        query = supabaseClient.from('delivery_requests').select(colsNoSnap).order('created_at', { ascending: false }).limit(200);
+        if (businessId) query = query.eq('business_id', businessId);
+        const retry3 = await query;
+        data = retry3.data;
+        error = retry3.error;
+      }
+    }
+
     if (error) return res.status(500).json({ error: error.message });
-    res.json({ requests: data || [] });
+
+    const stripSnapshot = (rows) =>
+      (rows || []).map((r) => {
+        const snap = r.pending_on_demand_snapshot;
+        const { pending_on_demand_snapshot: _drop, ...rest } = r;
+        if (r.status === 'ConfirmingDelivery' && snap && typeof snap === 'object') {
+          return {
+            ...rest,
+            quote_preview: {
+              amount_cents: snap.amount_cents != null ? Number(snap.amount_cents) : r.amount_quoted_cents,
+              final_price_cad: snap.final_price_cad != null ? String(snap.final_price_cad) : null,
+              disclaimer: snap.disclaimer != null ? String(snap.disclaimer) : null,
+            },
+          };
+        }
+        return rest;
+      });
+
+    res.json({ requests: stripSnapshot(data || []) });
   } catch (err) {
     console.error('[DeliveryNetwork] requests list error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load requests' });
@@ -837,6 +1035,28 @@ router.post('/requests/:id/sync-pod', async (req, res) => {
   } catch (err) {
     console.error('[DeliveryNetwork] customer sync-pod error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Sync failed' });
+  }
+});
+
+/**
+ * GET /api/v2/delivery-network/requests/:id/live-tracking
+ * Shipday progress + order details for in-app tracking (no Shipday-branded page).
+ */
+router.get('/requests/:id/live-tracking', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const businessId = req.active_business_id;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    const { getLiveTrackingForDeliveryRequest } = await import('../../services/delivery-network/shipdayTracking.js');
+    const result = await getLiveTrackingForDeliveryRequest(id, businessId);
+    if (!result.success) {
+      const code = result.error === 'Forbidden' ? 403 : result.error === 'Request not found' ? 404 : 400;
+      return res.status(code).json({ error: result.error || 'Failed to load tracking' });
+    }
+    res.json(result.tracking);
+  } catch (err) {
+    console.error('[DeliveryNetwork] live-tracking error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to load tracking' });
   }
 });
 
@@ -907,6 +1127,53 @@ router.post('/requests/:id/confirm-carrier', express.json(), async (req, res) =>
 });
 
 /**
+ * POST /api/v2/delivery-network/requests/:id/confirm-delivery-quote
+ * After staged on-demand quote (ConfirmingDelivery): run Shipday assign and mark Dispatched.
+ */
+router.post('/requests/:id/confirm-delivery-quote', express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const businessId = req.active_business_id;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    const result = await confirmStagedOnDemandQuoteForRequest(id, businessId);
+    if (!result.success) {
+      const code = result.error === 'Forbidden' ? 403 : 400;
+      return res.status(code).json({ error: result.error || 'Confirm failed' });
+    }
+    res.json({
+      success: true,
+      amount_cents: result.amount_cents,
+      final_price_cad: result.final_price_cad,
+      disclaimer: result.disclaimer,
+    });
+  } catch (err) {
+    console.error('[DeliveryNetwork] confirm-delivery-quote error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to confirm quote' });
+  }
+});
+
+/**
+ * POST /api/v2/delivery-network/requests/:id/reject-delivery-quote
+ * User declines staged price: delete Shipday order and cancel Tavari request.
+ */
+router.post('/requests/:id/reject-delivery-quote', express.json(), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const businessId = req.active_business_id;
+    if (!businessId) return res.status(400).json({ error: 'Business context required' });
+    const result = await rejectStagedOnDemandQuoteForRequest(id, businessId);
+    if (!result.success) {
+      const code = result.error === 'Forbidden' ? 403 : 400;
+      return res.status(code).json({ error: result.error || 'Reject failed' });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    console.error('[DeliveryNetwork] reject-delivery-quote error:', err?.message || err);
+    res.status(500).json({ error: err?.message || 'Failed to reject quote' });
+  }
+});
+
+/**
  * POST /api/v2/delivery-network/requests
  * Customer (business) creates a new delivery request from the dashboard. Authenticated; business_id = req.active_business_id.
  */
@@ -960,21 +1227,44 @@ router.post('/requests', express.json(), async (req, res) => {
 
     const { data: refreshed } = await supabaseClient
       .from('delivery_requests')
-      .select('status')
+      .select('status, pending_on_demand_snapshot, amount_quoted_cents')
       .eq('id', request.id)
       .single();
     const finalStatus = refreshed?.status || request.status;
     const needsCarrierChoice = finalStatus === 'ChoosingCarrier';
+    const needsQuoteConfirm = finalStatus === 'ConfirmingDelivery';
+
+    let quotePreview = null;
+    if (needsQuoteConfirm) {
+      const snap = refreshed?.pending_on_demand_snapshot;
+      if (snap && typeof snap === 'object') {
+        quotePreview = {
+          amount_cents: snap.amount_cents != null ? Number(snap.amount_cents) : refreshed?.amount_quoted_cents,
+          final_price_cad: snap.final_price_cad != null ? String(snap.final_price_cad) : null,
+          disclaimer: snap.disclaimer != null ? String(snap.disclaimer) : null,
+        };
+      } else if (refreshed?.amount_quoted_cents != null) {
+        quotePreview = {
+          amount_cents: Number(refreshed.amount_quoted_cents),
+          final_price_cad: null,
+          disclaimer: null,
+        };
+      }
+    }
 
     res.status(201).json({
       success: true,
-      message: needsCarrierChoice
-        ? 'Choose a delivery service to finish scheduling.'
-        : "We're scheduling your delivery. You'll get updates as it progresses.",
+      message: needsQuoteConfirm
+        ? 'Confirm the delivery price below to finish scheduling.'
+        : needsCarrierChoice
+          ? 'Choose a delivery service to finish scheduling.'
+          : "We're scheduling your delivery. You'll get updates as it progresses.",
       request_id: request.id,
       reference_number: request.reference_number,
       status: finalStatus,
       needs_carrier_choice: needsCarrierChoice,
+      needs_quote_confirm: needsQuoteConfirm,
+      quote_preview: quotePreview,
     });
   } catch (err) {
     console.error('[DeliveryNetwork] create request error:', err?.message || err);
@@ -996,12 +1286,13 @@ router.post('/requests/:id/reset-dispatch', async (req, res) => {
     const { id: requestId } = req.params;
     const { data: request, error: fetchErr } = await supabaseClient
       .from('delivery_requests')
-      .select('id')
+      .select('id, status')
       .eq('id', requestId)
       .single();
     if (fetchErr || !request) {
       return res.status(404).json({ error: 'Request not found' });
     }
+    const prevStatus = request.status;
     await supabaseClient.from('delivery_dispatch_calls').delete().eq('delivery_request_id', requestId);
     await supabaseClient.from('delivery_dispatch_log').delete().eq('delivery_request_id', requestId);
     const { error: updateErr } = await supabaseClient
@@ -1010,6 +1301,17 @@ router.post('/requests/:id/reset-dispatch', async (req, res) => {
       .eq('id', requestId);
     if (updateErr) {
       return res.status(500).json({ error: 'Failed to reset status: ' + (updateErr.message || updateErr) });
+    }
+    try {
+      const { logRequestActivity } = await import('../../services/delivery-network/activity.js');
+      await logRequestActivity(requestId, 'dispatch_reset', {
+        from_status: prevStatus ?? null,
+        to_status: 'New',
+        source: 'manual',
+        changed_by: 'Dashboard',
+      });
+    } catch (logErr) {
+      console.error('[DeliveryNetwork] reset-dispatch activity log failed', requestId, logErr?.message || logErr);
     }
     res.json({ success: true, message: 'Dispatch reset. You can retry dispatch again.' });
   } catch (err) {
@@ -1035,6 +1337,17 @@ router.post('/requests/:id/call-provider', async (req, res) => {
     }
     if (!['New', 'Contacting', 'ChoosingCarrier'].includes(request.status)) {
       return res.status(400).json({ error: `Cannot retry dispatch when status is "${request.status}".` });
+    }
+    try {
+      const { logRequestActivity } = await import('../../services/delivery-network/activity.js');
+      await logRequestActivity(requestId, 'dispatch_retry', {
+        from_status: request.status,
+        source: 'manual',
+        changed_by: 'Dashboard',
+        detail: { action: 'call_provider_retry' },
+      });
+    } catch (logErr) {
+      console.error('[DeliveryNetwork] retry-dispatch activity log failed', requestId, logErr?.message || logErr);
     }
     await startDispatch(requestId);
     res.json({ success: true, message: 'Dispatch retry initiated.' });
@@ -1073,6 +1386,7 @@ const DELIVERY_ALLOWED_STATUSES = [
   'New',
   'Contacting',
   'ChoosingCarrier',
+  'ConfirmingDelivery',
   'Dispatched',
   'Assigned',
   'PickedUp',
@@ -1098,12 +1412,16 @@ router.patch('/requests/:id', express.json(), async (req, res) => {
     const { data, error } = await supabaseClient.from('delivery_requests').update(updates).eq('id', id).select().single();
     if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
     try {
-      const { logRequestActivity } = await import('../../services/delivery-network/activity.js');
-      await logRequestActivity(id, 'status_change', { from_status: current?.status, to_status: status, source: 'manual', changed_by: 'Dashboard' });
-    } catch (logErr) {
-      console.error('[DeliveryNetwork] PATCH activity log failed for request', id, logErr?.message || logErr);
+      const { queueDeliveryStatusNotifications } = await import('../../services/delivery-network/deliveryCustomerNotifications.js');
+      queueDeliveryStatusNotifications(current?.status, status, id, data, {
+        source: 'manual',
+        changed_by: 'Dashboard',
+      });
+    } catch (nErr) {
+      console.error('[DeliveryNetwork] PATCH status notify:', nErr?.message || nErr);
     }
-    res.json(data);
+    const { customer_notify_token: _omitTok, ...safe } = data || {};
+    res.json(safe);
   } catch (err) {
     console.error('[DeliveryNetwork] request patch error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to update request' });
@@ -1394,11 +1712,31 @@ router.get('/dispatch-log', async (req, res) => {
 
 /**
  * GET /api/v2/delivery-network/requests/:id/activity
- * Request-level activity (optional MVP: no delivery_activity table yet).
+ * Timeline: request_created, status_change, dispatch_reset, dispatch_retry, etc.
  */
 router.get('/requests/:id/activity', async (req, res) => {
   try {
-    res.json({ activity: [] });
+    const { id: requestId } = req.params;
+    const businessId = req.active_business_id;
+    let ownQ = supabaseClient.from('delivery_requests').select('id').eq('id', requestId);
+    if (businessId) ownQ = ownQ.eq('business_id', businessId);
+    const { data: owns, error: ownErr } = await ownQ.maybeSingle();
+    if (ownErr || !owns) {
+      return res.status(404).json({ error: 'Request not found' });
+    }
+    const { data, error } = await supabaseClient
+      .from('delivery_request_activity')
+      .select('id, activity_type, from_status, to_status, source, changed_by, detail, created_at')
+      .eq('delivery_request_id', requestId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) {
+      if (error.code === '42P01' || String(error.message || '').includes('does not exist')) {
+        return res.json({ activity: [] });
+      }
+      return res.status(500).json({ error: error.message });
+    }
+    res.json({ activity: data || [] });
   } catch (err) {
     console.error('[DeliveryNetwork] GET request activity exception', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to load activity' });

@@ -1,4 +1,5 @@
 import express from 'express';
+import { randomUUID } from 'crypto';
 import { authenticateAdmin } from '../../middleware/adminAuth.js';
 import { AuditLog } from '../../models/v2/AuditLog.js';
 import { Notification } from '../../models/v2/Notification.js';
@@ -10,11 +11,30 @@ import { AdminActivityLog } from '../../models/AdminActivityLog.js';
 import { applyImpersonation } from '../../middleware/v2/applyImpersonation.js';
 import { supabaseClient } from '../../config/database.js';
 import { getDeliveryConfig, getDeliveryConfigFull, updateDeliveryConfig, normalizePhone } from '../../services/delivery-network/config.js';
+import { createDoorDashDriveJwt, getDoorDashOpenApiBaseUrl } from '../../services/delivery-network/doorDashDriveAuth.js';
 import { createDeliveryNetworkAssistant } from '../../services/delivery-network/create-vapi-assistant.js';
 import { linkDeliveryAssistantToNumbers } from '../../services/delivery-network/linkAgent.js';
 import { getTavariOwnedPhoneNumbers } from '../../utils/tavariPhoneNumbers.js';
 
 const router = express.Router();
+
+/** Strip DoorDash signing secret from admin API responses; UI uses signing_secret_configured + re-paste to rotate. */
+function sanitizeDeliveryAdminConfig(config) {
+  if (!config || typeof config !== 'object') return config;
+  let c;
+  try {
+    c = structuredClone(config);
+  } catch {
+    c = JSON.parse(JSON.stringify(config));
+  }
+  const dd = c.brokers?.doordash;
+  if (dd && typeof dd === 'object') {
+    const { signing_secret: _secret, ...rest } = dd;
+    c.brokers.doordash = { ...rest };
+    if (_secret) c.brokers.doordash.signing_secret_configured = true;
+  }
+  return c;
+}
 
 // All admin routes require admin authentication
 router.use(authenticateAdmin);
@@ -495,6 +515,8 @@ router.get('/modules/:moduleKey/outputs', async (req, res) => {
  */
 router.get('/delivery-operator/requests', async (req, res) => {
   try {
+    const { syncInFlightShipdayOrders } = await import('../../services/delivery-network/shipdayPod.js');
+    await syncInFlightShipdayOrders(null).catch(() => ({}));
     const status = req.query.status; // e.g. Needs Manual Assist
     const limit = Math.min(parseInt(req.query.limit) || 100, 200);
     const colsBase = 'id, reference_number, business_id, callback_phone, delivery_address, recipient_name, priority, status, payment_status, amount_quoted_cents, quoted_on_demand_provider, created_at, updated_at, pickup_address, caller_phone, scheduled_date, scheduled_time';
@@ -557,7 +579,7 @@ router.get('/delivery-operator/requests/:id', async (req, res) => {
       .eq('id', id)
       .single();
     if (error) return res.status(error.code === 'PGRST116' ? 404 : 500).json({ error: error.message });
-    const { businesses, ...request } = data || {};
+    const { businesses, customer_notify_token: _omitTok, ...request } = data || {};
     res.json({ ...request, business_name: businesses?.name ?? null });
   } catch (err) {
     console.error('[Admin delivery-operator] get request error:', err?.message || err);
@@ -677,11 +699,13 @@ router.patch('/delivery-operator/requests/:id', express.json(), async (req, res)
   try {
     const { id } = req.params;
     const body = req.body || {};
+    const { data: priorRow } = await supabaseClient.from('delivery_requests').select('status').eq('id', id).single();
     const updates = { updated_at: new Date().toISOString() };
     const allowedStatuses = [
       'New',
       'Contacting',
       'ChoosingCarrier',
+      'ConfirmingDelivery',
       'Dispatched',
       'Assigned',
       'PickedUp',
@@ -712,7 +736,19 @@ router.patch('/delivery-operator/requests/:id', express.json(), async (req, res)
         if (!r.success) console.warn('[Admin delivery-operator] Shipday sync after PATCH:', r.error);
       }).catch((e) => console.warn('[Admin delivery-operator] Shipday sync error:', e?.message || e));
     }
-    res.json(data);
+    if (updates.status && data) {
+      try {
+        const { queueDeliveryStatusNotifications } = await import('../../services/delivery-network/deliveryCustomerNotifications.js');
+        queueDeliveryStatusNotifications(priorRow?.status, updates.status, id, data, {
+          source: 'admin',
+          changed_by: 'Delivery operator console',
+        });
+      } catch (nErr) {
+        console.warn('[Admin delivery-operator] status notify:', nErr?.message || nErr);
+      }
+    }
+    const { customer_notify_token: _omitN, ...safeOut } = data || {};
+    res.json(safeOut);
   } catch (err) {
     console.error('[Admin delivery-operator] patch error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Update failed' });
@@ -868,7 +904,7 @@ router.get('/delivery-operator/config', async (req, res) => {
 router.put('/delivery-operator/config', express.json(), async (req, res) => {
   try {
     const updated = await updateDeliveryConfig(req.body || {});
-    res.json(updated);
+    res.json(sanitizeDeliveryAdminConfig(updated));
   } catch (err) {
     console.error('[Admin delivery-operator] config put error:', err?.message || err);
     res.status(500).json({ error: err?.message || 'Failed to update config' });
@@ -878,11 +914,108 @@ router.put('/delivery-operator/config', express.json(), async (req, res) => {
 /**
  * POST /api/v2/admin/delivery-operator/test-broker-connection
  * Test API credentials for a delivery broker (e.g. Shipday) without saving.
- * Body: { broker_id, api_key, base_url? }
+ * Body: Shipday { broker_id, api_key, base_url? } | DoorDash { broker_id, developer_id, key_id, signing_secret, base_url? }
  */
 router.post('/delivery-operator/test-broker-connection', express.json(), async (req, res) => {
   try {
     const { broker_id, api_key, base_url } = req.body || {};
+    if (broker_id === 'doordash') {
+      const developer_id = typeof req.body?.developer_id === 'string' ? req.body.developer_id.trim() : '';
+      const key_id = typeof req.body?.key_id === 'string' ? req.body.key_id.trim() : '';
+      const signing_secret = typeof req.body?.signing_secret === 'string' ? req.body.signing_secret.trim() : '';
+      if (!developer_id || !key_id || !signing_secret) {
+        return res.status(400).json({
+          success: false,
+          error: 'DoorDash test requires Developer ID, Key ID, and signing secret (paste from the DoorDash developer portal).',
+        });
+      }
+      const apiBase = getDoorDashOpenApiBaseUrl(
+        typeof base_url === 'string' && base_url.trim() ? { base_url: base_url.trim() } : {}
+      );
+      let token;
+      try {
+        token = createDoorDashDriveJwt({ developer_id, key_id, signing_secret });
+      } catch (jwtErr) {
+        return res.json({ success: false, error: jwtErr?.message || 'Failed to create JWT.' });
+      }
+      const axios = (await import('axios')).default;
+      const url = `${apiBase}/drive/v2/quotes`;
+      const externalId = `tavari-test-${randomUUID()}`;
+      // Sandbox geocoding/validation is reliable with US addresses from DoorDash docs; Canadian
+      // single-line strings often return 400 pickup_address/dropoff_address validation_error with locale en-US.
+      const quoteBody = {
+        external_delivery_id: externalId,
+        locale: 'en-US',
+        order_fulfillment_method: 'standard',
+        pickup_address: '901 Market Street, 6th Floor, San Francisco, CA 94103',
+        pickup_business_name: 'Tavari API test (pickup)',
+        pickup_phone_number: '+16505551234',
+        dropoff_address: '101 Howard Street, San Francisco, CA 94105',
+        dropoff_business_name: 'Tavari API test (dropoff)',
+        dropoff_phone_number: '+16505559876',
+        order_value: 1999,
+      };
+      const response = await axios.post(url, quoteBody, {
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        timeout: 25000,
+        validateStatus: () => true,
+      });
+      const sum = response.data && typeof response.data === 'object'
+        ? (response.data.fee != null ? `fee=${response.data.fee}` : JSON.stringify(response.data).slice(0, 120))
+        : String(response.data ?? '').slice(0, 120);
+      if (response.status === 401 || response.status === 403) {
+        return res.json({
+          success: false,
+          error: 'DoorDash returned unauthorized. Verify Developer ID, Key ID, and signing secret (base64 from portal).',
+          request_url: url,
+          http_method: 'POST',
+          response_status: response.status,
+        });
+      }
+      if (response.status === 200) {
+        return res.json({
+          success: true,
+          message: 'DoorDash Drive accepted the quote request (credentials valid).',
+          detail: `POST ${url} with sandbox sample San Francisco addresses (DoorDash doc format). Response: ${sum}`,
+          request_url: url,
+          http_method: 'POST',
+          response_status: 200,
+          response_summary: sum,
+        });
+      }
+      if (response.status === 422) {
+        return res.json({
+          success: true,
+          message: 'Credentials work; DoorDash returned 422 (e.g. not serviceable for this sandbox route).',
+          detail: typeof response.data === 'object' ? JSON.stringify(response.data).slice(0, 400) : String(response.data),
+          request_url: url,
+          http_method: 'POST',
+          response_status: 422,
+          response_summary: sum,
+        });
+      }
+      const fe = response.data?.field_errors;
+      const fieldHint =
+        Array.isArray(fe) && fe.length
+          ? fe.map((x) => `${x.field}: ${x.error || x.message || 'invalid'}`).join('; ')
+          : '';
+      const errMsg =
+        fieldHint ||
+        response.data?.message ||
+        response.data?.error ||
+        response.statusText ||
+        `HTTP ${response.status}`;
+      return res.json({
+        success: false,
+        error: String(errMsg),
+        detail: typeof response.data === 'object' ? JSON.stringify(response.data).slice(0, 800) : String(response.data),
+        request_url: url,
+        http_method: 'POST',
+        response_status: response.status,
+        response_summary: sum,
+      });
+    }
+
     if (!broker_id || !api_key || typeof api_key !== 'string' || !api_key.trim()) {
       return res.status(400).json({ success: false, error: 'Broker and API key are required.' });
     }
@@ -919,6 +1052,7 @@ router.post('/delivery-operator/test-broker-connection', express.json(), async (
           message: 'Connection successful.',
           detail: `Request: GET ${baseUrl}/orders?limit=1 (with your API key). Response: HTTP 200. Body: ${responseSummary}.`,
           request_url: `${baseUrl}/orders`,
+          http_method: 'GET',
           response_status: 200,
           response_summary: responseSummary,
         });
@@ -932,7 +1066,7 @@ router.post('/delivery-operator/test-broker-connection', express.json(), async (
       return res.json({ success: false, error: msg });
     }
 
-    return res.status(400).json({ success: false, error: `Unknown broker: ${broker_id}. Test is only supported for Shipday.` });
+    return res.status(400).json({ success: false, error: `Unknown broker: ${broker_id}. Test is supported for Shipday and DoorDash Drive.` });
   } catch (err) {
     const message = err.response?.data?.message || err.response?.data?.error || err.message || 'Connection test failed.';
     console.error('[Admin delivery-operator] test-broker-connection error:', err?.message || err);

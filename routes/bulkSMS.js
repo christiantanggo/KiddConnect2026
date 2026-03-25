@@ -1295,6 +1295,40 @@ router.post('/webhook', express.json(), async (req, res) => {
           }
           return;
         }
+
+        const { isDeliveryLineNumber } = await import('../services/delivery-network/config.js');
+        const isDelivery = await isDeliveryLineNumber(formattedToNumber);
+        console.log('[BulkSMS Webhook] Delivery check: to=', formattedToNumber, 'isDeliveryLineNumber=', isDelivery);
+        if (isDelivery) {
+          try {
+            const { handleSmsIntake } = await import('../services/delivery-network/sms-intake.js');
+            const { reply, requestId } = await handleSmsIntake(formattedFromNumber, formattedToNumber, rawText);
+            if (requestId) {
+              console.log('[BulkSMS Webhook] Delivery Network: request created from SMS intake', requestId, 'from', formattedFromNumber);
+            }
+            try {
+              await sendSMSDirect(formattedToNumber, formattedFromNumber, reply, true);
+              console.log('[BulkSMS Webhook] Delivery Network: reply SMS sent to', formattedFromNumber);
+            } catch (smsErr) {
+              const status = smsErr.response?.status;
+              const data = smsErr.response?.data;
+              console.error(
+                '[BulkSMS Webhook] Delivery Network: failed to send reply SMS. Status:',
+                status,
+                'Error:',
+                smsErr?.message || smsErr,
+                'Response:',
+                data ? JSON.stringify(data) : 'none',
+              );
+              if (!process.env.TELNYX_API_KEY) {
+                console.error('[BulkSMS Webhook] TELNYX_API_KEY is not set — set it in env to send reply SMS.');
+              }
+            }
+          } catch (err) {
+            console.error('[BulkSMS Webhook] Delivery Network intake error:', err?.message || err);
+          }
+          return;
+        }
       }
       
       // Check for opt-out keywords

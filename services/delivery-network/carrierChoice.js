@@ -193,12 +193,95 @@ export async function getCarrierOptionsForRequest(deliveryRequestId, businessId)
       disclaimer: pricing.disclaimer || PRICE_DISCLAIMER,
     });
   }
+  // Sort by price (cheapest first) so UI can auto-select the first
+  priced.sort((a, b) => {
+    const aCents = Number(a.amount_cents);
+    const bCents = Number(b.amount_cents);
+    if (Number.isFinite(aCents) && Number.isFinite(bCents)) return aCents - bCents;
+    if (Number.isFinite(aCents)) return -1;
+    if (Number.isFinite(bCents)) return 1;
+    return 0;
+  });
 
   return {
     success: true,
     disclaimer: PRICE_DISCLAIMER,
     estimates: priced,
     fleet_fallback_available: ctx.preferredIds.length > 0,
+  };
+}
+
+/**
+ * POST /on-demand/assign and mark delivery Dispatched (shared by dashboard confirm + dispatch auto-assign).
+ * @param {string} deliveryRequestId
+ * @param {{ name: string, fee: number, id?: string }} match
+ * @param {Awaited<ReturnType<typeof getShipdayOrderContext>> & { error?: undefined }} ctx - must include request, shipdayOrderId, onDemandBase, headers, shipdayConfig
+ */
+async function runOnDemandAssignAndMarkDispatched(deliveryRequestId, match, ctx) {
+  const { shipdayOrderId, onDemandBase, headers, shipdayConfig, request } = ctx;
+  const feeUsd = Number(match.fee);
+  if (!Number.isFinite(feeUsd) || feeUsd < 0) {
+    return { success: false, error: 'Invalid estimate from Shipday' };
+  }
+
+  const pricing = await calculateDeliveryPrice({
+    cost_usd: feeUsd,
+    business_id: request.business_id || null,
+  });
+
+  const axios = (await import('axios')).default;
+  const assignUrl = `${String(onDemandBase).replace(/\/$/, '')}/assign`;
+  const assignRes = await runOnDemandAssignVariants(axios, assignUrl, match, shipdayOrderId, shipdayConfig, headers);
+
+  if (!isShipdayOnDemandAssignSuccess(assignRes)) {
+    const msg =
+      assignRes?.data?.errorMessage ||
+      assignRes?.data?.message ||
+      (typeof assignRes?.data?.error === 'string' ? assignRes.data.error : null) ||
+      `Assign failed (${assignRes?.status || 'network'})`;
+    console.warn('[CarrierChoice] on-demand assign rejected', assignRes?.status, assignRes?.data);
+    return { success: false, error: String(msg) };
+  }
+
+  const cents = Math.max(0, Math.round(Number(pricing.amount_cents)));
+  const safeCents = Number.isFinite(cents) ? cents : 0;
+  const providerDb = String(match.name || '').trim().slice(0, QUOTED_ON_DEMAND_PROVIDER_MAX_LEN);
+
+  const { error: upErr } = await supabaseClient
+    .from('delivery_requests')
+    .update({
+      status: 'Dispatched',
+      amount_quoted_cents: safeCents,
+      quoted_on_demand_provider: providerDb || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', deliveryRequestId);
+  if (upErr) {
+    console.error('[CarrierChoice] DB update failed after Shipday on-demand assign', upErr.message || upErr);
+    return {
+      success: false,
+      error:
+        'Carrier was assigned in Shipday but we could not save your request. Contact support with your reference number.',
+    };
+  }
+
+  try {
+    const { queueDeliveryStatusNotifications } = await import('./deliveryCustomerNotifications.js');
+    queueDeliveryStatusNotifications(request.status, 'Dispatched', deliveryRequestId, null, {
+      source: 'manual',
+      changed_by: 'Customer — carrier confirm',
+      detail: { provider: providerDb || undefined },
+    });
+  } catch (e) {
+    console.warn('[CarrierChoice] dispatched notify:', e?.message || e);
+  }
+
+  return {
+    success: true,
+    provider_name: String(match.name || '').trim(),
+    amount_cents: safeCents,
+    final_price_cad: pricing.final_price_cad,
+    disclaimer: pricing.disclaimer,
   };
 }
 
@@ -291,59 +374,220 @@ async function confirmOnDemandCarrierForRequestImpl(deliveryRequestId, businessI
     return { success: false, error: 'That delivery option is no longer available. Refresh the list and try again.' };
   }
 
-  const feeUsd = Number(match.fee);
-  if (!Number.isFinite(feeUsd) || feeUsd < 0) {
-    return { success: false, error: 'Invalid estimate from Shipday' };
-  }
-
-  const pricing = await calculateDeliveryPrice({
-    cost_usd: feeUsd,
-    business_id: request.business_id || null,
-  });
-
-  const axios = (await import('axios')).default;
-  const assignUrl = `${String(onDemandBase).replace(/\/$/, '')}/assign`;
-  const assignRes = await runOnDemandAssignVariants(axios, assignUrl, match, shipdayOrderId, shipdayConfig, headers);
-
-  if (!isShipdayOnDemandAssignSuccess(assignRes)) {
-    const msg =
-      assignRes?.data?.errorMessage ||
-      assignRes?.data?.message ||
-      (typeof assignRes?.data?.error === 'string' ? assignRes.data.error : null) ||
-      `Assign failed (${assignRes?.status || 'network'})`;
-    console.warn('[CarrierChoice] confirm: Shipday assign rejected', assignRes?.status, assignRes?.data);
-    return { success: false, error: String(msg) };
-  }
-
-  const cents = Math.max(0, Math.round(Number(pricing.amount_cents)));
-  const safeCents = Number.isFinite(cents) ? cents : 0;
-  const providerDb = providerName.slice(0, QUOTED_ON_DEMAND_PROVIDER_MAX_LEN);
-
-  const { error: upErr } = await supabaseClient
-    .from('delivery_requests')
-    .update({
-      status: 'Dispatched',
-      amount_quoted_cents: safeCents,
-      quoted_on_demand_provider: providerDb,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', deliveryRequestId);
-  if (upErr) {
-    console.error('[CarrierChoice] confirm: DB update failed after Shipday assign', upErr.message || upErr);
-    return {
-      success: false,
-      error:
-        'Carrier was assigned in Shipday but we could not save your request. Contact support with your reference number.',
-    };
-  }
-
+  const assignOut = await runOnDemandAssignAndMarkDispatched(deliveryRequestId, match, { ...ctx, clearPendingSnapshot: true });
+  if (!assignOut.success) return assignOut;
   return {
     success: true,
     provider_name: providerName,
-    amount_cents: safeCents,
-    final_price_cad: pricing.final_price_cad,
-    disclaimer: pricing.disclaimer,
+    amount_cents: assignOut.amount_cents,
+    final_price_cad: assignOut.final_price_cad,
+    disclaimer: assignOut.disclaimer,
   };
+}
+
+/**
+ * Called from startDispatch while request is still Contacting: collect estimates, price via engine, stage for dashboard confirm (no Shipday assign yet).
+ * @returns {Promise<{ success: boolean, error?: string, amount_cents?: number, final_price_cad?: string, disclaimer?: string }>}
+ */
+export async function tryAutoAssignOnDemandAfterShipdayCreate(deliveryRequestId) {
+  try {
+    const ctx = await getShipdayOrderContext(deliveryRequestId);
+    if (ctx.error) return { success: false, error: ctx.error };
+
+    const { request, shipdayOrderId, onDemandBase, headers } = ctx;
+    if (request.status !== 'Contacting') {
+      return { success: false, error: 'Request is not in Contacting status (auto-assign must run before carrier choice)' };
+    }
+    if (!onDemandBase) return { success: false, error: 'On-demand is not configured' };
+
+    const fullConfig = await getDeliveryConfigFull();
+    const shipCfg = fullConfig?.brokers?.shipday;
+    if (!isShipdayOnDemandEnabledFlag(shipCfg?.on_demand_enabled)) {
+      return { success: false, error: 'On-demand is not enabled' };
+    }
+
+    const prefRaw = shipCfg?.preferred_on_demand_provider;
+    const mode =
+      prefRaw != null && String(prefRaw).trim() ? String(prefRaw).trim() : 'cheapest';
+
+    const estimates = await collectEstimatesAfterCreate(shipdayOrderId, onDemandBase, headers);
+    const match = pickOnDemandEstimate(estimates, mode);
+    if (!match) {
+      console.warn('[CarrierChoice] staged on-demand: no estimate for mode', JSON.stringify(mode), 'order', shipdayOrderId);
+      return { success: false, error: 'No on-demand estimates from Shipday for this order' };
+    }
+
+    const feeUsd = Number(match.fee);
+    if (!Number.isFinite(feeUsd) || feeUsd < 0) {
+      return { success: false, error: 'Invalid estimate from Shipday' };
+    }
+
+    const pricing = await calculateDeliveryPrice({
+      cost_usd: feeUsd,
+      business_id: request.business_id || null,
+    });
+    const safeCents = Math.max(0, Math.round(Number(pricing.amount_cents) || 0));
+    const snapshot = {
+      name: String(match.name || '').trim(),
+      estimate_id: match.id != null ? String(match.id) : '',
+      fee_usd: feeUsd,
+      amount_cents: safeCents,
+      final_price_cad: pricing.final_price_cad,
+      disclaimer: pricing.disclaimer || PRICE_DISCLAIMER,
+    };
+
+    const { data: updatedRows, error: upErr } = await supabaseClient
+      .from('delivery_requests')
+      .update({
+        status: 'ConfirmingDelivery',
+        amount_quoted_cents: safeCents,
+        pending_on_demand_snapshot: snapshot,
+        quoted_on_demand_provider: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', deliveryRequestId)
+      .eq('status', 'Contacting')
+      .select('id');
+
+    if (upErr) {
+      console.error('[CarrierChoice] staged on-demand: DB update failed', upErr.message || upErr);
+      return { success: false, error: 'Could not save staged quote' };
+    }
+    if (!updatedRows || updatedRows.length === 0) {
+      console.warn('[CarrierChoice] staged on-demand: no row updated (expected Contacting)');
+      return { success: false, error: 'Request state changed; refresh and try again' };
+    }
+
+    console.log('[CarrierChoice] staged on-demand quote for confirmation', deliveryRequestId, 'cents', safeCents);
+    return {
+      success: true,
+      amount_cents: safeCents,
+      final_price_cad: pricing.final_price_cad,
+      disclaimer: snapshot.disclaimer,
+    };
+  } catch (err) {
+    console.error('[CarrierChoice] tryAutoAssignOnDemandAfterShipdayCreate:', err?.stack || err?.message || err);
+    return { success: false, error: err?.message ? String(err.message) : 'Auto-assign failed' };
+  }
+}
+
+/**
+ * User confirmed staged quote: Shipday /on-demand/assign + Dispatched.
+ */
+export async function confirmStagedOnDemandQuoteForRequest(deliveryRequestId, businessId) {
+  try {
+    const ctx = await getShipdayOrderContext(deliveryRequestId);
+    if (ctx.error) return { success: false, error: ctx.error };
+    const { request } = ctx;
+    if (businessId && request.business_id !== businessId) {
+      return { success: false, error: 'Forbidden' };
+    }
+    if (request.status !== 'ConfirmingDelivery') {
+      return { success: false, error: 'This delivery is not waiting for quote confirmation' };
+    }
+    const snap = request.pending_on_demand_snapshot;
+    if (!snap || typeof snap !== 'object') {
+      return { success: false, error: 'Missing staged quote data' };
+    }
+    const match = {
+      name: String(snap.name || '').trim(),
+      fee: snap.fee_usd != null ? Number(snap.fee_usd) : NaN,
+      id: snap.estimate_id != null ? String(snap.estimate_id) : '',
+    };
+    if (!match.name || !Number.isFinite(match.fee) || match.fee < 0) {
+      return { success: false, error: 'Invalid staged quote' };
+    }
+
+    const assignOut = await runOnDemandAssignAndMarkDispatched(deliveryRequestId, match, { ...ctx, clearPendingSnapshot: true });
+    if (!assignOut.success) return assignOut;
+    return {
+      success: true,
+      amount_cents: assignOut.amount_cents,
+      final_price_cad: assignOut.final_price_cad,
+      disclaimer: assignOut.disclaimer,
+    };
+  } catch (err) {
+    console.error('[CarrierChoice] confirmStagedOnDemandQuoteForRequest:', err?.stack || err?.message || err);
+    return { success: false, error: err?.message ? String(err.message) : 'Confirm failed' };
+  }
+}
+
+const ON_DEMAND_CANCELLABLE_STATUSES = ['ConfirmingDelivery', 'ChoosingCarrier', 'Dispatched', 'Assigned', 'PickedUp'];
+
+/**
+ * User rejected staged quote or cancelled from carrier picker: delete Shipday order and cancel Tavari request.
+ * Works for ConfirmingDelivery (quote modal) and ChoosingCarrier (carrier picker modal).
+ */
+export async function cancelOnDemandDeliveryForRequest(deliveryRequestId, businessId) {
+  try {
+    const ctx = await getShipdayOrderContext(deliveryRequestId);
+    if (ctx.error) return { success: false, error: ctx.error };
+    const { request, shipdayOrderId, baseUrl, headers } = ctx;
+    if (businessId && request.business_id !== businessId) {
+      return { success: false, error: 'Forbidden' };
+    }
+    if (!ON_DEMAND_CANCELLABLE_STATUSES.includes(request.status)) {
+      return {
+        success: false,
+        error: 'This delivery cannot be cancelled from this screen',
+      };
+    }
+
+    const axios = (await import('axios')).default;
+    const delUrl = `${String(baseUrl).replace(/\/$/, '')}/orders/${encodeURIComponent(shipdayOrderId)}`;
+    try {
+      const delRes = await axios.delete(delUrl, {
+        headers: { Accept: 'application/json', Authorization: headers.Authorization },
+        timeout: 15000,
+        validateStatus: (s) => s < 500,
+      });
+      if (delRes.status !== 200 && delRes.status !== 204) {
+        console.warn('[CarrierChoice] cancel on-demand: Shipday DELETE', delRes.status, delRes.data);
+      }
+    } catch (delErr) {
+      console.warn('[CarrierChoice] cancel on-demand: Shipday delete failed', delErr?.message || delErr);
+    }
+
+    await supabaseClient
+      .from('delivery_dispatch_log')
+      .update({ result: 'cancelled', attempted_at: new Date().toISOString() })
+      .eq('delivery_request_id', deliveryRequestId)
+      .eq('broker_id', 'shipday');
+
+    const { error: upErr } = await supabaseClient
+      .from('delivery_requests')
+      .update({
+        status: 'Cancelled',
+        pending_on_demand_snapshot: null,
+        amount_quoted_cents: null,
+        quoted_on_demand_provider: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', deliveryRequestId)
+      .in('status', ON_DEMAND_CANCELLABLE_STATUSES);
+
+    if (upErr) {
+      console.error('[CarrierChoice] cancel on-demand: DB update failed', upErr.message || upErr);
+      return { success: false, error: 'Could not cancel request after removing Shipday order' };
+    }
+
+    try {
+      const { queueDeliveryStatusNotifications } = await import('./deliveryCustomerNotifications.js');
+      queueDeliveryStatusNotifications(request.status, 'Cancelled', deliveryRequestId);
+    } catch (e) {
+      console.warn('[CarrierChoice] cancelled notify:', e?.message || e);
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error('[CarrierChoice] cancelOnDemandDeliveryForRequest:', err?.stack || err?.message || err);
+    return { success: false, error: err?.message ? String(err.message) : 'Cancel failed' };
+  }
+}
+
+/** Alias for backward compatibility with reject-delivery-quote route. */
+export async function rejectStagedOnDemandQuoteForRequest(deliveryRequestId, businessId) {
+  return cancelOnDemandDeliveryForRequest(deliveryRequestId, businessId);
 }
 
 /**
@@ -426,6 +670,17 @@ async function confirmFleetCarrierForRequestImpl(deliveryRequestId, businessId) 
         success: false,
         error: 'Fleet was assigned in Shipday but we could not update your request. Contact support.',
       };
+    }
+
+    try {
+      const { queueDeliveryStatusNotifications } = await import('./deliveryCustomerNotifications.js');
+      queueDeliveryStatusNotifications('ChoosingCarrier', 'Dispatched', deliveryRequestId, null, {
+        source: 'manual',
+        changed_by: 'Customer — fleet carrier',
+        detail: { carrier_id: String(carrierId) },
+      });
+    } catch (nErr) {
+      console.warn('[CarrierChoice] fleet dispatched notify:', nErr?.message || nErr);
     }
 
     return { success: true, mode: 'fleet', amount_cents: amountCents };

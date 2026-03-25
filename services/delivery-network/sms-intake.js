@@ -1,9 +1,11 @@
 /**
- * Delivery Network web chat intake: collect callback phone + delivery address, then create request and dispatch.
+ * Delivery Network SMS + web chat intake: collect callback phone + delivery address, then create request and dispatch.
+ * SMS path: Telnyx webhook → bulkSMS → handleSmsIntake (when `to` is a delivery line).
  */
 import { supabaseClient } from '../../config/database.js';
 import { createDeliveryRequest } from './intake.js';
 import { startDispatch } from './dispatch.js';
+import { getBusinessIdByCallerPhone, getDeliveryConfigFull } from './config.js';
 
 const WEB_FROM = 'web';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -70,13 +72,107 @@ function extractPhone(text) {
   return null;
 }
 
-/** Simple extraction: first phone number and rest as address, or one line with comma. */
+/** Callback from text if present; otherwise use SMS sender. Rest of message = delivery address. */
+function parseSmsDeliveryMessage(text, defaultCallbackE164) {
+  const t = (text || '').trim();
+  const phoneExtracted = extractPhone(t);
+  const callback_phone = phoneExtracted || defaultCallbackE164 || null;
+  let address = t
+    .replace(/(?:\+?1[-.\s]*)?\(?[2-9]\d{2}\)?[-.\s]*\d{3}[-.\s]*\d{4}\b/g, ' ')
+    .replace(/\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (address.length > 500) address = address.slice(0, 500);
+  return { callback_phone, delivery_address: address || null };
+}
+
+/** Web/chat: require explicit phone + address in one message (no default callback). */
 function parseMessage(text) {
   const t = (text || '').trim();
   const phone = extractPhone(t);
   let address = t.replace(/(?:\+?1[-.\s]*)?\(?[2-9]\d{2}\)?[-.\s]*\d{3}[-.\s]*\d{4}\b/g, '').replace(/\n/g, ' ').trim();
   if (address.length > 500) address = address.slice(0, 500);
   return { callback_phone: phone, delivery_address: address || null };
+}
+
+const MIN_ADDRESS_LEN = 8;
+
+function deliveryServiceName(config) {
+  return (config?.service_line_name && String(config.service_line_name).trim()) || 'Last-Mile Delivery';
+}
+
+function deliverySmsPrompt(serviceName) {
+  return `${serviceName}: Send your full delivery address (street, city, province/postal). We will use this phone as your callback. To use a different number, start your message with it, e.g. 555-123-4567, 123 Main St, Toronto ON`;
+}
+
+/**
+ * Inbound SMS to a delivery line: prompt, then parse address (and optional alternate callback) and dispatch.
+ * @param {string} fromPhone - Customer E.164
+ * @param {string} toPhone - Tavari delivery line E.164
+ * @param {string} messageText
+ * @returns {Promise<{ reply: string, requestId?: string }>}
+ */
+export async function handleSmsIntake(fromPhone, toPhone, messageText) {
+  const config = await getDeliveryConfigFull();
+  const serviceName = deliveryServiceName(config);
+  const rawText = (messageText || '').trim();
+  const callbackDefault = String(fromPhone || '').trim();
+
+  const session = await getSession(fromPhone, toPhone);
+
+  if (!rawText) {
+    await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
+    return { reply: deliverySmsPrompt(serviceName) };
+  }
+
+  async function tryCreate(text) {
+    const parsed = parseSmsDeliveryMessage(text, callbackDefault);
+    const addr = parsed.delivery_address && String(parsed.delivery_address).trim();
+    if (!addr || addr.length < MIN_ADDRESS_LEN) return null;
+    const callback_phone = parsed.callback_phone || callbackDefault;
+    if (!callback_phone) return null;
+    const business_id = await getBusinessIdByCallerPhone(fromPhone);
+    return createDeliveryRequest({
+      business_id,
+      callback_phone,
+      delivery_address: addr,
+      intake_channel: 'sms',
+      priority: 'Immediate',
+    });
+  }
+
+  const oneShot = await tryCreate(rawText);
+  if (oneShot && !session) {
+    await deleteSession(fromPhone, toPhone);
+    startDispatch(oneShot.id).catch((err) =>
+      console.error('[Delivery SMS Intake] startDispatch error:', err?.message || err),
+    );
+    return {
+      reply: `${serviceName}: Got it. Ref ${oneShot.reference_number}. We are scheduling your pickup—watch for a confirmation text.`,
+      requestId: oneShot.id,
+    };
+  }
+
+  if (!session || session.step !== 'awaiting_details') {
+    await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
+    return { reply: deliverySmsPrompt(serviceName) };
+  }
+
+  const request = await tryCreate(rawText);
+  if (!request) {
+    return {
+      reply: `${serviceName}: Please send a full street address with city and province or postal code. You can add a different callback number at the start: 555-123-4567, 123 Main St…`,
+    };
+  }
+
+  await deleteSession(fromPhone, toPhone);
+  startDispatch(request.id).catch((err) =>
+    console.error('[Delivery SMS Intake] startDispatch error:', err?.message || err),
+  );
+  return {
+    reply: `${serviceName}: Got it. Ref ${request.reference_number}. We are scheduling your pickup—watch for a confirmation text.`,
+    requestId: request.id,
+  };
 }
 
 /**

@@ -12,7 +12,33 @@ import V2AppShell from '@/components/V2AppShell';
 import { deliveryNetworkAPI } from '@/lib/api';
 import { savedLocationRowToParts, savedLocationContactPhone } from '@/lib/canadianAddressParts';
 import { useBusinessTimezone } from '@/hooks/useBusinessTimezone';
-import { ArrowLeft, Loader, RefreshCw, Trash2, Truck, MapPin, Package, X, Camera, FileImage, BookmarkPlus, Pencil } from 'lucide-react';
+import { ArrowLeft, Loader, RefreshCw, Trash2, Truck, MapPin, Package, X, Camera, FileImage, BookmarkPlus, Pencil, Navigation, ExternalLink, History } from 'lucide-react';
+
+function activitySourceSuffix(ev) {
+  const s = ev?.source;
+  if (s === 'manual') return ' · Dashboard';
+  if (s === 'admin') return ' · Operator';
+  if (s === 'webhook') return ' · Webhook';
+  if (s === 'system') return ' · Automatic';
+  return s ? ` · ${s}` : '';
+}
+
+function describeActivityEntry(ev) {
+  switch (ev.activity_type) {
+    case 'request_created':
+      return { title: 'Request created', sub: ev.to_status ? `Status: ${ev.to_status}` : null };
+    case 'dispatch_reset':
+      return { title: 'Dispatch reset', sub: `${ev.from_status || '—'} → ${ev.to_status || 'New'}` };
+    case 'dispatch_retry':
+      return { title: 'Dispatch retry', sub: ev.from_status ? `While status was ${ev.from_status}` : 'Retry initiated' };
+    case 'status_change':
+    default:
+      return {
+        title: 'Status',
+        sub: `${ev.from_status || '—'} → ${ev.to_status || '—'}`,
+      };
+  }
+}
 
 const TABS = [
   { id: 'request', label: 'Request a pickup', icon: Package },
@@ -97,6 +123,35 @@ function readLastStoredAddress(key) {
   }
 }
 
+const LIVE_TRACKING_STATUSES = ['Dispatched', 'Assigned', 'PickedUp'];
+
+/** Shown in the drawer when we are not calling the live tracking API. */
+function trackingDrawerPlaceholderMessage(status) {
+  const s = String(status || '').trim();
+  if (s === 'New' || s === 'Contacting') {
+    return 'Delivery not started yet. Live tracking appears after the order is dispatched.';
+  }
+  if (s === 'ChoosingCarrier') {
+    return 'Choose a delivery service to continue. Live tracking will be available once a driver is assigned.';
+  }
+  if (s === 'ConfirmingDelivery') {
+    return 'Confirm the quoted price to continue. Live tracking will be available once dispatched.';
+  }
+  if (s === 'Completed') {
+    return 'Delivery complete. Live tracking is no longer available.';
+  }
+  if (s === 'Cancelled') {
+    return 'This delivery was cancelled. Tracking is not available.';
+  }
+  if (s === 'Failed') {
+    return 'Delivery failed. Tracking is not available.';
+  }
+  if (s === 'Needs Manual Assist') {
+    return 'This delivery needs operator attention. Tracking may be limited until it is resolved.';
+  }
+  return 'Tracking is not available for this delivery.';
+}
+
 export default function DeliveryDispatchPage() {
   const { formatDate } = useBusinessTimezone();
   const [activeTab, setActiveTab] = useState('request');
@@ -139,6 +194,11 @@ export default function DeliveryDispatchPage() {
   const [carrierPick, setCarrierPick] = useState(null); // { estimate_id, provider_name }
   const [carrierConfirming, setCarrierConfirming] = useState(false);
 
+  /** Staged Shipday on-demand quote: show price only, confirm assigns / decline deletes Shipday order */
+  const [quoteConfirmModal, setQuoteConfirmModal] = useState(null); // { requestId, referenceNumber, amount_cents, final_price_cad, disclaimer }
+  const [quoteConfirmBusy, setQuoteConfirmBusy] = useState(false);
+  const [quoteConfirmError, setQuoteConfirmError] = useState(null);
+
   /** Quick-fill: '' = manual, '__lastPickup__' / '__lastDelivery__', or saved location id */
   const [pickupFillSource, setPickupFillSource] = useState('');
   const [deliveryFillSource, setDeliveryFillSource] = useState('');
@@ -153,6 +213,15 @@ export default function DeliveryDispatchPage() {
   );
   const [lastPickupSnap, setLastPickupSnap] = useState(null);
   const [lastDeliverySnap, setLastDeliverySnap] = useState(null);
+
+  /** Detail modal: cancel pick up (ChoosingCarrier / ConfirmingDelivery) */
+  const [detailCancelLoading, setDetailCancelLoading] = useState(false);
+  const [detailCancelError, setDetailCancelError] = useState(null);
+
+  /** Detail modal: live ETA / map (Shipday data via Tavari API only) */
+  const [liveTracking, setLiveTracking] = useState(null);
+  const [liveTrackingLoading, setLiveTrackingLoading] = useState(false);
+  const [liveTrackingError, setLiveTrackingError] = useState(null);
 
   useEffect(() => {
     setLastPickupSnap(readLastStoredAddress(LAST_PICKUP_STORAGE_KEY));
@@ -335,8 +404,64 @@ export default function DeliveryDispatchPage() {
 
   /** Selected row: proof of delivery (POD) from Shipday — tap row to open. */
   const [detailRequest, setDetailRequest] = useState(null);
+  const [detailActivity, setDetailActivity] = useState([]);
+  const [detailActivityLoading, setDetailActivityLoading] = useState(false);
   const [podRefreshing, setPodRefreshing] = useState(false);
   const [podError, setPodError] = useState(null);
+
+  useEffect(() => {
+    if (!detailRequest?.id) {
+      setDetailActivity([]);
+      return;
+    }
+    let cancelled = false;
+    setDetailActivityLoading(true);
+    deliveryNetworkAPI
+      .getRequestActivity(detailRequest.id)
+      .then((res) => {
+        if (!cancelled) setDetailActivity(res.data?.activity ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setDetailActivity([]);
+      })
+      .finally(() => {
+        if (!cancelled) setDetailActivityLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [detailRequest?.id]);
+
+  useEffect(() => {
+    if (!detailRequest?.id) return;
+    if (!LIVE_TRACKING_STATUSES.includes(detailRequest.status)) {
+      setLiveTracking(null);
+      setLiveTrackingError(null);
+      setLiveTrackingLoading(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      setLiveTrackingLoading(true);
+      setLiveTrackingError(null);
+      try {
+        const res = await deliveryNetworkAPI.getRequestLiveTracking(detailRequest.id);
+        if (!cancelled) setLiveTracking(res.data);
+      } catch (e) {
+        if (!cancelled) {
+          setLiveTrackingError(
+            e.response?.data?.error || e.response?.data?.message || e.message || 'Could not load tracking.',
+          );
+          setLiveTracking(null);
+        }
+      } finally {
+        if (!cancelled) setLiveTrackingLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [detailRequest?.id, detailRequest?.status]);
 
   const isDeliveryCompleted = (status) => {
     const s = String(status || '').toLowerCase().replace(/\s+/g, '_');
@@ -494,6 +619,12 @@ export default function DeliveryDispatchPage() {
   useEffect(() => { load(); }, []);
 
   useEffect(() => {
+    if (activeTab !== 'deliveries') return;
+    const interval = setInterval(() => load(), 45000);
+    return () => clearInterval(interval);
+  }, [activeTab]);
+
+  useEffect(() => {
     if (!carrierModal?.requestId) return;
     let cancelled = false;
     (async () => {
@@ -545,6 +676,35 @@ export default function DeliveryDispatchPage() {
   const openCarrierChoice = useCallback((requestId, referenceNumber) => {
     setCarrierModal({ requestId, referenceNumber: referenceNumber || '' });
     setCarrierOptionsRefreshKey(0);
+  }, []);
+
+  const closeQuoteConfirmModal = useCallback(() => {
+    setQuoteConfirmModal(null);
+    setQuoteConfirmBusy(false);
+    setQuoteConfirmError(null);
+  }, []);
+
+  const openQuoteConfirmFromRow = useCallback((r) => {
+    if (!r?.id) return;
+    const qp = r.quote_preview;
+    if (qp && (qp.amount_cents != null || qp.final_price_cad)) {
+      setQuoteConfirmModal({
+        requestId: r.id,
+        referenceNumber: r.reference_number || '',
+        amount_cents: qp.amount_cents != null ? Number(qp.amount_cents) : null,
+        final_price_cad: qp.final_price_cad != null ? String(qp.final_price_cad) : null,
+        disclaimer: qp.disclaimer != null ? String(qp.disclaimer) : null,
+      });
+    } else if (r.status === 'ConfirmingDelivery' && r.amount_quoted_cents != null) {
+      setQuoteConfirmModal({
+        requestId: r.id,
+        referenceNumber: r.reference_number || '',
+        amount_cents: Number(r.amount_quoted_cents),
+        final_price_cad: null,
+        disclaimer: null,
+      });
+    }
+    setQuoteConfirmError(null);
   }, []);
 
   useEffect(() => {
@@ -624,7 +784,17 @@ export default function DeliveryDispatchPage() {
         res.data?.message ||
         (res.data?.reference_number ? `Delivery scheduled. Reference: ${res.data.reference_number}` : 'Delivery scheduled.');
       setSubmitSuccess(msg);
-      if (res.data?.needs_carrier_choice && res.data?.request_id) {
+      if (res.data?.needs_quote_confirm && res.data?.request_id && res.data?.quote_preview) {
+        const qp = res.data.quote_preview;
+        setQuoteConfirmModal({
+          requestId: res.data.request_id,
+          referenceNumber: res.data.reference_number || '',
+          amount_cents: qp.amount_cents != null ? Number(qp.amount_cents) : null,
+          final_price_cad: qp.final_price_cad != null ? String(qp.final_price_cad) : null,
+          disclaimer: qp.disclaimer != null ? String(qp.disclaimer) : null,
+        });
+        setQuoteConfirmError(null);
+      } else if (res.data?.needs_carrier_choice && res.data?.request_id) {
         openCarrierChoice(res.data.request_id, res.data.reference_number || '');
       }
       setPickupAddress('');
@@ -1162,8 +1332,23 @@ export default function DeliveryDispatchPage() {
                               key={r.id}
                               role="button"
                               tabIndex={0}
-                              onClick={() => { setDetailRequest(r); setPodError(null); }}
-                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setDetailRequest(r); setPodError(null); } }}
+                              onClick={() => {
+                                setDetailRequest(r);
+                                setPodError(null);
+                                setDetailCancelError(null);
+                                setLiveTracking(null);
+                                setLiveTrackingError(null);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  setDetailRequest(r);
+                                  setPodError(null);
+                                  setDetailCancelError(null);
+                                  setLiveTracking(null);
+                                  setLiveTrackingError(null);
+                                }
+                              }}
                               className="border-b border-slate-100 cursor-pointer hover:bg-emerald-50/60 transition-colors"
                             >
                               <td className="py-2 pr-2 font-mono">{r.reference_number || '—'}</td>
@@ -1184,6 +1369,32 @@ export default function DeliveryDispatchPage() {
                                     Choose service
                                   </button>
                                 )}
+                                {r.status === 'ConfirmingDelivery' && (
+                                  <button
+                                    type="button"
+                                    className="mt-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      openQuoteConfirmFromRow(r);
+                                    }}
+                                  >
+                                    Review price
+                                  </button>
+                                )}
+                                {LIVE_TRACKING_STATUSES.includes(r.status) &&
+                                  r.carrier_tracking_url &&
+                                  String(r.carrier_tracking_url).trim() && (
+                                    <a
+                                      href={String(r.carrier_tracking_url).trim()}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 hover:text-emerald-800 hover:underline"
+                                      onClick={(e) => e.stopPropagation()}
+                                    >
+                                      Track delivery
+                                      <ExternalLink className="w-3 h-3 shrink-0" aria-hidden />
+                                    </a>
+                                  )}
                               </td>
                               <td className="py-2 pr-2 text-center" title={hasPodContent(r) ? 'Proof on file' : 'After delivery'}>
                                 {hasPodContent(r) ? (
@@ -1217,8 +1428,8 @@ export default function DeliveryDispatchPage() {
                       if (!carrierConfirming) closeCarrierModal();
                     }}
                   />
-                  <div className="relative z-10 w-full max-w-md max-h-[min(90vh,640px)] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-xl p-5 md:p-6">
-                    <div className="flex items-start justify-between gap-2 mb-4">
+                  <div className="relative z-10 w-full max-w-md max-h-[min(90vh,640px)] flex flex-col rounded-xl border border-slate-200 bg-white shadow-xl overflow-hidden">
+                    <div className="flex items-start justify-between gap-2 p-5 md:p-6 pb-0 shrink-0">
                       <div>
                         <h3 id="carrier-choice-title" className="text-lg font-semibold text-slate-900">
                           Choose a delivery service
@@ -1238,6 +1449,7 @@ export default function DeliveryDispatchPage() {
                       </button>
                     </div>
 
+                    <div className="flex-1 min-h-0 overflow-y-auto p-5 md:p-6 pt-4">
                     {carrierOptionsLoading && (
                       <div className="flex items-center gap-2 text-slate-600 py-6">
                         <Loader className="w-5 h-5 animate-spin shrink-0" />
@@ -1261,9 +1473,18 @@ export default function DeliveryDispatchPage() {
                     )}
 
                     {!carrierOptionsLoading && !carrierOptionsError && carrierEstimates.length === 0 && (
-                      <p className="text-sm text-slate-600 mb-4">
-                        No instant quotes are available right now. You can use your own fleet if it is configured, or close this and try again in a moment.
-                      </p>
+                      <div className="text-sm text-slate-600 mb-4">
+                        <p>
+                          No instant quotes are available right now. You can use your own fleet if it is configured, or try again.
+                        </p>
+                        <button
+                          type="button"
+                          className="mt-2 text-sm font-medium text-emerald-700 hover:text-emerald-800 underline"
+                          onClick={() => setCarrierOptionsRefreshKey((k) => k + 1)}
+                        >
+                          Try again
+                        </button>
+                      </div>
                     )}
 
                     {!carrierOptionsLoading && carrierEstimates.length > 0 && (
@@ -1314,40 +1535,71 @@ export default function DeliveryDispatchPage() {
                     {carrierDisclaimer ? (
                       <p className="text-xs text-slate-500 leading-relaxed mb-4 border-t border-slate-100 pt-3">{carrierDisclaimer}</p>
                     ) : null}
+                    </div>
 
-                    <div className="flex flex-col sm:flex-row gap-2 sm:justify-end">
-                      {carrierFleetFallback && (
+                    <div className="shrink-0 border-t border-slate-200 p-5 md:p-6 pt-4 flex flex-col-reverse sm:flex-row gap-2 sm:justify-between sm:items-center">
+                      <div className="flex flex-wrap gap-2">
                         <button
                           type="button"
                           disabled={carrierConfirming || carrierOptionsLoading}
                           onClick={async () => {
+                            if (!window.confirm('Cancel this delivery and remove it from the system?')) return;
                             setCarrierConfirming(true);
                             setCarrierOptionsError(null);
                             try {
-                              await deliveryNetworkAPI.confirmCarrier(carrierModal.requestId, { mode: 'fleet' });
+                              await deliveryNetworkAPI.rejectDeliveryQuote(carrierModal.requestId);
+                              const ref = carrierModal.referenceNumber;
                               closeCarrierModal();
                               await load();
-                              setSubmitSuccess(
-                                carrierModal.referenceNumber
-                                  ? `Fleet driver assigned for ${carrierModal.referenceNumber}.`
-                                  : 'Fleet driver assigned.',
-                              );
+                              setSubmitSuccess(ref ? `Delivery ${ref} was cancelled.` : 'Delivery was cancelled.');
                             } catch (e) {
                               setCarrierOptionsError(
                                 e.response?.data?.error ||
                                   e.response?.data?.message ||
                                   e.message ||
-                                  'Could not assign fleet.',
+                                  'Could not cancel delivery.',
                               );
                             } finally {
                               setCarrierConfirming(false);
                             }
                           }}
-                          className="order-2 sm:order-1 px-4 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                          className="px-4 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                         >
-                          {carrierConfirming ? 'Assigning…' : 'Use our fleet'}
+                          Cancel delivery
                         </button>
-                      )}
+                        {carrierFleetFallback && (
+                          <button
+                            type="button"
+                            disabled={carrierConfirming || carrierOptionsLoading}
+                            onClick={async () => {
+                              setCarrierConfirming(true);
+                              setCarrierOptionsError(null);
+                              try {
+                                await deliveryNetworkAPI.confirmCarrier(carrierModal.requestId, { mode: 'fleet' });
+                                closeCarrierModal();
+                                await load();
+                                setSubmitSuccess(
+                                  carrierModal.referenceNumber
+                                    ? `Fleet driver assigned for ${carrierModal.referenceNumber}.`
+                                    : 'Fleet driver assigned.',
+                                );
+                              } catch (e) {
+                                setCarrierOptionsError(
+                                  e.response?.data?.error ||
+                                    e.response?.data?.message ||
+                                    e.message ||
+                                    'Could not assign fleet.',
+                                );
+                              } finally {
+                                setCarrierConfirming(false);
+                              }
+                            }}
+                            className="px-4 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {carrierConfirming ? 'Assigning…' : 'Use our fleet'}
+                          </button>
+                        )}
+                      </div>
                       <button
                         type="button"
                         disabled={
@@ -1383,9 +1635,123 @@ export default function DeliveryDispatchPage() {
                             setCarrierConfirming(false);
                           }
                         }}
-                        className="order-1 sm:order-2 px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                        className="w-full sm:w-auto px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
                       >
-                        {carrierConfirming ? 'Confirming…' : 'Confirm this service'}
+                          {carrierConfirming ? 'Confirming…' : 'Confirm this service'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {quoteConfirmModal && (
+                <div
+                  className="fixed inset-0 z-[65] flex items-center justify-center p-4"
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="quote-confirm-title"
+                >
+                  <button
+                    type="button"
+                    className="absolute inset-0 bg-slate-900/50"
+                    aria-label="Close"
+                    onClick={() => {
+                      if (!quoteConfirmBusy) closeQuoteConfirmModal();
+                    }}
+                  />
+                  <div className="relative z-10 w-full max-w-md rounded-xl border border-slate-200 bg-white shadow-xl p-5 md:p-6">
+                    <div className="flex items-start justify-between gap-2 mb-4">
+                      <div>
+                        <h3 id="quote-confirm-title" className="text-lg font-semibold text-slate-900">
+                          Confirm delivery price
+                        </h3>
+                        {quoteConfirmModal.referenceNumber ? (
+                          <p className="text-sm text-slate-600 mt-0.5 font-mono">Ref {quoteConfirmModal.referenceNumber}</p>
+                        ) : null}
+                      </div>
+                      <button
+                        type="button"
+                        disabled={quoteConfirmBusy}
+                        onClick={closeQuoteConfirmModal}
+                        className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 shrink-0 disabled:opacity-50"
+                        aria-label="Close"
+                      >
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <p className="text-sm text-slate-600 mb-3">
+                      Review the price below. <strong>Confirm</strong> keeps this delivery in Shipday and finalizes dispatch.
+                      <strong> Decline</strong> cancels the request and removes the order from Shipday.
+                    </p>
+                    <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-4 py-3 mb-3">
+                      <p className="text-xs font-medium text-slate-600 uppercase tracking-wide">Your price</p>
+                      <p className="text-2xl font-semibold text-emerald-800 mt-0.5">
+                        {quoteConfirmModal.final_price_cad != null && String(quoteConfirmModal.final_price_cad).trim()
+                          ? String(quoteConfirmModal.final_price_cad).trim()
+                          : quoteConfirmModal.amount_cents != null && Number.isFinite(Number(quoteConfirmModal.amount_cents))
+                            ? `$${(Number(quoteConfirmModal.amount_cents) / 100).toFixed(2)} CAD`
+                            : '—'}
+                      </p>
+                    </div>
+                    {quoteConfirmModal.disclaimer ? (
+                      <p className="text-xs text-slate-500 mb-4 leading-snug">{quoteConfirmModal.disclaimer}</p>
+                    ) : null}
+                    {quoteConfirmError ? (
+                      <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 mb-4">
+                        {quoteConfirmError}
+                      </div>
+                    ) : null}
+                    <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+                      <button
+                        type="button"
+                        disabled={quoteConfirmBusy}
+                        onClick={async () => {
+                          if (!window.confirm('Cancel this delivery and remove it from the system?')) return;
+                          const rid = quoteConfirmModal.requestId;
+                          const ref = quoteConfirmModal.referenceNumber;
+                          setQuoteConfirmBusy(true);
+                          setQuoteConfirmError(null);
+                          try {
+                            await deliveryNetworkAPI.rejectDeliveryQuote(rid);
+                            closeQuoteConfirmModal();
+                            await load();
+                            setSubmitSuccess(ref ? `Delivery ${ref} was cancelled.` : 'Delivery was cancelled.');
+                          } catch (e) {
+                            setQuoteConfirmError(
+                              e.response?.data?.error || e.response?.data?.message || e.message || 'Could not cancel.',
+                            );
+                          } finally {
+                            setQuoteConfirmBusy(false);
+                          }
+                        }}
+                        className="px-4 py-2.5 rounded-lg border border-slate-300 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                      >
+                        Decline
+                      </button>
+                      <button
+                        type="button"
+                        disabled={quoteConfirmBusy}
+                        onClick={async () => {
+                          const rid = quoteConfirmModal.requestId;
+                          const ref = quoteConfirmModal.referenceNumber;
+                          setQuoteConfirmBusy(true);
+                          setQuoteConfirmError(null);
+                          try {
+                            await deliveryNetworkAPI.confirmDeliveryQuote(rid);
+                            closeQuoteConfirmModal();
+                            await load();
+                            setSubmitSuccess(ref ? `Delivery confirmed for ${ref}.` : 'Delivery confirmed.');
+                          } catch (e) {
+                            setQuoteConfirmError(
+                              e.response?.data?.error || e.response?.data?.message || e.message || 'Could not confirm.',
+                            );
+                          } finally {
+                            setQuoteConfirmBusy(false);
+                          }
+                        }}
+                        className="px-4 py-2.5 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        {quoteConfirmBusy ? 'Confirming…' : 'Confirm delivery'}
                       </button>
                     </div>
                   </div>
@@ -1398,7 +1764,13 @@ export default function DeliveryDispatchPage() {
                     type="button"
                     className="absolute inset-0 bg-black/40"
                     aria-label="Close"
-                    onClick={() => { setDetailRequest(null); setPodError(null); }}
+                    onClick={() => {
+                    setDetailRequest(null);
+                    setPodError(null);
+                    setDetailCancelError(null);
+                    setLiveTracking(null);
+                    setLiveTrackingError(null);
+                  }}
                   />
                   <div className="relative w-full max-w-md max-h-full overflow-y-auto bg-white shadow-xl border-l border-slate-200 p-5 md:p-6">
                     <div className="flex items-start justify-between gap-2 mb-4">
@@ -1407,7 +1779,13 @@ export default function DeliveryDispatchPage() {
                       </h3>
                       <button
                         type="button"
-                        onClick={() => { setDetailRequest(null); setPodError(null); }}
+                        onClick={() => {
+                    setDetailRequest(null);
+                    setPodError(null);
+                    setDetailCancelError(null);
+                    setLiveTracking(null);
+                    setLiveTrackingError(null);
+                  }}
                         className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 shrink-0"
                         aria-label="Close"
                       >
@@ -1424,13 +1802,231 @@ export default function DeliveryDispatchPage() {
                       <div><dt className="text-slate-500 text-xs uppercase tracking-wide">Requested</dt><dd>{formatDate(detailRequest.created_at)}</dd></div>
                     </dl>
 
+                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3 mb-6">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <Navigation className="w-5 h-5 text-emerald-700 shrink-0" aria-hidden />
+                          <div>
+                            <p className="text-sm font-semibold text-slate-800">Live tracking</p>
+                            <p className="text-xs text-slate-500">
+                              Live ETA, map, carrier tracking link, and a driver contact number when your broker exposes one (often masked or relay).
+                            </p>
+                          </div>
+                        </div>
+                        {LIVE_TRACKING_STATUSES.includes(detailRequest.status) && (
+                          <button
+                            type="button"
+                            disabled={liveTrackingLoading}
+                            onClick={async () => {
+                              setLiveTrackingLoading(true);
+                              setLiveTrackingError(null);
+                              try {
+                                const res = await deliveryNetworkAPI.getRequestLiveTracking(detailRequest.id);
+                                setLiveTracking(res.data);
+                              } catch (e) {
+                                setLiveTrackingError(
+                                  e.response?.data?.error ||
+                                    e.response?.data?.message ||
+                                    e.message ||
+                                    'Could not load tracking.',
+                                );
+                                setLiveTracking(null);
+                              } finally {
+                                setLiveTrackingLoading(false);
+                              }
+                            }}
+                            className="shrink-0 px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {liveTrackingLoading ? 'Updating…' : 'Refresh'}
+                          </button>
+                        )}
+                      </div>
+
+                      {LIVE_TRACKING_STATUSES.includes(detailRequest.status) &&
+                        (() => {
+                          const trackHref = (
+                            liveTracking?.tracking_url ||
+                            detailRequest?.carrier_tracking_url ||
+                            ''
+                          ).trim();
+                          if (!trackHref) return null;
+                          return (
+                            <a
+                              href={trackHref}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center justify-center gap-2 w-full py-3 px-4 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 shadow-sm mb-3"
+                            >
+                              Track delivery
+                              <ExternalLink className="w-4 h-4 shrink-0 opacity-90" aria-hidden />
+                            </a>
+                          );
+                        })()}
+
+                      {!LIVE_TRACKING_STATUSES.includes(detailRequest.status) && (
+                        <p className="text-sm text-slate-600">{trackingDrawerPlaceholderMessage(detailRequest.status)}</p>
+                      )}
+
+                      {LIVE_TRACKING_STATUSES.includes(detailRequest.status) && liveTrackingLoading && !liveTracking && !liveTrackingError && (
+                        <p className="text-sm text-slate-600">Loading tracking…</p>
+                      )}
+
+                      {LIVE_TRACKING_STATUSES.includes(detailRequest.status) && liveTrackingError && (
+                        <p className="text-sm text-red-600">{liveTrackingError}</p>
+                      )}
+
+                      {LIVE_TRACKING_STATUSES.includes(detailRequest.status) &&
+                        liveTracking &&
+                        liveTracking.trackable === false && (
+                          <p className="text-sm text-slate-600">{liveTracking.reason || 'Tracking not available.'}</p>
+                        )}
+
+                      {LIVE_TRACKING_STATUSES.includes(detailRequest.status) &&
+                        liveTracking &&
+                        liveTracking.trackable &&
+                        liveTracking.message && (
+                          <p className="text-sm text-amber-900">{liveTracking.message}</p>
+                        )}
+
+                      {LIVE_TRACKING_STATUSES.includes(detailRequest.status) &&
+                        liveTracking &&
+                        liveTracking.trackable &&
+                        !liveTracking.message && (
+                          <div className="space-y-2 text-sm text-slate-700">
+                            {liveTracking.customer_status && String(liveTracking.customer_status).trim() && (
+                              <p className="text-base font-semibold text-slate-900 leading-snug">
+                                {liveTracking.customer_status}
+                              </p>
+                            )}
+                            <div>
+                              <span className="text-slate-500 text-xs uppercase tracking-wide block">Status</span>
+                              <span className="font-medium">{liveTracking.status_label || '—'}</span>
+                            </div>
+                            {(liveTracking.eta_label ||
+                              (liveTracking.eta_minutes != null &&
+                                Number.isFinite(Number(liveTracking.eta_minutes)))) && (
+                              <div>
+                                <span className="text-slate-500 text-xs uppercase tracking-wide block">Est. arrival</span>
+                                <span className="font-medium">
+                                  {liveTracking.eta_label && String(liveTracking.eta_label).trim()
+                                    ? liveTracking.eta_label
+                                    : `About ${liveTracking.eta_minutes} min`}
+                                </span>
+                              </div>
+                            )}
+                            <div>
+                              <span className="text-slate-500 text-xs uppercase tracking-wide block">Driver</span>
+                              <span className="font-medium">
+                                {liveTracking.carrier?.name && String(liveTracking.carrier.name).trim()
+                                  ? liveTracking.carrier.name
+                                  : 'Driver Not Assigned Yet'}
+                              </span>
+                            </div>
+                            {liveTracking.carrier?.phone && (
+                              <div>
+                                <span className="text-slate-500 text-xs uppercase tracking-wide block">Phone</span>
+                                <a
+                                  href={`tel:${String(liveTracking.carrier.phone).replace(/\s/g, '')}`}
+                                  className="font-medium text-emerald-700 hover:underline"
+                                >
+                                  {liveTracking.carrier.phone}
+                                </a>
+                              </div>
+                            )}
+                            {liveTracking.maps_url && (
+                              <a
+                                href={liveTracking.maps_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-block mt-1 text-sm font-medium text-emerald-700 hover:text-emerald-800 underline"
+                              >
+                                Open map at driver location
+                              </a>
+                            )}
+                            <p className="text-xs text-slate-400 pt-1">
+                              Map opens on OpenStreetMap. Carrier APIs may limit how often this can refresh.
+                            </p>
+                          </div>
+                        )}
+                    </div>
+
+                    {['ChoosingCarrier', 'ConfirmingDelivery', 'Dispatched', 'Assigned', 'PickedUp'].includes(detailRequest.status) && (
+                      <div className="mb-6 flex flex-col gap-2">
+                        {detailCancelError && (
+                          <p className="text-sm text-red-600">{detailCancelError}</p>
+                        )}
+                        <button
+                          type="button"
+                          disabled={detailCancelLoading}
+                          onClick={async () => {
+                            if (!window.confirm('Cancel this delivery and remove it from the system?')) return;
+                            setDetailCancelLoading(true);
+                            setDetailCancelError(null);
+                            try {
+                              await deliveryNetworkAPI.rejectDeliveryQuote(detailRequest.id);
+                              const ref = detailRequest.reference_number;
+                              setDetailRequest(null);
+                              setLiveTracking(null);
+                              setLiveTrackingError(null);
+                              await load();
+                              setSubmitSuccess(ref ? `Delivery ${ref} was cancelled.` : 'Delivery was cancelled.');
+                            } catch (e) {
+                              setDetailCancelError(
+                                e.response?.data?.error || e.response?.data?.message || e.message || 'Could not cancel delivery.',
+                              );
+                            } finally {
+                              setDetailCancelLoading(false);
+                            }
+                          }}
+                          className="w-full px-4 py-2.5 rounded-lg border border-red-300 bg-red-50 text-sm font-medium text-red-800 hover:bg-red-100 disabled:opacity-50"
+                        >
+                          {detailCancelLoading ? 'Cancelling…' : 'Cancel pick up'}
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4">
+                      <div className="flex items-center gap-2 mb-2">
+                        <History className="w-5 h-5 text-slate-600 shrink-0" />
+                        <h4 className="text-sm font-semibold text-slate-800">Activity</h4>
+                      </div>
+                      {detailActivityLoading ? (
+                        <p className="text-sm text-slate-500 flex items-center gap-2">
+                          <Loader className="w-4 h-4 animate-spin shrink-0" /> Loading…
+                        </p>
+                      ) : (detailActivity || []).length === 0 ? (
+                        <p className="text-sm text-slate-500">No activity logged yet.</p>
+                      ) : (
+                        <ul className="space-y-2 max-h-56 overflow-y-auto">
+                          {[...(detailActivity || [])].reverse().map((ev) => {
+                            const { title, sub } = describeActivityEntry(ev);
+                            return (
+                              <li key={ev.id} className="p-2.5 rounded-lg border border-slate-100 bg-slate-50/80 text-sm">
+                                <span className="font-medium text-slate-800">{title}</span>
+                                {sub && <span className="text-slate-600"> {sub}</span>}
+                                <span className="text-slate-500 text-xs">
+                                  {activitySourceSuffix(ev)}
+                                  {ev.changed_by ? ` (${ev.changed_by})` : ''}
+                                </span>
+                                {ev.created_at && (
+                                  <span className="block text-xs text-slate-400 mt-0.5">
+                                    {new Date(ev.created_at).toLocaleString()}
+                                  </span>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+
                     <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <Camera className="w-5 h-5 text-slate-600 shrink-0" />
                           <div>
                             <p className="text-sm font-semibold text-slate-800">Proof of delivery</p>
-                            <p className="text-xs text-slate-500">Photo from the driver’s app (Shipday) and any signature we have on file.</p>
+                            <p className="text-xs text-slate-500">Photo from the driver’s app and any signature we have on file.</p>
                           </div>
                         </div>
                         <button

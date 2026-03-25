@@ -141,6 +141,13 @@ export function isShipdayOnDemandEnabledFlag(raw) {
   return false;
 }
 
+/** When true, assign on-demand carrier immediately after Shipday order create (no dashboard picker). */
+export function isShipdayOnDemandAutoAssignFlag(raw) {
+  if (raw === true || raw === 1) return true;
+  if (typeof raw === 'string' && /^true$/i.test(raw.trim())) return true;
+  return false;
+}
+
 /**
  * Update global delivery config (admin or backend). Merges updates into current value.
  * @param {Object} updates - Same shape as PUT /config body
@@ -165,6 +172,7 @@ export async function updateDeliveryConfig(updates) {
     service_line_name,
     custom_instructions,
     customer_callback_message,
+    dispatch_broker,
     billing,
     brokers,
   } = updates || {};
@@ -188,6 +196,10 @@ export async function updateDeliveryConfig(updates) {
   if (service_line_name !== undefined) merged.service_line_name = service_line_name ? String(service_line_name).trim() || null : null;
   if (custom_instructions !== undefined) merged.custom_instructions = custom_instructions ? String(custom_instructions).trim() || null : null;
   if (customer_callback_message !== undefined) merged.customer_callback_message = customer_callback_message ? String(customer_callback_message).trim() || null : null;
+  if (dispatch_broker !== undefined) {
+    const v = String(dispatch_broker || 'shipday').toLowerCase();
+    merged.dispatch_broker = v === 'doordash' ? 'doordash' : 'shipday';
+  }
   if (billing !== undefined && billing !== null && typeof billing === 'object') {
     merged.billing = {
       price_basic_cents: typeof billing.price_basic_cents === 'number' ? billing.price_basic_cents : undefined,
@@ -216,6 +228,18 @@ export async function updateDeliveryConfig(updates) {
     merged.brokers = {};
     for (const [id, entry] of Object.entries(brokers)) {
       if (!id || typeof entry !== 'object') continue;
+      if (id === 'doordash') {
+        merged.brokers[id] = {
+          enabled: entry.enabled !== false,
+          developer_id: typeof entry.developer_id === 'string' ? entry.developer_id.trim() || null : null,
+          key_id: typeof entry.key_id === 'string' ? entry.key_id.trim() || null : null,
+          environment: entry.environment === 'production' ? 'production' : 'sandbox',
+          base_url: typeof entry.base_url === 'string' ? entry.base_url.trim() || null : null,
+        };
+        const secret = typeof entry.signing_secret === 'string' ? entry.signing_secret.trim() : '';
+        if (secret) merged.brokers[id].signing_secret = secret;
+        continue;
+      }
       merged.brokers[id] = {
         enabled: entry.enabled !== false,
         api_key: typeof entry.api_key === 'string' ? entry.api_key.trim() || null : null,
@@ -240,6 +264,7 @@ export async function updateDeliveryConfig(updates) {
       }
       if (id === 'shipday') {
         merged.brokers[id].on_demand_enabled = isShipdayOnDemandEnabledFlag(entry.on_demand_enabled);
+        merged.brokers[id].on_demand_auto_assign = isShipdayOnDemandAutoAssignFlag(entry.on_demand_auto_assign);
         const provider = typeof entry.preferred_on_demand_provider === 'string' ? entry.preferred_on_demand_provider.trim() || null : null;
         merged.brokers[id].preferred_on_demand_provider = provider || null;
         if (entry.on_demand_contactless === true) merged.brokers[id].on_demand_contactless = true;
@@ -255,7 +280,14 @@ export async function updateDeliveryConfig(updates) {
   const current = await getDeliveryConfigFull();
   const newValue = { ...current, ...merged };
   if (merged.billing) newValue.billing = { ...(current.billing || {}), ...merged.billing };
-  if (merged.brokers) newValue.brokers = { ...(current.brokers || {}), ...merged.brokers };
+  if (merged.brokers) {
+    newValue.brokers = { ...(current.brokers || {}), ...merged.brokers };
+    const prevDd = current.brokers?.doordash;
+    const nextDd = newValue.brokers.doordash;
+    if (prevDd && typeof prevDd === 'object' && prevDd.signing_secret && nextDd && typeof nextDd === 'object' && !nextDd.signing_secret) {
+      newValue.brokers.doordash = { ...nextDd, signing_secret: prevDd.signing_secret };
+    }
+  }
   const { error: upsertErr } = await supabaseClient
     .from('delivery_network_config')
     .upsert({ key: CONFIG_KEY, value: newValue, updated_at: new Date().toISOString() }, { onConflict: 'key' });

@@ -99,6 +99,7 @@ export async function createDeliveryRequest(params) {
     intake_channel: ['phone', 'sms', 'form', 'chat', 'api'].includes(intake_channel) ? intake_channel : 'form',
     payment_status: payment_status || null,
     updated_at: new Date().toISOString(),
+    customer_notify_token: crypto.randomBytes(32).toString('hex'),
   };
   if (amount_quoted_cents != null && Number.isFinite(amount_quoted_cents) && amount_quoted_cents >= 0) {
     payload.amount_quoted_cents = Math.round(amount_quoted_cents);
@@ -118,13 +119,23 @@ export async function createDeliveryRequest(params) {
     .single();
 
   if (error) throw error;
+  try {
+    const { logRequestActivity } = await import('./activity.js');
+    await logRequestActivity(data.id, 'request_created', {
+      to_status: 'New',
+      source: 'system',
+      detail: { intake_channel: payload.intake_channel },
+    });
+  } catch {
+    /* activity table optional until migration */
+  }
   return payload.transcript_access_token
     ? { ...data, transcript_access_token: payload.transcript_access_token }
     : data;
 }
 
 /**
- * Create a delivery request from minimal SMS intake.
+ * @deprecated Use `handleSmsIntake` in `sms-intake.js` (Telnyx → bulkSMS webhook). Kept for tests/scripts.
  */
 export async function createDeliveryRequestFromSms(fromPhone, messageText, businessId = null) {
   return createDeliveryRequest({
