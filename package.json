@@ -14,6 +14,7 @@
     "dev:raw": "node --watch server.js",
     "kill-port": "powershell -ExecutionPolicy Bypass -File ./kill-port.ps1",
     "vercel-build": "cd frontend && npm install && npm run build",
+    "deploy:vercel": "vercel --prod --yes",
     "lint": "eslint .",
     "format": "prettier --write .",
     "migrate": "node scripts/migrate.js",
