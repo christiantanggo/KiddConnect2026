@@ -3,7 +3,12 @@
 This folder **does not replace** the monorepo yet. It holds:
 
 - **SQL** to introspect your live Supabase/Postgres schema (`docs/supabase-schema-introspection.sql`).
-- **Manifests** listing tables and code paths for the YouTube-related product (`manifest/`).
+- **Manifests** (`manifest/`):
+  - `DATABASE_TABLES.md` — studio tables from migrations
+  - `CODE_PATHS.md` — routes/services to lift
+  - `SERVER_MOUNT_ORDER.md` — Express mount order (callbacks vs auth)
+  - `SHARED_CORE_PREREQUISITES.md` — `users` / `businesses` / `module_settings` etc.
+  - `MIGRATION_FILES_ORDER.md` — how to think about SQL ordering for a new DB
 
 ## Why nothing was deleted from the repo root
 

@@ -6,14 +6,18 @@ Paths are relative to repo root `KiddConnect Youtube/`.
 ## Backend (Express)
 - `routes/v2/kidquiz.js`, `routes/v2/kidquiz-youtube-callback.js`
 - `routes/v2/dad-joke-studio.js`, `routes/v2/dad-joke-studio-youtube-callback.js`
-- `routes/v2/orbix-network.js` (very large), `routes/v2/orbix-network-youtube-callback.js`
-- `routes/v2/movie-review.js` (+ any movie-review callback if present)
+- `routes/v2/orbix-network.js` (very large)
+- `routes/v2/orbix-network-youtube-callback.js`
+- `routes/v2/orbix-network-longform.js`
+- `routes/v2/orbix-network-jobs.js` (render/upload intervals — check `server.js`)
+- `routes/v2/orbix-network-setup.js`
+- `routes/v2/movie-review.js`
 - `routes/v2/riddle-youtube-callback.js` (Orbix custom OAuth channel)
 - `services/kidquiz/`
 - `services/dadjoke-studio/`
-- `services/orbix-network/` (renderers, publisher, scrapers, workers)
-- `services/movie-review/` (if present as folder)
-- `server.js` — mount only the routes you keep; CORS allowlist for `kiddconnect.ca`
+- `services/orbix-network/` (entire directory: renderers, publishers, scrapers, generators, longform, …)
+- `services/movie-review/` (`publisher.js`, `renderer.js`)
+- `server.js` — mount order: see `SERVER_MOUNT_ORDER.md`; CORS for `kiddconnect.ca` + `FRONTEND_URL`
 
 ## Frontend (Next.js)
 - `frontend/app/dashboard/v2/modules/kidquiz/**`
@@ -29,6 +33,7 @@ Paths are relative to repo root `KiddConnect Youtube/`.
 
 ## Workers / scripts
 - `scripts/orbix-render-worker.js` (and any cron/worker that processes Orbix/KidQuiz/DadJoke renders)
+- Search: `grep -r "orbix-network-jobs" scripts/ server.js`
 
 ## Config / env
 - YouTube OAuth redirect URIs per module (`YOUTUBE_REDIRECT_URI`, per-callback URLs)
