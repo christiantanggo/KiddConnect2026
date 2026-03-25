@@ -1499,9 +1499,16 @@ async function handleCallEnd(event) {
         intake_transcript: fullTranscript || undefined,
       });
       console.log("[VAPI Webhook] Delivery request created:", request.id, request.reference_number);
-      startDispatch(request.id).catch((err) =>
-        console.error("[VAPI Webhook] Delivery startDispatch error:", err?.message || err)
-      );
+      if (deliveryAddressQualifiesForAutoShipdayDispatch(extracted.delivery_address)) {
+        startDispatch(request.id).catch((err) =>
+          console.error("[VAPI Webhook] Delivery startDispatch error:", err?.message || err)
+        );
+      } else {
+        console.log(
+          "[VAPI Webhook] Delivery: saved request as New; skipping Shipday auto-dispatch until address is real (not placeholder/too short).",
+          request.id,
+        );
+      }
     } catch (err) {
       console.error("[VAPI Webhook] Delivery intake error:", err?.message || err);
     }
@@ -3521,6 +3528,17 @@ function determineIntent(summary, transcript) {
   }
   
   return "general";
+}
+
+/**
+ * Only push to Shipday when we have a plausible street address — not placeholders from weak extraction.
+ * Prevents ghost Shipday orders from wrong numbers, hang-ups, or assistant chatter that still passes duration/transcript gates.
+ */
+function deliveryAddressQualifiesForAutoShipdayDispatch(deliveryAddress) {
+  const s = String(deliveryAddress || "").trim();
+  if (s.length < 10) return false;
+  if (/to be confirmed|tbd|unknown address|address pending|n\/a\b/i.test(s)) return false;
+  return true;
 }
 
 /**

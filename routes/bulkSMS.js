@@ -1182,6 +1182,40 @@ router.post('/test', authenticate, async (req, res) => {
   }
 });
 
+/** Telnyx inbound SMS event_type values differ by API version; treat common variants as inbound. */
+function isTelnyxInboundSmsEventType(eventType) {
+  if (eventType == null || eventType === '') return true;
+  const t = String(eventType).toLowerCase();
+  if (t === 'message.received' || t === 'sms.received') return true;
+  if (t === 'inbound.message.received' || t === 'message.inbound') return true;
+  if (t.includes('received') && t.includes('message') && !t.includes('sent') && !t.includes('finalized')) return true;
+  return false;
+}
+
+/** Resolve nested Telnyx webhook payload to a message-like object with from/to/text. */
+function extractTelnyxInboundMessage(reqBody, data) {
+  const candidates = [
+    data?.payload,
+    data?.record,
+    data?.data,
+    reqBody?.payload,
+    reqBody?.data?.payload,
+    typeof data === 'object' && data && data.from && !data.payload ? data : null,
+  ].filter(Boolean);
+  for (const m of candidates) {
+    const from =
+      m?.from?.phone_number ||
+      m?.from?.number ||
+      (typeof m?.from === 'string' ? m.from : null) ||
+      m?.origin_phone_number;
+    const hasTo = m?.to != null || m?.destination_phone_number != null || m?.recipient != null;
+    const hasText = m?.text != null || m?.body != null || m?.message != null;
+    if (from && (hasTo || hasText)) return m;
+    if (String(m?.direction || '').toLowerCase() === 'inbound' && (from || hasTo)) return m;
+  }
+  return data?.payload || data?.record || data?.data || data;
+}
+
 /**
  * Test endpoint to verify webhook is accessible
  * GET /api/bulk-sms/webhook
@@ -1225,6 +1259,9 @@ router.post('/webhook', express.json(), async (req, res) => {
       eventType = req.body.event_type || 'message.received';
     }
     
+    if (!eventType && req.body?.type) {
+      eventType = req.body.type;
+    }
     console.log('[BulkSMS Webhook] Parsed event type:', eventType);
     console.log('[BulkSMS Webhook] Parsed data:', JSON.stringify(data, null, 2));
     
@@ -1234,13 +1271,19 @@ router.post('/webhook', express.json(), async (req, res) => {
     
     // Handle incoming SMS (for opt-outs)
     // Telnyx can send different event types, so check multiple
-    if (eventType === 'message.received' || eventType === 'sms.received' || !eventType) {
+    if (isTelnyxInboundSmsEventType(eventType)) {
       // Try multiple message formats - Telnyx webhook structure can vary
-      const message = data?.payload || data?.data || data;
+      const message = extractTelnyxInboundMessage(req.body, data);
       const fromNumber = message?.from?.phone_number || message?.from?.number || message?.from || message?.origin_phone_number;
       
       // Handle toNumber - it can be an array of objects or a single value
-      let toNumber = message?.to?.phone_number || message?.to?.number || message?.to || message?.destination_phone_number;
+      let toNumber =
+        message?.to?.phone_number ||
+        message?.to?.number ||
+        message?.destination_phone_number ||
+        message?.recipient?.phone_number ||
+        message?.to ||
+        message?.recipient;
       if (Array.isArray(toNumber) && toNumber.length > 0) {
         // If it's an array, get the phone_number from the first object
         toNumber = toNumber[0]?.phone_number || toNumber[0]?.number || toNumber[0];
@@ -1267,8 +1310,13 @@ router.post('/webhook', express.json(), async (req, res) => {
       
       // EMERGENCY NETWORK: separate stream — if destination is emergency number, create service request and stop
       if (toNumber) {
-        const formattedToNumber = formatPhoneNumberE164(toNumber);
-        const formattedFromNumber = formatPhoneNumberE164(fromNumber);
+        const { normalizePhone } = await import('../services/delivery-network/config.js');
+        const formattedToNumber =
+          formatPhoneNumberE164(toNumber) || normalizePhone(String(toNumber).trim()) || String(toNumber).trim();
+        const formattedFromNumber =
+          formatPhoneNumberE164(fromNumber) ||
+          (fromNumber ? normalizePhone(String(fromNumber).trim()) : null) ||
+          (fromNumber ? String(fromNumber).trim() : null);
         const { isEmergencyNumber } = await import('../services/emergency-network/config.js');
         const isEmergency = await isEmergencyNumber(formattedToNumber);
         console.log('[BulkSMS Webhook] Emergency check: to=', formattedToNumber, 'isEmergencyNumber=', isEmergency);
@@ -1329,6 +1377,11 @@ router.post('/webhook', express.json(), async (req, res) => {
           }
           return;
         }
+      } else if (fromNumber || rawText) {
+        console.warn(
+          '[BulkSMS Webhook] Inbound SMS branch: missing toNumber — cannot route emergency/delivery. Keys:',
+          Object.keys(message || {}),
+        );
       }
       
       // Check for opt-out keywords

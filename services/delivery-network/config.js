@@ -20,6 +20,28 @@ export function normalizePhone(phone) {
   return digits;
 }
 
+/** Last 10 digits for NANP-style loose matching (Telnyx vs DB format drift). */
+function nanpCore10(phone) {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (d.length >= 10) {
+    const core = d.length === 11 && d.startsWith('1') ? d.slice(1) : d.slice(-10);
+    return core.length === 10 ? core : '';
+  }
+  return '';
+}
+
+/**
+ * True if two numbers refer to the same line (E.164 normalize + NANP 10-digit fallback).
+ */
+export function phoneNumbersLooselyEqual(a, b) {
+  const na = normalizePhone(typeof a === 'string' ? a : String(a || ''));
+  const nb = normalizePhone(typeof b === 'string' ? b : String(b || ''));
+  if (na && nb && na === nb) return true;
+  const ca = nanpCore10(a);
+  const cb = nanpCore10(b);
+  return Boolean(ca && cb && ca === cb);
+}
+
 /**
  * Get global delivery network config (delivery_phone_numbers, delivery_vapi_assistant_id).
  */
@@ -67,12 +89,12 @@ export async function isDeliveryLineNumber(phone) {
   const config = await getDeliveryConfig();
   const numbers = config.delivery_phone_numbers || [];
   if (numbers.length === 0) return false;
-  const normalized = normalizePhone(phone);
+  if (phone == null || phone === '') return false;
+  const raw = typeof phone === 'string' ? phone : String(phone);
+  const normalized = normalizePhone(raw) || normalizePhone(raw.replace(/\D/g, ''));
   if (!normalized) return false;
-  const list = numbers.map(normalizePhone).filter(Boolean);
-  return list.some(
-    (n) => n === normalized || n === normalized.replace(/^\+/, '') || `+${n}` === normalized
-  );
+  const list = numbers.map((n) => (typeof n === 'string' ? n : String(n))).filter(Boolean);
+  return list.some((n) => phoneNumbersLooselyEqual(n, normalized) || phoneNumbersLooselyEqual(n, raw));
 }
 
 /**
