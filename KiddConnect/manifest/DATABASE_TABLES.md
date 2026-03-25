@@ -56,7 +56,8 @@ Additional columns / enums were added across many `add_orbix_*.sql` and channel-
 - `module_settings` — keys like `kidquiz`, `orbix-network`, `movie-review`, `dad-joke-studio`
 - `modules`, `businesses`, `users`, `organization_users` — see `SHARED_CORE_PREREQUISITES.md`
 
-## Storage buckets (examples from migrations)
-- Kid Quiz renders bucket (env: `SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS` or `kidquiz-videos`)
-- `dadjoke-studio-assets`, `dadjoke-studio-renders`
-- Orbix-related buckets per `add_orbix_network_storage_policies.sql`, `add_orbix_music_bucket_policies.sql`, etc.
+## Storage buckets
+
+**Production list:** see **`STORAGE_BUCKETS.md`** (live Supabase snapshot: Dad Joke, Kid Quiz, Movie Review, Orbix, `website-hero`).
+
+Env examples: `SUPABASE_STORAGE_BUCKET_KIDQUIZ_RENDERS` / `kidquiz-videos`; migrations also reference Orbix music/backgrounds policies in `add_orbix_*` SQL files.

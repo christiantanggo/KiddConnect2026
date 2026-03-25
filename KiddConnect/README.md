@@ -9,6 +9,7 @@ This folder **does not replace** the monorepo yet. It holds:
   - `SERVER_MOUNT_ORDER.md` — Express mount order (callbacks vs auth)
   - `SHARED_CORE_PREREQUISITES.md` — `users` / `businesses` / `module_settings` etc.
   - `MIGRATION_FILES_ORDER.md` — how to think about SQL ordering for a new DB
+  - `STORAGE_BUCKETS.md` — live Supabase storage bucket names, limits, MIME types
 
 ## Why nothing was deleted from the repo root
 
