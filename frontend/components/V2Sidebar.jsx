@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
+import { LEGACY_DASHBOARD_LABEL } from '@/lib/appBrand';
 import { CheckCircle2, Lock, AlertTriangle, Layout, Archive, ChevronDown, ChevronRight } from 'lucide-react';
 import { ARCHIVED_MODULE_KEYS } from '@/lib/archived-module-keys';
 
@@ -150,7 +151,7 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
             }}
           >
             <Layout className="w-4 h-4 mr-2" style={{ color: isDashboardActive ? 'var(--color-accent)' : 'var(--color-text-muted)' }} />
-            <span>Tavari AI Dashboard</span>
+            <span>{LEGACY_DASHBOARD_LABEL}</span>
           </Link>
         </div>
 

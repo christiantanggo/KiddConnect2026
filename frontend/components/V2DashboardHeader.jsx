@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { logout } from '@/lib/auth';
+import { APP_DISPLAY_NAME } from '@/lib/appBrand';
 import { Bell, Menu, X, Settings, HelpCircle, LogOut } from 'lucide-react';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
@@ -105,7 +106,7 @@ export default function V2DashboardHeader({ onMobileMenuToggle, mobileMenuOpen }
           </button>
 
           <Link href="/dashboard/v2" className="flex items-center">
-            <h1 className="text-xl font-semibold" style={{ color: 'var(--color-primary)' }}>Tavari Ai</h1>
+            <h1 className="text-xl font-semibold" style={{ color: 'var(--color-primary)' }}>{APP_DISPLAY_NAME}</h1>
           </Link>
         </div>
 

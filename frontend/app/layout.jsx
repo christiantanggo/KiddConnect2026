@@ -2,9 +2,15 @@ import './globals.css';
 import { ToastProvider } from '@/components/ToastProvider';
 import Script from 'next/script';
 
+const title = (process.env.NEXT_PUBLIC_APP_DISPLAY_NAME || 'Tavari Ai').trim();
+const description = (
+  process.env.NEXT_PUBLIC_APP_DESCRIPTION ||
+  'Tavari Ai — AI communications, phone agents, and business tools'
+).trim();
+
 export const metadata = {
-  title: 'Tavari Ai',
-  description: 'Tavari Ai — AI communications, phone agents, and business tools',
+  title,
+  description,
 };
 
 export default function RootLayout({ children }) {

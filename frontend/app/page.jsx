@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { trackPageView, trackLinkClick, trackButtonClick } from '@/lib/analytics';
+import { APP_DISPLAY_NAME } from '@/lib/appBrand';
+
+const IS_DEFAULT_TAVARI_BRAND = APP_DISPLAY_NAME === 'Tavari Ai';
 
 export default function TavariAILandingPage() {
   const [pageStartTime] = useState(Date.now());
@@ -64,15 +67,19 @@ export default function TavariAILandingPage() {
         <div className="container mx-auto px-4 py-4">
           <div className="flex justify-between items-center">
             <Link href="/" className="flex items-center">
-              <Image
-                src="/tavari-logo.png"
-                alt="Tavari AI"
-                width={400}
-                height={114}
-                className="h-28 w-auto"
-                style={{ width: 'auto', height: '7rem' }}
-                priority
-              />
+              {IS_DEFAULT_TAVARI_BRAND ? (
+                <Image
+                  src="/tavari-logo.png"
+                  alt={APP_DISPLAY_NAME}
+                  width={400}
+                  height={114}
+                  className="h-28 w-auto"
+                  style={{ width: 'auto', height: '7rem' }}
+                  priority
+                />
+              ) : (
+                <span className="text-2xl md:text-3xl font-bold text-blue-600 tracking-tight">{APP_DISPLAY_NAME}</span>
+              )}
             </Link>
             <div className="flex items-center space-x-6">
               <Link 
@@ -99,13 +106,20 @@ export default function TavariAILandingPage() {
         <section className="relative w-full max-w-7xl mx-auto mb-20 rounded-2xl overflow-hidden">
           {/* Hero Image */}
           <div className="relative w-full h-[500px] md:h-[600px]">
-            <Image
-              src="/Tavari-AI-Hero-Image.png"
-              alt="Tavari AI"
-              fill
-              className="object-cover"
-              priority
-            />
+            {IS_DEFAULT_TAVARI_BRAND ? (
+              <Image
+                src="/Tavari-AI-Hero-Image.png"
+                alt={APP_DISPLAY_NAME}
+                fill
+                className="object-cover"
+                priority
+              />
+            ) : (
+              <div
+                className="absolute inset-0 bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-700"
+                aria-hidden
+              />
+            )}
             {/* Buttons Overlay - Positioned in bottom third */}
             <div className="absolute bottom-0 left-0 right-0 flex flex-col sm:flex-row gap-4 justify-center items-center pb-8 md:pb-12 px-4">
               <Link
@@ -199,7 +213,7 @@ export default function TavariAILandingPage() {
         <section className="py-20 bg-gray-50 rounded-2xl mb-16">
           <div className="max-w-4xl mx-auto text-center px-8">
             <h2 className="text-3xl md:text-4xl font-bold text-gray-900 mb-6">
-              Why Choose Tavari AI?
+              Why Choose {APP_DISPLAY_NAME}?
             </h2>
             <div className="grid md:grid-cols-3 gap-8 mt-12">
               <div className="text-center">
@@ -259,14 +273,18 @@ export default function TavariAILandingPage() {
           <div className="flex flex-col md:flex-row justify-between items-center">
             <div className="mb-4 md:mb-0">
               <Link href="/admin/login" className="flex items-center hover:opacity-90 transition-opacity" title="Admin">
-                <Image
-                  src="/tavari-logo.png"
-                  alt="Tavari AI"
-                  width={400}
-                  height={114}
-                  className="h-28 w-auto opacity-80"
-                  style={{ width: 'auto', height: '7rem' }}
-                />
+                {IS_DEFAULT_TAVARI_BRAND ? (
+                  <Image
+                    src="/tavari-logo.png"
+                    alt={APP_DISPLAY_NAME}
+                    width={400}
+                    height={114}
+                    className="h-28 w-auto opacity-80"
+                    style={{ width: 'auto', height: '7rem' }}
+                  />
+                ) : (
+                  <span className="text-xl font-bold text-blue-600 opacity-90">{APP_DISPLAY_NAME}</span>
+                )}
               </Link>
             </div>
             <div className="flex space-x-6 text-sm text-gray-600">
