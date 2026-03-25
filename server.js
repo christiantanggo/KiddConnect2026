@@ -633,6 +633,22 @@ try {
     console.warn('⚠️  Kid Quiz Studio routes not loaded:', kqErr.message);
   }
 
+  // Dad Joke Studio (PUBLIC YouTube callback before authenticated routes)
+  try {
+    const djsCallback = (await import("./routes/v2/dad-joke-studio-youtube-callback.js")).default;
+    app.use("/api/v2/dad-joke-studio", djsCallback);
+    console.log("✅ Dad Joke Studio YouTube OAuth callback loaded (public)");
+  } catch (djsCbErr) {
+    console.warn("⚠️  Dad Joke Studio YouTube callback not loaded:", djsCbErr.message);
+  }
+  try {
+    const djsRoutes = (await import("./routes/v2/dad-joke-studio.js")).default;
+    app.use("/api/v2/dad-joke-studio", djsRoutes);
+    console.log("✅ Dad Joke Studio routes loaded at /api/v2/dad-joke-studio");
+  } catch (djsErr) {
+    console.warn("⚠️  Dad Joke Studio routes not loaded:", djsErr.message);
+  }
+
   // Movie Review Studio (PUBLIC callback must be before authenticated routes)
   try {
     const movieReviewRoutes = (await import("./routes/v2/movie-review.js")).default;

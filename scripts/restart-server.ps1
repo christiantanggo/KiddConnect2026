@@ -1,5 +1,12 @@
-# Quick script to kill process on port 5001 and restart server
-$port = 5001
+# Quick script to kill process on backend port (see config/dev-ports.json) and restart server
+$portsPath = Join-Path $PSScriptRoot "..\config\dev-ports.json"
+$port = 5000
+if (Test-Path $portsPath) {
+    try {
+        $ports = Get-Content $portsPath -Raw | ConvertFrom-Json
+        if ($ports.backend) { $port = [int]$ports.backend }
+    } catch { }
+}
 Write-Host "Checking for process on port $port..."
 
 $processes = netstat -ano | findstr ":$port" | ForEach-Object {

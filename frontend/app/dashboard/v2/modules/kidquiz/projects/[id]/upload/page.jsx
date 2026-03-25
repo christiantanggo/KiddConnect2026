@@ -77,7 +77,15 @@ export default function UploadPage() {
     } catch (err) { setError(err.message); setUploading(false); }
   }
 
-  const isPublished = project?.status === 'PUBLISHED' || publish?.publish_status === 'PUBLISHED';
+  const youtubeWatchUrl =
+    publish?.youtube_url ||
+    (typeof publish?.youtube_video_id === 'string' && publish.youtube_video_id
+      ? `https://www.youtube.com/watch?v=${publish.youtube_video_id}`
+      : null);
+  const isPublished =
+    publish?.publish_status === 'PUBLISHED' &&
+    typeof publish?.youtube_video_id === 'string' &&
+    publish.youtube_video_id.length > 0;
   const isUploading = project?.status === 'UPLOADING' || publish?.publish_status === 'UPLOADING' || uploading;
   const isFailed = publish?.publish_status === 'FAILED';
   const uploadErrorMessage = publish?.error_message || '';
@@ -160,8 +168,8 @@ export default function UploadPage() {
                 <div className="text-center py-4">
                   <div className="text-5xl mb-3">&#x1F389;</div>
                   <p className="font-bold text-lg mb-2" style={{ color: '#16a34a' }}>Published!</p>
-                  {publish?.youtube_url && (
-                    <a href={publish.youtube_url} target="_blank" rel="noopener noreferrer" className="inline-block px-5 py-2.5 rounded-xl font-bold text-white text-sm" style={{ background: '#ef4444' }}>
+                  {youtubeWatchUrl && (
+                    <a href={youtubeWatchUrl} target="_blank" rel="noopener noreferrer" className="inline-block px-5 py-2.5 rounded-xl font-bold text-white text-sm" style={{ background: '#ef4444' }}>
                       Watch on YouTube
                     </a>
                   )}

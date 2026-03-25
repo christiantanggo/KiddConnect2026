@@ -1,3 +1,22 @@
+const path = require('path');
+const fs = require('fs');
+
+/** Local API port must match repo root config/dev-ports.json (backend). */
+function getDevBackendPort() {
+  try {
+    const p = path.join(__dirname, '..', 'config', 'dev-ports.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    return Number(j.backend) || 5000;
+  } catch {
+    return 5000;
+  }
+}
+
+const isProd = process.env.NODE_ENV === 'production';
+const defaultApiUrl = isProd
+  ? 'https://api.tavarios.com'
+  : `http://localhost:${getDevBackendPort()}`;
+
 /** @type {import('next').NextConfig} */
 const fs = require('fs');
 const path = require('path');

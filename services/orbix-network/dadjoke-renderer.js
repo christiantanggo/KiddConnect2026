@@ -146,7 +146,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
   const lines = [];
-  lines.push(`Dialogue: 0,${t(SETUP_START)},${t(COUNTDOWN_END)},Setup,,0,0,0,,{\\an5\\pos(540,640)}${wrappedSetup}`);
+  // Setup visible only 0–4s; countdown 4–7s is digits + progress only; punchline from 7s (see header comment).
+  lines.push(`Dialogue: 0,${t(SETUP_START)},${t(SETUP_END)},Setup,,0,0,0,,{\\an5\\pos(540,640)}${wrappedSetup}`);
   lines.push(`Dialogue: 1,${t(SETUP_END)},${t(COUNTDOWN_END)},ProgressBg,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${PROGRESS_W} 0 l ${PROGRESS_W} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
   for (const kf of progressKeyframes) {
     lines.push(`Dialogue: 2,${t(kf.start)},${t(kf.end)},ProgressFill,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${kf.fillW} 0 l ${kf.fillW} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
@@ -161,37 +162,58 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   return assPath;
 }
 
-export async function processDadJokeRenderJob(render, story, script) {
-  const renderId = render.id;
-  const businessId = render.business_id;
+/**
+ * Same Orbix dad-joke Short pipeline (setup 0–4s, 3-2-1 countdown 4–7s, answer at 7s, ASS overlays, motion bg, TTS mix, optional music).
+ * Does not touch Supabase. Caller uploads/deletes localPath.
+ *
+ * @param {object} params
+ * @param {string} params.businessId
+ * @param {string} params.setup
+ * @param {string} params.punchline
+ * @param {string} [params.voice_script] - TTS for setup phase (defaults to setup)
+ * @param {string} [params.hook] - loop/CTA line (defaults via getDadJokeCta)
+ * @param {number} [params.episode_number]
+ * @param {number} [params.backgroundId]
+ * @param {string|null} [params.backgroundStoragePath] - Orbix storage path
+ * @param {string|null} [params.backgroundImageUrl] - full URL (e.g. Dad Joke Studio asset); wins over backgroundId/path
+ * @param {string|null} [params.musicTrackUrl] - explicit music URL; else Orbix channel music resolution
+ * @param {string|null} [params.orbixChannelIdForMusic] - story.channel_id for music folder
+ * @param {string} [params.tempId] - prefix for temp files
+ * @returns {Promise<{ localPath: string, duration: number }>}
+ */
+export async function renderOrbixStyleDadJokeShortToFile(params) {
+  const {
+    businessId,
+    setup: setupRaw,
+    punchline: punchlineRaw,
+    voice_script: voiceRaw,
+    hook: hookRaw,
+    episode_number: episodeIndex = 0,
+    backgroundId = 1,
+    backgroundStoragePath = null,
+    backgroundImageUrl = null,
+    musicTrackUrl = null,
+    orbixChannelIdForMusic = null,
+    tempId = `dj-${Date.now()}`,
+  } = params;
 
-  writeProgressLog('DADJOKE_RENDER_START', { renderId });
-  setCurrentRender(renderId, 'DADJOKE_RENDER');
-
-  const content = script?.content_json
-    ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
-    : {};
   const { getDadJokeCta } = await import('./dad-joke-cta.js');
-  const episodeIndex = content?.episode_number ?? 0;
   const defaultCta = getDadJokeCta(episodeIndex);
-  const setup = stripEmoji((content?.setup || '').trim().slice(0, 200));
-  const punchline = stripEmoji((content?.punchline || '').trim().slice(0, 100));
-  const voice_script = stripEmoji((content?.voice_script || setup).trim().slice(0, 300));
-  const hook = stripEmoji((content?.hook || defaultCta).trim());
+  const setup = stripEmoji((setupRaw || '').trim().slice(0, 200));
+  const punchline = stripEmoji((punchlineRaw || '').trim().slice(0, 100));
+  const voice_script = stripEmoji((voiceRaw || setup).trim().slice(0, 300));
+  const hook = stripEmoji((hookRaw || defaultCta).trim());
 
   if (!setup || !punchline) {
     throw new Error(`Dad joke render missing content: setup="${setup}" punchline="${punchline}"`);
   }
 
-  const backgroundStoragePath = render.background_storage_path ?? null;
-  const backgroundId = render.background_id ?? 1;
   let bgPath, motionPath, audioPath, musicPath, baseVideoPath, finalVideoPath, assPath, simpleAssPath;
 
   try {
     const axios = (await import('axios')).default;
     const fs = (await import('fs')).default;
 
-    // Generate audio first so we know how long the TTS runs. Answer starts at 7s (after countdown to zero).
     const audioResult = await generateTriviaAudio(
       { hook: null, question: voice_script, answerText: punchline, enableIntroHook: false, answerStartSeconds: 7 },
       AUDIO_CAP_SEC
@@ -202,19 +224,26 @@ export async function processDadJokeRenderJob(render, story, script) {
     const punchlineEnd = DURATION - CTA_SECONDS;
     const loopEnd = DURATION;
 
-    const imageUrl = await getBackgroundImageUrl(backgroundId, backgroundStoragePath);
-    bgPath = join(tmpdir(), `dadjoke-bg-${renderId}-${Date.now()}.png`);
-    const imgResp = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000 });
-    await fs.promises.writeFile(bgPath, imgResp.data);
+    bgPath = join(tmpdir(), `dadjoke-bg-${tempId}.png`);
+    if (backgroundImageUrl && String(backgroundImageUrl).trim()) {
+      const imgResp = await axios.get(String(backgroundImageUrl).split('?')[0], { responseType: 'arraybuffer', timeout: 30000 });
+      await fs.promises.writeFile(bgPath, imgResp.data);
+    } else if (allowOrbixBackgroundFallback) {
+      const imageUrl = await getBackgroundImageUrl(backgroundId, backgroundStoragePath);
+      const imgResp = await axios.get(imageUrl, { responseType: 'arraybuffer', timeout: 30000 });
+      await fs.promises.writeFile(bgPath, imgResp.data);
+    } else {
+      throw new Error('Background image URL is required (module uses Dad Joke Studio assets only).');
+    }
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
     assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd, episode_number: episodeIndex });
-    simpleAssPath = join(tmpdir(), `dadjoke-ass-${renderId}-${Date.now()}.ass`);
+    simpleAssPath = join(tmpdir(), `dadjoke-ass-${tempId}.ass`);
     await fs.promises.copyFile(assPath, simpleAssPath);
     const escapedAssPath = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
-    baseVideoPath = join(tmpdir(), `dadjoke-base-${renderId}-${Date.now()}.mp4`);
+    baseVideoPath = join(tmpdir(), `dadjoke-base-${tempId}.mp4`);
     const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.22:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
     await execAsync(
       `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
@@ -223,13 +252,15 @@ export async function processDadJokeRenderJob(render, story, script) {
     try { await unlinkAsync(assPath); } catch (_) {}
     try { await unlinkAsync(simpleAssPath); } catch (_) {}
 
-    finalVideoPath = join(tmpdir(), `dadjoke-final-${renderId}-${Date.now()}.mp4`);
-    const storyChannelId = story?.channel_id ?? null;
-    const channelId = await resolveDadJokeMusicChannelId(businessId, storyChannelId);
-    const musicTrack = await getRandomMusicTrack(businessId, channelId);
-    if (musicTrack) musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
+    finalVideoPath = join(tmpdir(), `dadjoke-final-${tempId}.mp4`);
+    if (musicTrackUrl && String(musicTrackUrl).trim()) {
+      musicPath = await prepareMusicTrack(String(musicTrackUrl).split('?')[0], DURATION);
+    } else if (allowOrbixMusicFallback) {
+      const channelId = await resolveDadJokeMusicChannelId(businessId, orbixChannelIdForMusic);
+      const musicTrack = await getRandomMusicTrack(businessId, channelId);
+      if (musicTrack) musicPath = await prepareMusicTrack(musicTrack.url, DURATION);
+    }
 
-    // Trim generated audio (AUDIO_CAP_SEC long) to DURATION, then mix with optional music
     const voiceTrim = `[1:a]atrim=0:${DURATION},asetpts=PTS-STARTPTS,volume=1.5625`;
     if (musicPath) {
       await execAsync(
@@ -242,6 +273,59 @@ export async function processDadJokeRenderJob(render, story, script) {
         { timeout: 60000 }
       );
     }
+
+    for (const p of [bgPath, motionPath, baseVideoPath, audioPath, musicPath].filter(Boolean)) {
+      try { await unlinkAsync(p); } catch (_) {}
+    }
+
+    return { localPath: finalVideoPath, duration: DURATION };
+  } catch (error) {
+    for (const p of [bgPath, motionPath, audioPath, musicPath, baseVideoPath, finalVideoPath, assPath, simpleAssPath].filter(Boolean)) {
+      try { await unlinkAsync(p); } catch (_) {}
+    }
+    throw error;
+  }
+}
+
+export async function processDadJokeRenderJob(render, story, script) {
+  const renderId = render.id;
+  const businessId = render.business_id;
+
+  writeProgressLog('DADJOKE_RENDER_START', { renderId });
+  setCurrentRender(renderId, 'DADJOKE_RENDER');
+
+  const content = script?.content_json
+    ? (typeof script.content_json === 'string' ? JSON.parse(script.content_json) : script.content_json)
+    : {};
+  const episodeIndex = content?.episode_number ?? 0;
+  const setup = stripEmoji((content?.setup || '').trim().slice(0, 200));
+  const punchline = stripEmoji((content?.punchline || '').trim().slice(0, 100));
+  const voice_script = stripEmoji((content?.voice_script || setup).trim().slice(0, 300));
+  const { getDadJokeCta } = await import('./dad-joke-cta.js');
+  const defaultCta = getDadJokeCta(episodeIndex);
+  const hook = stripEmoji((content?.hook || defaultCta).trim());
+
+  if (!setup || !punchline) {
+    throw new Error(`Dad joke render missing content: setup="${setup}" punchline="${punchline}"`);
+  }
+
+  let finalVideoPath;
+
+  try {
+    const { localPath } = await renderOrbixStyleDadJokeShortToFile({
+      businessId,
+      setup,
+      punchline,
+      voice_script,
+      hook,
+      episode_number: episodeIndex,
+      backgroundId: render.background_id ?? 1,
+      backgroundStoragePath: render.background_storage_path ?? null,
+      musicTrackUrl: null,
+      orbixChannelIdForMusic: story?.channel_id ?? null,
+      tempId: String(renderId),
+    });
+    finalVideoPath = localPath;
 
     const { title, description, hashtags } = buildYouTubeMetadata(story, script, renderId);
     await supabaseClient.from('orbix_renders').update({
@@ -273,8 +357,8 @@ export async function processDadJokeRenderJob(render, story, script) {
     }).eq('id', renderId);
     throw error;
   } finally {
-    for (const p of [bgPath, motionPath, audioPath, musicPath, baseVideoPath, finalVideoPath, assPath, simpleAssPath].filter(Boolean)) {
-      try { await unlinkAsync(p); } catch (_) {}
+    if (finalVideoPath) {
+      try { await unlinkAsync(finalVideoPath); } catch (_) {}
     }
   }
 }

@@ -10,6 +10,7 @@ import PricingModal from '@/components/PricingModal';
 import ModuleActivationModal from '@/components/ModuleActivationModal';
 import { ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { modulesAPI } from '@/lib/api';
+import { getModulePostActivatePath } from '@/lib/moduleRoutes';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
 
@@ -601,7 +602,7 @@ export default function ModuleDetailPage() {
               if (response.data.redirect_to) {
                 router.push(response.data.redirect_to);
               } else {
-                router.push(`/modules/${moduleKey}/setup`);
+                router.push(getModulePostActivatePath(moduleKey));
               }
             } catch (error) {
               console.error('Failed to activate module:', error);

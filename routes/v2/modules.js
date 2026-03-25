@@ -133,7 +133,7 @@ router.get('/:moduleKey', authenticate, requireBusinessContext, async (req, res)
  */
 // Internal/free modules that don't require Stripe or legal acceptance gate
 // delivery-dispatch removed: uses same billing as rest of app (Stripe subscription, legal acceptance)
-const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network']);
+const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network', 'dad-joke-studio']);
 
 router.post('/:moduleKey/activate',
   authenticate,

@@ -1,10 +1,17 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
+import AdminGuard from '@/components/AdminGuard';
 import { adminSMSNumbersAPI } from '@/lib/api';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.tavarios.com').replace(/\/$/, '');
+
+function getAdminToken() {
+  if (typeof document === 'undefined') return null;
+  const cookies = document.cookie.split(';');
+  const tokenCookie = cookies.find((c) => c.trim().startsWith('admin_token='));
+  return tokenCookie ? tokenCookie.split('=')[1] : null;
+}
 
 function AdminPhoneNumbersPage() {
   const [unassignedNumbers, setUnassignedNumbers] = useState([]);
@@ -73,14 +80,17 @@ function AdminPhoneNumbersPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="text-lg">Loading...</div>
-      </div>
+      <AdminGuard>
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="text-lg">Loading...</div>
+        </div>
+      </AdminGuard>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <AdminGuard>
+      <div className="min-h-screen bg-gray-50">
         <main className="container mx-auto px-4 py-8">
           <div className="bg-white rounded-lg shadow p-6 mb-6">
             <h2 className="text-xl font-bold mb-4">Unassigned Phone Numbers</h2>
@@ -185,12 +195,6 @@ function AdminPhoneNumbersPage() {
         </main>
       </div>
   );
-
-  function getAdminToken() {
-    const cookies = document.cookie.split(';');
-    const tokenCookie = cookies.find(c => c.trim().startsWith('admin_token='));
-    return tokenCookie ? tokenCookie.split('=')[1] : null;
-  }
 }
 
 export default AdminPhoneNumbersPage;

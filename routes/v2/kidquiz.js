@@ -758,15 +758,37 @@ router.post('/projects/:id/upload', async (req, res) => {
       .eq('id', req.params.id);
 
     import('../../services/kidquiz/publisher.js')
-      .then(mod => mod.publishKidQuizVideo(pub, render, project))
-      .catch(err => {
+      .then((mod) => mod.publishKidQuizVideo(pub, render, project))
+      .catch(async (err) => {
         console.error('[KidQuiz Upload] Failed:', err.message);
-        supabaseClient.from('kidquiz_publishes')
-          .update({ publish_status: 'FAILED', error_message: err.message })
+        const em = (err.message || 'Upload failed').slice(0, 2000);
+        const { data: pubRow } = await supabaseClient
+          .from('kidquiz_publishes')
+          .select('publish_status, youtube_video_id')
+          .eq('id', pub.id)
+          .maybeSingle();
+        if (pubRow?.publish_status === 'PUBLISHED' && pubRow?.youtube_video_id) {
+          const { error: p2 } = await supabaseClient
+            .from('kidquiz_projects')
+            .update({ status: 'PUBLISHED', updated_at: new Date().toISOString() })
+            .eq('id', req.params.id);
+          if (p2) console.error('[KidQuiz Upload] Could not sync project PUBLISHED after YouTube success:', p2.message);
+          return;
+        }
+        const { error: p1 } = await supabaseClient
+          .from('kidquiz_publishes')
+          .update({
+            publish_status: 'FAILED',
+            error_message: em,
+            updated_at: new Date().toISOString(),
+          })
           .eq('id', pub.id);
-        supabaseClient.from('kidquiz_projects')
+        if (p1) console.error('[KidQuiz Upload] Failed to mark publish FAILED:', p1.message);
+        const { error: p2 } = await supabaseClient
+          .from('kidquiz_projects')
           .update({ status: 'FAILED', updated_at: new Date().toISOString() })
           .eq('id', req.params.id);
+        if (p2) console.error('[KidQuiz Upload] Failed to mark project FAILED:', p2.message);
       });
 
     res.json({ publish_id: pub.id, status: 'UPLOADING' });

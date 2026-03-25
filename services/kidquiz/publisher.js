@@ -89,7 +89,15 @@ export async function publishKidQuizVideo(publish, render, project) {
 
   console.log(`[KidQuiz Publisher] Starting publish_id=${publishId}`);
 
+  let publishRowCommitted = false;
+  let videoId = null;
+  let youtubeUrl = null;
+  let tmpPath = null;
   try {
+    const { promisify } = await import('util');
+    const { unlink } = await import('fs');
+    const unlinkAsync = promisify(unlink);
+
     await supabaseClient
       .from('kidquiz_publishes')
       .update({ publish_status: 'UPLOADING', updated_at: new Date().toISOString() })
@@ -100,13 +108,10 @@ export async function publishKidQuizVideo(publish, render, project) {
     const fs = (await import('fs')).default;
     const { join } = await import('path');
     const { tmpdir } = await import('os');
-    const { promisify } = await import('util');
-    const { unlink } = await import('fs');
-    const unlinkAsync = promisify(unlink);
 
     if (!render.output_url) throw new Error('Render has no output_url. Re-render first.');
 
-    const tmpPath = join(tmpdir(), `kq-upload-${publishId}.mp4`);
+    tmpPath = join(tmpdir(), `kq-upload-${publishId}.mp4`);
     const resp = await axios.get(render.output_url.split('?')[0], { responseType: 'arraybuffer', timeout: 60000 });
     await fs.promises.writeFile(tmpPath, resp.data);
 
@@ -121,19 +126,28 @@ export async function publishKidQuizVideo(publish, render, project) {
     const videoBuffer = await fs.promises.readFile(tmpPath);
     const videoStream = Readable.from(videoBuffer);
 
+    const privacyRaw = (project.privacy || 'public').toString().trim().toLowerCase();
+    const privacyStatus = ['public', 'unlisted', 'private'].includes(privacyRaw) ? privacyRaw : 'public';
+
     const uploadResp = await youtube.videos.insert({
       part: ['snippet', 'status'],
       requestBody: {
         snippet: { title, description, tags, categoryId: '27' },
-        status: { privacyStatus: (project.privacy || 'PUBLIC').toLowerCase(), selfDeclaredMadeForKids: true }
+        status: { privacyStatus, selfDeclaredMadeForKids: true }
       },
       media: { mimeType: 'video/mp4', body: videoStream }
     });
 
-    const videoId = uploadResp.data.id;
-    const youtubeUrl = `https://www.youtube.com/shorts/${videoId}`;
+    videoId = uploadResp?.data?.id;
+    if (!videoId || typeof videoId !== 'string') {
+      const hint = uploadResp?.data ? JSON.stringify(uploadResp.data).slice(0, 500) : 'no body';
+      throw new Error(`YouTube did not return a video id after upload (${hint}). Check API quota, OAuth channel, and server logs.`);
+    }
 
-    await supabaseClient
+    // /watch?v= works for every uploaded video; /shorts/ only works when YouTube treats it as a Short.
+    youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+    const { error: pubUpErr } = await supabaseClient
       .from('kidquiz_publishes')
       .update({
         publish_status: 'PUBLISHED',
@@ -143,30 +157,56 @@ export async function publishKidQuizVideo(publish, render, project) {
         updated_at: new Date().toISOString()
       })
       .eq('id', publishId);
+    if (pubUpErr) throw new Error(`Saved YouTube id but failed to update publish row: ${pubUpErr.message}`);
+    publishRowCommitted = true;
 
-    await supabaseClient
+    const { error: projUpErr } = await supabaseClient
       .from('kidquiz_projects')
       .update({ status: 'PUBLISHED', updated_at: new Date().toISOString() })
       .eq('id', project.id);
+    if (projUpErr) throw new Error(`Publish succeeded on YouTube (id=${videoId}) but failed to update project: ${projUpErr.message}`);
 
-    try { await unlinkAsync(tmpPath); } catch (_) {}
+    try {
+      if (tmpPath) await unlinkAsync(tmpPath);
+    } catch (_) {}
     console.log(`[KidQuiz Publisher] Published videoId=${videoId}`);
     return { videoId, youtubeUrl };
   } catch (err) {
-    const msg = err.message || '';
+    const apiErr = err?.response?.data;
+    const apiMsg = apiErr?.error?.message || apiErr?.error_description || (typeof apiErr?.error === 'string' ? apiErr.error : '');
+    const msg = [err.message, apiMsg].filter(Boolean).join(' — ') || 'Unknown error';
     const isInvalidClient = msg.includes('invalid_client') || err?.response?.data?.error === 'invalid_client';
     const userMessage = isInvalidClient
       ? 'YouTube OAuth client invalid. Go to Kid Quiz Studio → Settings and re-connect YouTube (same Client ID/Secret you used before, or add them in Upload OAuth app and connect).'
       : msg;
-    console.error(`[KidQuiz Publisher] FAILED publish_id=${publishId}`, msg);
-    await supabaseClient
-      .from('kidquiz_publishes')
-      .update({ publish_status: 'FAILED', error_message: userMessage, updated_at: new Date().toISOString() })
-      .eq('id', publishId);
-    await supabaseClient
-      .from('kidquiz_projects')
-      .update({ status: 'FAILED', updated_at: new Date().toISOString() })
-      .eq('id', project.id);
+    console.error(`[KidQuiz Publisher] FAILED publish_id=${publishId}`, msg, apiErr ? JSON.stringify(apiErr).slice(0, 800) : '');
+
+    if (publishRowCommitted && videoId && youtubeUrl) {
+      const { error: syncErr } = await supabaseClient
+        .from('kidquiz_projects')
+        .update({ status: 'PUBLISHED', updated_at: new Date().toISOString() })
+        .eq('id', project.id);
+      if (!syncErr) {
+        try {
+          if (tmpPath) {
+            const { unlink } = await import('fs/promises');
+            await unlink(tmpPath);
+          }
+        } catch (_) {}
+        console.log(`[KidQuiz Publisher] Published videoId=${videoId} (after project row retry)`);
+        return { videoId, youtubeUrl };
+      }
+      console.error('[KidQuiz Publisher] Retry project PUBLISHED failed:', syncErr.message);
+    } else {
+      await supabaseClient
+        .from('kidquiz_publishes')
+        .update({ publish_status: 'FAILED', error_message: userMessage, updated_at: new Date().toISOString() })
+        .eq('id', publishId);
+      await supabaseClient
+        .from('kidquiz_projects')
+        .update({ status: 'FAILED', updated_at: new Date().toISOString() })
+        .eq('id', project.id);
+    }
     throw new Error(userMessage);
   }
 }

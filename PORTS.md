@@ -31,3 +31,7 @@ If you still set `YOUTUBE_REDIRECT_URI` to `http://localhost:5001/...`, dev mode
 - `frontend/next.config.js` — dev default `NEXT_PUBLIC_API_URL` = `http://localhost:<backend>`
 - `server.js` — CORS allows `http://localhost:<frontend>` and `127.0.0.1`
 - `start-dev.ps1` / `kill-port.ps1` — read backend port from `config/dev-ports.json`
+
+## Guide for other agents (other repositories)
+
+See also [`docs/DEV_PORTS_AGENT_GUIDE.md`](./docs/DEV_PORTS_AGENT_GUIDE.md) for the same pattern applied generically.

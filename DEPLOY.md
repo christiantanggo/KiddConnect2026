@@ -1,5 +1,9 @@
 # Deploy to Vercel (frontend) and Railway (backend)
 
+**Shared database:** This project uses the **same database** (same Supabase) as another app that is already running. See **[SHARED_DATABASE.md](./SHARED_DATABASE.md)** for rules so we don’t break the existing app.
+
+---
+
 ## For agents (quick reference)
 
 **One-line summary:** Deploy by staging the right files, committing, and running `git push origin main` from the repo root; the existing GitHub Actions deploy backend to Railway and frontend to Vercel.

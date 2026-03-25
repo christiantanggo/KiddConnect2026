@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { billingAPI, modulesAPI } from '@/lib/api';
+import { getModulePostActivatePath } from '@/lib/moduleRoutes';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
@@ -232,7 +233,7 @@ export default function PricingModal({ isOpen, onClose, module = null, moduleKey
                         if (response.data.redirect_to) {
                           router.push(response.data.redirect_to);
                         } else {
-                          router.push(`/modules/${module.key}/setup`);
+                          router.push(getModulePostActivatePath(module.key));
                         }
                       } catch (error) {
                         console.error('Failed to activate module:', error);
