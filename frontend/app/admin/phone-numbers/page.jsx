@@ -194,6 +194,7 @@ function AdminPhoneNumbersPage() {
           )}
         </main>
       </div>
+    </AdminGuard>
   );
 }
 
