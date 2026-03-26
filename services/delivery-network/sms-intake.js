@@ -1,11 +1,18 @@
 /**
  * Delivery Network SMS + web chat intake: collect callback phone + delivery address, then create request and dispatch.
  * SMS path: Telnyx webhook → bulkSMS → handleSmsIntake (when `to` is a delivery line).
+ * SMS uses OpenAI (when OPENAI_API_KEY is set) for multi-turn understanding + structured asks; otherwise a safe heuristic fallback.
  */
 import { supabaseClient } from '../../config/database.js';
 import { createDeliveryRequest } from './intake.js';
 import { startDispatch } from './dispatch.js';
-import { getBusinessIdByCallerPhone, getDeliveryConfigFull } from './config.js';
+import { getBusinessIdByCallerPhone, getDeliveryConfigFull, normalizePhone } from './config.js';
+import {
+  analyzeDeliverySmsConversation,
+  looksLikePhysicalAddress,
+  buildStructuredFallbackReply,
+  clampSmsLength,
+} from './sms-intake-ai.js';
 
 const WEB_FROM = 'web';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -95,14 +102,60 @@ function parseMessage(text) {
   return { callback_phone: phone, delivery_address: address || null };
 }
 
-const MIN_ADDRESS_LEN = 8;
+const THREAD_MAX = 14;
 
 function deliveryServiceName(config) {
   return (config?.service_line_name && String(config.service_line_name).trim()) || 'Last-Mile Delivery';
 }
 
-function deliverySmsPrompt(serviceName) {
-  return `${serviceName}: Send your full delivery address (street, city, province/postal). We will use this phone as your callback. To use a different number, start your message with it, e.g. 555-123-4567, 123 Main St, Toronto ON`;
+function trimThread(thread) {
+  const t = Array.isArray(thread)
+    ? thread.filter(
+        (m) =>
+          m &&
+          (m.role === 'user' || m.role === 'assistant') &&
+          String(m.content || '').trim(),
+      )
+    : [];
+  if (t.length <= THREAD_MAX) return t;
+  return t.slice(-THREAD_MAX);
+}
+
+function mergeReplyAndMissing(replySms, missingItems, serviceName) {
+  const r = String(replySms || '').trim();
+  if (r.length >= 30) return clampSmsLength(r);
+  return clampSmsLength(buildStructuredFallbackReply(serviceName, missingItems));
+}
+
+/**
+ * Heuristic analysis when OpenAI is unavailable.
+ */
+function fallbackSmsAnalysis(serviceName, defaultCallbackE164, rawText) {
+  const parsed = parseSmsDeliveryMessage(rawText, defaultCallbackE164);
+  const addr = parsed.delivery_address?.trim() || '';
+  const cbRaw = parsed.callback_phone || defaultCallbackE164;
+  const cb = cbRaw ? normalizePhone(String(cbRaw).trim()) || String(cbRaw).trim() : null;
+  if (looksLikePhysicalAddress(addr) && cb) {
+    return {
+      ready_to_book: true,
+      callback_phone_e164: cb,
+      delivery_address_full: addr,
+      missing_items: [],
+      reply_sms: '',
+    };
+  }
+  const missing = [];
+  if (!looksLikePhysicalAddress(addr)) {
+    missing.push('Full drop-off address (street #, city, province/state, postal or ZIP)');
+  }
+  missing.push('Briefly what we are picking up (if not clear yet)');
+  return {
+    ready_to_book: false,
+    callback_phone_e164: cb,
+    delivery_address_full: looksLikePhysicalAddress(addr) ? addr : null,
+    missing_items: missing,
+    reply_sms: buildStructuredFallbackReply(serviceName, missing),
+  };
 }
 
 /**
@@ -116,63 +169,82 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
   const config = await getDeliveryConfigFull();
   const serviceName = deliveryServiceName(config);
   const rawText = (messageText || '').trim();
-  const callbackDefault = String(fromPhone || '').trim();
+  const callbackDefault = normalizePhone(String(fromPhone || '').trim()) || String(fromPhone || '').trim();
 
   const session = await getSession(fromPhone, toPhone);
+  const prevData = session?.data && typeof session.data === 'object' ? session.data : {};
+  let thread = Array.isArray(prevData.thread)
+    ? prevData.thread.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
+    : [];
 
   if (!rawText) {
-    await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
-    return { reply: deliverySmsPrompt(serviceName) };
+    const welcome = buildStructuredFallbackReply(serviceName, [
+      'What you need picked up / delivered (one short line)',
+      'Full drop-off address (street #, city, province/state, postal or ZIP)',
+      'Different callback # only if it is not this phone',
+    ]);
+    thread.push({ role: 'assistant', content: welcome });
+    await upsertSession(fromPhone, toPhone, 'collecting', { thread: trimThread(thread) });
+    return { reply: welcome };
   }
 
-  async function tryCreate(text) {
-    const parsed = parseSmsDeliveryMessage(text, callbackDefault);
-    const addr = parsed.delivery_address && String(parsed.delivery_address).trim();
-    if (!addr || addr.length < MIN_ADDRESS_LEN) return null;
-    const callback_phone = parsed.callback_phone || callbackDefault;
-    if (!callback_phone) return null;
+  thread.push({ role: 'user', content: rawText });
+
+  let analysis = await analyzeDeliverySmsConversation({
+    serviceLineName: serviceName,
+    defaultCallbackE164: callbackDefault,
+    thread,
+  });
+  if (!analysis) {
+    const userBlob = thread
+      .filter((m) => m.role === 'user')
+      .map((m) => String(m.content || '').trim())
+      .filter(Boolean)
+      .join('\n');
+    analysis = fallbackSmsAnalysis(serviceName, callbackDefault, userBlob || rawText);
+  }
+
+  let addr = (analysis.delivery_address_full && String(analysis.delivery_address_full).trim()) || '';
+  let callback =
+    (analysis.callback_phone_e164 && String(analysis.callback_phone_e164).trim()) || callbackDefault;
+  callback = normalizePhone(callback) || callback;
+
+  if (analysis.ready_to_book && (!looksLikePhysicalAddress(addr) || !callback)) {
+    const mergedMissing = [
+      ...(analysis.missing_items || []),
+      'A complete street address with city and postal/ZIP (your last message did not look like a full address yet)',
+    ];
+    const priorReply = String(analysis.reply_sms || '').trim();
+    analysis = {
+      ...analysis,
+      ready_to_book: false,
+      missing_items: mergedMissing,
+      reply_sms:
+        priorReply.length >= 30 ? priorReply : buildStructuredFallbackReply(serviceName, mergedMissing),
+    };
+  }
+
+  if (analysis.ready_to_book && looksLikePhysicalAddress(addr) && callback) {
     const business_id = await getBusinessIdByCallerPhone(fromPhone);
-    return createDeliveryRequest({
+    const request = await createDeliveryRequest({
       business_id,
-      callback_phone,
+      callback_phone: callback,
       delivery_address: addr,
       intake_channel: 'sms',
       priority: 'Immediate',
     });
-  }
-
-  const oneShot = await tryCreate(rawText);
-  if (oneShot && !session) {
     await deleteSession(fromPhone, toPhone);
-    startDispatch(oneShot.id).catch((err) =>
+    startDispatch(request.id).catch((err) =>
       console.error('[Delivery SMS Intake] startDispatch error:', err?.message || err),
     );
-    return {
-      reply: `${serviceName}: Got it. Ref ${oneShot.reference_number}. We are scheduling your pickup—watch for a confirmation text.`,
-      requestId: oneShot.id,
-    };
+    const confirm = `${serviceName}: Got it. Ref ${request.reference_number}. We're scheduling your pickup—watch for updates here.`;
+    return { reply: confirm, requestId: request.id };
   }
 
-  if (!session || session.step !== 'awaiting_details') {
-    await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
-    return { reply: deliverySmsPrompt(serviceName) };
-  }
-
-  const request = await tryCreate(rawText);
-  if (!request) {
-    return {
-      reply: `${serviceName}: Please send a full street address with city and province or postal code. You can add a different callback number at the start: 555-123-4567, 123 Main St…`,
-    };
-  }
-
-  await deleteSession(fromPhone, toPhone);
-  startDispatch(request.id).catch((err) =>
-    console.error('[Delivery SMS Intake] startDispatch error:', err?.message || err),
-  );
-  return {
-    reply: `${serviceName}: Got it. Ref ${request.reference_number}. We are scheduling your pickup—watch for a confirmation text.`,
-    requestId: request.id,
-  };
+  const reply = mergeReplyAndMissing(analysis.reply_sms, analysis.missing_items, serviceName);
+  thread.push({ role: 'assistant', content: reply });
+  await upsertSession(fromPhone, toPhone, 'collecting', { thread: trimThread(thread) });
+  return { reply };
 }
 
 /**
