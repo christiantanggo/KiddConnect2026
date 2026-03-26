@@ -1,21 +1,18 @@
 /**
  * Delivery Network SMS + web chat intake: collect callback phone + delivery address, then create request and dispatch.
  * SMS path: Telnyx webhook → bulkSMS → handleSmsIntake (when `to` is a delivery line).
- * SMS uses OpenAI (when OPENAI_API_KEY is set) for multi-turn understanding + structured asks; otherwise a safe heuristic fallback.
+ *
+ * SMS uses the same session step pattern as handleWebIntake (delivery dispatch public chat): start → awaiting_details,
+ * with SMS-specific parsing (callback defaults to the sender’s number; address can be sent alone on a follow-up).
  */
 import { supabaseClient } from '../../config/database.js';
 import { createDeliveryRequest } from './intake.js';
 import { startDispatch } from './dispatch.js';
 import { getBusinessIdByCallerPhone, getDeliveryConfigFull, normalizePhone } from './config.js';
-import {
-  analyzeDeliverySmsConversation,
-  looksLikePhysicalAddress,
-  buildStructuredFallbackReply,
-  clampSmsLength,
-} from './sms-intake-ai.js';
 
 const WEB_FROM = 'web';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+const MIN_ADDRESS_LEN = 8;
 
 function getSessionKey(sessionId) {
   return String(sessionId || '').trim() || null;
@@ -49,7 +46,7 @@ export async function upsertSession(fromPhone, toPhone, step, data) {
     .from('delivery_sms_intake_sessions')
     .upsert(
       { from_phone: from, to_phone: to, ...payload },
-      { onConflict: 'from_phone,to_phone' }
+      { onConflict: 'from_phone,to_phone' },
     )
     .select('id, step')
     .single();
@@ -70,7 +67,8 @@ export async function deleteSession(fromPhone, toPhone) {
 
 function extractPhone(text) {
   if (!text || typeof text !== 'string') return null;
-  const m = text.match(/(?:\+?1[-.\s]*)?\(?([2-9]\d{2})\)?[-.\s]*(\d{3})[-.\s]*(\d{4})\b/) ||
+  const m =
+    text.match(/(?:\+?1[-.\s]*)?\(?([2-9]\d{2})\)?[-.\s]*(\d{3})[-.\s]*(\d{4})\b/) ||
     text.match(/\b([2-9]\d{2})[-.\s]*(\d{3})[-.\s]*(\d{4})\b/);
   if (!m) return null;
   const digits = m.slice(1).join('').replace(/\D/g, '');
@@ -97,73 +95,85 @@ function parseSmsDeliveryMessage(text, defaultCallbackE164) {
 function parseMessage(text) {
   const t = (text || '').trim();
   const phone = extractPhone(t);
-  let address = t.replace(/(?:\+?1[-.\s]*)?\(?[2-9]\d{2}\)?[-.\s]*\d{3}[-.\s]*\d{4}\b/g, '').replace(/\n/g, ' ').trim();
+  let address = t
+    .replace(/(?:\+?1[-.\s]*)?\(?[2-9]\d{2}\)?[-.\s]*\d{3}[-.\s]*\d{4}\b/g, '')
+    .replace(/\n/g, ' ')
+    .trim();
   if (address.length > 500) address = address.slice(0, 500);
   return { callback_phone: phone, delivery_address: address || null };
 }
 
-const THREAD_MAX = 14;
+/**
+ * Block vague SMS (“need a pickup”) from creating a delivery when only implicit callback is used.
+ * Web-style messages with phone+address skip this (same bar as public chat).
+ */
+function looksLikePhysicalAddress(text) {
+  const t = String(text || '').trim();
+  if (t.length < 14) return false;
+  const lower = t.toLowerCase();
+  const upper = t.toUpperCase();
+  if (/\b(need to|want to|schedule|scheduling|pick\s*up|pickup|delivery|deliver|hello|hi|help|asap|urgent)\b/i.test(lower)) {
+    const hasStreetNumber = /\b\d{1,5}\s+[a-z0-9]/i.test(t);
+    const hasPostalEarly = /\b[A-Z]\d[A-Z]\s?\d[A-Z]\d\b/.test(upper) || /\b\d{5}(-\d{4})?\b/.test(t);
+    if (!hasStreetNumber && !hasPostalEarly && !/\b(p\.?o\.?\s*box|postal box)\b/i.test(t)) return false;
+  }
+  const hasNumber = /\d/.test(t);
+  const poBox = /\b(p\.?o\.?\s*box|postal box)\b/i.test(t);
+  if (!hasNumber && !poBox) return false;
+  const hasPostal = /\b[A-Z]\d[A-Z]\s?\d[A-Z]\d\b/.test(upper) || /\b\d{5}(-\d{4})?\b/.test(t);
+  const hasComma = t.includes(',');
+  if (!hasPostal && !hasComma && t.length < 28) return false;
+  if (/to be confirmed|tbd\b|^n\/a$/i.test(lower)) return false;
+  return true;
+}
 
 function deliveryServiceName(config) {
   return (config?.service_line_name && String(config.service_line_name).trim()) || 'Last-Mile Delivery';
 }
 
-function trimThread(thread) {
-  const t = Array.isArray(thread)
-    ? thread.filter(
-        (m) =>
-          m &&
-          (m.role === 'user' || m.role === 'assistant') &&
-          String(m.content || '').trim(),
-      )
-    : [];
-  if (t.length <= THREAD_MAX) return t;
-  return t.slice(-THREAD_MAX);
-}
-
-function mergeReplyAndMissing(replySms, missingItems, serviceName) {
-  const r = String(replySms || '').trim();
-  if (r.length >= 30) return clampSmsLength(r);
-  return clampSmsLength(buildStructuredFallbackReply(serviceName, missingItems));
+/** Opening prompt aligned with handleWebIntake, adapted for SMS (callback defaults to this number). */
+function smsIntakeOpeningPrompt(serviceName) {
+  return `${serviceName}: To schedule a delivery, send your full drop-off address (street, city, province/postal). We use this phone as your callback. If you want a different callback number, start your message with it, e.g. 555-123-4567, 123 Main St, Toronto ON`;
 }
 
 /**
- * Heuristic analysis when OpenAI is unavailable.
+ * Try to build params for createDeliveryRequest from one SMS body.
+ * 1) Same as web chat: phone + address in one message (parseMessage).
+ * 2) SMS style: optional alt phone at start, else sender as callback; address must look like a real street line.
  */
-function fallbackSmsAnalysis(serviceName, defaultCallbackE164, rawText) {
-  const parsed = parseSmsDeliveryMessage(rawText, defaultCallbackE164);
-  const addr = parsed.delivery_address?.trim() || '';
-  const cbRaw = parsed.callback_phone || defaultCallbackE164;
-  const cb = cbRaw ? normalizePhone(String(cbRaw).trim()) || String(cbRaw).trim() : null;
-  if (looksLikePhysicalAddress(addr) && cb) {
-    return {
-      ready_to_book: true,
-      callback_phone_e164: cb,
-      delivery_address_full: addr,
-      missing_items: [],
-      reply_sms: '',
-    };
+async function tryParseSmsIntakePayload(rawText, callbackDefaultE164, fromPhone) {
+  const webParsed = parseMessage(rawText);
+  if (webParsed.callback_phone && webParsed.delivery_address) {
+    const addr = String(webParsed.delivery_address).trim();
+    if (addr.length >= MIN_ADDRESS_LEN) {
+      const cb = normalizePhone(String(webParsed.callback_phone).trim()) || String(webParsed.callback_phone).trim();
+      const business_id = await getBusinessIdByCallerPhone(fromPhone);
+      return {
+        business_id,
+        callback_phone: cb,
+        delivery_address: addr,
+      };
+    }
   }
-  const missing = [];
-  if (!looksLikePhysicalAddress(addr)) {
-    missing.push('Full drop-off address (street #, city, province/state, postal or ZIP)');
-  }
-  missing.push('Briefly what we are picking up (if not clear yet)');
+
+  const smsParsed = parseSmsDeliveryMessage(rawText, callbackDefaultE164);
+  const addr = smsParsed.delivery_address && String(smsParsed.delivery_address).trim();
+  if (!addr || addr.length < MIN_ADDRESS_LEN) return null;
+  const callback_phone = smsParsed.callback_phone || callbackDefaultE164;
+  if (!callback_phone) return null;
+  if (!looksLikePhysicalAddress(addr)) return null;
+
+  const cb = normalizePhone(String(callback_phone).trim()) || String(callback_phone).trim();
+  const business_id = await getBusinessIdByCallerPhone(fromPhone);
   return {
-    ready_to_book: false,
-    callback_phone_e164: cb,
-    delivery_address_full: looksLikePhysicalAddress(addr) ? addr : null,
-    missing_items: missing,
-    reply_sms: buildStructuredFallbackReply(serviceName, missing),
+    business_id,
+    callback_phone: cb,
+    delivery_address: addr,
   };
 }
 
 /**
- * Inbound SMS to a delivery line: prompt, then parse address (and optional alternate callback) and dispatch.
- * @param {string} fromPhone - Customer E.164
- * @param {string} toPhone - Tavari delivery line E.164
- * @param {string} messageText
- * @returns {Promise<{ reply: string, requestId?: string }>}
+ * Inbound SMS to a delivery line: same step flow as public web chat (start → awaiting_details), SMS parsing rules.
  */
 export async function handleSmsIntake(fromPhone, toPhone, messageText) {
   const config = await getDeliveryConfigFull();
@@ -172,79 +182,44 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
   const callbackDefault = normalizePhone(String(fromPhone || '').trim()) || String(fromPhone || '').trim();
 
   const session = await getSession(fromPhone, toPhone);
-  const prevData = session?.data && typeof session.data === 'object' ? session.data : {};
-  let thread = Array.isArray(prevData.thread)
-    ? prevData.thread.filter((m) => m && (m.role === 'user' || m.role === 'assistant') && String(m.content || '').trim())
-    : [];
+  const step = session?.step || '';
+  const inIntakeFlow =
+    !session || step === 'start' || step === 'awaiting_details' || step === 'collecting';
 
   if (!rawText) {
-    const welcome = buildStructuredFallbackReply(serviceName, [
-      'What you need picked up / delivered (one short line)',
-      'Full drop-off address (street #, city, province/state, postal or ZIP)',
-      'Different callback # only if it is not this phone',
-    ]);
-    thread.push({ role: 'assistant', content: welcome });
-    await upsertSession(fromPhone, toPhone, 'collecting', { thread: trimThread(thread) });
-    return { reply: welcome };
+    await upsertSession(fromPhone, toPhone, 'start', {});
+    return { reply: smsIntakeOpeningPrompt(serviceName) };
   }
 
-  thread.push({ role: 'user', content: rawText });
+  const payload = await tryParseSmsIntakePayload(rawText, callbackDefault, fromPhone);
 
-  let analysis = await analyzeDeliverySmsConversation({
-    serviceLineName: serviceName,
-    defaultCallbackE164: callbackDefault,
-    thread,
-  });
-  if (!analysis) {
-    const userBlob = thread
-      .filter((m) => m.role === 'user')
-      .map((m) => String(m.content || '').trim())
-      .filter(Boolean)
-      .join('\n');
-    analysis = fallbackSmsAnalysis(serviceName, callbackDefault, userBlob || rawText);
-  }
-
-  let addr = (analysis.delivery_address_full && String(analysis.delivery_address_full).trim()) || '';
-  let callback =
-    (analysis.callback_phone_e164 && String(analysis.callback_phone_e164).trim()) || callbackDefault;
-  callback = normalizePhone(callback) || callback;
-
-  if (analysis.ready_to_book && (!looksLikePhysicalAddress(addr) || !callback)) {
-    const mergedMissing = [
-      ...(analysis.missing_items || []),
-      'A complete street address with city and postal/ZIP (your last message did not look like a full address yet)',
-    ];
-    const priorReply = String(analysis.reply_sms || '').trim();
-    analysis = {
-      ...analysis,
-      ready_to_book: false,
-      missing_items: mergedMissing,
-      reply_sms:
-        priorReply.length >= 30 ? priorReply : buildStructuredFallbackReply(serviceName, mergedMissing),
-    };
-  }
-
-  if (analysis.ready_to_book && looksLikePhysicalAddress(addr) && callback) {
-    const business_id = await getBusinessIdByCallerPhone(fromPhone);
+  if (payload && inIntakeFlow) {
+    await deleteSession(fromPhone, toPhone);
     const request = await createDeliveryRequest({
-      business_id,
-      callback_phone: callback,
-      delivery_address: addr,
+      business_id: payload.business_id,
+      callback_phone: payload.callback_phone,
+      delivery_address: payload.delivery_address,
       intake_channel: 'sms',
       priority: 'Immediate',
     });
-    await deleteSession(fromPhone, toPhone);
     startDispatch(request.id).catch((err) =>
       console.error('[Delivery SMS Intake] startDispatch error:', err?.message || err),
     );
-    const confirm = `${serviceName}: Got it. Ref ${request.reference_number}. We're scheduling your pickup—watch for updates here.`;
-    return { reply: confirm, requestId: request.id };
+    return {
+      reply: `${serviceName}: Got it. Ref ${request.reference_number}. We're scheduling your pickup—watch for updates here.`,
+      requestId: request.id,
+    };
   }
 
-  const reply = mergeReplyAndMissing(analysis.reply_sms, analysis.missing_items, serviceName);
-  thread.push({ role: 'assistant', content: reply });
-  await upsertSession(fromPhone, toPhone, 'collecting', { thread: trimThread(thread) });
-  return { reply };
+  const awaitingFollowUp = session && (step === 'awaiting_details' || step === 'collecting');
+  if (!session || !awaitingFollowUp) {
+    await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
+    return { reply: smsIntakeOpeningPrompt(serviceName) };
+  }
+
+  return {
+    reply: `${serviceName}: We need a full street address with city and province or postal code. You can start with a different callback: 555-123-4567, 123 Main St, City ON`,
+  };
 }
 
 /**
@@ -263,7 +238,8 @@ export async function handleWebIntake(sessionId, messageText) {
   if (!rawText) {
     await upsertSession(fromPhone, toPhone, 'start', {});
     return {
-      reply: "Hi! To schedule a delivery, please send your callback phone number and the delivery address in one message (e.g. 555-123-4567, 123 Main St).",
+      reply:
+        'Hi! To schedule a delivery, please send your callback phone number and the delivery address in one message (e.g. 555-123-4567, 123 Main St).',
       session_id: sid,
     };
   }
@@ -273,7 +249,8 @@ export async function handleWebIntake(sessionId, messageText) {
     if (!parsed.callback_phone || !parsed.delivery_address) {
       await upsertSession(fromPhone, toPhone, 'start', {});
       return {
-        reply: "We need both a callback phone number and a delivery address. Please send them in one message (e.g. 555-123-4567, 123 Main St).",
+        reply:
+          'We need both a callback phone number and a delivery address. Please send them in one message (e.g. 555-123-4567, 123 Main St).',
         session_id: sid,
       };
     }
@@ -285,7 +262,7 @@ export async function handleWebIntake(sessionId, messageText) {
       intake_channel: 'chat',
     });
     startDispatch(request.id).catch((err) =>
-      console.error('[Delivery SMS Intake] startDispatch error:', err?.message || err)
+      console.error('[Delivery SMS Intake] startDispatch error:', err?.message || err),
     );
     return {
       reply: `Thanks! Your delivery request has been created (reference ${request.reference_number}). We'll arrange pickup and delivery—you'll get a confirmation shortly.`,
@@ -296,7 +273,7 @@ export async function handleWebIntake(sessionId, messageText) {
 
   await upsertSession(fromPhone, toPhone, 'start', {});
   return {
-    reply: "Please send your callback phone number and delivery address in one message.",
+    reply: 'Please send your callback phone number and delivery address in one message.',
     session_id: sid,
   };
 }
