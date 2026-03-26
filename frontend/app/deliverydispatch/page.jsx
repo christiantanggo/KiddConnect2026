@@ -136,6 +136,10 @@ function DeliveryDispatchContent() {
   const paidRef = searchParams.get('ref');
   const paidOk = searchParams.get('paid') === '1';
   const cancelled = searchParams.get('cancel') === '1';
+  const intakeToken = (searchParams.get('it') || '').trim();
+
+  const [phoneLockedFromSms, setPhoneLockedFromSms] = useState(false);
+  const [intakeTokenStatus, setIntakeTokenStatus] = useState('idle'); // idle | loading | ok | error
 
   const heroImage = (pageContent?.hero_image_url && String(pageContent.hero_image_url).trim()) || null;
   const apiHeader = (pageContent?.hero_header && String(pageContent.hero_header).trim()) || '';
@@ -218,6 +222,46 @@ function DeliveryDispatchContent() {
     }
   }, [chatOpen, chatLoading, chatMessages]);
 
+  useEffect(() => {
+    if (!intakeToken) {
+      setPhoneLockedFromSms(false);
+      setIntakeTokenStatus('idle');
+      return;
+    }
+    let cancelled = false;
+    setIntakeTokenStatus('loading');
+    fetch(`${API_URL}/api/v2/delivery-network/public/intake-sms-token/validate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: intakeToken }),
+    })
+      .then(async (r) => {
+        const j = await r.json().catch(() => ({}));
+        return { ok: r.ok, j };
+      })
+      .then(({ ok, j }) => {
+        if (cancelled) return;
+        if (ok && j.phone_e164 && String(j.phone_e164).trim()) {
+          setFormPhone(String(j.phone_e164).trim());
+          setPhoneLockedFromSms(true);
+          setIntakeTokenStatus('ok');
+          setTimeout(() => formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+        } else {
+          setPhoneLockedFromSms(false);
+          setIntakeTokenStatus('error');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPhoneLockedFromSms(false);
+          setIntakeTokenStatus('error');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [intakeToken]);
+
   const submitForm = async (e) => {
     e.preventDefault();
     setFormError(null);
@@ -239,6 +283,9 @@ function DeliveryDispatchContent() {
         email: formEmail.trim() || null,
       };
       if (businessIdParam) body.business_id = businessIdParam;
+      if (intakeToken && intakeTokenStatus === 'ok') {
+        body.sms_intake_token = intakeToken;
+      }
 
       const res = await fetch(`${API_URL}/api/v2/delivery-network/request`, {
         method: 'POST',
@@ -398,16 +445,27 @@ function DeliveryDispatchContent() {
               <div>
                 <label htmlFor="dd-phone" className="block text-sm font-medium text-slate-700 mb-1">
                   Your phone <span className="text-red-600">*</span>
+                  {phoneLockedFromSms && (
+                    <span className="ml-2 text-xs font-normal text-emerald-700">(from your SMS — cannot be changed)</span>
+                  )}
                 </label>
                 <input
                   id="dd-phone"
                   type="tel"
                   required
+                  readOnly={phoneLockedFromSms}
                   value={formPhone}
-                  onChange={(e) => setFormPhone(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  onChange={(e) => {
+                    if (!phoneLockedFromSms) setFormPhone(e.target.value);
+                  }}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm ${
+                    phoneLockedFromSms
+                      ? 'border-slate-200 bg-slate-100 text-slate-700 cursor-not-allowed'
+                      : 'border-slate-300'
+                  }`}
                   placeholder="+1…"
                   autoComplete="tel"
+                  aria-readonly={phoneLockedFromSms || undefined}
                 />
               </div>
               {!businessIdParam && (

@@ -8,7 +8,9 @@
 import { supabaseClient } from '../../config/database.js';
 import { createDeliveryRequest } from './intake.js';
 import { startDispatch } from './dispatch.js';
+import { getFrontendPublicBaseUrl } from '../../config/public-urls.js';
 import { getBusinessIdByCallerPhone, getDeliveryConfigFull, normalizePhone } from './config.js';
+import { signDeliverySmsIntakeToken } from './smsIntakeLinkToken.js';
 
 const WEB_FROM = 'web';
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -157,9 +159,25 @@ function deliveryServiceName(config) {
   return (config?.service_line_name && String(config.service_line_name).trim()) || 'Last-Mile Delivery';
 }
 
-/** Opening prompt aligned with handleWebIntake, adapted for SMS (callback defaults to this number). */
+/** Opening prompt when signed links are not configured (no JWT secret). */
 function smsIntakeOpeningPrompt(serviceName) {
   return `${serviceName}: To schedule a delivery, send your full drop-off address (street, city, province/postal). We use this phone as your callback. If you want a different callback number, start your message with it, e.g. 555-123-4567, 123 Main St, Toronto ON`;
+}
+
+/** Public form URL with `it` = JWT binding callback to the texter’s number. */
+export async function buildSmsIntakeScheduleLinkUrl(fromPhoneE164) {
+  const token = signDeliverySmsIntakeToken(fromPhoneE164);
+  if (!token) return null;
+  const base = getFrontendPublicBaseUrl().replace(/\/$/, '');
+  return `${base}/deliverydispatch?it=${encodeURIComponent(token)}`;
+}
+
+async function smsIntakeOpeningWithLink(serviceName, fromPhoneE164) {
+  const url = await buildSmsIntakeScheduleLinkUrl(fromPhoneE164);
+  if (url) {
+    return `${serviceName}: Schedule your delivery here (your number is pre-filled; no login): ${url} Or text us your full drop-off address if you prefer.`;
+  }
+  return smsIntakeOpeningPrompt(serviceName);
 }
 
 /**
@@ -214,7 +232,7 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
 
   if (!rawText) {
     await upsertSession(fromPhone, toPhone, 'start', {});
-    return { reply: smsIntakeOpeningPrompt(serviceName) };
+    return { reply: await smsIntakeOpeningWithLink(serviceName, callbackDefault) };
   }
 
   const payload = await tryParseSmsIntakePayload(rawText, callbackDefault, fromPhone);
@@ -240,15 +258,17 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
   const awaitingFollowUp = session && (step === 'awaiting_details' || step === 'collecting');
   if (!session || !awaitingFollowUp) {
     await upsertSession(fromPhone, toPhone, 'awaiting_details', {});
-    return { reply: smsIntakeOpeningPrompt(serviceName) };
+    return { reply: await smsIntakeOpeningWithLink(serviceName, callbackDefault) };
   }
 
   if (isCasualNonAddressMessage(rawText)) {
-    return { reply: smsIntakeOpeningPrompt(serviceName) };
+    return { reply: await smsIntakeOpeningWithLink(serviceName, callbackDefault) };
   }
 
+  const scheduleUrl = await buildSmsIntakeScheduleLinkUrl(callbackDefault);
+  const linkSuffix = scheduleUrl ? ` Or use the form: ${scheduleUrl}` : '';
   return {
-    reply: `${serviceName}: We need a full street address with city and province or postal code. You can start with a different callback: 555-123-4567, 123 Main St, City ON`,
+    reply: `${serviceName}: We need a full street address with city and province or postal code. You can start with a different callback: 555-123-4567, 123 Main St, City ON.${linkSuffix}`,
   };
 }
 

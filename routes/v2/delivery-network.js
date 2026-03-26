@@ -159,6 +159,29 @@ router.get('/public/branding', async (req, res) => {
 });
 
 /**
+ * POST /api/v2/delivery-network/public/intake-sms-token/validate
+ * Body: { token } — validates JWT from SMS link; returns phone for pre-filled locked field on /deliverydispatch.
+ */
+router.post('/public/intake-sms-token/validate', express.json(), async (req, res) => {
+  try {
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!token) {
+      return res.status(400).json({ error: 'token required' });
+    }
+    const { verifyDeliverySmsIntakeToken } = await import('../../services/delivery-network/smsIntakeLinkToken.js');
+    const v = verifyDeliverySmsIntakeToken(token);
+    if (!v) {
+      return res.status(401).json({ error: 'Invalid or expired link' });
+    }
+    res.set('Cache-Control', 'no-store');
+    res.json({ phone_e164: v.phone_e164 });
+  } catch (err) {
+    console.error('[DeliveryNetwork] public/intake-sms-token/validate error:', err?.message || err);
+    res.status(500).json({ error: 'Validation failed' });
+  }
+});
+
+/**
  * GET /api/v2/emergency-network/public/transcript/:token
  * Public (no auth) view of the intake call transcript. Link is sent to providers via SMS/email after they accept.
  */
@@ -481,7 +504,19 @@ router.post('/public/cancel', express.json(), async (req, res) => {
 router.post('/request', express.json(), async (req, res) => {
   try {
     const body = req.body || {};
-    const callback_phone = body.phone || body.callback_phone;
+    let smsIntakePhone = null;
+    const rawSmsToken = typeof body.sms_intake_token === 'string' ? body.sms_intake_token.trim() : '';
+    if (rawSmsToken) {
+      const { verifyDeliverySmsIntakeToken } = await import('../../services/delivery-network/smsIntakeLinkToken.js');
+      const verified = verifyDeliverySmsIntakeToken(rawSmsToken);
+      if (!verified) {
+        return res.status(400).json({
+          error: 'Invalid or expired scheduling link. Text the delivery line again for a new link.',
+        });
+      }
+      smsIntakePhone = verified.phone_e164;
+    }
+    const callback_phone = smsIntakePhone || body.phone || body.callback_phone;
     if (!callback_phone || !String(callback_phone).trim()) {
       return res.status(400).json({ error: 'Phone number is required' });
     }
@@ -495,7 +530,7 @@ router.post('/request', express.json(), async (req, res) => {
 
     const request = await createDeliveryRequest({
       business_id: businessId,
-      caller_phone: body.caller_phone || null,
+      caller_phone: smsIntakePhone || body.caller_phone || null,
       callback_phone: String(callback_phone).trim(),
       delivery_address: String(delivery_address).trim(),
       delivery_city: body.delivery_city?.trim() || null,
