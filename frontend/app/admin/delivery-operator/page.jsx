@@ -261,9 +261,10 @@ function AdminDeliveryOperatorPage() {
     if (activeTab === 'settings') loadConfig();
   }, [activeTab]);
 
+  /** @returns {Promise<boolean>} true if saved (or nothing to do), false if no token or save failed */
   const saveConfig = async () => {
     const token = getAdminToken();
-    if (!token) return;
+    if (!token) return false;
     setConfigSaving(true);
     try {
       const toSave = (deliveryPhoneNumbersRef.current || []).map(normalizeE164).filter(Boolean);
@@ -303,8 +304,10 @@ function AdminDeliveryOperatorPage() {
       deliveryPhoneNumbersRef.current = (updated.delivery_phone_numbers || []).map(normalizeE164).filter(Boolean);
       setConfig(updated);
       setConfigForm(f => ({ ...f, delivery_phone_numbers: deliveryPhoneNumbersRef.current }));
+      return true;
     } catch (e) {
       alert(e.message || 'Save failed');
+      return false;
     } finally {
       setConfigSaving(false);
     }
@@ -315,6 +318,8 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setAgentLoading('create');
     try {
+      const saved = await saveConfig();
+      if (!saved) return;
       const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/create-agent`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -418,6 +423,10 @@ function AdminDeliveryOperatorPage() {
     if (!token) return;
     setAgentLoading('link');
     try {
+      // Link-agent uses delivery_phone_numbers from the DB — persist the current line selection first
+      // (selectDeliveryNumber only updates local state until Save).
+      const saved = await saveConfig();
+      if (!saved) return;
       const res = await fetch(`${getApiBaseUrl()}/api/v2/admin/delivery-operator/link-agent`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
@@ -820,11 +829,14 @@ function AdminDeliveryOperatorPage() {
                             <span className="text-amber-600">Not set</span>
                           )}
                         </p>
-                        <div className="flex gap-2">
+                        <div className="flex gap-2 flex-wrap items-center">
                           <button type="button" onClick={createAgent} disabled={agentLoading !== null} className="px-4 py-2 rounded bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50">Rebuild agent</button>
                           <button type="button" onClick={linkAgent} disabled={agentLoading !== null || !config?.delivery_vapi_assistant_id} className="px-4 py-2 rounded bg-slate-600 text-white text-sm hover:bg-slate-700 disabled:opacity-50">Link agent to numbers</button>
                           {agentLoading && <span className="text-slate-500 text-sm self-center">…</span>}
                         </div>
+                        <p className="text-xs text-slate-500 mt-2">
+                          Selecting a line above only changed the screen until now — <strong>Link agent</strong> and <strong>Rebuild agent</strong> save your selection to the server first, then run VAPI. Use <strong>Save settings</strong> at the bottom if you only want to persist without linking.
+                        </p>
                       </div>
                     </div>
                   </section>
