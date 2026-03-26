@@ -220,6 +220,10 @@ export async function handleSmsIntake(fromPhone, toPhone, messageText) {
     return { reply: smsIntakeOpeningPrompt(serviceName) };
   }
 
+  if (isCasualNonAddressMessage(rawText)) {
+    return { reply: smsIntakeOpeningPrompt(serviceName) };
+  }
+
   return {
     reply: `${serviceName}: We need a full street address with city and province or postal code. You can start with a different callback: 555-123-4567, 123 Main St, City ON`,
   };
