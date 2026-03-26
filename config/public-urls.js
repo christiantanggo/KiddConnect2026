@@ -11,6 +11,16 @@ export const DEFAULT_API_PUBLIC_BASE = 'https://api.tavarios.com';
 /** Production marketing / app origin when not set via env. */
 export const DEFAULT_FRONTEND_PUBLIC_BASE = 'https://www.tavarios.com';
 
+/** True when this Node process is running on a typical cloud host (Railway, Fly, Render). */
+function deploymentLooksHosted() {
+  return Boolean(
+    (process.env.RAILWAY_ENVIRONMENT || '').trim() ||
+      (process.env.RAILWAY_PUBLIC_DOMAIN || '').trim() ||
+      (process.env.FLY_APP_NAME || '').trim() ||
+      (process.env.RENDER || '').trim(),
+  );
+}
+
 /**
  * Public base URL of this API (no trailing slash), e.g. https://api.tavarios.com
  */
@@ -53,11 +63,39 @@ export function riddleYoutubeCallbackUrl() {
 export function getFrontendPublicBaseUrl() {
   const f = (process.env.FRONTEND_URL || '').trim().replace(/\/$/, '');
   if (f && f !== '*') {
-    if (f.startsWith('http')) return f;
-    return f.includes('localhost') ? `http://${f}` : `https://${f}`;
+    let resolved = f.startsWith('http') ? f : f.includes('localhost') ? `http://${f}` : `https://${f}`;
+    if (deploymentLooksHosted() && /localhost|127\.0\.0\.1/i.test(resolved)) {
+      console.warn(
+        '[public-urls] FRONTEND_URL is localhost on a hosted deploy; using DEFAULT_FRONTEND_PUBLIC_BASE. Set FRONTEND_URL to your live site (e.g. https://www.tavarios.com).',
+      );
+      return DEFAULT_FRONTEND_PUBLIC_BASE;
+    }
+    return resolved;
   }
   if (process.env.NODE_ENV === 'production') {
     return DEFAULT_FRONTEND_PUBLIC_BASE;
   }
+  if (deploymentLooksHosted()) {
+    return DEFAULT_FRONTEND_PUBLIC_BASE;
+  }
   return `http://localhost:${getDevFrontendPort()}`;
+}
+
+/**
+ * Base URL for SMS “schedule delivery” links only. Override with DELIVERY_PUBLIC_SCHEDULE_URL when
+ * the marketing site origin differs from FRONTEND_URL.
+ */
+export function getDeliverySchedulePublicBaseUrl() {
+  const o = (process.env.DELIVERY_PUBLIC_SCHEDULE_URL || '').trim().replace(/\/$/, '');
+  if (o && o !== '*') {
+    let resolved = o.startsWith('http') ? o : o.includes('localhost') ? `http://${o}` : `https://${o}`;
+    if (deploymentLooksHosted() && /localhost|127\.0\.0\.1/i.test(resolved)) {
+      console.warn(
+        '[public-urls] DELIVERY_PUBLIC_SCHEDULE_URL is localhost on a hosted deploy; using DEFAULT_FRONTEND_PUBLIC_BASE.',
+      );
+      return DEFAULT_FRONTEND_PUBLIC_BASE;
+    }
+    return resolved;
+  }
+  return getFrontendPublicBaseUrl();
 }

@@ -8,7 +8,7 @@
 import { supabaseClient } from '../../config/database.js';
 import { createDeliveryRequest } from './intake.js';
 import { startDispatch } from './dispatch.js';
-import { getFrontendPublicBaseUrl } from '../../config/public-urls.js';
+import { getDeliverySchedulePublicBaseUrl } from '../../config/public-urls.js';
 import { getBusinessIdByCallerPhone, getDeliveryConfigFull, normalizePhone } from './config.js';
 import { signDeliverySmsIntakeToken } from './smsIntakeLinkToken.js';
 
@@ -168,7 +168,7 @@ function smsIntakeOpeningPrompt(serviceName) {
 export async function buildSmsIntakeScheduleLinkUrl(fromPhoneE164) {
   const token = signDeliverySmsIntakeToken(fromPhoneE164);
   if (!token) return null;
-  const base = getFrontendPublicBaseUrl().replace(/\/$/, '');
+  const base = getDeliverySchedulePublicBaseUrl().replace(/\/$/, '');
   return `${base}/deliverydispatch?it=${encodeURIComponent(token)}`;
 }
 
