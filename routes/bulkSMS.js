@@ -1192,8 +1192,32 @@ function isTelnyxInboundSmsEventType(eventType) {
   return false;
 }
 
+/**
+ * Telnyx Messaging API v1 / some profiles POST a flat JSON:
+ * { sms_id, direction: "inbound", from: "+1...", to: "+1...", body: "..." }
+ * Normalize to the nested shape the rest of the handler expects.
+ */
+function normalizeFlatTelnyxSmsWebhook(reqBody) {
+  const b = reqBody && typeof reqBody === 'object' ? reqBody : null;
+  if (!b) return null;
+  const inbound = String(b.direction || '').toLowerCase() === 'inbound';
+  const fromStr = typeof b.from === 'string' ? b.from.trim() : '';
+  const toStr = typeof b.to === 'string' ? b.to.trim() : '';
+  if (!inbound || !fromStr || !toStr) return null;
+  const textRaw = b.body != null ? String(b.body) : b.text != null ? String(b.text) : '';
+  return {
+    from: { phone_number: fromStr },
+    to: { phone_number: toStr },
+    text: textRaw,
+    body: textRaw,
+  };
+}
+
 /** Resolve nested Telnyx webhook payload to a message-like object with from/to/text. */
 function extractTelnyxInboundMessage(reqBody, data) {
+  const flat = normalizeFlatTelnyxSmsWebhook(reqBody);
+  if (flat) return flat;
+
   const candidates = [
     data?.payload,
     data?.record,
@@ -1261,6 +1285,10 @@ router.post('/webhook', express.json(), async (req, res) => {
     
     if (!eventType && req.body?.type) {
       eventType = req.body.type;
+    }
+    if (!data && normalizeFlatTelnyxSmsWebhook(req.body)) {
+      data = req.body;
+      if (!eventType) eventType = 'message.received';
     }
     console.log('[BulkSMS Webhook] Parsed event type:', eventType);
     console.log('[BulkSMS Webhook] Parsed data:', JSON.stringify(data, null, 2));

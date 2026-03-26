@@ -169,13 +169,23 @@ export async function publishMovieReview(project, businessId) {
     console.log(`[MovieReview Publisher] Published videoId=${videoId}`);
     return { videoId, youtubeUrl };
   } catch (err) {
-    const isInvalidClient = (err.message || '').toLowerCase().includes('invalid_client');
+    const rawMsg = String(err.message || err.response?.data?.error || '');
+    const lower = rawMsg.toLowerCase();
+    const isInvalidClient = lower.includes('invalid_client');
+    const isInvalidGrant = lower.includes('invalid_grant');
     console.error('[MovieReview Publisher] FAILED projectId=%s:', projectId, err.message);
     console.error('[MovieReview Publisher] Stack:', err.stack);
     if (isInvalidClient) {
       console.error('[MovieReview Publisher] invalid_client usually means the OAuth Client ID/Secret or redirect URI do not match the app that was used when you connected YouTube. In Movie Review Settings, either use the same Upload OAuth app (and same YOUTUBE_REDIRECT_URI on the server) or disconnect and reconnect YouTube.');
     }
-    const userMessage = (err.message || 'Upload failed').slice(0, 500);
+    if (isInvalidGrant) {
+      console.error('[MovieReview Publisher] invalid_grant: Google rejected the refresh token (revoked, expired, or app credentials changed). User must disconnect YouTube in Movie Review settings and run Connect again.');
+    }
+    let userMessage = (err.message || 'Upload failed').slice(0, 500);
+    if (isInvalidGrant) {
+      userMessage =
+        'YouTube sign-in expired or was revoked. In Movie Review → Settings, disconnect YouTube, then connect again and retry upload.';
+    }
     const baseUpdate = { status: 'FAILED', updated_at: new Date().toISOString() };
     const { error: updateErr } = await supabaseClient
       .from('movie_review_projects')
