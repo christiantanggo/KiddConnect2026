@@ -50,7 +50,10 @@ export async function upsertSession(fromPhone, toPhone, step, data) {
     )
     .select('id, step')
     .single();
-  if (error) return null;
+  if (error) {
+    console.error('[Delivery SMS Intake] upsertSession error:', error?.message || error);
+    return null;
+  }
   return row;
 }
 

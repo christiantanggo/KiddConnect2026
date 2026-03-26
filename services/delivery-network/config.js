@@ -83,18 +83,36 @@ export async function getDeliveryConfig() {
 }
 
 /**
- * Returns true if the given phone number (destination) is a delivery line number.
+ * Extra delivery lines from env (comma-separated E.164), merged with DB config.
+ * Use when the toll-free is live in Telnyx but `delivery_network_config` is missing or mismatched.
+ */
+function deliveryLineNumbersFromEnv() {
+  const raw = String(process.env.DELIVERY_NETWORK_SMS_LINES || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => normalizePhone(s.trim()))
+    .filter(Boolean);
+}
+
+/**
+ * Same matching rules as emergency-network/config.js isEmergencyNumber (normalized E.164 + + / no-+ variants).
+ * Optional DELIVERY_NETWORK_SMS_LINES merges comma-separated E.164s without a DB row.
  */
 export async function isDeliveryLineNumber(phone) {
   const config = await getDeliveryConfig();
-  const numbers = config.delivery_phone_numbers || [];
+  const fromDb = Array.isArray(config.delivery_phone_numbers) ? config.delivery_phone_numbers : [];
+  const numbers = [...fromDb, ...deliveryLineNumbersFromEnv()];
   if (numbers.length === 0) return false;
-  if (phone == null || phone === '') return false;
-  const raw = typeof phone === 'string' ? phone : String(phone);
-  const normalized = normalizePhone(raw) || normalizePhone(raw.replace(/\D/g, ''));
+  const raw = typeof phone === 'string' ? phone : String(phone || '');
+  const normalized = normalizePhone(raw);
   if (!normalized) return false;
-  const list = numbers.map((n) => (typeof n === 'string' ? n : String(n))).filter(Boolean);
-  return list.some((n) => phoneNumbersLooselyEqual(n, normalized) || phoneNumbersLooselyEqual(n, raw));
+  const normalizedList = numbers
+    .map((n) => normalizePhone(typeof n === 'string' ? n : String(n)))
+    .filter(Boolean);
+  return normalizedList.some(
+    (n) => n === normalized || n === normalized.replace(/^\+/, '') || `+${n}` === normalized,
+  );
 }
 
 /**

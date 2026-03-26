@@ -161,7 +161,7 @@ export async function sendDeliveryStatusNotifications(previousStatus, newStatus,
       if (!fromE164.startsWith('+')) fromE164 = fromE164.length === 10 ? `+1${fromE164}` : `+${fromE164}`;
       let toE164 = customerPhone.replace(/[^0-9+]/g, '');
       if (!toE164.startsWith('+')) toE164 = toE164.length === 10 ? `+1${toE164}` : `+${toE164}`;
-      await sendSMSDirect(fromE164, toE164, messageText);
+      await sendSMSDirect(fromE164, toE164, messageText, false, false, { omitMessagingProfile: true });
       console.log('[DeliveryNotify] customer SMS sent', newStatus, requestId);
     } catch (e) {
       console.error('[DeliveryNotify] customer SMS failed:', e?.message || e);
@@ -199,7 +199,9 @@ export async function sendDeliveryStatusNotifications(previousStatus, newStatus,
       if (!fromE164.startsWith('+')) fromE164 = fromE164.length === 10 ? `+1${fromE164}` : `+${fromE164}`;
       let toE164 = String(config.notification_sms_number).replace(/[^0-9+]/g, '');
       if (!toE164.startsWith('+')) toE164 = toE164.length === 10 ? `+1${toE164}` : `+${toE164}`;
-      await sendSMSDirect(fromE164, toE164, addBusinessIdentification(short, serviceLine));
+      await sendSMSDirect(fromE164, toE164, addBusinessIdentification(short, serviceLine), false, false, {
+        omitMessagingProfile: true,
+      });
       console.log('[DeliveryNotify] ops SMS sent', newStatus, requestId);
     } catch (e) {
       console.error('[DeliveryNotify] ops SMS failed:', e?.message || e);

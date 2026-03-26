@@ -11,6 +11,7 @@ const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FROM_EMAIL = process.env.AWS_SES_FROM_EMAIL || "noreply@tanggo.ca";
 const FROM_NAME = "Tavari";
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
+const TELNYX_MESSAGING_PROFILE_ID = process.env.TELNYX_MESSAGING_PROFILE_ID;
 
 /**
  * SMS footer that must be appended to all messages (TCPA compliance)
@@ -66,9 +67,10 @@ export function addBusinessIdentification(messageText, businessName) {
  * @param {string} messageText - SMS message text (footer will be added automatically)
  * @param {string|boolean} businessNameOrSkipFooter - Optional: business name (ignored, for backward compatibility) or boolean to skip footer
  * @param {boolean} skipFooter - Optional: set to true to skip adding footer (for internal use only)
+ * @param {{ omitMessagingProfile?: boolean, messagingProfileId?: string|null }} [sendOptions] - Optional Telnyx routing: omit profile so API uses the profile tied to `from`; or set a specific profile id; null forces omit
  * @returns {Promise<Object>} Telnyx API response
  */
-export async function sendSMSDirect(fromNumber, toNumber, messageText, businessNameOrSkipFooter = false, skipFooter = false) {
+export async function sendSMSDirect(fromNumber, toNumber, messageText, businessNameOrSkipFooter = false, skipFooter = false, sendOptions = undefined) {
   if (!TELNYX_API_KEY) {
     throw new Error("TELNYX_API_KEY not configured");
   }
@@ -90,24 +92,44 @@ export async function sendSMSDirect(fromNumber, toNumber, messageText, businessN
   
   // Add required footer to all SMS messages (TCPA compliance)
   const finalMessageText = actualSkipFooter ? messageText : addSMSFooter(messageText);
-  
-  // Add timeout to prevent hanging (30 seconds)
-  const response = await axios.post(
-    "https://api.telnyx.com/v2/messages",
-    {
-      from: formattedFrom,
-      to: formattedTo,
-      text: finalMessageText,
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${TELNYX_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      timeout: 30000, // 30 second timeout to prevent hanging
+
+  const payload = {
+    from: formattedFrom,
+    to: formattedTo,
+    text: finalMessageText,
+  };
+  const opts = sendOptions && typeof sendOptions === 'object' ? sendOptions : null;
+  const forceOmitProfile = opts?.omitMessagingProfile === true || opts?.messagingProfileId === null;
+  const explicitProfile =
+    typeof opts?.messagingProfileId === 'string' && opts.messagingProfileId.trim()
+      ? opts.messagingProfileId.trim()
+      : null;
+  if (!forceOmitProfile) {
+    const profileId = explicitProfile || TELNYX_MESSAGING_PROFILE_ID;
+    if (profileId) {
+      payload.messaging_profile_id = profileId;
     }
-  );
-  
+  }
+
+  // Add timeout to prevent hanging (30 seconds)
+  const response = await axios.post("https://api.telnyx.com/v2/messages", payload, {
+    headers: {
+      Authorization: `Bearer ${TELNYX_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    timeout: 30000, // 30 second timeout to prevent hanging
+  });
+
+  const body = response.data;
+  const msgId = body?.data?.id;
+  const apiErrors = body?.errors;
+  if (apiErrors?.length) {
+    console.warn("[Notifications] Telnyx message API returned errors array:", JSON.stringify(apiErrors));
+  }
+  if (msgId) {
+    console.log(`[Notifications] Telnyx outbound SMS id=${msgId} from=${formattedFrom} to=${formattedTo} parts=${body?.data?.parts ?? "?"}`);
+  }
+
   return response;
 }
 

@@ -1194,6 +1194,10 @@ function isTelnyxInboundSmsEventType(eventType) {
 
 function telnyxPhoneString(v) {
   if (v == null) return '';
+  if (Array.isArray(v)) {
+    if (v.length === 0) return '';
+    return telnyxPhoneString(v[0]);
+  }
   if (typeof v === 'string') return v.trim();
   if (typeof v === 'object') {
     const p = v.phone_number || v.number || v.phone;
@@ -1253,6 +1257,50 @@ function extractTelnyxInboundMessage(reqBody, data) {
     if (String(m?.direction || '').toLowerCase() === 'inbound' && (from || hasTo)) return m;
   }
   return data?.payload || data?.record || data?.data || data;
+}
+
+/**
+ * Single path for Emergency + Delivery inbound SMS: intake → Telnyx reply (service line → customer).
+ * Same sequence both networks already used; shared so behavior cannot drift.
+ */
+async function runDispatchNetworkSmsReply(label, formattedCustomerNumber, formattedServiceLineNumber, rawText, handleSmsIntake) {
+  try {
+    const { reply, requestId } = await handleSmsIntake(formattedCustomerNumber, formattedServiceLineNumber, rawText);
+    if (requestId) {
+      const createdMsg =
+        label === 'Emergency Network'
+          ? 'service request created from SMS intake'
+          : 'request created from SMS intake';
+      console.log(`[BulkSMS Webhook] ${label}: ${createdMsg}`, requestId, 'from', formattedCustomerNumber);
+    }
+    try {
+      const sendRes = await sendSMSDirect(formattedServiceLineNumber, formattedCustomerNumber, reply, true, false, {
+        omitMessagingProfile: true,
+      });
+      const tid = sendRes?.data?.data?.id;
+      console.log(
+        `[BulkSMS Webhook] ${label}: reply SMS API ok to`,
+        formattedCustomerNumber,
+        tid ? `(telnyx_id=${tid})` : '(no id in response)',
+      );
+    } catch (smsErr) {
+      const status = smsErr.response?.status;
+      const errData = smsErr.response?.data;
+      console.error(
+        `[BulkSMS Webhook] ${label}: failed to send reply SMS. Status:`,
+        status,
+        'Error:',
+        smsErr?.message || smsErr,
+        'Response:',
+        errData ? JSON.stringify(errData) : 'none',
+      );
+      if (!process.env.TELNYX_API_KEY) {
+        console.error('[BulkSMS Webhook] TELNYX_API_KEY is not set — set it in env to send reply SMS.');
+      }
+    }
+  } catch (err) {
+    console.error(`[BulkSMS Webhook] ${label} intake error:`, err?.message || err);
+  }
 }
 
 /**
@@ -1364,26 +1412,14 @@ router.post('/webhook', express.json(), async (req, res) => {
         const isEmergency = await isEmergencyNumber(formattedToNumber);
         console.log('[BulkSMS Webhook] Emergency check: to=', formattedToNumber, 'isEmergencyNumber=', isEmergency);
         if (isEmergency) {
-          try {
-            const { handleSmsIntake } = await import('../services/emergency-network/sms-intake.js');
-            const { reply, requestId } = await handleSmsIntake(formattedFromNumber, formattedToNumber, rawText);
-            if (requestId) {
-              console.log('[BulkSMS Webhook] Emergency Network: service request created from SMS intake', requestId, 'from', formattedFromNumber);
-            }
-            try {
-              await sendSMSDirect(formattedToNumber, formattedFromNumber, reply, true);
-              console.log('[BulkSMS Webhook] Emergency Network: reply SMS sent to', formattedFromNumber);
-            } catch (smsErr) {
-              const status = smsErr.response?.status;
-              const data = smsErr.response?.data;
-              console.error('[BulkSMS Webhook] Emergency Network: failed to send reply SMS. Status:', status, 'Error:', smsErr?.message || smsErr, 'Response:', data ? JSON.stringify(data) : 'none');
-              if (!process.env.TELNYX_API_KEY) {
-                console.error('[BulkSMS Webhook] TELNYX_API_KEY is not set — set it in env to send reply SMS.');
-              }
-            }
-          } catch (err) {
-            console.error('[BulkSMS Webhook] Emergency Network intake error:', err?.message || err);
-          }
+          const { handleSmsIntake } = await import('../services/emergency-network/sms-intake.js');
+          await runDispatchNetworkSmsReply(
+            'Emergency Network',
+            formattedFromNumber,
+            formattedToNumber,
+            rawText,
+            handleSmsIntake,
+          );
           return;
         }
 
@@ -1391,33 +1427,14 @@ router.post('/webhook', express.json(), async (req, res) => {
         const isDelivery = await isDeliveryLineNumber(formattedToNumber);
         console.log('[BulkSMS Webhook] Delivery check: to=', formattedToNumber, 'isDeliveryLineNumber=', isDelivery);
         if (isDelivery) {
-          try {
-            const { handleSmsIntake } = await import('../services/delivery-network/sms-intake.js');
-            const { reply, requestId } = await handleSmsIntake(formattedFromNumber, formattedToNumber, rawText);
-            if (requestId) {
-              console.log('[BulkSMS Webhook] Delivery Network: request created from SMS intake', requestId, 'from', formattedFromNumber);
-            }
-            try {
-              await sendSMSDirect(formattedToNumber, formattedFromNumber, reply, true);
-              console.log('[BulkSMS Webhook] Delivery Network: reply SMS sent to', formattedFromNumber);
-            } catch (smsErr) {
-              const status = smsErr.response?.status;
-              const data = smsErr.response?.data;
-              console.error(
-                '[BulkSMS Webhook] Delivery Network: failed to send reply SMS. Status:',
-                status,
-                'Error:',
-                smsErr?.message || smsErr,
-                'Response:',
-                data ? JSON.stringify(data) : 'none',
-              );
-              if (!process.env.TELNYX_API_KEY) {
-                console.error('[BulkSMS Webhook] TELNYX_API_KEY is not set — set it in env to send reply SMS.');
-              }
-            }
-          } catch (err) {
-            console.error('[BulkSMS Webhook] Delivery Network intake error:', err?.message || err);
-          }
+          const { handleSmsIntake } = await import('../services/delivery-network/sms-intake.js');
+          await runDispatchNetworkSmsReply(
+            'Delivery Network',
+            formattedFromNumber,
+            formattedToNumber,
+            rawText,
+            handleSmsIntake,
+          );
           return;
         }
       } else if (fromNumber || rawText) {
@@ -1600,8 +1617,8 @@ router.post('/webhook', express.json(), async (req, res) => {
         console.log('[BulkSMS Webhook] Message received but no opt-out/opt-in keyword detected');
       }
     } else if (eventType === 'message.sent' || eventType === 'message.finalized') {
-      // Handle outbound message status updates (for bulk SMS campaigns)
-      console.log(`[BulkSMS Webhook] Processing ${eventType} event for outbound message`);
+      // Bulk SMS campaigns only — Telnyx also POSTs message.finalized for every outbound SMS (e.g. delivery replies)
+      console.log(`[BulkSMS Webhook] Processing ${eventType} for bulk campaign status (skips if not a campaign send)`);
       
       const message = data?.payload || data;
       const messageId = message?.id;
@@ -1711,7 +1728,9 @@ router.post('/webhook', express.json(), async (req, res) => {
                   console.log(`[BulkSMS Webhook] ❌ Updated recipient ${recipient.id} to 'failed' status (fallback)`);
                 }
               } else {
-                console.log(`[BulkSMS Webhook] ℹ️ No recipient found for message ${messageId} or phone ${formattedPhone}`);
+                console.log(
+                  `[BulkSMS Webhook] No campaign recipient for ${messageId} / ${formattedPhone} — expected for transactional SMS (delivery, emergency, opt-out replies, etc.)`
+                );
               }
             }
           }
