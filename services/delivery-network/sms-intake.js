@@ -130,6 +130,29 @@ function looksLikePhysicalAddress(text) {
   return true;
 }
 
+/**
+ * Short / greeting-only SMS while already in awaiting_details — re-send opening instructions
+ * instead of the terse “need full address” line (reads as “broken” on the phone).
+ */
+function isCasualNonAddressMessage(text) {
+  const t = String(text || '').trim();
+  if (!t) return true;
+  if (looksLikePhysicalAddress(t)) return false;
+  if (t.length >= 14) return false;
+  if (/^\d[\d\s\-+.()]{0,24}$/.test(t)) return false;
+  const words = t
+    .toLowerCase()
+    .replace(/[!?.…,]+$/g, '')
+    .trim();
+  if (
+    /^(hi|hey|hello|yo|sup|hiya|howdy|help|start|begin|info|information|\?)$/.test(words)
+  ) {
+    return true;
+  }
+  if (t.length <= 4 && !/\d/.test(t)) return true;
+  return false;
+}
+
 function deliveryServiceName(config) {
   return (config?.service_line_name && String(config.service_line_name).trim()) || 'Last-Mile Delivery';
 }
