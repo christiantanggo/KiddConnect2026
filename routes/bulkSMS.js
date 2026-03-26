@@ -1192,6 +1192,16 @@ function isTelnyxInboundSmsEventType(eventType) {
   return false;
 }
 
+function telnyxPhoneString(v) {
+  if (v == null) return '';
+  if (typeof v === 'string') return v.trim();
+  if (typeof v === 'object') {
+    const p = v.phone_number || v.number || v.phone;
+    if (p != null) return String(p).trim();
+  }
+  return '';
+}
+
 /**
  * Telnyx Messaging API v1 / some profiles POST a flat JSON:
  * { sms_id, direction: "inbound", from: "+1...", to: "+1...", body: "..." }
@@ -1200,10 +1210,15 @@ function isTelnyxInboundSmsEventType(eventType) {
 function normalizeFlatTelnyxSmsWebhook(reqBody) {
   const b = reqBody && typeof reqBody === 'object' ? reqBody : null;
   if (!b) return null;
-  const inbound = String(b.direction || '').toLowerCase() === 'inbound';
-  const fromStr = typeof b.from === 'string' ? b.from.trim() : '';
-  const toStr = typeof b.to === 'string' ? b.to.trim() : '';
-  if (!inbound || !fromStr || !toStr) return null;
+  const dir = String(b.direction || '').toLowerCase();
+  if (dir === 'outbound') return null;
+  const fromStr = telnyxPhoneString(b.from);
+  const toStr = telnyxPhoneString(b.to);
+  if (!fromStr || !toStr) return null;
+  const inbound =
+    dir === 'inbound' ||
+    (b.sms_id != null && !b.data && !(b.event_type && String(b.event_type).toLowerCase().includes('sent')));
+  if (!inbound) return null;
   const textRaw = b.body != null ? String(b.body) : b.text != null ? String(b.text) : '';
   return {
     from: { phone_number: fromStr },
