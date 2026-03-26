@@ -95,6 +95,25 @@ function deliveryLineNumbersFromEnv() {
     .filter(Boolean);
 }
 
+/** NANP toll-free (800, 833, 844, 855, 866, 877, 888). MT-SMS from these often fails on handsets while geographic numbers work. */
+export function isNanpTollFreeE164(phone) {
+  const d = String(phone || '').replace(/\D/g, '');
+  if (d.length < 10) return false;
+  const core = d.length === 11 && d.startsWith('1') ? d.slice(1) : d.slice(-10);
+  return /^8(00|33|44|55|66|77|88)\d{7}$/.test(core);
+}
+
+/**
+ * Optional geographic `from` for delivery auto-replies. Customers may still text the toll-free;
+ * replies send from this number so carriers deliver like your emergency line.
+ * Must be a number on your Telnyx account (e.g. +1519… emergency line).
+ */
+export function getDeliverySmsReplyFromE164() {
+  const raw = String(process.env.DELIVERY_SMS_REPLY_FROM || '').trim();
+  if (!raw) return null;
+  return normalizePhone(raw) || null;
+}
+
 /**
  * Same matching rules as emergency-network/config.js isEmergencyNumber (normalized E.164 + + / no-+ variants).
  * Optional DELIVERY_NETWORK_SMS_LINES merges comma-separated E.164s without a DB row.

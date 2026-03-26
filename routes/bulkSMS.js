@@ -1274,7 +1274,29 @@ async function runDispatchNetworkSmsReply(label, formattedCustomerNumber, format
       console.log(`[BulkSMS Webhook] ${label}: ${createdMsg}`, requestId, 'from', formattedCustomerNumber);
     }
     try {
-      const sendRes = await sendSMSDirect(formattedServiceLineNumber, formattedCustomerNumber, reply, true, false, {
+      let smsFrom = formattedServiceLineNumber;
+      if (label === 'Delivery Network') {
+        const { getDeliverySmsReplyFromE164, isNanpTollFreeE164 } = await import(
+          '../services/delivery-network/config.js'
+        );
+        const replyFromOverride = getDeliverySmsReplyFromE164();
+        if (replyFromOverride) {
+          smsFrom = replyFromOverride;
+          console.log(
+            '[BulkSMS Webhook] Delivery Network: SMS reply FROM',
+            smsFrom,
+            '(DELIVERY_SMS_REPLY_FROM; customer texted',
+            formattedServiceLineNumber + ')',
+          );
+        } else if (isNanpTollFreeE164(formattedServiceLineNumber)) {
+          console.warn(
+            '[BulkSMS Webhook] Delivery Network: replying FROM toll-free',
+            formattedServiceLineNumber,
+            '— if customers see no SMS, set DELIVERY_SMS_REPLY_FROM to a geographic Telnyx number (same pipeline as emergency; only `from` differs).',
+          );
+        }
+      }
+      const sendRes = await sendSMSDirect(smsFrom, formattedCustomerNumber, reply, true, false, {
         omitMessagingProfile: true,
       });
       const tid = sendRes?.data?.data?.id;
