@@ -1,0 +1,7 @@
+﻿kiddconnect-api/node_modules/
+kiddconnect-api/.env
+kiddconnect-api/*.log
+kiddconnect-web/node_modules/
+kiddconnect-web/.next/
+kiddconnect-web/.env
+kiddconnect-web/.env.local

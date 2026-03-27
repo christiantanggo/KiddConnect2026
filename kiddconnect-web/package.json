@@ -1,0 +1,38 @@
+{
+  "name": "kiddconnect-web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node scripts/run-next-dev.mjs",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "vercel-build": "next build",
+    "deploy:vercel": "npx vercel@latest deploy --prod --yes --scope christian-fourniers-projects"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@vapi-ai/web": "^2.5.2",
+    "axios": "^1.6.2",
+    "js-cookie": "^3.0.5",
+    "libphonenumber-js": "^1.12.31",
+    "lucide-react": "^0.562.0",
+    "next": "^14.0.4",
+    "openai": "^6.16.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/js-cookie": "^3.0.5",
+    "@types/node": "^20.10.5",
+    "@types/react": "^18.2.45",
+    "@types/react-dom": "^18.2.18",
+    "autoprefixer": "^10.4.16",
+    "eslint-config-next": "14.2.18",
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.3.3"
+  }
+}
