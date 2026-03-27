@@ -1,0 +1,9 @@
+# Node 20 + ffmpeg (Kid Quiz audio mix, Orbix video). Required on Railway for render routes.
+[phases.setup]
+nixPkgs = ["nodejs_20", "ffmpeg"]
+
+[phases.build]
+cmds = ["npm ci"]
+
+[start]
+cmd = "npm start"
