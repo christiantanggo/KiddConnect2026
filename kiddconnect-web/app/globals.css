@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Import Inter font */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+
+:root {
+  /* Tavari AI v2 Design System - From Specification */
+  --color-primary: #0F172A;
+  --color-accent: #14B8A6;
+  --color-accent-2: #FACC15;
+  --color-danger: #EF4444;
+  --color-background: #F8FAFC;
+  --color-surface: #FFFFFF;
+  --color-border: #E5E7EB;
+  --color-text-main: #020617;
+  --color-text-muted: #64748B;
+  
+  /* Layout - From Specification */
+  --sidebar-width: 260px;
+  --topbar-height: 64px;
+  --max-content-width: 1200px;
+  --padding-base: 24px;
+  --card-radius: 12px;
+  --button-radius: 10px;
+  --input-height: 40px;
+  /* Space for fixed DeploymentBar at bottom of viewport */
+  --deployment-bar-height: 36px;
+}
+
+/* Sidebar offset — desktop only */
+.sidebar-offset {
+  padding-left: 0;
+}
+@media (min-width: 768px) {
+  .sidebar-offset {
+    padding-left: var(--sidebar-width);
+  }
+}
+
+/* Disable dark mode auto-detection - we use light theme */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-primary: #0F172A;
+    --color-accent: #14B8A6;
+    --color-accent-2: #FACC15;
+    --color-danger: #EF4444;
+    --color-background: #F8FAFC;
+    --color-surface: #FFFFFF;
+    --color-border: #E5E7EB;
+    --color-text-main: #020617;
+    --color-text-muted: #64748B;
+  }
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: var(--color-text-main);
+  background-color: var(--color-background);
+  padding-bottom: var(--deployment-bar-height);
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in {
+  animation: slide-in 0.3s ease-out;
+}
+
+@keyframes typing {
+  0%, 60%, 100% { opacity: 0.35; }
+  30% { opacity: 1; }
+}
+

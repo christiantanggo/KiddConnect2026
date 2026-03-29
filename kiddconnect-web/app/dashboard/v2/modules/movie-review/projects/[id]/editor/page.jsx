@@ -1,0 +1,2126 @@
+'use client';
+
+import { useEffect, useState, useRef, useCallback } from 'react';
+import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
+import AuthGuard from '@/components/AuthGuard';
+import V2AppShell from '@/components/V2AppShell';
+import {
+  Mic, MicOff, Play, Pause, Trash2, Upload, Image, Music,
+  Sparkles, Send, ChevronLeft, ChevronRight, Plus, X,
+  GripVertical, Type, Wand2, Loader2, CheckCircle, FileText, Eye, EyeOff
+} from 'lucide-react';
+
+import Cookies from 'js-cookie';
+import axios from 'axios';
+
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+
+function getBusinessId() {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
+}
+
+// Axios instance matching the pattern used by the rest of the app
+const api = axios.create({ baseURL: API_URL, timeout: 60000 });
+api.interceptors.request.use(cfg => {
+  const token = Cookies.get('token');
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  const biz = getBusinessId();
+  if (biz) cfg.headers['X-Active-Business-Id'] = biz;
+  return cfg;
+});
+
+const STEPS = ['Research', 'Voice', 'Images', 'Timeline', 'AI'];
+const MOTION_PRESETS = ['ZOOM_IN','ZOOM_OUT','PAN_LEFT','PAN_RIGHT'];
+const POSITION_PRESETS = ['TOP','CENTER','BOTTOM'];
+
+// ─── Step progress bar ────────────────────────────────────────────────────────
+function StepBar({ step, steps, onStep }) {
+  return (
+    <div className="flex items-center mb-4" style={{ gap: 2, minWidth: 0 }}>
+      {steps.map((s, i) => {
+        const active = i === step;
+        const done = i < step;
+        return (
+          <div key={s} className="flex items-center" style={{ flex: '1 1 0', minWidth: 0 }}>
+            <button
+              onClick={() => onStep(i)}
+              className="flex items-center justify-center gap-1 w-full rounded-lg py-1.5 text-xs font-semibold truncate transition-all"
+              style={{
+                background: active ? 'linear-gradient(135deg,#e11d48,#9333ea)' : done ? 'rgba(225,29,72,0.12)' : 'var(--color-surface)',
+                color: active ? '#fff' : done ? '#e11d48' : 'var(--color-text-muted)',
+                border: `1px solid ${active ? 'transparent' : done ? '#fda4af' : 'var(--color-border)'}`,
+                width: '100%',
+              }}
+            >
+              {done && <CheckCircle className="w-3 h-3 flex-shrink-0" />}
+              <span className="truncate">{s}</span>
+            </button>
+            {i < steps.length - 1 && (
+              <div className="flex-shrink-0" style={{ width: 6, height: 1, background: 'var(--color-border)' }} />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Fact Check + Script Panel (Step 0) ───────────────────────────────────────
+function FactCheckPanel({ projectId, project, onProjectUpdate }) {
+  const [chatMessages, setChatMessages] = useState([
+    { role: 'assistant', content: `Hey! I'm your movie research assistant. Ask me anything — plot, cast, trivia, fun facts, quotes — and I'll help you build a great script to record!` }
+  ]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatLoading, setChatLoading] = useState(false);
+  const [scriptLoading, setScriptLoading] = useState(false);
+  const [scriptSaved, setScriptSaved] = useState(false);
+  const [editingScript, setEditingScript] = useState(false);
+  const [localScript, setLocalScript] = useState(project?.script_text || '');
+  const [savingScript, setSavingScript] = useState(false);
+  const chatEndRef = useRef(null);
+
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+  useEffect(() => { setLocalScript(project?.script_text || ''); }, [project?.script_text]);
+
+  async function sendChat() {
+    if (!chatInput.trim() || chatLoading) return;
+    const userMsg = { role: 'user', content: chatInput };
+    setChatMessages(m => [...m, userMsg]);
+    setChatInput('');
+    setChatLoading(true);
+    try {
+      const history = [...chatMessages, userMsg].filter(m => m.role !== 'system');
+      const { data } = await api.post('/api/v2/movie-review/ai/chat', { messages: history, movie_title: project?.movie_title });
+      setChatMessages(m => [...m, { role: 'assistant', content: data.message }]);
+    } catch (err) {
+      setChatMessages(m => [...m, { role: 'assistant', content: `Error: ${err.message}` }]);
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function generateScript() {
+    setScriptLoading(true); setScriptSaved(false);
+    try {
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/ai/script`, {
+        chat_messages: chatMessages,
+      });
+      setLocalScript(data.script_text);
+      onProjectUpdate({ ...project, script_text: data.script_text });
+      setScriptSaved(true);
+      setEditingScript(false);
+      setTimeout(() => setScriptSaved(false), 3000);
+    } catch (err) {
+      alert('Script error: ' + err.message);
+    } finally {
+      setScriptLoading(false);
+    }
+  }
+
+  async function saveScript() {
+    setSavingScript(true);
+    try {
+      await api.put(`/api/v2/movie-review/projects/${projectId}`, { script_text: localScript });
+      onProjectUpdate({ ...project, script_text: localScript });
+      setEditingScript(false);
+      setScriptSaved(true);
+      setTimeout(() => setScriptSaved(false), 2500);
+    } catch (err) {
+      alert('Save error: ' + err.message);
+    } finally {
+      setSavingScript(false);
+    }
+  }
+
+  const wordCount = localScript.trim().split(/\s+/).filter(Boolean).length;
+  const estSeconds = Math.round(wordCount / 2.3); // ~2.3 words/sec spoken
+
+  return (
+    <div className="space-y-4">
+      {/* Chat */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <div className="px-4 pt-4 pb-2">
+          <h2 className="font-bold text-base mb-0.5" style={{ color: 'var(--color-text-main)' }}>🔍 Research & Fact Check</h2>
+          <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+            Ask the AI anything about your movie to gather facts, quotes, and talking points before you record.
+          </p>
+        </div>
+        <div className="px-4 py-3 space-y-3 overflow-y-auto" style={{ maxHeight: 300 }}>
+          {chatMessages.map((msg, i) => (
+            <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className="px-3 py-2 rounded-2xl text-sm" style={{
+                maxWidth: '85%',
+                background: msg.role === 'user' ? 'linear-gradient(135deg,#e11d48,#9333ea)' : 'var(--color-bg)',
+                color: msg.role === 'user' ? '#fff' : 'var(--color-text-main)',
+                border: msg.role === 'assistant' ? '1px solid var(--color-border)' : 'none',
+              }}>
+                {msg.content}
+              </div>
+            </div>
+          ))}
+          {chatLoading && (
+            <div className="flex justify-start">
+              <div className="px-3 py-2 rounded-2xl text-sm flex items-center gap-2" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}>
+                <Loader2 className="w-3 h-3 animate-spin" /> Thinking…
+              </div>
+            </div>
+          )}
+          <div ref={chatEndRef} />
+        </div>
+        <div className="px-3 pb-3 flex gap-2">
+          <input
+            value={chatInput}
+            onChange={e => setChatInput(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendChat()}
+            placeholder="Ask anything about the movie…"
+            className="flex-1 px-3 py-2 rounded-xl text-sm"
+            style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+          />
+          <button onClick={sendChat} disabled={chatLoading || !chatInput.trim()}
+            className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-xl text-white"
+            style={{ background: chatLoading || !chatInput.trim() ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+            <Send className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+
+      {/* Script generator */}
+      <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <h2 className="font-bold text-base" style={{ color: 'var(--color-text-main)' }}>📝 Script</h2>
+            <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+              Generate a script to read while recording. You can edit it after.
+            </p>
+          </div>
+          {localScript && (
+            <span className="text-xs px-2 py-1 rounded-full ml-2 flex-shrink-0"
+              style={{ background: estSeconds <= 50 ? 'rgba(5,150,105,0.1)' : 'rgba(245,158,11,0.1)', color: estSeconds <= 50 ? '#059669' : '#d97706' }}>
+              ~{estSeconds}s
+            </span>
+          )}
+        </div>
+
+        <button onClick={generateScript} disabled={scriptLoading}
+          className="w-full py-3 rounded-xl font-bold text-white flex items-center justify-center gap-2 mb-3"
+          style={{ background: scriptSaved ? '#059669' : scriptLoading ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+          {scriptLoading
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Writing script…</>
+            : scriptSaved
+            ? '✅ Script saved!'
+            : <><Sparkles className="w-4 h-4" /> {localScript ? 'Regenerate Script' : 'Generate Script'}</>}
+        </button>
+
+        {localScript ? (
+          editingScript ? (
+            <div className="space-y-2">
+              <textarea
+                rows={8}
+                value={localScript}
+                onChange={e => setLocalScript(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl text-sm resize-none"
+                style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none', lineHeight: 1.6 }}
+              />
+              <div className="flex gap-2">
+                <button onClick={saveScript} disabled={savingScript}
+                  className="flex-1 py-2 rounded-xl text-sm font-bold text-white"
+                  style={{ background: savingScript ? '#9ca3af' : '#1d4ed8' }}>
+                  {savingScript ? 'Saving…' : '💾 Save Script'}
+                </button>
+                <button onClick={() => { setLocalScript(project?.script_text || ''); setEditingScript(false); }}
+                  className="px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-muted)' }}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-xl p-3 relative" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--color-text-main)' }}>{localScript}</p>
+              <button onClick={() => setEditingScript(true)}
+                className="mt-2 text-xs underline"
+                style={{ color: 'var(--color-accent)' }}>
+                ✏️ Edit script
+              </button>
+            </div>
+          )
+        ) : (
+          <p className="text-xs text-center py-3" style={{ color: 'var(--color-text-muted)' }}>
+            Chat with the AI above to gather facts, then generate your script.
+          </p>
+        )}
+      </div>
+
+      {/* Notes */}
+      {project?.notes_text && (
+        <div className="rounded-2xl p-3" style={{ background: '#fef3c7', border: '1px solid #fde68a' }}>
+          <p className="text-xs font-semibold mb-1" style={{ color: '#92400e' }}>📋 Your original notes</p>
+          <p className="text-xs whitespace-pre-wrap" style={{ color: '#92400e' }}>{project.notes_text}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Voice recorder panel ─────────────────────────────────────────────────────
+const VOICE_EFFECTS = [
+  { id: 'normal',   label: 'Normal',   emoji: '🎙️', desc: 'Your original voice' },
+  { id: 'deep',     label: 'Deep',     emoji: '🔊', desc: 'Lower, deeper tone' },
+  { id: 'chipmunk', label: 'Chipmunk', emoji: '🐿️', desc: 'High & squeaky' },
+  { id: 'robotic',  label: 'Robotic',  emoji: '🤖', desc: 'Metallic robot voice' },
+  { id: 'radio',    label: 'Radio',    emoji: '📻', desc: 'Walkie-talkie filter' },
+  { id: 'echo',     label: 'Echo',     emoji: '🏔️', desc: 'Adds reverb echo' },
+];
+
+const TTS_VOICE_OPTIONS = [
+  { id: 'nova',    label: 'Nova',    emoji: '⭐', desc: 'Warm & friendly (girl)' },
+  { id: 'shimmer', label: 'Shimmer', emoji: '✨', desc: 'Soft & clear (girl)' },
+  { id: 'alloy',   label: 'Alloy',   emoji: '🔷', desc: 'Neutral & balanced' },
+  { id: 'echo',    label: 'Echo',    emoji: '🔵', desc: 'Smooth & confident (boy)' },
+  { id: 'fable',   label: 'Fable',   emoji: '📖', desc: 'Expressive storyteller' },
+  { id: 'onyx',    label: 'Onyx',    emoji: '🖤', desc: 'Deep & powerful (boy)' },
+];
+
+function VoicePanel({ projectId, voiceAsset, onVoiceChange, scriptText }) {
+  const [voiceMode, setVoiceMode] = useState('record'); // 'record' | 'ai'
+  const [recording, setRecording] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState(null);
+  const [audioError, setAudioError] = useState(null);
+  const [localUrl, setLocalUrl] = useState(null);
+  const [micLabel, setMicLabel] = useState(null);
+  const [volume, setVolume] = useState(0);
+  const [devices, setDevices] = useState([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState('');
+  const mediaRecorderRef = useRef(null);
+  const chunksRef = useRef([]);
+  const streamRef = useRef(null);
+  const monitorRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const [elapsed, setElapsed] = useState(0);
+  const timerRef = useRef(null);
+  const [activeEffect, setActiveEffect] = useState('normal');
+  const [applyingEffect, setApplyingEffect] = useState(false);
+  const [showScript, setShowScript] = useState(true);
+  const [ttsVoice, setTtsVoice] = useState('nova');
+  const [ttsLoading, setTtsLoading] = useState(false);
+
+  // Load available microphones on mount
+  useEffect(() => {
+    async function loadDevices() {
+      try {
+        // Must request permission first to get device labels
+        await navigator.mediaDevices.getUserMedia({ audio: true }).then(s => s.getTracks().forEach(t => t.stop()));
+        const all = await navigator.mediaDevices.enumerateDevices();
+        const mics = all.filter(d => d.kind === 'audioinput');
+        setDevices(mics);
+        if (mics.length > 0) setSelectedDeviceId(mics[0].deviceId);
+      } catch (_) {}
+    }
+    loadDevices();
+    return () => {
+      if (localUrl) URL.revokeObjectURL(localUrl);
+      monitorRef.current?.close().catch(() => {});
+      cancelAnimationFrame(animFrameRef.current);
+    };
+  }, []);
+
+  async function startRecording() {
+    setError(null);
+    setLocalUrl(null);
+    setVolume(0);
+    chunksRef.current = [];
+
+    try {
+      const constraints = {
+        audio: selectedDeviceId ? { deviceId: selectedDeviceId } : true,
+        video: false,
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      streamRef.current = stream;
+
+      const track = stream.getAudioTracks()[0];
+      setMicLabel(track?.label || 'Microphone');
+
+      // Live volume meter
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      monitorRef.current = ctx;
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      const tick = () => {
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((a, b) => a + b, 0) / data.length;
+        setVolume(Math.min(100, Math.round(avg * 2)));
+        animFrameRef.current = requestAnimationFrame(tick);
+      };
+      animFrameRef.current = requestAnimationFrame(tick);
+
+      const mr = new MediaRecorder(stream);
+      mediaRecorderRef.current = mr;
+
+      mr.ondataavailable = e => {
+        if (e.data?.size > 0) chunksRef.current.push(e.data);
+      };
+
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop());
+        ctx.close().catch(() => {});
+        cancelAnimationFrame(animFrameRef.current);
+        setVolume(0);
+
+        const blob = new Blob(chunksRef.current, { type: mr.mimeType });
+        if (blob.size === 0) {
+          setError('No audio captured.');
+          return;
+        }
+        const url = URL.createObjectURL(blob);
+        setLocalUrl(url);
+        uploadRecording(blob, mr.mimeType);
+      };
+
+      mr.start(250);
+      setRecording(true);
+      setElapsed(0);
+      timerRef.current = setInterval(() => setElapsed(e => e + 1), 1000);
+    } catch (err) {
+      setError('Microphone error: ' + err.message);
+    }
+  }
+
+  function stopRecording() {
+    clearInterval(timerRef.current);
+    setRecording(false);
+    const mr = mediaRecorderRef.current;
+    if (mr && mr.state !== 'inactive') mr.stop();
+  }
+
+  async function uploadRecording(blob, mimeType) {
+    const ext = mimeType?.includes('ogg') ? 'ogg' : mimeType?.includes('mp4') ? 'mp4' : 'webm';
+    setUploading(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      fd.append('voice', blob, `voice.${ext}`);
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/voice`, fd);
+      onVoiceChange(data.asset);
+    } catch (err) {
+      setError('Upload failed: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function deleteVoice() {
+    if (!confirm('Delete voice recording?')) return;
+    setLocalUrl(null);
+    setAudioError(null);
+    setActiveEffect('normal');
+    await api.delete(`/api/v2/movie-review/projects/${projectId}/voice`);
+    onVoiceChange(null);
+  }
+
+  async function applyEffect(effectId) {
+    if (applyingEffect) return;
+    setActiveEffect(effectId);
+    if (effectId === 'normal' && !voiceAsset) return;
+    setApplyingEffect(true);
+    setError(null);
+    setLocalUrl(null);
+    try {
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/voice/transform`, { effect: effectId });
+      onVoiceChange(data.asset);
+    } catch (err) {
+      setError('Effect failed: ' + (err.response?.data?.error || err.message));
+      setActiveEffect('normal');
+    } finally {
+      setApplyingEffect(false);
+    }
+  }
+
+  async function generateAIVoice() {
+    if (!scriptText?.trim()) {
+      setError('Generate a script first on the Research screen — the AI voice needs text to read!');
+      return;
+    }
+    setTtsLoading(true);
+    setError(null);
+    try {
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/voice/tts`, {
+        script_text: scriptText,
+        voice: ttsVoice,
+      });
+      setLocalUrl(null);
+      onVoiceChange(data.asset);
+    } catch (err) {
+      setError('AI Voice failed: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setTtsLoading(false);
+    }
+  }
+
+  const fmtTime = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  const hasVoice = !!voiceAsset?.public_url;
+  const playbackUrl = localUrl || voiceAsset?.public_url;
+  const mp3Url = voiceAsset?.public_url;
+  const durationSec = voiceAsset?.duration_seconds;
+
+  return (
+    <div className="space-y-4">
+      {/* Teleprompter — only show in record mode */}
+      {scriptText && voiceMode === 'record' && (
+        <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f1a', border: '1px solid #9333ea' }}>
+          <button
+            onClick={() => setShowScript(s => !s)}
+            className="w-full flex items-center justify-between px-4 py-2.5"
+            style={{ background: 'rgba(147,51,234,0.15)' }}>
+            <span className="text-sm font-bold flex items-center gap-2" style={{ color: '#e9d5ff' }}>
+              <FileText className="w-4 h-4" /> Script — read this while recording
+            </span>
+            {showScript ? <EyeOff className="w-4 h-4" style={{ color: '#a78bfa' }} /> : <Eye className="w-4 h-4" style={{ color: '#a78bfa' }} />}
+          </button>
+          {showScript && (
+            <div className="px-5 py-4 overflow-y-auto" style={{ maxHeight: 220 }}>
+              <p className="text-base font-medium whitespace-pre-wrap leading-relaxed" style={{ color: '#f3e8ff', lineHeight: '1.9' }}>
+                {scriptText}
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <h2 className="font-bold text-base mb-3" style={{ color: 'var(--color-text-main)' }}>🎙️ Voice</h2>
+
+        {/* Mode tabs */}
+        <div className="flex rounded-xl overflow-hidden mb-4" style={{ border: '1px solid var(--color-border)' }}>
+          {[
+            { id: 'record', label: '🎙️ Record Yourself' },
+            { id: 'ai',     label: '🤖 AI Voice' },
+          ].map(tab => (
+            <button key={tab.id} onClick={() => { setVoiceMode(tab.id); setError(null); }}
+              className="flex-1 py-2 text-sm font-semibold transition-all"
+              style={{
+                background: voiceMode === tab.id ? 'linear-gradient(135deg,#e11d48,#9333ea)' : 'var(--color-bg)',
+                color: voiceMode === tab.id ? '#fff' : 'var(--color-text-muted)',
+              }}>
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
+
+        {/* AI Voice mode */}
+        {voiceMode === 'ai' && (
+          <div className="space-y-4">
+            {!scriptText?.trim() && (
+              <div className="p-3 rounded-xl text-xs" style={{ background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e' }}>
+                ⚠️ Go to the <strong>Research</strong> step and generate a script first — the AI voice needs words to read!
+              </div>
+            )}
+            {scriptText?.trim() && (
+              <div className="p-3 rounded-xl text-xs" style={{ background: 'rgba(147,51,234,0.08)', border: '1px solid rgba(147,51,234,0.2)', color: 'var(--color-text-main)' }}>
+                <p className="font-semibold mb-1" style={{ color: '#9333ea' }}>📝 Script to be read:</p>
+                <p className="whitespace-pre-wrap leading-relaxed" style={{ color: 'var(--color-text-muted)' }}>{scriptText}</p>
+              </div>
+            )}
+
+            <div>
+              <p className="text-xs font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>Choose a voice:</p>
+              <div className="grid grid-cols-2 gap-2">
+                {TTS_VOICE_OPTIONS.map(v => (
+                  <button key={v.id} onClick={() => setTtsVoice(v.id)}
+                    className="flex items-center gap-2 px-3 py-2.5 rounded-xl text-left transition-all"
+                    style={{
+                      background: ttsVoice === v.id ? 'linear-gradient(135deg,rgba(225,29,72,0.12),rgba(147,51,234,0.12))' : 'var(--color-bg)',
+                      border: `1px solid ${ttsVoice === v.id ? '#9333ea' : 'var(--color-border)'}`,
+                    }}>
+                    <span className="text-lg leading-none">{v.emoji}</span>
+                    <div>
+                      <p className="text-xs font-bold leading-tight" style={{ color: ttsVoice === v.id ? '#9333ea' : 'var(--color-text-main)' }}>{v.label}</p>
+                      <p className="text-xs leading-tight" style={{ color: 'var(--color-text-muted)' }}>{v.desc}</p>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button onClick={generateAIVoice} disabled={ttsLoading || !scriptText?.trim()}
+              className="w-full py-3 rounded-xl font-bold text-white flex items-center justify-center gap-2"
+              style={{ background: ttsLoading || !scriptText?.trim() ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)', cursor: ttsLoading ? 'wait' : 'pointer' }}>
+              {ttsLoading
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating AI voice…</>
+                : <><Sparkles className="w-4 h-4" /> {hasVoice ? 'Regenerate AI Voice' : 'Generate AI Voice'}</>}
+            </button>
+
+            {hasVoice && (
+              <div className="rounded-xl p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-xs font-medium" style={{ color: 'var(--color-text-main)' }}>
+                    AI voice ready{voiceAsset?.duration_seconds ? ` · ${Math.round(voiceAsset.duration_seconds)}s` : ''}
+                  </span>
+                </div>
+                <audio key={voiceAsset?.public_url} src={voiceAsset?.public_url} controls preload="auto" className="w-full" style={{ minHeight: 44 }} />
+                <button onClick={deleteVoice} className="mt-2 text-xs underline" style={{ color: '#dc2626' }}>🗑 Remove and start over</button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Record mode */}
+        {voiceMode === 'record' && (<>
+
+        {/* Microphone selector */}
+        {!recording && !hasVoice && !localUrl && devices.length > 1 && (
+          <div className="mb-3">
+            <label className="text-xs font-medium block mb-1" style={{ color: 'var(--color-text-muted)' }}>🎙 Select Microphone</label>
+            <select
+              value={selectedDeviceId}
+              onChange={e => setSelectedDeviceId(e.target.value)}
+              className="w-full rounded-lg px-3 py-2 text-xs"
+              style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}
+            >
+              {devices.map(d => (
+                <option key={d.deviceId} value={d.deviceId}>{d.label || `Microphone ${d.deviceId.slice(0,8)}`}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {(hasVoice || localUrl) ? (
+          <div className="space-y-3">
+            <div className="rounded-xl p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-2 h-2 rounded-full bg-green-500" />
+                <span className="text-xs font-medium" style={{ color: 'var(--color-text-main)' }}>
+                  {uploading ? 'Saving recording…' : `Recording saved${durationSec ? ` · ${Math.round(durationSec)}s` : ''}`}
+                </span>
+                {uploading && <Loader2 className="w-3 h-3 animate-spin" style={{ color: '#9333ea' }} />}
+              </div>
+              <audio
+                key={playbackUrl}
+                src={playbackUrl}
+                controls
+                preload="auto"
+                className="w-full"
+                style={{ minHeight: 44 }}
+                onCanPlay={() => setAudioError(null)}
+                onError={e => {
+                  const code = e.target?.error?.code;
+                  const msgs = { 1: 'ABORTED', 2: 'NETWORK', 3: 'DECODE', 4: 'SRC_NOT_SUPPORTED' };
+                  setAudioError(`Player error: ${code ? msgs[code] || code : 'unknown'}`);
+                }}
+              />
+              {audioError && (
+                <p className="text-xs mt-2" style={{ color: '#dc2626' }}>{audioError}</p>
+              )}
+              {mp3Url && (
+                <a
+                  href={mp3Url}
+                  download="voice.wav"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-block mt-2 text-xs underline"
+                  style={{ color: 'var(--color-text-muted)' }}
+                >
+                  Download to verify
+                </a>
+              )}
+            </div>
+
+            {/* Voice Effects */}
+            <div className="rounded-xl p-3" style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)' }}>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs font-semibold" style={{ color: 'var(--color-text-main)' }}>🎛️ Voice Effect</span>
+                {applyingEffect && (
+                  <span className="text-xs flex items-center gap-1" style={{ color: 'var(--color-text-muted)' }}>
+                    <Loader2 className="w-3 h-3 animate-spin" /> Applying…
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {VOICE_EFFECTS.map(fx => (
+                  <button
+                    key={fx.id}
+                    onClick={() => applyEffect(fx.id)}
+                    disabled={applyingEffect || uploading}
+                    title={fx.desc}
+                    className="flex flex-col items-center gap-0.5 py-2 px-1 rounded-lg text-center transition-all"
+                    style={{
+                      background: activeEffect === fx.id ? 'var(--color-accent)' : 'var(--color-surface)',
+                      border: `1px solid ${activeEffect === fx.id ? 'var(--color-accent)' : 'var(--color-border)'}`,
+                      opacity: (applyingEffect || uploading) ? 0.6 : 1,
+                      cursor: (applyingEffect || uploading) ? 'wait' : 'pointer',
+                    }}
+                  >
+                    <span className="text-base leading-none">{fx.emoji}</span>
+                    <span className="text-xs font-medium leading-tight" style={{ color: activeEffect === fx.id ? 'white' : 'var(--color-text-main)' }}>
+                      {fx.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
+                {VOICE_EFFECTS.find(f => f.id === activeEffect)?.desc || ''}
+                {activeEffect !== 'normal' && !applyingEffect && (
+                  <> · <button onClick={() => applyEffect('normal')} className="underline" style={{ color: 'var(--color-accent)' }}>Reset to normal</button></>
+                )}
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <button onClick={startRecording} disabled={recording || uploading}
+                className="flex-1 py-2.5 rounded-xl text-sm font-semibold"
+                style={{ border: '2px dashed var(--color-border)', color: 'var(--color-text-muted)' }}>
+                🔄 Re-record
+              </button>
+              <button onClick={deleteVoice} className="px-4 py-2.5 rounded-xl text-sm"
+                style={{ background: '#fee2e2', color: '#dc2626' }}>
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {recording ? (
+              <div className="text-center py-4">
+                <div className="inline-flex items-center gap-3 mb-3">
+                  <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-2xl font-bold" style={{ color: '#dc2626' }}>{fmtTime(elapsed)}</span>
+                </div>
+                {micLabel && <p className="text-xs mb-2" style={{ color: 'var(--color-text-muted)' }}>🎙 {micLabel}</p>}
+                {/* Live volume meter */}
+                <div className="mx-auto mb-3 rounded-full overflow-hidden" style={{ width: '100%', height: 10, background: 'var(--color-border)' }}>
+                  <div className="h-full rounded-full transition-all" style={{ width: `${volume}%`, background: volume > 10 ? '#22c55e' : '#ef4444' }} />
+                </div>
+                {volume <= 5 && <p className="text-xs mb-2" style={{ color: '#ef4444' }}>⚠️ No mic signal detected — check Windows Sound Settings</p>}
+                <button onClick={stopRecording}
+                  className="px-8 py-3 rounded-2xl font-bold text-white"
+                  style={{ background: '#dc2626' }}>
+                  ⏹ Stop Recording
+                </button>
+              </div>
+            ) : (
+              <button onClick={startRecording}
+                className="w-full py-8 rounded-2xl font-bold text-white flex flex-col items-center gap-3"
+                style={{ background: 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+                <Mic className="w-10 h-10" />
+                <span className="text-lg">Tap to Record</span>
+              </button>
+            )}
+          </div>
+        )}
+        </>)}
+      </div>
+
+      <div className="rounded-2xl p-4" style={{ background: '#fef3c7', border: '1px solid #fde68a' }}>
+        <p className="text-xs font-semibold mb-1" style={{ color: '#92400e' }}>💡 Tips for a great Short</p>
+        <ul className="text-xs space-y-1" style={{ color: '#92400e' }}>
+          <li>• Keep it under {50} seconds</li>
+          <li>• Start with a strong hook — grab their attention right away!</li>
+          <li>• Be energetic and enthusiastic</li>
+          <li>• End with "Like and subscribe!"</li>
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+// ─── Images panel ─────────────────────────────────────────────────────────────
+function ImagesPanel({ projectId, images, onImagesChange }) {
+  const [uploading, setUploading] = useState(false);
+  const [pastingImage, setPastingImage] = useState(false);
+  const [error, setError] = useState(null);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef(null);
+  const [dragIdx, setDragIdx] = useState(null);
+  const [dragOverIdx, setDragOverIdx] = useState(null);
+
+  async function uploadFiles(files) {
+    if (!files.length) return;
+    setUploading(true); setError(null);
+    try {
+      const fd = new FormData();
+      for (const f of files) fd.append('images', f);
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/images`, fd);
+      onImagesChange([...images, ...data.assets]);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function handleDrop(e) {
+    e.preventDefault(); setDragOver(false);
+    const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('image/'));
+    uploadFiles(files);
+  }
+
+  async function pasteImage() {
+    setPastingImage(true);
+    setError(null);
+    try {
+      const clipboardItems = await navigator.clipboard.read();
+      let imageBlob = null;
+      for (const item of clipboardItems) {
+        const imageType = item.types.find(t => t.startsWith('image/'));
+        if (imageType) { imageBlob = await item.getType(imageType); break; }
+      }
+      if (!imageBlob) {
+        setError('No image found in clipboard. Copy an image first (right-click → Copy Image), then tap Paste Image.');
+        return;
+      }
+      const fd = new FormData();
+      fd.append('images', imageBlob, 'pasted-image.png');
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/images`, fd);
+      onImagesChange([...images, ...data.assets]);
+    } catch (err) {
+      if (err.name === 'NotAllowedError') {
+        setError('Clipboard access denied. Allow clipboard access in your browser settings and try again.');
+      } else {
+        setError('Paste failed: ' + err.message);
+      }
+    } finally {
+      setPastingImage(false);
+    }
+  }
+
+  async function deleteImage(asset) {
+    if (!confirm('Remove this image?')) return;
+    await api.delete(`/api/v2/movie-review/assets/${asset.id}`);
+    onImagesChange(images.filter(i => i.id !== asset.id));
+  }
+
+  // Drag-to-reorder
+  async function handleReorderDrop(targetIdx) {
+    if (dragIdx === null || dragIdx === targetIdx) return;
+    const newOrder = [...images];
+    const [moved] = newOrder.splice(dragIdx, 1);
+    newOrder.splice(targetIdx, 0, moved);
+    onImagesChange(newOrder);
+    setDragIdx(null); setDragOverIdx(null);
+    // Persist order
+    await api.put(`/api/v2/movie-review/projects/${projectId}/images/reorder`, { order: newOrder.map(i => i.id) });
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-2xl p-5" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <h2 className="font-bold text-base mb-1" style={{ color: 'var(--color-text-main)' }}>🖼️ Images</h2>
+        <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
+          Upload, paste from clipboard, or drag to add images. Drag thumbnails to reorder.
+        </p>
+
+        {error && <div className="p-3 mb-3 rounded-lg text-xs" style={{ background: '#fee2e2', color: '#dc2626' }}>{error}</div>}
+
+        {/* Drop zone */}
+        <div
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={handleDrop}
+          onClick={() => fileInputRef.current?.click()}
+          className="flex flex-col items-center justify-center cursor-pointer rounded-2xl transition-all"
+          style={{
+            border: `2px dashed ${dragOver ? '#e11d48' : 'var(--color-border)'}`,
+            background: dragOver ? 'rgba(225,29,72,0.05)' : 'var(--color-background)',
+            padding: '24px',
+            marginBottom: 12,
+          }}
+        >
+          {uploading ? (
+            <><Loader2 className="w-6 h-6 animate-spin mb-2" style={{ color: '#9333ea' }} /><p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Uploading…</p></>
+          ) : (
+            <><Image className="w-6 h-6 mb-2" style={{ color: 'var(--color-text-muted)' }} /><p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Drop images here or click to upload</p></>
+          )}
+          <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden"
+            onChange={e => uploadFiles(Array.from(e.target.files || []))} />
+        </div>
+
+        {/* Paste from clipboard */}
+        <button
+          onClick={pasteImage}
+          disabled={pastingImage || uploading}
+          className="w-full py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-all mb-4"
+          style={{
+            border: '1px solid #6366f1',
+            color: '#6366f1',
+            background: 'var(--color-background)',
+            opacity: (pastingImage || uploading) ? 0.6 : 1,
+            cursor: (pastingImage || uploading) ? 'wait' : 'pointer',
+          }}
+        >
+          {pastingImage
+            ? <><Loader2 className="w-4 h-4 animate-spin" /> Pasting…</>
+            : <>📋 Paste Image from Clipboard</>}
+        </button>
+
+        {/* Image grid */}
+        {images.length > 0 && (
+          <div className="grid grid-cols-3 gap-2">
+            {images.map((img, idx) => (
+              <div key={img.id}
+                draggable
+                onDragStart={() => setDragIdx(idx)}
+                onDragOver={e => { e.preventDefault(); setDragOverIdx(idx); }}
+                onDrop={() => handleReorderDrop(idx)}
+                onDragEnd={() => { setDragIdx(null); setDragOverIdx(null); }}
+                className="relative rounded-xl overflow-hidden cursor-grab"
+                style={{
+                  aspectRatio: '9/16',
+                  border: dragOverIdx === idx ? '2px solid #e11d48' : '2px solid transparent',
+                  opacity: dragIdx === idx ? 0.5 : 1,
+                }}
+              >
+                <img src={img.public_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div className="absolute top-1 right-1">
+                  <button onClick={() => deleteImage(img)}
+                    className="w-5 h-5 flex items-center justify-center rounded-full"
+                    style={{ background: 'rgba(0,0,0,0.7)', color: '#fff' }}>
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+                <div className="absolute bottom-1 left-1 w-5 h-5 flex items-center justify-center rounded-full"
+                  style={{ background: 'rgba(0,0,0,0.6)', color: '#fff', fontSize: 10, fontWeight: 700 }}>
+                  {idx + 1}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── TikTok-style Timeline editor ─────────────────────────────────────────────
+const TRACK_H = 52; // px height of each track row
+const MIN_CLIP_S = 0.5; // minimum clip width in seconds
+
+function TimelinePanel({ projectId, images, voiceAsset, timelineItems, onTimelineChange, maxDuration, onMaxDurationChange }) {
+  // audioDur = the actual recorded voice length (from the <audio> element metadata)
+  const [audioDur, setAudioDur] = useState(voiceAsset?.duration_seconds || null);
+  // dur = total video length — user can extend this beyond the audio to show extra images
+  const [dur, setDur] = useState(maxDuration || voiceAsset?.duration_seconds || 50);
+
+  const [items, setItems] = useState(timelineItems || []);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [selectedId, setSelectedId] = useState(null);
+
+  // Real waveform peaks decoded from the audio file
+  const [waveformPeaks, setWaveformPeaks] = useState(null);
+  useEffect(() => {
+    if (!voiceAsset?.public_url) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Add cache-busting param so the browser sends fresh CORS headers
+        const url = voiceAsset.public_url + (voiceAsset.public_url.includes('?') ? '&' : '?') + '_t=' + Date.now();
+        const res = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+        if (!res.ok) throw new Error(`fetch failed ${res.status}`);
+        const arrayBuffer = await res.arrayBuffer();
+        if (cancelled) return;
+        const actx = new (window.AudioContext || window.webkitAudioContext)();
+        const decoded = await actx.decodeAudioData(arrayBuffer);
+        actx.close();
+        if (cancelled) return;
+        // decoded.duration is the ground truth — always use it
+        if (decoded.duration && isFinite(decoded.duration)) {
+          const realDur = decoded.duration;
+          setAudioDur(realDur);
+          // Always correct the audio clip end to the real duration
+          setAudioClip(prev => ({ ...prev, end: prev.end > realDur ? realDur : prev.end }));
+          // Correct the video timeline length too if it was based on the bad server estimate
+          setDur(prev => prev > realDur + 1 ? realDur : prev);
+        }
+        const raw = decoded.getChannelData(0);
+        const BUCKETS = 600;
+        const blockSize = Math.max(1, Math.floor(raw.length / BUCKETS));
+        const peaks = new Float32Array(BUCKETS);
+        for (let b = 0; b < BUCKETS; b++) {
+          let max = 0;
+          const off = b * blockSize;
+          for (let s = 0; s < blockSize && off + s < raw.length; s++) {
+            const abs = Math.abs(raw[off + s]);
+            if (abs > max) max = abs;
+          }
+          peaks[b] = max;
+        }
+        setWaveformPeaks(peaks);
+      } catch (err) {
+        console.warn('[Waveform] decode failed:', err.message);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [voiceAsset?.public_url]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Playback state
+  const [playing, setPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [playStartKey, setPlayStartKey] = useState(0); // increments each time play starts, forces img remount
+  const audioRef = useRef(null);
+  const rafRef = useRef(null);
+
+  // Timeline scroll/zoom
+  const [zoom, setZoom] = useState(1);
+  const rulerRef = useRef(null);
+  const timelineRef = useRef(null);
+  const [timelineWidth, setTimelineWidth] = useState(600);
+
+  // Drag state for clips
+  const dragState = useRef(null);
+
+  useEffect(() => { setItems(timelineItems || []); }, [timelineItems]);
+
+  // When <audio> metadata loads
+  function onAudioMetadata() {
+    const realDur = audioRef.current?.duration;
+    if (!realDur || !isFinite(realDur)) return;
+    setAudioDur(realDur);
+    setAudioClip(prev => ({ ...prev, end: prev.end > realDur ? realDur : prev.end }));
+    setDur(prev => prev > realDur + 1 ? realDur : prev);
+  }
+
+  // Save the new video end time to the project
+  async function saveDuration(newDur) {
+    const clamped = Math.max(1, parseFloat(newDur.toFixed(1)));
+    setDur(clamped);
+    try {
+      await api.put(`/api/v2/movie-review/projects/${projectId}`, { max_duration_seconds: clamped });
+      if (onMaxDurationChange) onMaxDurationChange(clamped);
+    } catch (_) {}
+  }
+
+  useEffect(() => {
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width;
+      if (w) setTimelineWidth(w);
+    });
+    if (timelineRef.current) ro.observe(timelineRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // px per second based on zoom level
+  const pxPerSec = (timelineWidth / dur) * zoom;
+  const totalPx = dur * pxPerSec;
+
+  // ── Audio clip state ──────────────────────────────────────────────────────
+  const [audioClip, setAudioClip] = useState({ start: 0, end: voiceAsset?.duration_seconds || 50, fileStart: 0 });
+
+
+  // ── Playback — purely time-based RAF, audio just follows ─────────────────
+  const playingRef = useRef(false); // ref so RAF closure always sees latest value
+  const lastRafTs = useRef(null);
+
+  function stopPlayback() {
+    playingRef.current = false;
+    cancelAnimationFrame(rafRef.current);
+    setPlaying(false);
+    if (audioRef.current && !audioRef.current.paused) audioRef.current.pause();
+  }
+
+  function startPlayback(fromTime) {
+    const audio = audioRef.current;
+    playingRef.current = true;
+    setPlaying(true);
+    setPlayStartKey(k => k + 1); // force img remount so CSS animation restarts
+    lastRafTs.current = null;
+
+    // Only play audio if we're inside the audio clip window
+    if (audio && fromTime >= audioClip.start && fromTime < audioClip.end) {
+      const offsetInFile = audioClip.fileStart + (fromTime - audioClip.start);
+      audio.currentTime = Math.max(0, offsetInFile);
+      audio.play().catch(() => {});
+    }
+
+    let ct = fromTime;
+    const tick = (ts) => {
+      if (!playingRef.current) return;
+      if (lastRafTs.current !== null) {
+        const delta = (ts - lastRafTs.current) / 1000;
+        ct = ct + delta;
+        if (ct >= dur) {
+          ct = dur;
+          setCurrentTime(ct);
+          stopPlayback();
+          return;
+        }
+        setCurrentTime(ct);
+
+        // Sync audio: if we enter the audio window, start audio; if we leave, pause it
+        if (audio) {
+          const inAudioWindow = ct >= audioClip.start && ct < audioClip.end;
+          if (inAudioWindow && audio.paused) {
+            const offsetInFile = audioClip.fileStart + (ct - audioClip.start);
+            audio.currentTime = Math.max(0, offsetInFile);
+            audio.play().catch(() => {});
+          } else if (!inAudioWindow && !audio.paused) {
+            audio.pause();
+          }
+        }
+      }
+      lastRafTs.current = ts;
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+  }
+
+  async function togglePlay() {
+    if (playing) {
+      stopPlayback();
+    } else {
+      startPlayback(currentTime >= dur ? 0 : currentTime);
+    }
+  }
+
+  function seekTo(t) {
+    const clamped = Math.max(0, Math.min(dur, t));
+    setCurrentTime(clamped);
+    if (playing) stopPlayback();
+    // Sync audio position to new seek point
+    if (audioRef.current) {
+      const inWindow = clamped >= audioClip.start && clamped < audioClip.end;
+      if (inWindow) {
+        const offsetInFile = audioClip.fileStart + (clamped - audioClip.start);
+        const safeDur = audioDur || audioRef.current.duration || 9999;
+        audioRef.current.currentTime = Math.min(safeDur - 0.01, Math.max(0, offsetInFile));
+      } else if (!audioRef.current.paused) {
+        audioRef.current.pause();
+      }
+    }
+  }
+
+  // Click on ruler to seek
+  function handleRulerClick(e) {
+    const rect = rulerRef.current.getBoundingClientRect();
+    const scrollLeft = rulerRef.current.closest('[data-scroll]')?.scrollLeft || 0;
+    const x = e.clientX - rect.left + scrollLeft;
+    seekTo(x / pxPerSec);
+  }
+
+  // ── Snapping ──────────────────────────────────────────────────────────────
+  // Returns the nearest snap point within SNAP_THRESHOLD seconds, or the value itself
+  const SNAP_THRESHOLD_S = 0.4; // seconds within which an edge snaps
+
+  function snapValue(value, excludeId, currentItems) {
+    const snapPoints = [0, dur];
+    for (const item of currentItems) {
+      if (item.id === excludeId) continue;
+      snapPoints.push(item.start_time, item.end_time);
+    }
+    let best = value;
+    let bestDist = SNAP_THRESHOLD_S;
+    for (const p of snapPoints) {
+      const d = Math.abs(value - p);
+      if (d < bestDist) { bestDist = d; best = p; }
+    }
+    return best;
+  }
+
+  // ── All drag state in one ref so the window listener always sees latest ──
+  const pxPerSecRef = useRef(pxPerSec);
+  useEffect(() => { pxPerSecRef.current = pxPerSec; }, [pxPerSec]);
+  const durRef = useRef(dur);
+  useEffect(() => { durRef.current = dur; }, [dur]);
+  const audioDurRef = useRef(audioDur);
+  useEffect(() => { audioDurRef.current = audioDur; }, [audioDur]);
+
+  useEffect(() => {
+    const move = (e) => {
+      const ds = dragState.current;
+      if (!ds) return;
+
+      const pps = pxPerSecRef.current;
+      const totalDur = durRef.current;
+      const maxAudioDur = audioDurRef.current;
+      const dx = e.clientX - ds.startX;
+      const dSec = dx / pps;
+
+      if (ds.type === 'audio-left') {
+        // Left edge moves, right edge FIXED, fileStart tracks the trim
+        const newStart = Math.max(0, Math.min(ds.origEnd - MIN_CLIP_S, ds.origStart + dSec));
+        const newFileStart = Math.max(0, ds.origFileStart + (newStart - ds.origStart));
+        setAudioClip({ start: newStart, end: ds.origEnd, fileStart: newFileStart });
+        return;
+      }
+
+      if (ds.type === 'audio-right') {
+        // Right edge moves, left edge FIXED, fileStart unchanged
+        const maxEnd = maxAudioDur ? ds.origStart + (maxAudioDur - ds.origFileStart) : totalDur;
+        const newEnd = Math.max(ds.origStart + MIN_CLIP_S, Math.min(maxEnd, Math.min(totalDur, ds.origEnd + dSec)));
+        setAudioClip({ start: ds.origStart, end: newEnd, fileStart: ds.origFileStart });
+        return;
+      }
+
+      if (ds.type === 'audio-move') {
+        // Both edges move together, fileStart unchanged
+        const clipLen = ds.origEnd - ds.origStart;
+        const newStart = Math.max(0, Math.min(totalDur - clipLen, ds.origStart + dSec));
+        setAudioClip({ start: newStart, end: newStart + clipLen, fileStart: ds.origFileStart });
+        return;
+      }
+
+      // Image / text clips
+      setItems(prev => prev.map(item => {
+        if (item.id !== ds.itemId) return item;
+        const clipLen = ds.origEnd - ds.origStart;
+        let start_time, end_time;
+        const SNAP = 0.4;
+        const snapPoints = [0, totalDur, ...prev.filter(i => i.id !== ds.itemId).flatMap(i => [i.start_time, i.end_time])];
+        const snap = (v) => { let best = v, bd = SNAP; for (const p of snapPoints) { const d = Math.abs(v - p); if (d < bd) { bd = d; best = p; } } return best; };
+
+        if (ds.type === 'move') {
+          let rawStart = Math.max(0, Math.min(totalDur - clipLen, ds.origStart + dSec));
+          const ss = snap(rawStart), se = snap(rawStart + clipLen);
+          start_time = ss !== rawStart ? ss : se !== rawStart + clipLen ? se - clipLen : rawStart;
+          start_time = Math.max(0, Math.min(totalDur - clipLen, start_time));
+          end_time = start_time + clipLen;
+        } else if (ds.type === 'resize-left') {
+          start_time = Math.max(0, Math.min(ds.origEnd - MIN_CLIP_S, snap(ds.origStart + dSec)));
+          end_time = ds.origEnd;
+        } else {
+          end_time = Math.min(totalDur, Math.max(ds.origStart + MIN_CLIP_S, snap(ds.origEnd + dSec)));
+          start_time = ds.origStart;
+        }
+        return { ...item, start_time: parseFloat(start_time.toFixed(2)), end_time: parseFloat(end_time.toFixed(2)) };
+      }));
+    };
+
+    const up = () => { dragState.current = null; };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    return () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Clip drag start ───────────────────────────────────────────────────────
+  function onClipPointerDown(e, itemId, type) {
+    e.stopPropagation();
+    const item = items.find(i => i.id === itemId);
+    dragState.current = { type, itemId, startX: e.clientX, origStart: item.start_time, origEnd: item.end_time, origFileStart: 0 };
+  }
+
+
+  // ── Add / remove items ────────────────────────────────────────────────────
+  function addImageItem(asset) {
+    // Place at playhead if there's space, otherwise pack at end of last image clip
+    setItems(prev => {
+      const imgClips = prev.filter(i => i.type === 'IMAGE').sort((a, b) => a.start_time - b.start_time);
+      // Try playhead position first
+      let start = parseFloat(Math.min(currentTime, dur - MIN_CLIP_S).toFixed(2));
+      // Check if another clip already covers that position — if so, pack after the last clip
+      const overlaps = imgClips.some(c => c.start_time < start + 0.1 && c.end_time > start + 0.1);
+      if (overlaps || imgClips.length > 0) {
+        const lastEnd = imgClips.length ? imgClips[imgClips.length - 1].end_time : 0;
+        start = parseFloat(Math.min(lastEnd, dur - MIN_CLIP_S).toFixed(2));
+      }
+      const end = parseFloat(Math.min(start + 5, dur).toFixed(2));
+      return [...prev, {
+        id: `tmp-${Date.now()}`,
+        type: 'IMAGE',
+        asset_id: asset.id,
+        asset_url: asset.public_url,
+        start_time: start,
+        end_time: end,
+        motion_preset: 'ZOOM_IN',
+        position_preset: 'CENTER',
+        order_index: prev.length,
+      }];
+    });
+  }
+
+  function addTextItem() {
+    const start = parseFloat(Math.min(currentTime, dur - 3).toFixed(2));
+    const end = parseFloat(Math.min(start + 3, dur).toFixed(2));
+    setItems(prev => [...prev, {
+      id: `tmp-${Date.now()}`,
+      type: 'TEXT',
+      text_content: 'Enter text here',
+      start_time: start,
+      end_time: end,
+      position_preset: 'BOTTOM',
+      motion_preset: 'ZOOM_IN',
+      order_index: prev.length,
+    }]);
+  }
+
+  function updateItem(id, field, value) {
+    setItems(prev => prev.map(item => item.id === id ? { ...item, [field]: value } : item));
+  }
+
+  function removeItem(id) {
+    setItems(prev => prev.filter(item => item.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  }
+
+  function autoDistribute() {
+    if (!images.length) return;
+    const segLen = dur / images.length;
+    const textItems = items.filter(i => i.type === 'TEXT');
+    const newImageItems = images.map((img, i) => ({
+      id: `tmp-${Date.now()}-${i}`,
+      type: 'IMAGE',
+      asset_id: img.id,
+      asset_url: img.public_url,
+      start_time: parseFloat((i * segLen).toFixed(2)),
+      end_time: parseFloat(((i + 1) * segLen).toFixed(2)),
+      motion_preset: ['ZOOM_IN','ZOOM_OUT','PAN_LEFT','PAN_RIGHT'][i % 4],
+      position_preset: 'CENTER',
+      order_index: i,
+    }));
+    setItems([...newImageItems, ...textItems.map((t, i) => ({ ...t, order_index: newImageItems.length + i }))]);
+  }
+
+  async function saveTimeline() {
+    setSaving(true);
+    try {
+      const payload = items.map((item, i) => ({
+        id: item.id?.startsWith('tmp-') ? undefined : item.id,
+        type: item.type,
+        asset_id: item.asset_id || null,
+        text_content: item.text_content || null,
+        start_time: item.start_time,
+        end_time: item.end_time,
+        position_preset: item.position_preset || 'CENTER',
+        motion_preset: item.motion_preset || 'ZOOM_IN',
+        order_index: i,
+      }));
+      await api.put(`/api/v2/movie-review/projects/${projectId}/timeline`, { items: payload });
+      onTimelineChange(items);
+      setSaved(true); setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      alert('Save failed: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── Current frame preview ─────────────────────────────────────────────────
+  const activeImageItem = items
+    .filter(i => i.type === 'IMAGE' && i.start_time <= currentTime && i.end_time > currentTime)
+    .sort((a, b) => b.start_time - a.start_time)[0];
+
+  const selectedItem = items.find(i => i.id === selectedId);
+  const imageItems = items.filter(i => i.type === 'IMAGE');
+  const textItems = items.filter(i => i.type === 'TEXT');
+
+  // Ruler tick marks
+  const tickStep = dur <= 15 ? 1 : dur <= 60 ? 5 : 10;
+  const ticks = [];
+  for (let t = 0; t <= dur; t += tickStep) ticks.push(parseFloat(t.toFixed(1)));
+
+  const fmtT = s => {
+    const m = Math.floor(s / 60);
+    const sec = (s % 60).toFixed(1);
+    return m > 0 ? `${m}:${sec.padStart(4,'0')}` : `${parseFloat(sec).toFixed(1)}s`;
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Hidden audio for playback */}
+      {voiceAsset?.public_url && (
+        <audio ref={audioRef} src={voiceAsset.public_url} preload="auto" style={{ display: 'none' }}
+          onLoadedMetadata={onAudioMetadata} />
+      )}
+
+      {/* ── Preview monitor ── */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: '#0f0f0f', border: '1px solid var(--color-border)', aspectRatio: '9/16', maxHeight: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' }}>
+        {activeImageItem?.asset_url ? (() => {
+          const motion = activeImageItem.motion_preset || 'ZOOM_IN';
+          const clipDur = Math.max(0.1, activeImageItem.end_time - activeImageItem.start_time);
+          const elapsed = Math.min(Math.max(0, currentTime - activeImageItem.start_time), clipDur);
+          // p = progress 0→1 through the clip at current playhead
+          const p = elapsed / clipDur;
+          // remaining = real seconds left in this clip from the current playhead
+          const remaining = Math.max(0.05, clipDur - elapsed);
+
+          // Returns the CSS transform string at progress q (0=clip start, 1=clip end)
+          const transformAt = (q) => {
+            q = Math.min(1, Math.max(0, q));
+            if (motion === 'ZOOM_IN')   return `scale(${(1.0 + 0.3 * q).toFixed(4)})`;
+            if (motion === 'ZOOM_OUT')  return `scale(${(1.3 - 0.3 * q).toFixed(4)})`;
+            if (motion === 'PAN_LEFT')  return `scale(1.15) translateX(${(8 - 16 * q).toFixed(2)}%)`;
+            if (motion === 'PAN_RIGHT') return `scale(1.15) translateX(${(-8 + 16 * q).toFixed(2)}%)`;
+            return 'scale(1)';
+          };
+
+          // Unique keyframe name per play-start so it's always fresh
+          const kfName = `mr-clip-${playStartKey}`;
+          // from = where we are RIGHT NOW, to = where we end at clip finish
+          const kfFrom = transformAt(p);
+          const kfTo   = transformAt(1);
+
+          return (
+            <>
+              <style>{`
+                @keyframes ${kfName} {
+                  from { transform: ${kfFrom}; }
+                  to   { transform: ${kfTo}; }
+                }
+              `}</style>
+              <img
+                key={`${activeImageItem.id}-${motion}-${playStartKey}`}
+                src={activeImageItem.asset_url}
+                alt=""
+                style={{
+                  width: '100%', height: '100%', objectFit: 'cover',
+                  // When playing: run from current position to end, taking exactly the remaining seconds
+                  // When paused: static transform at current playhead position
+                  animation: playing
+                    ? `${kfName} ${remaining.toFixed(3)}s linear 0s 1 forwards`
+                    : 'none',
+                  transform: playing ? undefined : transformAt(p),
+                  transformOrigin: 'center center',
+                  willChange: 'transform',
+                }}
+              />
+            </>
+          );
+        })() : (
+          <div className="text-center" style={{ color: '#555' }}>
+            <Play className="w-10 h-10 mx-auto mb-2 opacity-30" />
+            <p className="text-xs opacity-50">No image at this point</p>
+          </div>
+        )}
+        {/* Text overlays */}
+        {textItems.filter(t => t.start_time <= currentTime && t.end_time > currentTime).map(t => (
+          <div key={t.id} className="absolute left-0 right-0 text-center px-3 py-1 text-white font-bold text-sm"
+            style={{
+              top: t.position_preset === 'TOP' ? 12
+                : t.position_preset === 'CENTER' ? '50%'
+                : undefined,
+              bottom: t.position_preset === 'BOTTOM' ? 12 : undefined,
+              transform: t.position_preset === 'CENTER' ? 'translateY(-50%)' : undefined,
+              textShadow: '0 1px 4px rgba(0,0,0,0.9)',
+              background: 'rgba(0,0,0,0.4)',
+            }}>
+            {t.text_content}
+          </div>
+        ))}
+        {/* Time badge */}
+        <div className="absolute top-2 right-2 text-xs px-2 py-0.5 rounded-full font-mono"
+          style={{ background: 'rgba(0,0,0,0.7)', color: '#fff' }}>
+          {fmtT(currentTime)} / {fmtT(dur)}
+        </div>
+      </div>
+
+      {/* ── Transport controls ── */}
+      <div className="flex items-center gap-3">
+        <button onClick={togglePlay}
+          className="w-9 h-9 flex-shrink-0 flex items-center justify-center rounded-full text-white"
+          style={{ background: 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+          {playing ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+        </button>
+        <input type="range" min={0} max={dur} step={0.1} value={currentTime}
+          onChange={e => seekTo(parseFloat(e.target.value))}
+          className="flex-1" style={{ accentColor: '#9333ea' }} />
+        <span className="text-xs font-mono flex-shrink-0" style={{ color: 'var(--color-text-muted)', minWidth: 40, textAlign: 'right' }}>
+          {fmtT(currentTime)}
+        </span>
+      </div>
+
+      {/* ── Image library shelf ── */}
+      {images.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold mb-2" style={{ color: 'var(--color-text-muted)' }}>
+            Tap image to add at playhead · {fmtT(currentTime)}
+          </p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {images.map(img => (
+              <button key={img.id} onClick={() => addImageItem(img)}
+                className="flex-shrink-0 rounded-lg overflow-hidden relative"
+                style={{ width: 44, height: 66, border: '2px solid var(--color-border)' }}>
+                <img src={img.public_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                <div className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity"
+                  style={{ background: 'rgba(147,51,234,0.5)' }}>
+                  <Plus className="w-5 h-5 text-white" />
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Controls row ── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={autoDistribute} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+          style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>
+          <Wand2 className="w-3 h-3" /> Auto-fill
+        </button>
+        <button onClick={addTextItem} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold"
+          style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>
+          <Type className="w-3 h-3" /> Add Text
+        </button>
+        <div className="flex items-center gap-1 ml-auto">
+          <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>Zoom</span>
+          <button onClick={() => setZoom(z => Math.max(0.5, parseFloat((z - 0.25).toFixed(2))))}
+            className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold"
+            style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>−</button>
+          <button onClick={() => setZoom(z => Math.min(8, parseFloat((z + 0.25).toFixed(2))))}
+            className="w-6 h-6 rounded flex items-center justify-center text-xs font-bold"
+            style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>+</button>
+        </div>
+      </div>
+
+      {/* ── Video end time control ── */}
+      <div className="flex items-center gap-2 px-3 py-2 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        <span className="text-xs font-semibold flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>🎬 Video ends at</span>
+        <input
+          type="number" min={1} max={300} step={0.5}
+          value={dur}
+          onChange={e => setDur(parseFloat(e.target.value) || dur)}
+          onBlur={e => saveDuration(parseFloat(e.target.value) || dur)}
+          className="w-16 px-2 py-0.5 rounded text-xs text-center font-mono"
+          style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+        />
+        <span className="text-xs" style={{ color: 'var(--color-text-muted)' }}>s</span>
+        {audioDur && (
+          <button onClick={() => saveDuration(audioDur)} className="text-xs px-2 py-0.5 rounded-lg ml-1"
+            style={{ background: 'rgba(37,99,235,0.15)', color: '#60a5fa', border: '1px solid rgba(37,99,235,0.3)' }}>
+            Match audio ({audioDur.toFixed(1)}s)
+          </button>
+        )}
+        <button onClick={() => saveDuration(Math.max(dur, ...(items.map(i => i.end_time)), audioDur || 0))} className="text-xs px-2 py-0.5 rounded-lg"
+          style={{ background: 'rgba(147,51,234,0.15)', color: '#c084fc', border: '1px solid rgba(147,51,234,0.3)' }}>
+          Fit clips
+        </button>
+      </div>
+
+      {/* ── TikTok-style timeline ── */}
+      <div className="rounded-2xl overflow-hidden" style={{ background: '#111', border: '1px solid var(--color-border)' }}>
+        {/* Scrollable track area */}
+        <div ref={timelineRef} data-scroll style={{ overflowX: 'auto', overflowY: 'hidden', cursor: 'default' }}>
+
+          <div style={{ width: Math.max(totalPx + 32, timelineWidth), minWidth: '100%', position: 'relative' }}>
+
+            {/* ── Time ruler ── */}
+            <div ref={rulerRef} onClick={handleRulerClick}
+              style={{ height: 24, position: 'relative', background: '#1a1a1a', cursor: 'pointer', userSelect: 'none', borderBottom: '1px solid #333' }}>
+              {ticks.map(t => (
+                <div key={t} style={{ position: 'absolute', left: t * pxPerSec, top: 0, height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+                  <div style={{ width: 1, height: t % (tickStep * 2) === 0 ? 12 : 6, background: '#555', marginTop: 0 }} />
+                  {t % (tickStep * 2) === 0 && (
+                    <span style={{ fontSize: 9, color: '#888', marginLeft: 3, lineHeight: 1 }}>{fmtT(t)}</span>
+                  )}
+                </div>
+              ))}
+              {/* Playhead line on ruler */}
+              <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none' }} />
+            </div>
+
+            {/* ── Track rows ── */}
+
+            {/* AUDIO track */}
+            <div style={{ display: 'flex', alignItems: 'center', height: TRACK_H, borderBottom: '1px solid #222', position: 'relative' }}>
+              <div style={{ width: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#888', fontWeight: 700, background: '#0d0d0d', height: '100%', borderRight: '1px solid #222' }}>
+                🎙<br /><span style={{ fontSize: 8 }}>AUDIO</span>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+                {voiceAsset?.public_url ? (() => {
+                  const clipW = Math.max((audioClip.end - audioClip.start) * pxPerSec, 24);
+                  const clipL = audioClip.start * pxPerSec;
+                  return (
+                  <div style={{ position: 'absolute', left: clipL, top: 6, width: clipW, height: TRACK_H - 12, userSelect: 'none', boxSizing: 'border-box' }}>
+                    {/* Left resize handle — rendered FIRST so it sits above the body in z-order */}
+                    <div
+                      onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-left', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
+                      style={{ position: 'absolute', left: 0, top: 0, width: 14, height: '100%', cursor: 'ew-resize', zIndex: 10, borderRadius: '6px 0 0 6px', background: 'rgba(96,165,250,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ width: 2, height: '50%', background: '#fff', borderRadius: 2, opacity: 0.8 }} />
+                    </div>
+                    {/* Clip body — move drag, between the two handles */}
+                    <div
+                      onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-move', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
+                      style={{ position: 'absolute', left: 14, right: 14, top: 0, bottom: 0, cursor: 'grab', borderRadius: 4, background: 'linear-gradient(90deg,#1e3a5f,#2563eb)', overflow: 'hidden', border: '2px solid rgba(96,165,250,0.5)', boxSizing: 'border-box' }}>
+                      {/* Real waveform SVG */}
+                      {waveformPeaks ? (() => {
+                        const svgW = Math.max(clipW - 28, 4);
+                        const svgH = TRACK_H - 12;
+                        const mid = svgH / 2;
+                        // Work out which slice of the 600 buckets to show
+                        const totalBuckets = waveformPeaks.length;
+                        const realDur = audioDur && isFinite(audioDur) && audioDur > 0 ? audioDur : (audioClip.end - audioClip.start);
+                        const fileStart = audioClip.fileStart || 0;
+                        const clipDur = audioClip.end - audioClip.start;
+                        const s0 = Math.max(0, Math.floor((fileStart / realDur) * totalBuckets));
+                        const s1 = Math.min(totalBuckets, Math.ceil(((fileStart + clipDur) / realDur) * totalBuckets));
+                        const slice = Array.from(waveformPeaks.slice(s0, Math.max(s0 + 1, s1)));
+                        const n = slice.length;
+                        // Draw one vertical line per display column (max 300)
+                        const COLS = Math.min(n, Math.floor(svgW));
+                        const lines = [];
+                        for (let c = 0; c < COLS; c++) {
+                          const bi = Math.floor((c / COLS) * n);
+                          const amp = slice[bi] || 0;
+                          const h = Math.max(1, amp * mid * 0.95);
+                          const x = ((c + 0.5) / COLS) * svgW;
+                          lines.push(<line key={c} x1={x} y1={mid - h} x2={x} y2={mid + h} stroke="rgba(147,197,253,0.9)" strokeWidth="1.5" strokeLinecap="round" />);
+                        }
+                        return (
+                          <svg width={svgW} height={svgH} style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}>
+                            {lines}
+                          </svg>
+                        );
+                      })() : (
+                        // Placeholder while decoding
+                        <div style={{ display: 'flex', gap: 1, alignItems: 'center', height: '100%', overflow: 'hidden', paddingInline: 4 }}>
+                          {Array.from({ length: 40 }).map((_, i) => (
+                            <div key={i} style={{ width: 2, borderRadius: 1, flexShrink: 0, height: `${20 + Math.sin(i * 0.7) * 14}%`, background: 'rgba(147,197,253,0.4)' }} />
+                          ))}
+                        </div>
+                      )}
+                      <span style={{ position: 'absolute', left: 6, bottom: 3, color: '#93c5fd', fontSize: 9, fontWeight: 700, pointerEvents: 'none', whiteSpace: 'nowrap', opacity: 0.8 }}>
+                        🎙 {(audioClip.end - audioClip.start).toFixed(1)}s
+                      </span>
+                    </div>
+                    {/* Right resize handle */}
+                    <div
+                      onPointerDown={e => { e.stopPropagation(); dragState.current = { type: 'audio-right', startX: e.clientX, origStart: audioClip.start, origEnd: audioClip.end, origFileStart: audioClip.fileStart || 0 }; }}
+                      style={{ position: 'absolute', right: 0, top: 0, width: 14, height: '100%', cursor: 'ew-resize', zIndex: 10, borderRadius: '0 6px 6px 0', background: 'rgba(96,165,250,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <div style={{ width: 2, height: '50%', background: '#fff', borderRadius: 2, opacity: 0.8 }} />
+                    </div>
+                  </div>
+                  );
+                })() : (
+                  <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#444', fontSize: 11 }}>
+                    No voice recorded
+                  </div>
+                )}
+                {/* Playhead */}
+                <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none', zIndex: 10 }} />
+              </div>
+            </div>
+
+            {/* VIDEO track */}
+            <div style={{ display: 'flex', alignItems: 'center', height: TRACK_H, borderBottom: '1px solid #222', position: 'relative' }}>
+              <div style={{ width: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#888', fontWeight: 700, background: '#0d0d0d', height: '100%', borderRight: '1px solid #222' }}>
+                🖼️<br /><span style={{ fontSize: 8 }}>VIDEO</span>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+                {imageItems.map(item => {
+                  const left = item.start_time * pxPerSec;
+                  const width = Math.max((item.end_time - item.start_time) * pxPerSec, 24);
+                  const isSelected = selectedId === item.id;
+                  return (
+                    <div key={item.id}
+                      style={{ position: 'absolute', left, top: 6, width, height: TRACK_H - 12, borderRadius: 6, overflow: 'hidden', cursor: 'grab', border: isSelected ? '2px solid #e11d48' : '2px solid rgba(255,255,255,0.15)', boxSizing: 'border-box', userSelect: 'none' }}
+                      onClick={e => { e.stopPropagation(); setSelectedId(isSelected ? null : item.id); }}
+                      onPointerDown={e => onClipPointerDown(e, item.id, 'move')}>
+                      {/* Thumbnail */}
+                      {item.asset_url && (
+                        <img src={item.asset_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
+                      )}
+                      {/* Delete button */}
+                      {isSelected && (
+                        <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); removeItem(item.id); }}
+                          style={{ position: 'absolute', top: 2, right: 2, width: 16, height: 16, borderRadius: '50%', background: '#e11d48', color: '#fff', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 5 }}>
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      )}
+                      {/* Left resize handle */}
+                      <div
+                        onPointerDown={e => onClipPointerDown(e, item.id, 'resize-left')}
+                        style={{ position: 'absolute', left: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(255,255,255,0.25)', zIndex: 4 }} />
+                      {/* Right resize handle */}
+                      <div
+                        onPointerDown={e => onClipPointerDown(e, item.id, 'resize-right')}
+                        style={{ position: 'absolute', right: 0, top: 0, width: 10, height: '100%', cursor: 'ew-resize', background: 'rgba(255,255,255,0.25)', zIndex: 4 }} />
+                    </div>
+                  );
+                })}
+                {imageItems.length === 0 && (
+                  <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#444', fontSize: 11 }}>
+                    Tap an image above to place it
+                  </div>
+                )}
+                {/* Playhead */}
+                <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none', zIndex: 10 }} />
+              </div>
+            </div>
+
+            {/* TEXT track */}
+            <div style={{ display: 'flex', alignItems: 'center', height: TRACK_H, position: 'relative' }}>
+              <div style={{ width: 52, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#888', fontWeight: 700, background: '#0d0d0d', height: '100%', borderRight: '1px solid #222' }}>
+                📝<br /><span style={{ fontSize: 8 }}>TEXT</span>
+              </div>
+              <div style={{ flex: 1, position: 'relative', height: '100%' }}>
+                {textItems.map(item => {
+                  const left = item.start_time * pxPerSec;
+                  const width = Math.max((item.end_time - item.start_time) * pxPerSec, 32);
+                  const isSelected = selectedId === item.id;
+                  return (
+                    <div key={item.id}
+                      style={{ position: 'absolute', left, top: 6, width, height: TRACK_H - 12, borderRadius: 6, overflow: 'hidden', cursor: 'grab', border: isSelected ? '2px solid #c084fc' : '2px solid rgba(192,132,252,0.4)', background: '#2d1b4e', boxSizing: 'border-box', userSelect: 'none', display: 'flex', alignItems: 'center', paddingInline: 10 }}
+                      onClick={e => { e.stopPropagation(); setSelectedId(isSelected ? null : item.id); }}
+                      onPointerDown={e => onClipPointerDown(e, item.id, 'move')}>
+                      <span style={{ color: '#c084fc', fontSize: 10, fontWeight: 700, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis', pointerEvents: 'none', flex: 1 }}>
+                        {item.text_content || 'Text'}
+                      </span>
+                      {isSelected && (
+                        <button onPointerDown={e => e.stopPropagation()} onClick={e => { e.stopPropagation(); removeItem(item.id); }}
+                          style={{ width: 14, height: 14, borderRadius: '50%', background: '#e11d48', color: '#fff', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, zIndex: 5 }}>
+                          <X className="w-2 h-2" />
+                        </button>
+                      )}
+                      <div onPointerDown={e => onClipPointerDown(e, item.id, 'resize-left')}
+                        style={{ position: 'absolute', left: 0, top: 0, width: 8, height: '100%', cursor: 'ew-resize', zIndex: 4 }} />
+                      <div onPointerDown={e => onClipPointerDown(e, item.id, 'resize-right')}
+                        style={{ position: 'absolute', right: 0, top: 0, width: 8, height: '100%', cursor: 'ew-resize', zIndex: 4 }} />
+                    </div>
+                  );
+                })}
+                {textItems.length === 0 && (
+                  <div style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', color: '#444', fontSize: 11 }}>
+                    Use "Add Text" to place captions
+                  </div>
+                )}
+                {/* Playhead */}
+                <div style={{ position: 'absolute', top: 0, left: currentTime * pxPerSec, width: 2, height: '100%', background: '#e11d48', pointerEvents: 'none', zIndex: 10 }} />
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      {/* ── Selected clip inspector ── */}
+      {selectedItem && (
+        <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-bold" style={{ color: 'var(--color-text-main)' }}>
+              {selectedItem.type === 'IMAGE' ? '🖼️ Image clip' : '📝 Text clip'} — {fmtT(selectedItem.start_time)} → {fmtT(selectedItem.end_time)}
+            </span>
+            <button onClick={() => removeItem(selectedItem.id)} className="text-xs px-2 py-1 rounded-lg"
+              style={{ background: '#fee2e2', color: '#dc2626' }}>
+              Remove
+            </button>
+          </div>
+
+          {selectedItem.type === 'TEXT' && (
+            <input value={selectedItem.text_content || ''} onChange={e => updateItem(selectedItem.id, 'text_content', e.target.value)}
+              placeholder="Caption text…"
+              className="w-full px-3 py-2 rounded-xl text-sm mb-3"
+              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }} />
+          )}
+
+          <div className="flex gap-3 flex-wrap">
+            {selectedItem.type === 'IMAGE' && (
+              <div className="flex-1 min-w-0">
+                <label className="text-xs mb-1 block" style={{ color: 'var(--color-text-muted)' }}>Motion</label>
+                <select value={selectedItem.motion_preset} onChange={e => updateItem(selectedItem.id, 'motion_preset', e.target.value)}
+                  className="w-full text-xs rounded-lg px-2 py-1.5"
+                  style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}>
+                  {MOTION_PRESETS.map(m => <option key={m} value={m}>{m.replace(/_/g,' ')}</option>)}
+                </select>
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <label className="text-xs mb-1 block" style={{ color: 'var(--color-text-muted)' }}>Position</label>
+              <select value={selectedItem.position_preset} onChange={e => updateItem(selectedItem.id, 'position_preset', e.target.value)}
+                className="w-full text-xs rounded-lg px-2 py-1.5"
+                style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}>
+                {POSITION_PRESETS.map(p => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <button onClick={saveTimeline} disabled={saving}
+        className="w-full py-2.5 rounded-xl font-bold text-sm text-white"
+        style={{ background: saved ? '#059669' : saving ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+        {saved ? '✅ Saved!' : saving ? 'Saving…' : '💾 Save Timeline'}
+      </button>
+    </div>
+  );
+}
+
+// ─── AI panel ─────────────────────────────────────────────────────────────────
+function AIPanel({ projectId, project, onProjectUpdate, musicTracks, onMusicSelect }) {
+  const [metaLoading, setMetaLoading] = useState(false);
+  const [metaSaved, setMetaSaved] = useState(false);
+  const [savingMeta, setSavingMeta] = useState(false);
+  const [activeTab, setActiveTab] = useState('metadata');
+
+  async function generateMetadata() {
+    setMetaLoading(true); setMetaSaved(false);
+    try {
+      const { data } = await api.post(`/api/v2/movie-review/projects/${projectId}/ai/metadata`);
+      onProjectUpdate(data.result);
+      setMetaSaved(true); setTimeout(() => setMetaSaved(false), 3000);
+    } catch (err) {
+      alert('AI error: ' + err.message);
+    } finally {
+      setMetaLoading(false);
+    }
+  }
+
+  async function saveMetadata() {
+    setSavingMeta(true);
+    try {
+      await api.put(`/api/v2/movie-review/projects/${projectId}`, {
+        hook_text: project?.hook_text || null,
+        tagline_text: project?.tagline_text || null,
+        yt_title: project?.yt_title || null,
+        yt_description: project?.yt_description || null,
+        yt_hashtags: project?.yt_hashtags || [],
+      });
+      setMetaSaved(true);
+      setTimeout(() => setMetaSaved(false), 2500);
+    } catch (err) {
+      alert('Save error: ' + err.message);
+    } finally {
+      setSavingMeta(false);
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      {/* Sub-tabs */}
+      <div className="flex gap-1 p-1 rounded-xl" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+        {[{ key:'metadata', label:'🤖 AI Metadata' }, { key:'music', label:'🎵 Music' }].map(t => (
+          <button key={t.key} onClick={() => setActiveTab(t.key)}
+            className="flex-1 py-1.5 rounded-lg text-xs font-semibold transition-all"
+            style={{
+              background: activeTab === t.key ? 'linear-gradient(135deg,#e11d48,#9333ea)' : 'transparent',
+              color: activeTab === t.key ? '#fff' : 'var(--color-text-muted)',
+            }}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Metadata tab */}
+      {activeTab === 'metadata' && (
+        <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+          <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
+            AI will generate a title, description, hook, and hashtags for your YouTube Short based on your movie and notes.
+          </p>
+          <button onClick={generateMetadata} disabled={metaLoading}
+            className="w-full py-3 rounded-xl font-bold text-white flex items-center justify-center gap-2 mb-4"
+            style={{ background: metaSaved ? '#059669' : metaLoading ? '#9ca3af' : 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+            {metaLoading ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating…</> : metaSaved ? '✅ Generated & Saved!' : <><Sparkles className="w-4 h-4" /> Generate AI Metadata</>}
+          </button>
+
+          {/* Editable metadata fields — shown once generated (or pre-existing) */}
+          {(project?.hook_text || project?.yt_title || project?.yt_description) && (
+            <div className="space-y-3 text-sm">
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Hook</label>
+                <input
+                  value={project?.hook_text || ''}
+                  onChange={e => onProjectUpdate({ ...project, hook_text: e.target.value })}
+                  placeholder="Opening hook for your Short…"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Tagline</label>
+                <input
+                  value={project?.tagline_text || ''}
+                  onChange={e => onProjectUpdate({ ...project, tagline_text: e.target.value })}
+                  placeholder="Short catchy tagline…"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>YouTube Title</label>
+                <input
+                  value={project?.yt_title || ''}
+                  onChange={e => onProjectUpdate({ ...project, yt_title: e.target.value })}
+                  maxLength={100}
+                  placeholder="YouTube video title…"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Description</label>
+                <textarea
+                  rows={3}
+                  value={project?.yt_description || ''}
+                  onChange={e => onProjectUpdate({ ...project, yt_description: e.target.value })}
+                  placeholder="YouTube description…"
+                  className="w-full px-3 py-2 rounded-xl text-sm resize-none"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold mb-1" style={{ color: 'var(--color-text-muted)' }}>Hashtags (comma separated)</label>
+                <input
+                  value={(project?.yt_hashtags || []).join(', ')}
+                  onChange={e => onProjectUpdate({ ...project, yt_hashtags: e.target.value.split(',').map(t => t.trim()).filter(Boolean) })}
+                  placeholder="MovieReview, Film, Shorts"
+                  className="w-full px-3 py-2 rounded-xl text-sm"
+                  style={{ background: 'var(--color-bg)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)', outline: 'none' }}
+                />
+                {project?.yt_hashtags?.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1.5">
+                    {project.yt_hashtags.map((tag, i) => (
+                      <span key={i} className="px-2 py-0.5 rounded-full text-xs"
+                        style={{ background: 'rgba(147,51,234,0.1)', color: '#9333ea' }}>
+                        #{tag}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <button
+                onClick={saveMetadata}
+                disabled={savingMeta}
+                className="w-full py-2.5 rounded-xl font-bold text-white text-sm flex items-center justify-center gap-2"
+                style={{ background: metaSaved ? '#059669' : savingMeta ? '#9ca3af' : '#1d4ed8' }}>
+                {savingMeta ? <><Loader2 className="w-4 h-4 animate-spin" /> Saving…</> : metaSaved ? '✅ Saved!' : '💾 Save Changes'}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Music tab */}
+      {activeTab === 'music' && (
+        <div className="rounded-2xl p-4" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+          <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
+            Pick background music — it will play quietly behind your voice.
+          </p>
+          {musicTracks.length === 0 ? (
+            <div className="text-center py-6" style={{ color: 'var(--color-text-muted)', fontSize: 13 }}>
+              No music available yet. Upload tracks in Settings or via Orbix Network.
+            </div>
+          ) : (
+            <div className="space-y-2">
+              <button onClick={() => onMusicSelect(null)}
+                className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-left"
+                style={{ background: !project?.music_asset_id ? 'rgba(225,29,72,0.1)' : 'var(--color-background)', border: '1px solid var(--color-border)' }}>
+                <span>🚫</span>
+                <span style={{ color: 'var(--color-text-main)' }}>No music</span>
+              </button>
+              {musicTracks.map(track => (
+                <button key={track.id} onClick={() => onMusicSelect(track)}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm text-left"
+                  style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)' }}>
+                  <Music className="w-4 h-4 flex-shrink-0" style={{ color: '#9333ea' }} />
+                  <span className="truncate flex-1" style={{ color: 'var(--color-text-main)' }}>{track.name}</span>
+                  <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: track.source === 'own' ? '#dbeafe' : '#f3f4f6', color: track.source === 'own' ? '#2563eb' : '#6b7280' }}>
+                    {track.source === 'own' ? 'Mine' : 'Orbix'}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Main editor ──────────────────────────────────────────────────────────────
+export default function MovieReviewEditor() {
+  const { id: projectId } = useParams();
+  const router = useRouter();
+  const [project, setProject] = useState(null);
+  const [images, setImages] = useState([]);
+  const [timeline, setTimeline] = useState([]);
+  const [voiceAsset, setVoiceAsset] = useState(null);
+  const [musicTracks, setMusicTracks] = useState([]);
+  const [step, setStep] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => { loadProject(); loadMusic(); }, [projectId]);
+
+  async function loadProject() {
+    try {
+      const { data } = await api.get(`/api/v2/movie-review/projects/${projectId}`);
+      const p = data.project;
+      setProject(p);
+      const imgs = (p.assets || []).filter(a => a.type === 'IMAGE');
+      const voice = p.voice_asset_id ? (p.assets || []).find(a => a.id === p.voice_asset_id) : null;
+      setImages(imgs);
+      setVoiceAsset(voice || null);
+      // Enrich timeline with asset URLs
+      const tl = (p.timeline || []).map(item => {
+        if (item.type === 'IMAGE' && item.asset_id) {
+          const asset = (p.assets || []).find(a => a.id === item.asset_id);
+          return { ...item, asset_url: asset?.public_url };
+        }
+        return item;
+      });
+      setTimeline(tl);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadMusic() {
+    try {
+      const { data } = await api.get('/api/v2/movie-review/music');
+      setMusicTracks(data.tracks || []);
+    } catch (_) {}
+  }
+
+  async function handleMusicSelect(track) {
+    try {
+      // For now store music info in project notes or a separate mechanism
+      // We'll store the music track as an asset and link it
+      if (track) {
+        // Check if this track is already an asset in this project
+        const existing = (project?.assets || []).find(a => a.type === 'AUDIO_MUSIC' && a.storage_path === track.path);
+        let musicAssetId = existing?.id;
+        localStorage.setItem(`mr-music-${projectId}`, JSON.stringify({ ...track }));
+        setProject(p => ({ ...p, _selectedMusic: track }));
+      } else {
+        localStorage.removeItem(`mr-music-${projectId}`);
+        setProject(p => ({ ...p, _selectedMusic: null, music_asset_id: null }));
+        await api.put(`/api/v2/movie-review/projects/${projectId}`, { music_asset_id: null });
+      }
+    } catch (err) {
+      console.error('Music select error:', err.message);
+    }
+  }
+
+  function handleVoiceChange(asset) {
+    setVoiceAsset(asset);
+    setProject(p => ({ ...p, voice_asset_id: asset?.id || null }));
+  }
+
+  function handleProjectUpdate(updates) {
+    setProject(p => ({ ...p, ...updates }));
+  }
+
+  async function goToRender() {
+    if (!voiceAsset) { alert('Record your voice first!'); return; }
+    router.push(`/dashboard/v2/modules/movie-review/projects/${projectId}/render`);
+  }
+
+  if (loading) {
+    return (
+      <AuthGuard><V2AppShell>
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="w-8 h-8 animate-spin" style={{ color: '#9333ea' }} />
+        </div>
+      </V2AppShell></AuthGuard>
+    );
+  }
+
+  if (error) {
+    return (
+      <AuthGuard><V2AppShell>
+        <div className="p-6 text-center" style={{ color: '#dc2626' }}>{error}</div>
+      </V2AppShell></AuthGuard>
+    );
+  }
+
+  return (
+    <AuthGuard>
+      <V2AppShell>
+        <div style={{ maxWidth: 720, margin: '0 auto', padding: '16px' }}>
+          {/* Header */}
+          <div className="flex items-center gap-2 mb-3 flex-wrap">
+            <button onClick={() => router.push('/dashboard/v2/modules/movie-review/dashboard')}
+              className="flex items-center gap-1 text-sm flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
+              <ChevronLeft className="w-4 h-4" />
+            </button>
+            <div className="flex-1 min-w-0">
+              <h1 className="font-bold text-base truncate" style={{ color: 'var(--color-text-main)' }}>
+                🎬 {project?.movie_title}
+              </h1>
+              <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
+                {project?.content_type === 'review' ? '🎬 Review' : project?.content_type === 'facts' ? '🤓 Facts' : project?.content_type}
+              </p>
+            </div>
+            <button
+              onClick={goToRender}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold text-white text-sm flex-shrink-0"
+              style={{ background: voiceAsset ? 'linear-gradient(135deg,#e11d48,#9333ea)' : '#9ca3af' }}
+            >
+              🎬 Render
+            </button>
+          </div>
+
+          {/* Step bar */}
+          <StepBar step={step} steps={STEPS} onStep={setStep} />
+
+          {/* Step content */}
+          {step === 0 && (
+            <FactCheckPanel
+              projectId={projectId}
+              project={project}
+              onProjectUpdate={handleProjectUpdate}
+            />
+          )}
+          {step === 1 && (
+            <VoicePanel
+              projectId={projectId}
+              voiceAsset={voiceAsset}
+              onVoiceChange={handleVoiceChange}
+              scriptText={project?.script_text || ''}
+            />
+          )}
+          {step === 2 && (
+            <ImagesPanel
+              projectId={projectId}
+              images={images}
+              onImagesChange={setImages}
+            />
+          )}
+          {step === 3 && (
+            <TimelinePanel
+              projectId={projectId}
+              images={images}
+              voiceAsset={voiceAsset}
+              timelineItems={timeline}
+              onTimelineChange={tl => setTimeline(tl)}
+              maxDuration={project?.max_duration_seconds || null}
+              onMaxDurationChange={d => setProject(p => ({ ...p, max_duration_seconds: d }))}
+            />
+          )}
+          {step === 4 && (
+            <AIPanel
+              projectId={projectId}
+              project={project}
+              onProjectUpdate={handleProjectUpdate}
+              musicTracks={musicTracks}
+              onMusicSelect={handleMusicSelect}
+            />
+          )}
+
+          {/* Nav arrows */}
+          <div className="flex justify-between mt-4">
+            <button onClick={() => setStep(s => Math.max(0, s - 1))} disabled={step === 0}
+              className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm"
+              style={{ color: step === 0 ? 'var(--color-text-muted)' : 'var(--color-text-main)', background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}>
+              <ChevronLeft className="w-4 h-4" /> Back
+            </button>
+            {step < STEPS.length - 1 ? (
+              <button onClick={() => setStep(s => Math.min(STEPS.length - 1, s + 1))}
+                className="flex items-center gap-1 px-3 py-2 rounded-lg text-sm font-semibold text-white"
+                style={{ background: 'linear-gradient(135deg,#e11d48,#9333ea)' }}>
+                Next <ChevronRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <button onClick={goToRender}
+                className="flex items-center gap-1 px-4 py-2 rounded-lg text-sm font-bold text-white"
+                style={{ background: voiceAsset ? 'linear-gradient(135deg,#e11d48,#9333ea)' : '#9ca3af' }}>
+                🎬 Go to Render
+              </button>
+            )}
+          </div>
+        </div>
+      </V2AppShell>
+    </AuthGuard>
+  );
+}

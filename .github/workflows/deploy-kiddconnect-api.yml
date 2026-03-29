@@ -1,0 +1,52 @@
+# KiddConnect API ONLY — deploys kiddconnect-api/ to its own Railway project.
+# Secrets (GitHub → Settings → Secrets and variables → Actions):
+#   RAILWAY_TOKEN_KIDDCONNECT  — Railway token (create a project token for the KiddConnect API project only)
+#   RAILWAY_PROJECT_ID_KIDDCONNECT — Project ID (Settings → General → Project ID, starts with prj_)
+# Optional:
+#   RAILWAY_ENVIRONMENT_ID_KIDDCONNECT — if not production default
+#
+# Railway service name must match RAILWAY_SERVICE_KIDDCONNECT below (repo variable overrides default).
+
+name: Deploy KiddConnect API to Railway
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'kiddconnect-api/**'
+      - '.github/workflows/deploy-kiddconnect-api.yml'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    name: KiddConnect API → Railway
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: kiddconnect-api
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Railway (KiddConnect project only)
+        run: railway up --service "${SERVICE_NAME:-kiddconnect-api}"
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN_KIDDCONNECT }}
+          RAILWAY_PROJECT_ID: ${{ secrets.RAILWAY_PROJECT_ID_KIDDCONNECT }}
+          RAILWAY_ENVIRONMENT_ID: ${{ secrets.RAILWAY_ENVIRONMENT_ID_KIDDCONNECT }}
+          SERVICE_NAME: ${{ vars.RAILWAY_SERVICE_KIDDCONNECT }}
