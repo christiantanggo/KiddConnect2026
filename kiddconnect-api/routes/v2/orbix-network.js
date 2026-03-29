@@ -5,6 +5,7 @@ import { requireBusinessContext } from '../../middleware/v2/requireBusinessConte
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { google } from 'googleapis';
+import { withYouTubeLoginHint, YOUTUBE_OAUTH_PROMPT } from '../../utils/google-oauth-url-options.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024 } }); // 20MB for images/audio
@@ -3252,12 +3253,17 @@ router.get('/youtube/auth-url', async (req, res) => {
     if (frontendOrigin && (frontendOrigin.startsWith('https://') || frontendOrigin.startsWith('http://'))) {
       state = `${state}|${frontendOrigin}`;
     }
-    const authUrl = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: scopes,
-      prompt: 'consent',
-      state
-    });
+    const authUrl = oauth2Client.generateAuthUrl(
+      withYouTubeLoginHint(
+        {
+          access_type: 'offline',
+          scope: scopes,
+          prompt: YOUTUBE_OAUTH_PROMPT,
+          state,
+        },
+        req.query
+      )
+    );
 
     console.log('[Orbix auth-url] redirect_uri=', redirectUri, 'orbixChannelId=', orbixChannelId || 'none', 'usage=', usage, 'customOAuth=', !!hasCustomClient);
     res.json({ configured: true, auth_url: authUrl, redirect_uri: redirectUri });

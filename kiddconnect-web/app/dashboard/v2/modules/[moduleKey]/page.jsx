@@ -361,7 +361,17 @@ export default function ModuleDetailPage() {
             {module.subscribed ? (
               <>
                 <Link
-                  href={`/dashboard/v2/settings/modules/${moduleKey}`}
+                  href={
+                    moduleKey === 'orbix-network'
+                      ? '/dashboard/v2/modules/orbix-network/settings'
+                      : moduleKey === 'kidquiz'
+                        ? '/dashboard/v2/modules/kidquiz/settings'
+                        : moduleKey === 'movie-review'
+                          ? '/dashboard/v2/modules/movie-review/settings'
+                          : moduleKey === 'dad-joke-studio'
+                            ? '/dashboard/v2/modules/dad-joke-studio/dashboard'
+                            : '/dashboard/v2/settings/modules'
+                  }
                   className="px-6 py-3 text-white font-medium transition-colors"
                   style={{
                     backgroundColor: 'var(--color-accent)',

@@ -31,9 +31,17 @@ function publicUrlForRow(supabaseClient, bucket, row) {
   return data?.publicUrl || null;
 }
 
-function pickRandom(arr) {
-  if (!arr.length) return null;
-  return arr[Math.floor(Math.random() * arr.length)];
+/**
+ * Stable pick so dashboard preview and FFmpeg render use the same background/music
+ * when the user leaves “Random” selected (matches frontend deterministicAssetIndex).
+ */
+function pickDeterministicByContentId(rows, contentId) {
+  if (!rows?.length) return null;
+  const sorted = [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const s = String(contentId ?? '');
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+  return sorted[h % sorted.length];
 }
 
 /**
@@ -54,11 +62,10 @@ export async function resolveDadJokeStudioRenderMedia(opts) {
     .from('dadjoke_studio_assets')
     .select('*')
     .eq('business_id', businessId)
-    .is('deleted_at', null)
-    .eq('enabled', true);
+    .is('deleted_at', null);
 
   if (error) throw error;
-  const assets = allAssets || [];
+  const assets = (allAssets || []).filter((a) => a.enabled !== false);
 
   const eligibleBg = assets.filter(
     (a) => BG_TYPES.includes(a.asset_type) && isAssetEligibleForRender(a, contentType, formatKey)
@@ -85,7 +92,7 @@ export async function resolveDadJokeStudioRenderMedia(opts) {
   } else if (snap.background_public_url && String(snap.background_public_url).trim()) {
     background_public_url = String(snap.background_public_url).trim();
   } else {
-    const row = pickRandom(eligibleBg);
+    const row = pickDeterministicByContentId(eligibleBg, content.id);
     if (!row) {
       throw new Error(
         'No Dad Joke Studio background is available for this format. Upload an image/background asset with scope Global, matching Shorts/Long form, or this format — then render again.'
@@ -101,10 +108,10 @@ export async function resolveDadJokeStudioRenderMedia(opts) {
 
   let music_public_url = null;
   let music_asset_id = null;
-  const muPick = snap.music_asset_id || null;
+  const muPick = snap.music_asset_id ?? null;
 
-  if (muPick) {
-    const row = assets.find((a) => a.id === muPick);
+  if (muPick != null && muPick !== '') {
+    const row = assets.find((a) => String(a.id) === String(muPick));
     if (!row) throw new Error('Selected music asset was not found.');
     if (!MUSIC_TYPES.includes(row.asset_type)) {
       throw new Error('That asset is not an audio/music file.');
@@ -115,7 +122,7 @@ export async function resolveDadJokeStudioRenderMedia(opts) {
     music_public_url = publicUrlForRow(supabaseClient, assetsBucket, row);
     music_asset_id = row.id;
   } else {
-    const row = pickRandom(eligibleMusic);
+    const row = pickDeterministicByContentId(eligibleMusic, content.id);
     if (row) {
       music_public_url = publicUrlForRow(supabaseClient, assetsBucket, row);
       music_asset_id = row.id;

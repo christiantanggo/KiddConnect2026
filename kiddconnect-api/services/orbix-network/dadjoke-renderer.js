@@ -2,13 +2,13 @@
  * Orbix Dad Jokes Render Pipeline
  *
  * Format:
- *   0–4s:   Joke setup on screen; AI voice reads setup
- *   4–7s:   3-2-1 countdown (large, visible)
- *   7s:     Countdown to zero, then TTS says the answer (punchline)
- *   7s–end: Punchline on screen; TTS can continue over CTA
- *   last 1.5s: rotating CTA (e.g. "Rate this dad joke 1-10") then loop
+ *   0–4s:   AI voice reads setup
+ *   0–7s:   Joke setup on screen through 3-2-1; removed when punchline flashes
+ *   4–7s:   Countdown numbers + progress (setup text still visible)
+ *   7s:     Punchline text-only flash (not spoken)
+ *   7–7.5s: Punchline on screen only (~0.5s flash)
  *
- * Total: variable (min 8s). Video length = TTS content end + CTA; no hard 8s stop.
+ * Total: max(min length, punchline flash end, setup TTS end). No separate punchline voice track.
  */
 
 import { exec } from 'child_process';
@@ -42,8 +42,9 @@ const SETUP_START    = 0;
 const SETUP_END      = 4.0;   // setup on screen 0–4s
 const COUNTDOWN_END  = 7.0;   // 3-2-1: 4s → 7s; answer TTS starts at 7s (after countdown)
 const MIN_DURATION   = 8;     // minimum video length
-const CTA_SECONDS    = 1.5;   // call-to-action at end
-const AUDIO_CAP_SEC  = 30;    // generate audio with this cap so TTS is never cut; we trim to actual duration when mixing
+/** Punchline subtitle window after countdown (YouTube loop: brief flash, then end). */
+const PUNCHLINE_ON_SCREEN_SEC = 0.5;
+const AUDIO_CAP_SEC  = 30;    // generate audio with this cap so TTS is never cut; we trim to DURATION when mixing
 
 /** Resolve channel for dad joke music: use the channel that has the DAD_JOKE_GENERATOR source so music comes from the dad joke channel, not trivia. */
 async function resolveDadJokeMusicChannelId(businessId, storyChannelId) {
@@ -81,15 +82,10 @@ async function generateDadJokeASSFile(opts) {
     return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
   };
 
-  const punchlineEnd = opts.punchlineEnd ?? COUNTDOWN_END + 1;
-  const loopEnd = opts.loopEnd ?? COUNTDOWN_END + 2;
+  const punchlineEnd = opts.punchlineEnd ?? COUNTDOWN_END + PUNCHLINE_ON_SCREEN_SEC;
 
-  const { getDadJokeCta } = await import('./dad-joke-cta.js');
-  const episodeIndex = opts.episode_number ?? 0;
-  const defaultCta = getDadJokeCta(episodeIndex);
   const setupText = (opts.setup || '').trim().toUpperCase();
   const punchlineText = (opts.punchline || '').trim().toUpperCase();
-  const loopLine = (opts.loopLine || defaultCta).trim();
 
   const wrapText = (text, maxChars) => {
     const words = (text || '').split(/\s+/).filter(Boolean);
@@ -139,15 +135,14 @@ Style: ProgressBg,Arial,12,&H44FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,1
 Style: ProgressFill,Arial,12,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 Style: CountdownNum,Arial,130,&H00FFFF00,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,5,3,5,80,80,10,1
 Style: Punchline,Arial,${punchlineFontSize},&H00FFFF00,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,5,3,5,80,80,10,1
-Style: LoopTrigger,Arial,52,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,3,1,5,60,60,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 `;
 
   const lines = [];
-  // Setup visible only 0–4s; countdown 4–7s is digits + progress only; punchline from 7s (see header comment).
-  lines.push(`Dialogue: 0,${t(SETUP_START)},${t(SETUP_END)},Setup,,0,0,0,,{\\an5\\pos(540,640)}${wrappedSetup}`);
+  // Setup on screen through countdown; punchline replaces it from 7s (see header comment).
+  lines.push(`Dialogue: 0,${t(SETUP_START)},${t(COUNTDOWN_END)},Setup,,0,0,0,,{\\an5\\pos(540,640)}${wrappedSetup}`);
   lines.push(`Dialogue: 1,${t(SETUP_END)},${t(COUNTDOWN_END)},ProgressBg,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${PROGRESS_W} 0 l ${PROGRESS_W} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
   for (const kf of progressKeyframes) {
     lines.push(`Dialogue: 2,${t(kf.start)},${t(kf.end)},ProgressFill,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${kf.fillW} 0 l ${kf.fillW} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`);
@@ -156,9 +151,153 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     lines.push(`Dialogue: 3,${t(seg.start)},${t(seg.end)},CountdownNum,,0,0,0,,{\\an5\\pos(540,${COUNTDOWN_NUM_Y})}${seg.digit}`);
   }
   lines.push(`Dialogue: 4,${t(COUNTDOWN_END)},${t(punchlineEnd)},Punchline,,0,0,0,,{\\an5\\pos(540,960)}${esc(punchlineText)}`);
-  lines.push(`Dialogue: 0,${t(punchlineEnd)},${t(loopEnd)},LoopTrigger,,0,0,0,,{\\an5\\pos(540,960)}${esc(loopLine)}`);
 
   await fs.promises.writeFile(assPath, assContent + lines.join('\n') + '\n', 'utf8');
+  return assPath;
+}
+
+/**
+ * Dad Joke Studio dashboard preview — mirrors `DadJokeClassicLoopPreview` in kiddconnect-web:
+ * gradient dim via FFmpeg; text centered in upper ~86% frame; 3-2-1 + "Get ready…"; bottom ~90% width bar;
+ * punchline flash; end-phase CTA line like preview `phase === 'cta'`.
+ */
+async function generateDashboardStyleDadJokeASSFile(opts) {
+  const fs = (await import('fs')).default;
+  const assPath = join(tmpdir(), `djs-dashboard-dadjoke-${Date.now()}.ass`);
+  const esc = (s) => (s || '').toString()
+    .replace(/\\/g, '\\\\')
+    .replace(/\{/g, '\\{')
+    .replace(/\}/g, '\\}');
+
+  const tf = (sec) => {
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = Math.floor(sec % 60);
+    const cs = Math.round((sec - Math.floor(sec)) * 100);
+    return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+  };
+
+  const punchlineEnd = opts.punchlineEnd ?? COUNTDOWN_END + PUNCHLINE_ON_SCREEN_SEC;
+  const loopEnd = opts.loopEnd ?? COUNTDOWN_END + PUNCHLINE_ON_SCREEN_SEC + 1;
+
+  const setupText = (opts.setup || '').trim().toUpperCase();
+  const punchlineText = (opts.punchline || '').trim().toUpperCase();
+  const ctaRaw = String(opts.ctaText || '').trim();
+  const ctaText = ctaRaw.toUpperCase();
+
+  const wrapText = (text, maxChars) => {
+    const words = (text || '').split(/\s+/).filter(Boolean);
+    const linesOut = [];
+    let cur = '';
+    for (const w of words) {
+      const next = cur ? `${cur} ${w}` : w;
+      if (next.length <= maxChars) cur = next;
+      else {
+        if (cur) linesOut.push(cur);
+        cur = w;
+      }
+    }
+    if (cur) linesOut.push(cur);
+    return linesOut.map((l) => esc(l)).join('\\N');
+  };
+
+  // Setup centered 0–4s; during countdown digit is upper (Y_COUNT) so setup moves down 4–7s — BigNum layer would cover same Y as punch.
+  const Y_SETUP_SOLO = 930;
+  const Y_SETUP_WITH_COUNT = 1100;
+  const Y_PUNCH = 930;
+  const Y_COUNT = 560;
+  const Y_HINT = 720;
+  const setupFontSize = 76;
+  const punchlineFontSize = 90;
+  const bigNumSize = 168;
+  const ctaFontSize = 54;
+  const charsPerLineSetup = Math.floor(900 / (setupFontSize * 0.5));
+  const wrappedSetup = wrapText(setupText, charsPerLineSetup);
+  const wrappedPunch = wrapText(punchlineText, Math.floor(900 / (punchlineFontSize * 0.45)));
+  const wrappedCta = ctaText ? wrapText(ctaText, Math.floor(900 / (ctaFontSize * 0.52))) : '';
+
+  const PROGRESS_W = 972;
+  const PROGRESS_H = 14;
+  const PROGRESS_X = Math.round((1080 - PROGRESS_W) / 2);
+  const PROGRESS_Y = 1871;
+  const pbTop = PROGRESS_Y - Math.round(PROGRESS_H / 2);
+  const TRACK_BG = '&H2EFFFFFF';
+
+  const pushGrowingBar = (arr, t0, t1, nSeg) => {
+    const dur = t1 - t0;
+    if (dur <= 0 || nSeg < 1) return;
+    for (let i = 0; i < nSeg; i++) {
+      const a = t0 + (dur * i) / nSeg;
+      const b = t0 + (dur * (i + 1)) / nSeg;
+      const w = Math.round((PROGRESS_W * (i + 1)) / nSeg);
+      arr.push(
+        `Dialogue: 2,${tf(a)},${tf(b)},ProgressFill,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${w} 0 l ${w} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`,
+      );
+    }
+  };
+
+  const assHead = `[Script Info]
+Title: Dad Joke Studio Dashboard
+ScriptType: v4.00+
+PlayResX: 1080
+PlayResY: 1920
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Main,Arial,${setupFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,2,0,1,6,4,5,60,60,10,1
+Style: BigNum,Arial,${bigNumSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,8,5,5,80,80,10,1
+Style: Punch,Arial,${punchlineFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,6,4,5,80,80,10,1
+Style: Cta,Arial,${ctaFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,2,0,1,5,3,5,60,60,10,1
+Style: Hint,Arial,36,&H00E6E6E6,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,4,3,5,60,60,10,1
+Style: ProgressBg,Arial,12,${TRACK_BG},&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: ProgressFill,Arial,12,&H00EBEBEB,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+`;
+
+  const events = [];
+  events.push(
+    `Dialogue: 1,${tf(0)},${tf(loopEnd)},ProgressBg,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${PROGRESS_W} 0 l ${PROGRESS_W} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`,
+  );
+
+  pushGrowingBar(events, 0, SETUP_END, 8);
+  pushGrowingBar(events, SETUP_END, COUNTDOWN_END, 9);
+  const punchDur = Math.max(0.01, punchlineEnd - COUNTDOWN_END);
+  const punchSegs = Math.max(3, Math.min(12, Math.round(punchDur * 6)));
+  pushGrowingBar(events, COUNTDOWN_END, punchlineEnd, punchSegs);
+  events.push(
+    `Dialogue: 2,${tf(punchlineEnd)},${tf(loopEnd)},ProgressFill,,0,0,0,,{\\an7\\pos(${PROGRESS_X},${pbTop})\\p1}m 0 0 l ${PROGRESS_W} 0 l ${PROGRESS_W} ${PROGRESS_H} l 0 ${PROGRESS_H}{\\p0}`,
+  );
+
+  events.push(`Dialogue: 0,${tf(SETUP_START)},${tf(SETUP_END)},Main,,0,0,0,,{\\an5\\pos(540,${Y_SETUP_SOLO})}${wrappedSetup}`);
+  events.push(`Dialogue: 0,${tf(SETUP_END)},${tf(COUNTDOWN_END)},Main,,0,0,0,,{\\an5\\pos(540,${Y_SETUP_WITH_COUNT})}${wrappedSetup}`);
+
+  const countdownSegments = [
+    { digit: '3', start: SETUP_END, end: SETUP_END + 1.0 },
+    { digit: '2', start: SETUP_END + 1.0, end: SETUP_END + 2.0 },
+    { digit: '1', start: SETUP_END + 2.0, end: COUNTDOWN_END },
+  ];
+  for (const seg of countdownSegments) {
+    events.push(
+      `Dialogue: 3,${tf(seg.start)},${tf(seg.end)},BigNum,,0,0,0,,{\\an5\\pos(540,${Y_COUNT})}${seg.digit}`,
+    );
+  }
+  events.push(
+    `Dialogue: 4,${tf(SETUP_END)},${tf(COUNTDOWN_END)},Hint,,0,0,0,,{\\an5\\pos(540,${Y_HINT})}Get ready…`,
+  );
+
+  events.push(
+    `Dialogue: 0,${tf(COUNTDOWN_END)},${tf(punchlineEnd)},Punch,,0,0,0,,{\\an5\\pos(540,${Y_PUNCH})}${wrappedPunch}`,
+  );
+
+  if (wrappedCta && loopEnd > punchlineEnd + 0.02) {
+    events.push(
+      `Dialogue: 0,${tf(punchlineEnd)},${tf(loopEnd)},Cta,,0,0,0,,{\\an5\\pos(540,${Y_PUNCH})}${wrappedCta}`,
+    );
+  }
+
+  await fs.promises.writeFile(assPath, assHead + events.join('\n') + '\n', 'utf8');
   return assPath;
 }
 
@@ -171,7 +310,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
  * @param {string} params.setup
  * @param {string} params.punchline
  * @param {string} [params.voice_script] - TTS for setup phase (defaults to setup)
- * @param {string} [params.hook] - loop/CTA line (defaults via getDadJokeCta)
+ * @param {string} [params.hook] - reserved (end CTA overlay removed for YouTube loop)
  * @param {number} [params.episode_number]
  * @param {number} [params.backgroundId]
  * @param {string|null} [params.backgroundStoragePath] - Orbix storage path
@@ -195,14 +334,15 @@ export async function renderOrbixStyleDadJokeShortToFile(params) {
     musicTrackUrl = null,
     orbixChannelIdForMusic = null,
     tempId = `dj-${Date.now()}`,
+    allowOrbixBackgroundFallback = true,
+    allowOrbixMusicFallback = true,
+    /** 'orbix' = legacy ASS; 'dashboard' = match Dad Joke Studio web preview */
+    assStyle = 'orbix',
   } = params;
 
-  const { getDadJokeCta } = await import('./dad-joke-cta.js');
-  const defaultCta = getDadJokeCta(episodeIndex);
   const setup = stripEmoji((setupRaw || '').trim().slice(0, 200));
   const punchline = stripEmoji((punchlineRaw || '').trim().slice(0, 100));
   const voice_script = stripEmoji((voiceRaw || setup).trim().slice(0, 300));
-  const hook = stripEmoji((hookRaw || defaultCta).trim());
 
   if (!setup || !punchline) {
     throw new Error(`Dad joke render missing content: setup="${setup}" punchline="${punchline}"`);
@@ -215,13 +355,14 @@ export async function renderOrbixStyleDadJokeShortToFile(params) {
     const fs = (await import('fs')).default;
 
     const audioResult = await generateTriviaAudio(
-      { hook: null, question: voice_script, answerText: punchline, enableIntroHook: false, answerStartSeconds: 7 },
+      { hook: null, question: voice_script, answerText: '', enableIntroHook: false, answerStartSeconds: 7 },
       AUDIO_CAP_SEC
     );
     audioPath = audioResult.audioPath;
-    const contentEndSeconds = audioResult.contentEndSeconds ?? COUNTDOWN_END;
-    const DURATION = Math.max(MIN_DURATION, Math.ceil((contentEndSeconds + CTA_SECONDS) * 2) / 2);
-    const punchlineEnd = DURATION - CTA_SECONDS;
+    const contentEndSeconds = audioResult.contentEndSeconds ?? 0;
+    const punchlineFlashEnd = COUNTDOWN_END + PUNCHLINE_ON_SCREEN_SEC;
+    const DURATION = Math.max(MIN_DURATION, punchlineFlashEnd, Math.ceil(contentEndSeconds * 2) / 2);
+    const punchlineEnd = punchlineFlashEnd;
     const loopEnd = DURATION;
 
     bgPath = join(tmpdir(), `dadjoke-bg-${tempId}.png`);
@@ -238,13 +379,26 @@ export async function renderOrbixStyleDadJokeShortToFile(params) {
 
     motionPath = await applyMotionToImage(bgPath, DURATION);
 
-    assPath = await generateDadJokeASSFile({ setup, punchline, loopLine: hook, punchlineEnd, loopEnd, episode_number: episodeIndex });
+    let assOpts = { setup, punchline, punchlineEnd, loopEnd };
+    if (assStyle === 'dashboard') {
+      const { getDadJokeCta } = await import('./dad-joke-cta.js');
+      const ctaText = stripEmoji((hookRaw || getDadJokeCta(episodeIndex)).trim()).slice(0, 200);
+      assOpts = { ...assOpts, ctaText };
+    }
+    assPath =
+      assStyle === 'dashboard'
+        ? await generateDashboardStyleDadJokeASSFile(assOpts)
+        : await generateDadJokeASSFile(assOpts);
     simpleAssPath = join(tmpdir(), `dadjoke-ass-${tempId}.ass`);
     await fs.promises.copyFile(assPath, simpleAssPath);
     const escapedAssPath = simpleAssPath.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
 
     baseVideoPath = join(tmpdir(), `dadjoke-base-${tempId}.mp4`);
-    const filterComplex = `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.22:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
+    // Dashboard: match preview linear-gradient (~35% top → ~55% bottom) via stacked drawboxes; Orbix: light vignette.
+    const filterComplex =
+      assStyle === 'dashboard'
+        ? `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.35:t=fill[db1];[db1]drawbox=x=0:y=ih/2:w=iw:h=ih/2:color=black@0.20:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`
+        : `[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black@0.22:t=fill[v1];[v1]ass='${escapedAssPath}'[vout]`;
     await execAsync(
       `ffmpeg -i "${motionPath}" -filter_complex "${filterComplex}" -map "[vout]" -map 0:a? -c:v libx264 -preset medium -crf 23 -c:a copy -t ${DURATION} -pix_fmt yuv420p -y "${baseVideoPath}"`,
       { timeout: 120000 }
