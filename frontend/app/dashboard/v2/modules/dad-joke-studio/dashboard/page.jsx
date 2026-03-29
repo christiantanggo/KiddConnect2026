@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 
@@ -36,7 +36,9 @@ function isAssetEligibleForVideo(a, contentType, formatKey) {
 }
 
 function DadJokeStudioDashboardInner() {
+  const router = useRouter();
   const searchParams = useSearchParams();
+  const [accessAllowed, setAccessAllowed] = useState(null);
   const [mainSection, setMainSection] = useState('studio');
   const [studioTop, setStudioTop] = useState('shorts');
   const [formats, setFormats] = useState([]);
@@ -55,6 +57,7 @@ function DadJokeStudioDashboardInner() {
   const [libFilter, setLibFilter] = useState({ content_type: '', format_key: '', status: '' });
   const [assets, setAssets] = useState([]);
   const [ytStatus, setYtStatus] = useState(null);
+  const [ytGoogleEmail, setYtGoogleEmail] = useState('');
   const [moduleSettings, setModuleSettings] = useState({});
   const [uploadForm, setUploadForm] = useState({
     title: '',
@@ -391,6 +394,14 @@ function DadJokeStudioDashboardInner() {
 
   function toggleUploadFormatKey(key) {
     setUploadFormatKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  }
+
+  if (accessAllowed === null) {
+    return (
+      <div className="text-sm p-8" style={{ color: 'var(--color-text-muted)' }}>
+        Loading…
+      </div>
+    );
   }
 
   return (
@@ -895,12 +906,31 @@ function DadJokeStudioDashboardInner() {
             <code className="text-xs">…/api/v2/dad-joke-studio/youtube/callback</code>
           </p>
           <p className="text-sm">YouTube: {ytStatus?.connected ? `Connected (${ytStatus.channel_title || 'channel'})` : 'Not connected'}</p>
+          <label className="block text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
+            Google email (optional — helps Google offer the right account first)
+            <input
+              type="email"
+              className="mt-1 w-full max-w-sm border p-2 text-sm rounded block"
+              style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', color: 'var(--color-text-main)' }}
+              autoComplete="email"
+              value={ytGoogleEmail}
+              onChange={(e) => setYtGoogleEmail(e.target.value)}
+              placeholder="you@gmail.com"
+            />
+          </label>
+          <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+            We only store the <strong>primary</strong> YouTube channel for the Google account you pick. Wrong channel with one login? Set that channel as default in YouTube, or use incognito and pick the right Google user.
+          </p>
           <button
             type="button"
-            className="px-3 py-2 rounded text-white text-sm"
+            className="px-3 py-2 rounded text-white text-sm mt-2"
             style={{ background: '#c00' }}
             onClick={async () => {
-              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, { headers: buildHeaders() });
+              const q = new URLSearchParams();
+              const e = ytGoogleEmail.trim();
+              if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) q.set('login_hint', e);
+              const qs = q.toString();
+              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url${qs ? `?${qs}` : ''}`, { headers: buildHeaders() });
               const d = await res.json();
               if (d.url) window.location.href = d.url;
             }}

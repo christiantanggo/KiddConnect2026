@@ -62,11 +62,10 @@ export async function resolveDadJokeStudioRenderMedia(opts) {
     .from('dadjoke_studio_assets')
     .select('*')
     .eq('business_id', businessId)
-    .is('deleted_at', null)
-    .eq('enabled', true);
+    .is('deleted_at', null);
 
   if (error) throw error;
-  const assets = allAssets || [];
+  const assets = (allAssets || []).filter((a) => a.enabled !== false);
 
   const eligibleBg = assets.filter(
     (a) => BG_TYPES.includes(a.asset_type) && isAssetEligibleForRender(a, contentType, formatKey)
@@ -109,10 +108,10 @@ export async function resolveDadJokeStudioRenderMedia(opts) {
 
   let music_public_url = null;
   let music_asset_id = null;
-  const muPick = snap.music_asset_id || null;
+  const muPick = snap.music_asset_id ?? null;
 
-  if (muPick) {
-    const row = assets.find((a) => a.id === muPick);
+  if (muPick != null && muPick !== '') {
+    const row = assets.find((a) => String(a.id) === String(muPick));
     if (!row) throw new Error('Selected music asset was not found.');
     if (!MUSIC_TYPES.includes(row.asset_type)) {
       throw new Error('That asset is not an audio/music file.');

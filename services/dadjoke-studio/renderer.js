@@ -64,6 +64,18 @@ async function downloadToTmp(url, ext) {
   return p;
 }
 
+async function resolveBackgroundLocalFromUrl(url) {
+  const u = url && String(url).trim();
+  if (!u) throw new Error('Background image URL is required for this format.');
+  const pathPart = u.split('?')[0].toLowerCase();
+  const ext = pathPart.endsWith('.jpg') || pathPart.endsWith('.jpeg')
+    ? 'jpg'
+    : pathPart.endsWith('.webp')
+      ? 'webp'
+      : 'png';
+  return downloadToTmp(u, ext);
+}
+
 async function resolveBackgroundLocal(businessId, cfg) {
   if (cfg.background_public_url) {
     return downloadToTmp(cfg.background_public_url, 'png');
@@ -239,7 +251,7 @@ export async function processDadJokeStudioRender(renderOutputId) {
       .eq('id', content.id);
   };
 
-  // ─── Classic Loop = Orbix dad-joke Short pipeline (setup 0–4s, 3-2-1 at 4–7s, answer TTS at 7s, ASS, motion, mix) ───
+  // ─── Classic Loop: same TTS timing as Orbix; ASS uses dashboard preview style ───
   if (formatRow.format_key === 'shorts_classic_loop') {
     if (!process.env.OPENAI_API_KEY) {
       await markFailed('OPENAI_API_KEY is required for Classic Loop (Orbix-style TTS timing).');
@@ -272,6 +284,7 @@ export async function processDadJokeStudioRender(renderOutputId) {
         orbixChannelIdForMusic: null,
         allowOrbixBackgroundFallback: false,
         allowOrbixMusicFallback: false,
+        assStyle: 'dashboard',
         tempId: `djs-${renderOutputId}`,
       });
       localPath = lp;

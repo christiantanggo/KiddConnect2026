@@ -361,7 +361,7 @@ export default function ModuleSettingsPage() {
                         )}
                         {!isSubscribed && (
                           <Link
-                            href="/dashboard"
+                            href={`/dashboard/v2/modules/${module.key}`}
                             className="px-3 py-1.5 text-sm rounded-md transition-colors"
                             style={{
                               backgroundColor: 'var(--color-accent)',

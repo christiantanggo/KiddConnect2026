@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 
@@ -47,18 +47,13 @@ function isAssetEligibleForVideo(a, contentType, formatKey) {
   return false;
 }
 
-/**
- * Phase lengths aligned with services/orbix-network/dadjoke-renderer.js (SETUP_END=4, COUNTDOWN_END=7).
- * Punchline on-screen time varies with TTS; CTA uses CTA_SECONDS (1.5s) in the renderer.
- */
+/** Looped preview: setup 4s, countdown 3s, punchline on-screen ~0.5s, then short tail (matches render loop). */
 const CLASSIC_SETUP_MS = 4000;
 const CLASSIC_COUNTDOWN_MS = 3000;
-const CLASSIC_PUNCHLINE_MS = 4000;
-const CLASSIC_CTA_MS = 1500;
+const CLASSIC_PUNCHLINE_MS = 500;
+/** Silent tail before loop (matches ~8s render: 7.5s content + 0.5s pad). */
+const CLASSIC_CTA_MS = 500;
 const CLASSIC_LOOP_MS = CLASSIC_SETUP_MS + CLASSIC_COUNTDOWN_MS + CLASSIC_PUNCHLINE_MS + CLASSIC_CTA_MS;
-
-/** ASS progress bar: full width, then ⅔, then ⅓ over each countdown second */
-const COUNTDOWN_BAR_SEG_WIDTH_PCT = [100, (200 / 3), (100 / 3)];
 
 function stripEmojiStudio(s) {
   if (typeof s !== 'string') return '';
@@ -165,8 +160,8 @@ function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAss
   const rawLines = useMemo(() => parseClassicLoopLines(content), [content]);
   const lines = useMemo(
     () => ({
-      setup: stripEmojiStudio(rawLines.setup).toUpperCase(),
-      punchline: stripEmojiStudio(rawLines.punchline).toUpperCase(),
+      setup: stripEmojiStudio(rawLines.setup),
+      punchline: stripEmojiStudio(rawLines.punchline),
       cta: stripEmojiStudio(rawLines.cta) || rawLines.cta,
     }),
     [rawLines.setup, rawLines.punchline, rawLines.cta]
@@ -202,15 +197,22 @@ function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAss
           ? 'punchline'
           : 'cta';
 
+  let barPct = 0;
+  if (phase === 'setup') barPct = (tMs / CLASSIC_SETUP_MS) * 100;
+  else if (phase === 'countdown') {
+    const u = tMs - CLASSIC_SETUP_MS;
+    barPct = (u / CLASSIC_COUNTDOWN_MS) * 100;
+  } else if (phase === 'punchline') {
+    const u = tMs - CLASSIC_SETUP_MS - CLASSIC_COUNTDOWN_MS;
+    barPct = (u / CLASSIC_PUNCHLINE_MS) * 100;
+  } else barPct = 100;
+
   let countdownDigit = '';
-  let countdownSeg = 0;
   if (phase === 'countdown') {
     const u = tMs - CLASSIC_SETUP_MS;
-    countdownSeg = Math.min(2, Math.floor(u / 1000));
-    countdownDigit = String(3 - countdownSeg);
+    const idx = Math.min(2, Math.floor(u / 1000));
+    countdownDigit = String(3 - idx);
   }
-
-  const countdownBarInnerPct = phase === 'countdown' ? COUNTDOWN_BAR_SEG_WIDTH_PCT[countdownSeg] : 0;
 
   const hasJoke = Boolean(rawLines.setup && rawLines.punchline);
 
@@ -223,21 +225,17 @@ function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAss
           maxHeight: 380,
           borderRadius: 8,
           background: '#0f172a',
-          color: '#f8fafc',
+          color: '#e2e8f0',
         }}
       >
         {bgUrl ? (
           <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={bgUrl}
-              alt=""
-              className="absolute inset-0 w-full h-full object-cover"
-              style={{
-                animation: 'djsPreviewKenBurns 22s ease-in-out infinite alternate',
-              }}
+            <img src={bgUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
+            <div
+              className="absolute inset-0 pointer-events-none"
+              style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.55) 100%)' }}
             />
-            <div className="absolute inset-0 pointer-events-none" style={{ background: 'rgba(0,0,0,0.22)' }} />
           </>
         ) : (
           <div
@@ -247,106 +245,54 @@ function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAss
             No eligible background for this draft — upload under Assets (e.g. Shorts only) or pick one above.
           </div>
         )}
-        <style>{`
-          @keyframes djsPreviewKenBurns {
-            from { transform: scale(1) translate(0, 0); }
-            to { transform: scale(1.07) translate(-1.5%, -1%); }
-          }
-        `}</style>
-        <div className="relative z-10 w-full flex-1 min-h-[220px]">
-          {!hasJoke && (
-            <div className="absolute inset-0 flex items-center justify-center px-4 text-center">
+        <div className="relative z-10 flex flex-col flex-1 min-h-0">
+          <div className="flex-1 flex flex-col items-center justify-center px-4 py-6 text-center min-h-[180px]">
+            {!hasJoke && (
               <p className="text-sm opacity-90">Generate a script or add setup + punchline to see the timed preview.</p>
-            </div>
-          )}
-          {hasJoke && phase === 'setup' && (
-            <p
-              className="absolute left-1/2 w-[88%] text-center font-bold leading-snug uppercase"
-              style={{
-                top: '33.333%',
-                transform: 'translate(-50%, -50%)',
-                fontSize: 'clamp(0.8rem, 2.8vmin, 1.05rem)',
-                color: '#ffffff',
-                textShadow: '0 0 4px rgba(0,0,0,0.9), 0 2px 14px rgba(0,0,0,0.85)',
-              }}
-            >
-              {lines.setup}
-            </p>
-          )}
-          {hasJoke && phase === 'countdown' && (
-            <span
-              className="absolute left-1/2 font-black tabular-nums leading-none"
-              style={{
-                top: '79.7%',
-                transform: 'translate(-50%, -50%)',
-                fontSize: 'clamp(3.5rem, 14vmin, 5.5rem)',
-                color: '#ffff00',
-                textShadow: '0 0 6px rgba(0,0,0,0.95), 0 3px 18px rgba(0,0,0,0.9)',
-              }}
-            >
-              {countdownDigit}
-            </span>
-          )}
-          {hasJoke && phase === 'punchline' && (
-            <p
-              className="absolute left-1/2 w-[90%] text-center font-bold leading-snug uppercase"
-              style={{
-                top: '50%',
-                transform: 'translate(-50%, -50%)',
-                fontSize: 'clamp(0.95rem, 3.2vmin, 1.2rem)',
-                color: '#ffff00',
-                textShadow: '0 0 4px rgba(0,0,0,0.9), 0 2px 14px rgba(0,0,0,0.85)',
-              }}
-            >
-              {lines.punchline}
-            </p>
-          )}
-          {hasJoke && phase === 'cta' && (
-            <p
-              className="absolute left-1/2 w-[88%] text-center font-semibold uppercase"
-              style={{
-                top: '50%',
-                transform: 'translate(-50%, -50%)',
-                fontSize: 'clamp(0.75rem, 2.4vmin, 0.95rem)',
-                color: '#ffffff',
-                textShadow: '0 0 4px rgba(0,0,0,0.9), 0 2px 12px rgba(0,0,0,0.85)',
-              }}
-            >
-              {lines.cta}
-            </p>
-          )}
-          {phase === 'countdown' && (
-            <div
-              className="absolute left-[8.33%] right-[8.33%] rounded-sm overflow-hidden z-20"
-              style={{
-                bottom: '16.67%',
-                height: 'max(6px, 0.35vmin)',
-                background: 'rgba(255,255,255,0.28)',
-              }}
-            >
+            )}
+            {hasJoke && phase === 'setup' && (
+              <p className="text-base sm:text-lg font-semibold leading-snug uppercase tracking-tight" style={{ textShadow: '0 2px 12px rgba(0,0,0,0.85)' }}>
+                {lines.setup}
+              </p>
+            )}
+            {hasJoke && phase === 'countdown' && (
+              <div className="flex flex-col items-center gap-3 w-full max-w-[95%]">
+                <p className="text-sm sm:text-base font-semibold leading-snug uppercase tracking-tight line-clamp-4" style={{ textShadow: '0 2px 12px rgba(0,0,0,0.85)' }}>
+                  {lines.setup}
+                </p>
+                <span className="text-7xl sm:text-8xl font-black tabular-nums leading-none" style={{ textShadow: '0 4px 24px rgba(0,0,0,0.9)' }}>
+                  {countdownDigit}
+                </span>
+                <span className="text-xs uppercase tracking-widest opacity-80" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.8)' }}>
+                  Get ready…
+                </span>
+              </div>
+            )}
+            {hasJoke && phase === 'punchline' && (
+              <p className="text-lg sm:text-xl font-bold leading-snug uppercase tracking-tight" style={{ textShadow: '0 2px 12px rgba(0,0,0,0.85)' }}>
+                {lines.punchline}
+              </p>
+            )}
+            {hasJoke && phase === 'cta' && (
+              <p className="text-sm sm:text-base font-semibold uppercase tracking-wide opacity-95" style={{ textShadow: '0 2px 12px rgba(0,0,0,0.85)' }}>
+                {lines.cta}
+              </p>
+            )}
+          </div>
+          <div className="px-[5%] pb-5 pt-1">
+            <div className="h-3.5 w-full rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.18)' }}>
               <div
-                className="h-full rounded-sm"
-                style={{
-                  width: `${countdownBarInnerPct}%`,
-                  background: 'rgba(255,255,255,0.92)',
-                  marginLeft: 0,
-                  transition: 'width 80ms linear',
-                }}
+                className="h-full rounded-full transition-none"
+                style={{ width: `${Math.min(100, barPct)}%`, background: 'rgba(255,255,255,0.92)' }}
               />
             </div>
-          )}
-          <p
-            className="absolute left-0 right-0 text-center text-[10px] uppercase tracking-wide px-2"
-            style={{
-              bottom: 6,
-              color: 'rgba(248,250,252,0.7)',
-            }}
-          >
-            {phase === 'setup' && 'Setup 0–4s (no bar — matches render)'}
-            {phase === 'countdown' && '3 · 2 · 1 (bar shrinks each second, like render)'}
-            {phase === 'punchline' && 'Punchline on screen'}
-            {phase === 'cta' && `Loop CTA (~${CLASSIC_CTA_MS / 1000}s in preview)`}
-          </p>
+            <p className="text-[10px] mt-2 text-center uppercase tracking-wide" style={{ color: 'rgba(248,250,252,0.65)' }}>
+              {phase === 'setup' && 'Setup (0–4s)'}
+              {phase === 'countdown' && '3 · 2 · 1 (4–7s)'}
+              {phase === 'punchline' && 'Punchline'}
+              {phase === 'cta' && 'End'}
+            </p>
+          </div>
         </div>
       </div>
       {musicNote && (
@@ -355,14 +301,17 @@ function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAss
         </p>
       )}
       <p className="text-[10px] mt-1 text-center" style={{ color: 'var(--color-text-muted)' }}>
-        Preview mirrors ASS layout (positions, colors, countdown bar). Exact video length follows TTS; motion is approximated.
+        Shorts Classic Loop renders use this same layout (centered copy, linear bar, gradient dim). Orbix channel jobs still use the legacy yellow layout.
       </p>
     </div>
   );
 }
 
 function DadJokeStudioDashboardInner() {
+  const router = useRouter();
   const searchParams = useSearchParams();
+  /** null = checking subscription; unsubscribed users are sent to the module page to activate (avoids settings ↔ marketplace loop). */
+  const [accessAllowed, setAccessAllowed] = useState(null);
   const [mainSection, setMainSection] = useState('studio');
   const [studioTop, setStudioTop] = useState('shorts');
   const [formats, setFormats] = useState([]);
@@ -381,6 +330,7 @@ function DadJokeStudioDashboardInner() {
   const [libFilter, setLibFilter] = useState({ content_type: '', format_key: '', status: '' });
   const [assets, setAssets] = useState([]);
   const [ytStatus, setYtStatus] = useState(null);
+  const [ytGoogleEmail, setYtGoogleEmail] = useState('');
   const [moduleSettings, setModuleSettings] = useState({});
   const [uploadForm, setUploadForm] = useState({
     title: '',
@@ -416,18 +366,27 @@ function DadJokeStudioDashboardInner() {
     try {
       await loadFormats();
       const h = buildHeaders();
-      const [so, libRes, astRes, yt, ms] = await Promise.all([
-        fetch(`${API}/api/v2/dad-joke-studio/style-options`, { headers: h }).then((r) => r.json()),
-        fetch(`${API}/api/v2/dad-joke-studio/content`, { headers: h }).then((r) => r.json()),
-        fetch(`${API}/api/v2/dad-joke-studio/assets`, { headers: h }).then((r) => r.json()),
-        fetch(`${API}/api/v2/dad-joke-studio/youtube/status`, { headers: h }).then((r) => r.json()),
-        fetch(`${API}/api/v2/settings/modules/${MODULE}`, { headers: h }).then((r) => r.json()),
+      /** Parse JSON without failing the whole dashboard if one endpoint errors. */
+      const fetchJson = async (url) => {
+        const r = await fetch(url, { headers: h });
+        const data = await r.json().catch(() => ({}));
+        return { ok: r.ok, data, status: r.status };
+      };
+      const [soR, libR, astR, ytR, msR] = await Promise.all([
+        fetchJson(`${API}/api/v2/dad-joke-studio/style-options`),
+        fetchJson(`${API}/api/v2/dad-joke-studio/content`),
+        fetchJson(`${API}/api/v2/dad-joke-studio/assets`),
+        fetchJson(`${API}/api/v2/dad-joke-studio/youtube/status`),
+        fetchJson(`${API}/api/v2/settings/modules/${MODULE}`),
       ]);
-      setStyleCategories(so.categories || {});
-      setLibrary(libRes.items || []);
-      setAssets(astRes.assets || []);
-      setYtStatus(yt);
-      setModuleSettings(ms.settings || {});
+      if (!soR.ok) throw new Error(soR.data?.error || `Style options failed (${soR.status})`);
+      if (!libR.ok) throw new Error(libR.data?.error || `Library failed (${libR.status})`);
+      if (!astR.ok) throw new Error(astR.data?.error || `Assets failed (${astR.status})`);
+      setStyleCategories(soR.data.categories || {});
+      setLibrary(libR.data.items || []);
+      setAssets(astR.data.assets || []);
+      setYtStatus(ytR.ok ? ytR.data : { connected: false, connected_manual: false });
+      setModuleSettings(msR.ok && msR.data?.settings != null ? msR.data.settings : {});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -467,7 +426,6 @@ function DadJokeStudioDashboardInner() {
         if (full.item) setContent(full.item);
         if (full.current_render) setCurrentRender(full.current_render);
         loadAll();
-        if (data.render?.render_status === 'READY') setMainSection('upload');
       }
     }, 3000);
     return () => clearInterval(t);
@@ -583,6 +541,37 @@ function DadJokeStudioDashboardInner() {
     setContent(item);
     if (data.current_render) setCurrentRender(data.current_render);
     setMainSection('studio');
+  }
+
+  async function deleteLibraryRow(e, row) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (['RENDERING', 'UPLOADING'].includes(row.status)) {
+      setError('Wait for render or upload to finish before deleting.');
+      return;
+    }
+    const label = row.summary || row.format_key || row.id;
+    if (!window.confirm(`Remove “${String(label).slice(0, 80)}” from the library? This cannot be undone.`)) return;
+    setError(null);
+    try {
+      const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${row.id}`, {
+        method: 'DELETE',
+        headers: buildHeaders(),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data?.error || `Delete failed (${res.status})`);
+        return;
+      }
+      setLibrary((prev) => prev.filter((r) => r.id !== row.id));
+      if (content?.id === row.id) {
+        setContent(null);
+        setCurrentRender(null);
+        setPollRender(null);
+      }
+    } catch (err) {
+      setError(err.message || 'Delete failed');
+    }
   }
 
   async function runGenerate(extra) {
@@ -730,21 +719,33 @@ function DadJokeStudioDashboardInner() {
   const shortFormats = formats.filter((f) => f.content_type === 'shorts');
   const longFormats = formats.filter((f) => f.content_type === 'long_form');
 
+  /**
+   * Which content_type + format_key to use for “eligible” background/music lists.
+   * When no draft is open, `content` is null — we still use the active Shorts/Long tab + format keys
+   * so uploads don’t look “missing” on the Studio screen (only the Assets tab had the full list before).
+   */
+  const assetEligibilityContext = useMemo(() => {
+    if (content?.content_type && content?.format_key) {
+      return { contentType: content.content_type, formatKey: content.format_key };
+    }
+    const contentType = studioTop === 'long_form' ? 'long_form' : 'shorts';
+    const formatKey = studioTop === 'long_form' ? longKey : shortKey;
+    return { contentType, formatKey };
+  }, [content?.content_type, content?.format_key, studioTop, shortKey, longKey]);
+
   const eligibleBackgroundAssets = useMemo(() => {
-    const ct = content?.content_type;
-    const fk = content?.format_key;
-    if (!ct || !fk) return [];
+    const { contentType: ct, formatKey: fk } = assetEligibilityContext;
+    if (!fk) return [];
     return assets.filter(
       (a) => ['background', 'image'].includes(a.asset_type) && isAssetEligibleForVideo(a, ct, fk)
     );
-  }, [assets, content?.content_type, content?.format_key]);
+  }, [assets, assetEligibilityContext]);
 
   const eligibleMusicAssets = useMemo(() => {
-    const ct = content?.content_type;
-    const fk = content?.format_key;
-    if (!ct || !fk) return [];
+    const { contentType: ct, formatKey: fk } = assetEligibilityContext;
+    if (!fk) return [];
     return assets.filter((a) => a.asset_type === 'music' && isAssetEligibleForVideo(a, ct, fk));
-  }, [assets, content?.content_type, content?.format_key]);
+  }, [assets, assetEligibilityContext]);
 
   const classicLoopMusicNote = useMemo(() => {
     const sel = content?.asset_snapshot?.music_asset_id;
@@ -755,7 +756,8 @@ function DadJokeStudioDashboardInner() {
     const sorted = sortedStudioAssetsById(eligibleMusicAssets);
     if (sorted.length > 0) {
       const pick = sorted[deterministicAssetIndex(content?.id, sorted.length)];
-      return `Render music: “${pick?.display_name || 'track'}” (same auto-pick as preview for this draft)`;
+      const scope = content?.id ? 'this draft' : 'this format (no draft open)';
+      return `Render music: “${pick?.display_name || 'track'}” (same auto-pick as preview for ${scope})`;
     }
     return 'Render music: voice-only (no eligible music for this format)';
   }, [content?.asset_snapshot?.music_asset_id, content?.id, eligibleMusicAssets]);
@@ -774,6 +776,14 @@ function DadJokeStudioDashboardInner() {
 
   function toggleUploadFormatKey(key) {
     setUploadFormatKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  }
+
+  if (accessAllowed === null) {
+    return (
+      <div className="text-sm p-8" style={{ color: 'var(--color-text-muted)' }}>
+        Loading…
+      </div>
+    );
   }
 
   return (
@@ -951,7 +961,7 @@ function DadJokeStudioDashboardInner() {
                 </p>
                 {formatKey === 'shorts_classic_loop' && (
                   <p className="text-[11px] rounded p-2" style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}>
-                    <strong>Shorts Classic Loop</strong> matches Orbix dad-joke shorts layout and timing (setup → 3-2-1 → punchline → CTA). Your <strong>background and music</strong> always come from the uploads and picks below — upload images under Assets (scope Global, Shorts only, or include this format).
+                    <strong>Shorts Classic Loop</strong> uses the same phase order as before (setup → 3-2-1 → punchline → CTA). The <strong>rendered MP4 follows the dashboard preview</strong> (centered text, linear progress bar, gradient dim). Your <strong>background and music</strong> come from the uploads and picks below.
                   </p>
                 )}
                 <label className="block text-[11px] font-medium">Background</label>
@@ -1013,6 +1023,52 @@ function DadJokeStudioDashboardInner() {
                   {content?.summary || content?.script_text?.slice(0, 200) || 'Script / storyboard preview for this format.'}
                 </div>
               )}
+              {content?.status === 'RENDERING' && (
+                <p className="text-xs mt-4 text-center" style={{ color: 'var(--color-text-muted)' }}>
+                  Rendering video… This usually takes under a minute.
+                </p>
+              )}
+              {currentRender?.render_status === 'FAILED' && (
+                <div className="mt-4 p-3 rounded-lg text-sm" style={{ background: '#fee2e2', color: '#991b1b' }}>
+                  <p className="font-semibold">Render failed</p>
+                  <p className="text-xs mt-1">{currentRender.error_message || 'Try again or check API logs.'}</p>
+                </div>
+              )}
+              {currentRender?.render_status === 'READY' && currentRender.output_url && (
+                <div
+                  className="mt-4 rounded-xl overflow-hidden border"
+                  style={{ borderColor: 'var(--color-border)', background: 'var(--color-surface)' }}
+                >
+                  <p className="text-xs font-semibold px-3 pt-3" style={{ color: 'var(--color-text-main)' }}>
+                    Render complete — review your video
+                  </p>
+                  <div className="px-3 pt-2 pb-1" style={{ background: '#0f172a' }}>
+                    <video
+                      key={currentRender.output_url}
+                      controls
+                      playsInline
+                      preload="metadata"
+                      className="w-full max-h-[min(50vh,420px)] object-contain mx-auto bg-black rounded-md"
+                      src={currentRender.output_url}
+                    >
+                      Your browser cannot play this video.
+                    </video>
+                  </div>
+                  <div className="p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <p className="text-[11px]" style={{ color: 'var(--color-text-muted)' }}>
+                      Add title, privacy, and schedule in the next step.
+                    </p>
+                    <button
+                      type="button"
+                      className="px-4 py-2 rounded-lg text-sm font-semibold text-white shrink-0"
+                      style={{ background: '#0ea5e9' }}
+                      onClick={() => setMainSection('upload')}
+                    >
+                      Publish or schedule →
+                    </button>
+                  </div>
+                </div>
+              )}
               <p className="text-xs mb-1">Storyboard (JSON)</p>
               <pre className="text-[10px] p-2 rounded overflow-auto max-h-24 bg-gray-100">{JSON.stringify(content?.storyboard_json || [], null, 0)}</pre>
               <p className="text-xs mt-2">Status: <strong>{content?.status || '—'}</strong></p>
@@ -1046,9 +1102,6 @@ function DadJokeStudioDashboardInner() {
                 </button>
                 <button type="button" className="px-2 py-1 text-xs rounded text-white" style={{ background: '#10b981' }} onClick={runRender} disabled={!content?.id}>Render video</button>
               </div>
-              {content?.status === 'RENDERED' && (
-                <p className="text-xs mt-2 text-green-700">Video ready — use Upload tab to publish or schedule.</p>
-              )}
             </div>
           </div>
         </>
@@ -1076,7 +1129,8 @@ function DadJokeStudioDashboardInner() {
       {mainSection === 'library' && (
         <div>
           <p className="text-sm mb-2" style={{ color: 'var(--color-text-muted)' }}>
-            Tap or click a row (or press Enter when focused) to open that draft in Studio and keep editing.
+            Tap or click a row (or press Enter when focused) to open that draft in Studio. Use <strong>Delete</strong> to remove
+            drafts or rendered items from the library (not allowed while a render or YouTube upload is running).
           </p>
           <div className="flex flex-wrap gap-2 mb-3">
             <select className="border rounded p-1 text-sm" value={libFilter.content_type} onChange={(e) => setLibFilter((f) => ({ ...f, content_type: e.target.value }))}>
@@ -1108,7 +1162,7 @@ function DadJokeStudioDashboardInner() {
                 <th className="border p-2 text-left">Status</th>
                 <th className="border p-2 text-left">Summary</th>
                 <th className="border p-2 text-left">Created</th>
-                <th className="border p-2 text-left w-24"> </th>
+                <th className="border p-2 text-left w-40">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1133,8 +1187,25 @@ function DadJokeStudioDashboardInner() {
                   <td className="border p-2">{row.status}</td>
                   <td className="border p-2 max-w-xs truncate">{row.summary || row.script_text?.slice(0, 60)}</td>
                   <td className="border p-2">{row.created_at?.slice(0, 10)}</td>
-                  <td className="border p-2 text-sm font-semibold" style={{ color: '#6366f1' }}>
-                    Open →
+                  <td className="border p-2">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold" style={{ color: '#6366f1' }}>
+                        Open →
+                      </span>
+                      <button
+                        type="button"
+                        className="text-xs px-2 py-0.5 rounded border border-red-300 text-red-700 hover:bg-red-50"
+                        title={
+                          ['RENDERING', 'UPLOADING'].includes(row.status)
+                            ? 'Wait for render or upload to finish'
+                            : 'Remove from library'
+                        }
+                        disabled={['RENDERING', 'UPLOADING'].includes(row.status)}
+                        onClick={(e) => deleteLibraryRow(e, row)}
+                      >
+                        Delete
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -1380,12 +1451,31 @@ function DadJokeStudioDashboardInner() {
             <code className="text-xs">…/api/v2/dad-joke-studio/youtube/callback</code>
           </p>
           <p className="text-sm">YouTube: {ytStatus?.connected ? `Connected (${ytStatus.channel_title || 'channel'})` : 'Not connected'}</p>
+          <label className="block text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
+            Google email (optional — helps Google offer the right account first)
+            <input
+              type="email"
+              className="mt-1 w-full max-w-sm border p-2 text-sm rounded block"
+              style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', color: 'var(--color-text-main)' }}
+              autoComplete="email"
+              value={ytGoogleEmail}
+              onChange={(e) => setYtGoogleEmail(e.target.value)}
+              placeholder="you@gmail.com"
+            />
+          </label>
+          <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
+            We only store the <strong>primary</strong> YouTube channel for the Google account you pick. Wrong channel with one login? Set that channel as default in YouTube, or use incognito and pick the right Google user.
+          </p>
           <button
             type="button"
-            className="px-3 py-2 rounded text-white text-sm"
+            className="px-3 py-2 rounded text-white text-sm mt-2"
             style={{ background: '#c00' }}
             onClick={async () => {
-              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, { headers: buildHeaders() });
+              const q = new URLSearchParams();
+              const e = ytGoogleEmail.trim();
+              if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) q.set('login_hint', e);
+              const qs = q.toString();
+              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url${qs ? `?${qs}` : ''}`, { headers: buildHeaders() });
               const d = await res.json();
               if (d.url) window.location.href = d.url;
             }}

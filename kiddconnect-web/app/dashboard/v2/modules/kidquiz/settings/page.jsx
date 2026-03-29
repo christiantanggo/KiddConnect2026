@@ -41,7 +41,16 @@ function KidQuizSettingsInner() {
   const [ytRedirectUriManual, setYtRedirectUriManual] = useState(null);
   const [connectingManual, setConnectingManual] = useState(false);
   const [connectingYt, setConnectingYt] = useState(false);
+  const [ytGoogleEmail, setYtGoogleEmail] = useState('');
   const youtubeSectionRef = useRef(null);
+
+  function ytAuthQuery(extra) {
+    const q = new URLSearchParams(extra || {});
+    const e = ytGoogleEmail.trim();
+    if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) q.set('login_hint', e);
+    const s = q.toString();
+    return s ? `?${s}` : '';
+  }
 
   useEffect(() => {
     loadData();
@@ -208,7 +217,7 @@ function KidQuizSettingsInner() {
     setConnectingManual(true); setError(null);
     try {
       const headers = { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() };
-      const res = await fetch(`${API_URL}/api/v2/kidquiz/youtube/auth-url?usage=manual`, { headers });
+      const res = await fetch(`${API_URL}/api/v2/kidquiz/youtube/auth-url${ytAuthQuery({ usage: 'manual' })}`, { headers });
       const data = await res.json();
       if (data.configured === false) {
         setError(data.error || 'Set Client ID and Secret above and click Save first.');
@@ -264,6 +273,16 @@ function KidQuizSettingsInner() {
               <p className="text-xs mb-4" style={{ color: 'var(--color-text-muted)' }}>
                 Use a Google Cloud project for Kid Quiz so it gets its own quota. Create a project, enable YouTube Data API v3, add OAuth credentials, and set the redirect URI to your app&apos;s callback URL (see below).
               </p>
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>Google email (optional — for both Connect buttons on this page)</label>
+              <input
+                type="email"
+                autoComplete="email"
+                value={ytGoogleEmail}
+                onChange={(e) => setYtGoogleEmail(e.target.value)}
+                placeholder="you@gmail.com"
+                className="w-full max-w-md px-3 py-2 rounded-lg text-sm border mb-3"
+                style={{ borderColor: 'var(--color-border)', background: 'var(--color-bg)', color: 'var(--color-text-main)' }}
+              />
               {ytStatus?.custom_oauth && (
                 <>
                   <p className="text-xs font-medium mb-2" style={{ color: '#15803d' }}>Custom OAuth app is set — uploads use that project&apos;s quota.</p>

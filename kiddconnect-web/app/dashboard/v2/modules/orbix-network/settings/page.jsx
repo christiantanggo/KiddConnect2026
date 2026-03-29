@@ -408,6 +408,13 @@ function ChannelSettingsTab({ channel }) {
     frontend_origin: typeof window !== 'undefined' ? window.location.origin : ''
   }), [channel.id]);
   const apiBody = useCallback(() => ({ channel_id: channel.id }), [channel.id]);
+  const [ytGoogleEmail, setYtGoogleEmail] = useState('');
+  const youtubeAuthParams = useCallback(() => {
+    const p = { ...apiParams() };
+    const e = ytGoogleEmail.trim();
+    if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) p.login_hint = e;
+    return p;
+  }, [apiParams, ytGoogleEmail]);
   const channelEnabled = channel.enabled !== false;
   const [togglingEnabled, setTogglingEnabled] = useState(false);
 
@@ -566,7 +573,7 @@ function ChannelSettingsTab({ channel }) {
       setYtChannel(null);
       setYtCredentialsSource(null);
       setYtClientIdPreview(null);
-      const res = await orbixNetworkAPI.getYoutubeAuthUrl(apiParams());
+      const res = await orbixNetworkAPI.getYoutubeAuthUrl(youtubeAuthParams());
       if (res.data?.auth_url) {
         window.location.href = res.data.auth_url;
         return;
@@ -583,7 +590,7 @@ function ChannelSettingsTab({ channel }) {
     setYtSetupMsg(null);
     setConnectingYt(true);
     try {
-      const res = await orbixNetworkAPI.getYoutubeAuthUrl(apiParams());
+      const res = await orbixNetworkAPI.getYoutubeAuthUrl(youtubeAuthParams());
       if (res.data?.configured === false) {
         const msg = res.data?.message || res.data?.setup_instructions?.short || 'YouTube OAuth not configured. For this channel: add Client ID and Secret in Custom OAuth below, then try again.';
         setYtSetupMsg(msg);
@@ -618,7 +625,7 @@ function ChannelSettingsTab({ channel }) {
   const handleConnectYtManual = async () => {
     setConnectingYtManual(true);
     try {
-      const res = await orbixNetworkAPI.getYoutubeAuthUrl({ ...apiParams(), usage: 'manual' });
+      const res = await orbixNetworkAPI.getYoutubeAuthUrl({ ...youtubeAuthParams(), usage: 'manual' });
       if (res.data?.configured === false) {
         showError(res.data?.message || 'Add Manual upload OAuth Client ID and Secret below, then try again.');
         return;
@@ -880,6 +887,27 @@ function ChannelSettingsTab({ channel }) {
           </button>
         ))}
       </div>
+
+      {(subTab === 'youtube-auto' || subTab === 'youtube-manual') && (
+        <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg">
+          <label className="block text-xs font-medium text-slate-700 mb-1" htmlFor={`yt-google-email-${channel.id}`}>
+            Google account email (optional)
+          </label>
+          <input
+            id={`yt-google-email-${channel.id}`}
+            type="email"
+            autoComplete="email"
+            value={ytGoogleEmail}
+            onChange={(e) => setYtGoogleEmail(e.target.value)}
+            placeholder="owner@gmail.com for the YouTube channel"
+            className="w-full max-w-md px-3 py-2 border border-slate-300 rounded-lg text-sm text-slate-900 bg-white"
+          />
+          <p className="text-xs text-slate-600 mt-1.5">
+            Passed to Google as <code className="text-[11px]">login_hint</code> so that account is offered first. You can still pick another. If the wrong login keeps winning, use a private/incognito window. After connect, we store the{' '}
+            <strong>primary</strong> YouTube channel for that Google login (not brand/secondary channels unless that channel is default in YouTube).
+          </p>
+        </div>
+      )}
 
       {/* ── YouTube (auto upload) sub-tab ── */}
       {subTab === 'youtube-auto' && (

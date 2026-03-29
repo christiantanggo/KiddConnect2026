@@ -9,6 +9,7 @@ import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { OrganizationUser } from '../../models/v2/OrganizationUser.js';
 import { google } from 'googleapis';
+import { withYouTubeLoginHint, YOUTUBE_OAUTH_PROMPT } from '../../utils/google-oauth-url-options.js';
 import {
   STYLE_OPTIONS,
   analyzeStyleRecipe,
@@ -190,12 +191,17 @@ router.get('/youtube/auth-url', async (req, res) => {
         });
       }
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-      const url = oauth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
-        state: `${businessId}:dad-joke-studio:manual`,
-        prompt: 'consent',
-      });
+      const url = oauth2Client.generateAuthUrl(
+        withYouTubeLoginHint(
+          {
+            access_type: 'offline',
+            scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
+            state: `${businessId}:dad-joke-studio:manual`,
+            prompt: YOUTUBE_OAUTH_PROMPT,
+          },
+          req.query
+        )
+      );
       return res.json({ url, redirect_uri: redirectUri });
     }
 
@@ -213,12 +219,17 @@ router.get('/youtube/auth-url', async (req, res) => {
       });
     }
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-    const url = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
-      state: `${businessId}:dad-joke-studio`,
-      prompt: 'consent',
-    });
+    const url = oauth2Client.generateAuthUrl(
+      withYouTubeLoginHint(
+        {
+          access_type: 'offline',
+          scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
+          state: `${businessId}:dad-joke-studio`,
+          prompt: YOUTUBE_OAUTH_PROMPT,
+        },
+        req.query
+      )
+    );
     res.json({ url, redirect_uri: redirectUri });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -359,7 +370,8 @@ router.get('/assets', async (req, res) => {
     }
     const withUrls = rows.map((a) => {
       const { data: pub } = supabaseClient.storage.from(ASSETS_BUCKET).getPublicUrl(a.storage_path);
-      return { ...a, public_url: pub?.publicUrl || null };
+      const public_url = pub?.publicUrl || pub?.publicURL || null;
+      return { ...a, public_url };
     });
     res.json({ assets: withUrls });
   } catch (err) {
@@ -901,11 +913,26 @@ router.get('/content/:id/render-status', async (req, res) => {
 router.delete('/content/:id', async (req, res) => {
   try {
     const businessId = req.active_business_id;
-    await supabaseClient
+    const { data: row, error: fetchErr } = await supabaseClient
+      .from('dadjoke_studio_generated_content')
+      .select('id, status, deleted_at')
+      .eq('id', req.params.id)
+      .eq('business_id', businessId)
+      .maybeSingle();
+    if (fetchErr) throw fetchErr;
+    if (!row || row.deleted_at) return res.status(404).json({ error: 'Not found' });
+    if (['RENDERING', 'UPLOADING'].includes(row.status)) {
+      return res.status(409).json({
+        error: 'Cannot delete while a render or YouTube upload is in progress. Wait for it to finish or fail.',
+      });
+    }
+    const { error: upErr } = await supabaseClient
       .from('dadjoke_studio_generated_content')
       .update({ deleted_at: new Date().toISOString() })
       .eq('id', req.params.id)
-      .eq('business_id', businessId);
+      .eq('business_id', businessId)
+      .is('deleted_at', null);
+    if (upErr) throw upErr;
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

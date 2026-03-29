@@ -10,6 +10,7 @@ import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { defaultOrbixYoutubeCallbackUrl } from '../../config/public-urls.js';
 import { google } from 'googleapis';
+import { withYouTubeLoginHint, YOUTUBE_OAUTH_PROMPT } from '../../utils/google-oauth-url-options.js';
 import OpenAI from 'openai';
 import multer from 'multer';
 
@@ -150,12 +151,17 @@ router.get('/youtube/auth-url', async (req, res) => {
         });
       }
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-      const url = oauth2Client.generateAuthUrl({
-        access_type: 'offline',
-        scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
-        state: `${businessId}:kidquiz:manual`,
-        prompt: 'consent'
-      });
+      const url = oauth2Client.generateAuthUrl(
+        withYouTubeLoginHint(
+          {
+            access_type: 'offline',
+            scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
+            state: `${businessId}:kidquiz:manual`,
+            prompt: YOUTUBE_OAUTH_PROMPT,
+          },
+          req.query
+        )
+      );
       return res.json({ url, redirect_uri: redirectUri });
     }
 
@@ -175,12 +181,17 @@ router.get('/youtube/auth-url', async (req, res) => {
     }
 
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-    const url = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
-      state: `${businessId}:kidquiz`,
-      prompt: 'consent'
-    });
+    const url = oauth2Client.generateAuthUrl(
+      withYouTubeLoginHint(
+        {
+          access_type: 'offline',
+          scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
+          state: `${businessId}:kidquiz`,
+          prompt: YOUTUBE_OAUTH_PROMPT,
+        },
+        req.query
+      )
+    );
     res.json({ url, redirect_uri: redirectUri });
   } catch (err) {
     res.status(500).json({ error: err.message });
