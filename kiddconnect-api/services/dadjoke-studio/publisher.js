@@ -5,7 +5,7 @@ import { google } from 'googleapis';
 import { createReadStream } from 'fs';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
-import { defaultOrbixYoutubeCallbackUrl } from '../../config/public-urls.js';
+import { dadjokeYoutubeCallbackUrl } from '../../config/public-urls.js';
 
 const MODULE_KEY = 'dad-joke-studio';
 const THUMB_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_DADJOKE_STUDIO_ASSETS || 'dadjoke-studio-assets';
