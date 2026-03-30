@@ -8,6 +8,13 @@ function isUpstreamHtmlError(error) {
   return trimmed.startsWith('<') || trimmed.includes('<!DOCTYPE') || trimmed.includes('cloudflare');
 }
 
+/** Strip junk values clients sometimes send for X-Active-Business-Id (e.g. literal "null"). */
+function normalizeActiveBusinessHeader(raw) {
+  const v = String(raw ?? '').trim();
+  if (!v || /^null$/i.test(v) || /^undefined$/i.test(v)) return '';
+  return v;
+}
+
 /**
  * Simplified requireBusinessContext Middleware
  *
@@ -22,12 +29,13 @@ export const requireBusinessContext = async (req, res, next) => {
     }
 
     // Use X-Active-Business-Id when present and user has access; else user.business_id
-    let activeBusinessId = (req.headers['x-active-business-id'] || '').trim();
-    if (activeBusinessId && String(activeBusinessId) !== String(req.user.business_id)) {
+    let activeBusinessId = normalizeActiveBusinessHeader(req.headers['x-active-business-id']);
+    const userPrimaryBiz = req.user.business_id != null ? String(req.user.business_id) : '';
+    if (activeBusinessId && activeBusinessId !== userPrimaryBiz) {
       const membership = await OrganizationUser.findByUserAndBusiness(req.user.id, activeBusinessId).catch(() => null);
-      if (!membership) activeBusinessId = req.user.business_id;
+      if (!membership) activeBusinessId = userPrimaryBiz || '';
     }
-    if (!activeBusinessId) activeBusinessId = req.user.business_id;
+    if (!activeBusinessId) activeBusinessId = userPrimaryBiz || '';
 
     if (!activeBusinessId) {
       return res.status(400).json({
