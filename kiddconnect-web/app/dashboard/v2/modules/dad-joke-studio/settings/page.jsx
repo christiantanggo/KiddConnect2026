@@ -41,7 +41,6 @@ function DadJokeStudioSettingsInner() {
   const [loadingData, setLoadingData] = useState(false);
   const [moduleSettings, setModuleSettings] = useState({});
   const [ytStatus, setYtStatus] = useState(null);
-  const [ytGoogleEmail, setYtGoogleEmail] = useState('');
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
 
@@ -201,14 +200,22 @@ function DadJokeStudioSettingsInner() {
             <h2 className="font-semibold" style={{ color: 'var(--color-text-main)' }}>
               YouTube
             </h2>
-            <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-              Add this redirect URI in Google Cloud Console for your OAuth client:{' '}
-              <code className="text-xs break-all">…/api/v2/dad-joke-studio/youtube/callback</code>
+            <p className="text-sm font-medium" style={{ color: 'var(--color-text-main)' }}>
+              If Google shows <strong>redirect_uri_mismatch</strong>, add this exact URL under Google Cloud Console → APIs &amp; Services → Credentials → your OAuth 2.0 Client →{' '}
+              <em>Authorized redirect URIs</em> (in addition to any Kid Quiz / Orbix URIs):
             </p>
+            <pre
+              className="text-xs p-3 rounded-lg break-all whitespace-pre-wrap border"
+              style={{
+                background: 'var(--color-bg)',
+                borderColor: 'var(--color-border)',
+                color: 'var(--color-text-main)',
+              }}
+            >
+              {ytStatus?.oauth_redirect_uri || `${API}/api/v2/dad-joke-studio/youtube/callback`}
+            </pre>
             <p className="text-sm rounded-md p-3" style={{ background: 'var(--color-bg)', color: 'var(--color-text-main)' }}>
-              <strong>Wrong account?</strong> Enter the Google account email that owns the YouTube channel, then connect. We send it to Google as{' '}
-              <code className="text-xs">login_hint</code> and force the account picker. If Chrome still picks the wrong profile, use a private/incognito window
-              or sign out at google.com, then try again.
+              Connect opens Google’s <strong>account chooser</strong> first (you pick the Google user). We do not send <code className="text-xs">login_hint</code>, so the app won’t pre-pick an account for you.
             </p>
             <p className="text-sm">
               Status:{' '}
@@ -216,38 +223,23 @@ function DadJokeStudioSettingsInner() {
                 {ytStatus?.connected ? `Connected (${ytStatus.channel_title || 'channel'})` : 'Not connected'}
               </strong>
             </p>
-            <label className="block text-xs" style={{ color: 'var(--color-text-muted)' }}>
-              Google account email (strongly recommended)
-              <input
-                type="email"
-                className="mt-1 w-full max-w-md border p-2 text-sm rounded block"
-                style={{
-                  background: 'var(--color-surface)',
-                  borderColor: 'var(--color-border)',
-                  color: 'var(--color-text-main)',
-                }}
-                autoComplete="email"
-                value={ytGoogleEmail}
-                onChange={(e) => setYtGoogleEmail(e.target.value)}
-                placeholder="you@gmail.com"
-              />
-            </label>
             <button
               type="button"
               className="px-3 py-2 rounded text-white text-sm"
               style={{ background: '#c00' }}
               onClick={async () => {
                 setError(null);
-                const raw = ytGoogleEmail.trim();
-                const hasHint = raw && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
-                const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, {
-                  method: 'POST',
-                  headers: buildHeaders(),
-                  body: JSON.stringify(hasHint ? { login_hint: raw, email: raw } : {}),
-                });
+                const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, { headers: buildHeaders() });
                 const data = await res.json().catch(() => ({}));
-                if (res.ok && data.url) window.location.href = data.url;
-                else setError(data.error || 'Could not start YouTube sign-in');
+                if (data.configured === false) {
+                  setError(
+                    data.error ||
+                      'Add Client ID and Secret in the OAuth section below and click Save, or set YOUTUBE_CLIENT_ID/SECRET on the server (same as Kid Quiz).'
+                  );
+                  return;
+                }
+                if (data.url) window.location.href = data.url;
+                else setError(data.error || 'Could not get auth URL');
               }}
             >
               Connect YouTube

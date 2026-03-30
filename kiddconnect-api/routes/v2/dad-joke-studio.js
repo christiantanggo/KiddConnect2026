@@ -9,11 +9,7 @@ import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { OrganizationUser } from '../../models/v2/OrganizationUser.js';
 import { google } from 'googleapis';
-import {
-  withYouTubeLoginHint,
-  YOUTUBE_OAUTH_PROMPT,
-  oauthHintMergeFromRequest,
-} from '../../utils/google-oauth-url-options.js';
+import { dadjokeYoutubeCallbackUrl } from '../../config/public-urls.js';
 import {
   STYLE_OPTIONS,
   analyzeStyleRecipe,
@@ -27,15 +23,6 @@ import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-re
 
 const MODULE_KEY = 'dad-joke-studio';
 const ASSETS_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_DADJOKE_STUDIO_ASSETS || 'dadjoke-studio-assets';
-
-/** Same env keys as Kid Quiz so one Railway project can serve both modules. */
-function envYoutubeClientCredentials() {
-  const clientId =
-    (process.env.YOUTUBE_CLIENT_ID || process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || '').trim() || null;
-  const clientSecret =
-    (process.env.YOUTUBE_CLIENT_SECRET || process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || '').trim() || null;
-  return { clientId, clientSecret };
-}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -182,16 +169,16 @@ router.patch('/formats/:formatId', requireOwnerOrAdmin, async (req, res) => {
   }
 });
 
-// ─── YouTube OAuth (mirror Kid Quiz) ─────────────────────────────────────────
+// ─── YouTube OAuth (account chooser first; no login_hint — user picks Google account) ─
 
-async function dadJokeStudioYouTubeAuthUrlHandler(req, res) {
+const DAD_JOKE_YOUTUBE_PROMPT =
+  (process.env.DAD_JOKE_YOUTUBE_PROMPT || '').trim() || 'select_account consent';
+
+router.get('/youtube/auth-url', async (req, res) => {
   try {
     const businessId = req.active_business_id;
-    const hintSrc = oauthHintMergeFromRequest(req);
-    const usageManual = String(hintSrc.usage || '').toLowerCase() === 'manual';
-    const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5000/api/v2/orbix-network/youtube/callback';
-    const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
-    const redirectUri = `${baseUrl}/api/v2/dad-joke-studio/youtube/callback`;
+    const usageManual = (req.query.usage || '').toLowerCase() === 'manual';
+    const redirectUri = dadjokeYoutubeCallbackUrl();
 
     if (usageManual) {
       const moduleSettings = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
@@ -200,22 +187,18 @@ async function dadJokeStudioYouTubeAuthUrlHandler(req, res) {
       const clientSecret = (ytManual.manual_client_secret || '').trim();
       if (!clientId || !clientSecret) {
         return res.status(400).json({
-          error: 'Manual OAuth not set. Enter Client ID and Secret, save in module settings, then connect.',
+          error:
+            'Manual OAuth not set. Enter Client ID and Secret in the Manual-upload OAuth section and click Save, then try Connect again.',
           configured: false,
         });
       }
       const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-      const url = oauth2Client.generateAuthUrl(
-        withYouTubeLoginHint(
-          {
-            access_type: 'offline',
-            scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
-            state: `${businessId}:dad-joke-studio:manual`,
-            prompt: YOUTUBE_OAUTH_PROMPT,
-          },
-          hintSrc
-        )
-      );
+      const url = oauth2Client.generateAuthUrl({
+        access_type: 'offline',
+        scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
+        state: `${businessId}:dad-joke-studio:manual`,
+        prompt: DAD_JOKE_YOUTUBE_PROMPT,
+      });
       return res.json({ url, redirect_uri: redirectUri });
     }
 
@@ -224,37 +207,29 @@ async function dadJokeStudioYouTubeAuthUrlHandler(req, res) {
     const customId = (yt.client_id || '').trim();
     const customSecret = (yt.client_secret || '').trim();
     const useCustom = customId && customSecret;
-    const envCreds = envYoutubeClientCredentials();
-    const clientId = useCustom ? customId : envCreds.clientId;
-    const clientSecret = useCustom ? customSecret : envCreds.clientSecret;
+
+    const clientId = useCustom ? customId : (process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID);
+    const clientSecret = useCustom ? customSecret : (process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET);
     if (!clientId || !clientSecret) {
       return res.status(400).json({
         error:
-          'YouTube OAuth not configured. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET on the server (Railway → Variables), or use KIDQUIZ_YOUTUBE_CLIENT_ID / KIDQUIZ_YOUTUBE_CLIENT_SECRET. Alternatively save both Client ID and Secret in Dad Joke Studio → Settings.',
-        code: 'YOUTUBE_OAUTH_NOT_CONFIGURED',
+          'YouTube OAuth not configured. Add Client ID and Secret in the Upload OAuth app section above and click Save, or set YOUTUBE_CLIENT_ID/SECRET on the server.',
         configured: false,
       });
     }
+
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
-    const url = oauth2Client.generateAuthUrl(
-      withYouTubeLoginHint(
-        {
-          access_type: 'offline',
-          scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
-          state: `${businessId}:dad-joke-studio`,
-          prompt: YOUTUBE_OAUTH_PROMPT,
-        },
-        hintSrc
-      )
-    );
+    const url = oauth2Client.generateAuthUrl({
+      access_type: 'offline',
+      scope: ['https://www.googleapis.com/auth/youtube.upload', 'https://www.googleapis.com/auth/youtube.readonly'],
+      state: `${businessId}:dad-joke-studio`,
+      prompt: DAD_JOKE_YOUTUBE_PROMPT,
+    });
     res.json({ url, redirect_uri: redirectUri });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-}
-
-router.get('/youtube/auth-url', dadJokeStudioYouTubeAuthUrlHandler);
-router.post('/youtube/auth-url', express.json(), dadJokeStudioYouTubeAuthUrlHandler);
+});
 
 router.get('/youtube/status', async (req, res) => {
   try {
@@ -268,6 +243,7 @@ router.get('/youtube/status', async (req, res) => {
       connected_manual: !!(ytManual.manual_access_token),
       channel_title: yt.channel_title || ytManual.manual_channel_title || null,
       custom_oauth: !!(yt.client_id),
+      oauth_redirect_uri: dadjokeYoutubeCallbackUrl(),
     });
   } catch (err) {
     res.status(500).json({ error: err.message });

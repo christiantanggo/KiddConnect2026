@@ -5,6 +5,7 @@ import { google } from 'googleapis';
 import { createReadStream } from 'fs';
 import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { defaultOrbixYoutubeCallbackUrl } from '../../config/public-urls.js';
 
 const MODULE_KEY = 'dad-joke-studio';
 const THUMB_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_DADJOKE_STUDIO_ASSETS || 'dadjoke-studio-assets';
@@ -32,9 +33,9 @@ async function getYouTubeClient(businessId) {
     clientId = (yt?.client_id || '').trim();
     clientSecret = (yt?.client_secret || '').trim();
     if (!clientId || !clientSecret) {
-      clientId = (process.env.YOUTUBE_CLIENT_ID || process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || '').trim() || undefined;
+      clientId = (process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID || '').trim() || undefined;
       clientSecret =
-        (process.env.YOUTUBE_CLIENT_SECRET || process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || '').trim() || undefined;
+        (process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET || '').trim() || undefined;
     }
     if (!yt?.access_token) {
       throw new Error('YouTube not connected for Dad Joke Studio. Open Upload & YouTube in the studio and connect.');
@@ -49,9 +50,7 @@ async function getYouTubeClient(businessId) {
     throw new Error('YouTube OAuth client not configured. Add Client ID and Secret in module settings, then connect YouTube.');
   }
 
-  const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5000/api/v2/orbix-network/youtube/callback';
-  const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
-  const redirectUri = `${baseUrl}/api/v2/dad-joke-studio/youtube/callback`;
+  const redirectUri = dadjokeYoutubeCallbackUrl();
 
   const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
   oauth2Client.setCredentials({
