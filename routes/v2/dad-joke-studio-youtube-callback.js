@@ -41,8 +41,12 @@ router.get('/youtube/callback', async (req, res) => {
     } else {
       const existingAuto = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
       const yt = existingAuto?.settings?.youtube || {};
-      clientId = (yt.client_id || '').trim() || process.env.YOUTUBE_CLIENT_ID;
-      clientSecret = (yt.client_secret || '').trim() || process.env.YOUTUBE_CLIENT_SECRET;
+      clientId =
+        (yt.client_id || '').trim() ||
+        (process.env.YOUTUBE_CLIENT_ID || process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || '').trim();
+      clientSecret =
+        (yt.client_secret || '').trim() ||
+        (process.env.YOUTUBE_CLIENT_SECRET || process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || '').trim();
       if (!clientId || !clientSecret) {
         return res.redirect(`${FRONTEND}/dashboard/v2/modules/dad-joke-studio/dashboard?error=youtube_not_configured&studioSection=upload`);
       }

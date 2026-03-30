@@ -32,8 +32,9 @@ async function getYouTubeClient(businessId) {
     clientId = (yt?.client_id || '').trim();
     clientSecret = (yt?.client_secret || '').trim();
     if (!clientId || !clientSecret) {
-      clientId = process.env.YOUTUBE_CLIENT_ID;
-      clientSecret = process.env.YOUTUBE_CLIENT_SECRET;
+      clientId = (process.env.YOUTUBE_CLIENT_ID || process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || '').trim() || undefined;
+      clientSecret =
+        (process.env.YOUTUBE_CLIENT_SECRET || process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || '').trim() || undefined;
     }
     if (!yt?.access_token) {
       throw new Error('YouTube not connected for Dad Joke Studio. Open Upload & YouTube in the studio and connect.');

@@ -28,6 +28,15 @@ import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-re
 const MODULE_KEY = 'dad-joke-studio';
 const ASSETS_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_DADJOKE_STUDIO_ASSETS || 'dadjoke-studio-assets';
 
+/** Same env keys as Kid Quiz so one Railway project can serve both modules. */
+function envYoutubeClientCredentials() {
+  const clientId =
+    (process.env.YOUTUBE_CLIENT_ID || process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || '').trim() || null;
+  const clientSecret =
+    (process.env.YOUTUBE_CLIENT_SECRET || process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || '').trim() || null;
+  return { clientId, clientSecret };
+}
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 22 * 1024 * 1024 },
@@ -215,11 +224,14 @@ async function dadJokeStudioYouTubeAuthUrlHandler(req, res) {
     const customId = (yt.client_id || '').trim();
     const customSecret = (yt.client_secret || '').trim();
     const useCustom = customId && customSecret;
-    const clientId = useCustom ? customId : process.env.YOUTUBE_CLIENT_ID;
-    const clientSecret = useCustom ? customSecret : process.env.YOUTUBE_CLIENT_SECRET;
+    const envCreds = envYoutubeClientCredentials();
+    const clientId = useCustom ? customId : envCreds.clientId;
+    const clientSecret = useCustom ? customSecret : envCreds.clientSecret;
     if (!clientId || !clientSecret) {
       return res.status(400).json({
-        error: 'YouTube OAuth not configured. Add Client ID and Secret in module settings or env.',
+        error:
+          'YouTube OAuth not configured. Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET on the server (Railway → Variables), or use KIDQUIZ_YOUTUBE_CLIENT_ID / KIDQUIZ_YOUTUBE_CLIENT_SECRET. Alternatively save both Client ID and Secret in Dad Joke Studio → Settings.',
+        code: 'YOUTUBE_OAUTH_NOT_CONFIGURED',
         configured: false,
       });
     }
