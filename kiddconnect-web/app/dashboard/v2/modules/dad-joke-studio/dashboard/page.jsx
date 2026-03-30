@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 
@@ -395,8 +396,35 @@ function DadJokeStudioDashboardInner() {
   }, [loadFormats]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/v2/modules/${MODULE}`, { headers: buildHeaders() });
+        if (!res.ok) {
+          if (!cancelled) setAccessAllowed(true);
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        const ok = !!data.module?.subscribed;
+        if (!ok) {
+          router.replace(`/dashboard/v2/modules/${MODULE}`);
+          return;
+        }
+        setAccessAllowed(true);
+      } catch {
+        if (!cancelled) setAccessAllowed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  useEffect(() => {
+    if (accessAllowed !== true) return;
     loadAll();
-  }, [loadAll]);
+  }, [accessAllowed, loadAll]);
 
   useEffect(() => {
     if (mainSection !== 'ideas') return;
@@ -409,8 +437,8 @@ function DadJokeStudioDashboardInner() {
   useEffect(() => {
     const sec = searchParams.get('studioSection');
     if (sec) setMainSection(sec);
-    if (searchParams.get('youtube_connected') === 'true') loadAll();
-  }, [searchParams, loadAll]);
+    if (accessAllowed === true && searchParams.get('youtube_connected') === 'true') loadAll();
+  }, [searchParams, loadAll, accessAllowed]);
 
   useEffect(() => {
     if (!pollRender || !content?.id) return;
@@ -780,8 +808,8 @@ function DadJokeStudioDashboardInner() {
 
   if (accessAllowed === null) {
     return (
-      <div className="text-sm p-8" style={{ color: 'var(--color-text-muted)' }}>
-        Loading…
+      <div className="text-sm p-8 text-slate-600 dark:text-slate-300">
+        Checking access…
       </div>
     );
   }
@@ -1450,9 +1478,17 @@ function DadJokeStudioDashboardInner() {
             Uses the same Google OAuth app as the rest of KiddConnect. Add your redirect URI:{' '}
             <code className="text-xs">…/api/v2/dad-joke-studio/youtube/callback</code>
           </p>
+          <p className="text-sm rounded-md p-3 mb-2" style={{ background: 'var(--color-bg)', color: 'var(--color-text-main)' }}>
+            <strong>Wrong Google account?</strong> Enter that account&apos;s email below, then connect (we send <code className="text-xs">login_hint</code> and force
+            Google&apos;s account picker). Prefer a dedicated screen? Use{' '}
+            <Link href="/dashboard/v2/modules/dad-joke-studio/settings" className="underline">
+              Dad Joke Studio → Settings
+            </Link>
+            . If the browser still picks the wrong profile, try an incognito window.
+          </p>
           <p className="text-sm">YouTube: {ytStatus?.connected ? `Connected (${ytStatus.channel_title || 'channel'})` : 'Not connected'}</p>
           <label className="block text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
-            Google email (optional — helps Google offer the right account first)
+            Google account email (recommended)
             <input
               type="email"
               className="mt-1 w-full max-w-sm border p-2 text-sm rounded block"
@@ -1471,13 +1507,17 @@ function DadJokeStudioDashboardInner() {
             className="px-3 py-2 rounded text-white text-sm mt-2"
             style={{ background: '#c00' }}
             onClick={async () => {
-              const q = new URLSearchParams();
-              const e = ytGoogleEmail.trim();
-              if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) q.set('login_hint', e);
-              const qs = q.toString();
-              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url${qs ? `?${qs}` : ''}`, { headers: buildHeaders() });
-              const d = await res.json();
-              if (d.url) window.location.href = d.url;
+              setError(null);
+              const raw = ytGoogleEmail.trim();
+              const hasHint = raw && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, {
+                method: 'POST',
+                headers: buildHeaders(),
+                body: JSON.stringify(hasHint ? { login_hint: raw, email: raw } : {}),
+              });
+              const d = await res.json().catch(() => ({}));
+              if (res.ok && d.url) window.location.href = d.url;
+              else setError(d.error || 'Could not start YouTube sign-in');
             }}
           >
             Connect YouTube

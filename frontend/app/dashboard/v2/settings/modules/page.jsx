@@ -147,6 +147,7 @@ export default function ModuleSettingsPage() {
       'reviews': '/review-reply-ai/dashboard/settings',
       'phone-agent': '/tavari-ai-phone/dashboard/settings',
       'orbix-network': '/dashboard/v2/modules/orbix-network/settings',
+      'dad-joke-studio': '/dashboard/v2/modules/dad-joke-studio/settings',
       'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
       'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
     };

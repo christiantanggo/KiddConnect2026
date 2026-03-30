@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 
@@ -106,8 +107,35 @@ function DadJokeStudioDashboardInner() {
   }, [loadFormats]);
 
   useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`${API}/api/v2/modules/${MODULE}`, { headers: buildHeaders() });
+        if (!res.ok) {
+          if (!cancelled) setAccessAllowed(true);
+          return;
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        const ok = !!data.module?.subscribed;
+        if (!ok) {
+          router.replace(`/dashboard/v2/modules/${MODULE}`);
+          return;
+        }
+        setAccessAllowed(true);
+      } catch {
+        if (!cancelled) setAccessAllowed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [router]);
+
+  useEffect(() => {
+    if (accessAllowed !== true) return;
     loadAll();
-  }, [loadAll]);
+  }, [accessAllowed, loadAll]);
 
   useEffect(() => {
     if (mainSection !== 'ideas') return;
@@ -120,8 +148,8 @@ function DadJokeStudioDashboardInner() {
   useEffect(() => {
     const sec = searchParams.get('studioSection');
     if (sec) setMainSection(sec);
-    if (searchParams.get('youtube_connected') === 'true') loadAll();
-  }, [searchParams, loadAll]);
+    if (accessAllowed === true && searchParams.get('youtube_connected') === 'true') loadAll();
+  }, [searchParams, loadAll, accessAllowed]);
 
   useEffect(() => {
     if (!pollRender || !content?.id) return;
@@ -398,8 +426,8 @@ function DadJokeStudioDashboardInner() {
 
   if (accessAllowed === null) {
     return (
-      <div className="text-sm p-8" style={{ color: 'var(--color-text-muted)' }}>
-        Loading…
+      <div className="text-sm p-8 text-slate-600 dark:text-slate-300">
+        Checking access…
       </div>
     );
   }
@@ -926,13 +954,17 @@ function DadJokeStudioDashboardInner() {
             className="px-3 py-2 rounded text-white text-sm mt-2"
             style={{ background: '#c00' }}
             onClick={async () => {
-              const q = new URLSearchParams();
-              const e = ytGoogleEmail.trim();
-              if (e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) q.set('login_hint', e);
-              const qs = q.toString();
-              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url${qs ? `?${qs}` : ''}`, { headers: buildHeaders() });
-              const d = await res.json();
-              if (d.url) window.location.href = d.url;
+              setError(null);
+              const raw = ytGoogleEmail.trim();
+              const hasHint = raw && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
+              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, {
+                method: 'POST',
+                headers: buildHeaders(),
+                body: JSON.stringify(hasHint ? { login_hint: raw, email: raw } : {}),
+              });
+              const d = await res.json().catch(() => ({}));
+              if (res.ok && d.url) window.location.href = d.url;
+              else setError(d.error || 'Could not start YouTube sign-in');
             }}
           >
             Connect YouTube
