@@ -266,6 +266,71 @@ export async function generateLongFormScript(params) {
   }
 }
 
+/**
+ * YouTube title, description, and tags from studio content (publish step).
+ * @param {object} ctx
+ */
+export async function generateYouTubeMetadata(ctx) {
+  const {
+    title = '',
+    content_type = '',
+    format_key = '',
+    script_excerpt = '',
+    setup = '',
+    punchline = '',
+    ai_prompt = '',
+  } = ctx || {};
+
+  const openai = getClient();
+  const userBlock = [
+    `Working title (you may improve): ${title || '(none)'}`,
+    `Video type: ${content_type || 'unknown'}; format: ${format_key || 'unknown'}`,
+    setup ? `Setup: ${setup}` : '',
+    punchline ? `Punchline: ${punchline}` : '',
+    script_excerpt ? `Storyboard / script beats:\n${script_excerpt}` : '',
+    ai_prompt ? `Creator notes: ${ai_prompt}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o-mini',
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You write YouTube metadata for family-friendly dad-humor Shorts and long-form videos. ' +
+          'Return JSON only: {"title":"","description":"","tags":[]}. ' +
+          'title: catchy, max ~95 characters, honest (no false clickbait), no emoji unless one subtle one is clearly fitting. ' +
+          'description: 2–6 short lines; optional light CTA to subscribe or comment; you may end with 2–4 hashtags as words with #. ' +
+          'tags: array of 8–12 strings for YouTube search — lowercase phrases, no # in the array values. ' +
+          'Keep content general-audience safe.',
+      },
+      {
+        role: 'user',
+        content: userBlock || 'Generate generic dad-joke comedy metadata.',
+      },
+    ],
+    response_format: { type: 'json_object' },
+    temperature: 0.75,
+  });
+  const text = completion.choices[0]?.message?.content || '{}';
+  try {
+    const parsed = JSON.parse(text);
+    const outTitle = String(parsed.title || title || 'Dad joke video').trim().slice(0, 100);
+    const outDesc = String(parsed.description || '').trim();
+    let tags = Array.isArray(parsed.tags) ? parsed.tags.map((t) => String(t).trim()).filter(Boolean) : [];
+    tags = [...new Set(tags.map((t) => t.replace(/^#/, '')))].slice(0, 15);
+    return { title: outTitle, description: outDesc, tags };
+  } catch {
+    return {
+      title: (title || 'Dad joke video').slice(0, 100),
+      description: '',
+      tags: ['dad jokes', 'comedy', 'shorts', 'funny'],
+    };
+  }
+}
+
 export async function generatePlaceholderLongForm(formatKey, aiPrompt) {
   const openai = getClient();
   const completion = await openai.chat.completions.create({
