@@ -9,7 +9,11 @@ import { supabaseClient } from '../../config/database.js';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { OrganizationUser } from '../../models/v2/OrganizationUser.js';
 import { google } from 'googleapis';
-import { withYouTubeLoginHint, YOUTUBE_OAUTH_PROMPT } from '../../utils/google-oauth-url-options.js';
+import {
+  withYouTubeLoginHint,
+  YOUTUBE_OAUTH_PROMPT,
+  oauthHintMergeFromRequest,
+} from '../../utils/google-oauth-url-options.js';
 import {
   STYLE_OPTIONS,
   analyzeStyleRecipe,
@@ -171,10 +175,11 @@ router.patch('/formats/:formatId', requireOwnerOrAdmin, async (req, res) => {
 
 // ─── YouTube OAuth (mirror Kid Quiz) ─────────────────────────────────────────
 
-router.get('/youtube/auth-url', async (req, res) => {
+async function dadJokeStudioYouTubeAuthUrlHandler(req, res) {
   try {
     const businessId = req.active_business_id;
-    const usageManual = (req.query.usage || '').toLowerCase() === 'manual';
+    const hintSrc = oauthHintMergeFromRequest(req);
+    const usageManual = String(hintSrc.usage || '').toLowerCase() === 'manual';
     const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5000/api/v2/orbix-network/youtube/callback';
     const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
     const redirectUri = `${baseUrl}/api/v2/dad-joke-studio/youtube/callback`;
@@ -199,7 +204,7 @@ router.get('/youtube/auth-url', async (req, res) => {
             state: `${businessId}:dad-joke-studio:manual`,
             prompt: YOUTUBE_OAUTH_PROMPT,
           },
-          req.query
+          hintSrc
         )
       );
       return res.json({ url, redirect_uri: redirectUri });
@@ -227,14 +232,17 @@ router.get('/youtube/auth-url', async (req, res) => {
           state: `${businessId}:dad-joke-studio`,
           prompt: YOUTUBE_OAUTH_PROMPT,
         },
-        req.query
+        hintSrc
       )
     );
     res.json({ url, redirect_uri: redirectUri });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
-});
+}
+
+router.get('/youtube/auth-url', dadJokeStudioYouTubeAuthUrlHandler);
+router.post('/youtube/auth-url', express.json(), dadJokeStudioYouTubeAuthUrlHandler);
 
 router.get('/youtube/status', async (req, res) => {
   try {
