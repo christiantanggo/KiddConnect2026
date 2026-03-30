@@ -1,32 +1,34 @@
 /**
- * Dad Joke Studio — YouTube OAuth callback (public).
- * Same OAuth app as Kid Quiz / Orbix; stores tokens under module_key dad-joke-studio.
+ * Dad Joke Studio — YouTube OAuth Callback (PUBLIC route, no auth)
+ * Same pattern as kidquiz-youtube-callback.js; stores under module_key dad-joke-studio.
  */
 import express from 'express';
 import { google } from 'googleapis';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
+import { defaultOrbixYoutubeCallbackUrl, getFrontendPublicBaseUrl } from '../../config/public-urls.js';
 
 const router = express.Router();
 const MODULE_KEY = 'dad-joke-studio';
-const FRONTEND = process.env.FRONTEND_URL || 'http://localhost:3000';
-const DADJOKE_YT_RETURN = `${FRONTEND}/dashboard/v2/modules/dad-joke-studio/settings`;
+const FRONTEND = getFrontendPublicBaseUrl();
 
 router.get('/youtube/callback', async (req, res) => {
   try {
     const { code, state, error } = req.query;
 
+    const settingsPath = `${FRONTEND}/dashboard/v2/modules/dad-joke-studio/settings`;
+
     if (error) {
-      return res.redirect(`${DADJOKE_YT_RETURN}?error=youtube_oauth_denied`);
+      return res.redirect(`${settingsPath}?error=youtube_oauth_denied`);
     }
     if (!code) {
-      return res.redirect(`${DADJOKE_YT_RETURN}?error=youtube_oauth_failed`);
+      return res.redirect(`${settingsPath}?error=youtube_oauth_failed`);
     }
 
     const stateParts = (state || '').split(':');
     const businessId = stateParts[0] || state;
     const isManual = stateParts[2] === 'manual';
     if (!businessId) {
-      return res.redirect(`${DADJOKE_YT_RETURN}?error=invalid_state`);
+      return res.redirect(`${settingsPath}?error=invalid_state`);
     }
 
     let clientId, clientSecret;
@@ -36,25 +38,22 @@ router.get('/youtube/callback', async (req, res) => {
       clientId = (ytManual.manual_client_id || '').trim();
       clientSecret = (ytManual.manual_client_secret || '').trim();
       if (!clientId || !clientSecret) {
-        return res.redirect(`${FRONTEND}/dashboard/v2/modules/dad-joke-studio/dashboard?error=youtube_not_configured&studioSection=upload`);
+        return res.redirect(`${settingsPath}?error=youtube_not_configured`);
       }
     } else {
       const existingAuto = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
       const yt = existingAuto?.settings?.youtube || {};
       clientId =
-        (yt.client_id || '').trim() ||
-        (process.env.YOUTUBE_CLIENT_ID || process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || '').trim();
+        (yt.client_id || '').trim() || (process.env.KIDQUIZ_YOUTUBE_CLIENT_ID || process.env.YOUTUBE_CLIENT_ID);
       clientSecret =
         (yt.client_secret || '').trim() ||
-        (process.env.YOUTUBE_CLIENT_SECRET || process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || '').trim();
+        (process.env.KIDQUIZ_YOUTUBE_CLIENT_SECRET || process.env.YOUTUBE_CLIENT_SECRET);
       if (!clientId || !clientSecret) {
-        return res.redirect(`${FRONTEND}/dashboard/v2/modules/dad-joke-studio/dashboard?error=youtube_not_configured&studioSection=upload`);
+        return res.redirect(`${settingsPath}?error=youtube_not_configured`);
       }
     }
 
-    const raw = process.env.YOUTUBE_REDIRECT_URI || 'http://localhost:5000/api/v2/orbix-network/youtube/callback';
-    const baseUrl = raw.replace(/\/api\/v2\/.+$/, '');
-    const redirectUri = `${baseUrl}/api/v2/dad-joke-studio/youtube/callback`;
+    const redirectUri = dadjokeYoutubeCallbackUrl();
 
     const oauth2Client = new google.auth.OAuth2(clientId, clientSecret, redirectUri);
 
@@ -66,7 +65,7 @@ router.get('/youtube/callback', async (req, res) => {
       const data = tokenError?.response?.data;
       console.error('[DadJokeStudio YouTube Callback] getToken failed:', data?.error, data?.error_description);
       if (data?.error === 'invalid_grant' || tokenError?.message?.includes('invalid_grant')) {
-        return res.redirect(`${DADJOKE_YT_RETURN}?error=invalid_grant`);
+        return res.redirect(`${settingsPath}?error=invalid_grant`);
       }
       throw tokenError;
     }
@@ -76,7 +75,7 @@ router.get('/youtube/callback', async (req, res) => {
     const channelResponse = await youtube.channels.list({ part: ['snippet'], mine: true });
     const channel = channelResponse.data.items?.[0];
     if (!channel) {
-      return res.redirect(`${DADJOKE_YT_RETURN}?error=no_channel_found`);
+      return res.redirect(`${settingsPath}?error=no_channel_found`);
     }
 
     const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
@@ -110,14 +109,15 @@ router.get('/youtube/callback', async (req, res) => {
     await ModuleSettings.update(businessId, MODULE_KEY, settings);
     console.log('[DadJokeStudio YouTube Callback] Saved credentials businessId=', businessId, 'channel=', channel.id);
 
-    res.redirect(`${DADJOKE_YT_RETURN}?youtube_connected=true`);
+    res.redirect(`${settingsPath}?youtube_connected=true`);
   } catch (err) {
+    const settingsPath = `${FRONTEND}/dashboard/v2/modules/dad-joke-studio/settings`;
     const isInvalidGrant = err?.response?.data?.error === 'invalid_grant' || err?.message?.includes('invalid_grant');
     console.error('[DadJokeStudio YouTube Callback] Error:', err?.message);
     if (isInvalidGrant) {
-      return res.redirect(`${DADJOKE_YT_RETURN}?error=invalid_grant`);
+      return res.redirect(`${settingsPath}?error=invalid_grant`);
     }
-    res.redirect(`${DADJOKE_YT_RETURN}?error=youtube_oauth_error`);
+    res.redirect(`${settingsPath}?error=youtube_oauth_error`);
   }
 });
 

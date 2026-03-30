@@ -58,7 +58,6 @@ function DadJokeStudioDashboardInner() {
   const [libFilter, setLibFilter] = useState({ content_type: '', format_key: '', status: '' });
   const [assets, setAssets] = useState([]);
   const [ytStatus, setYtStatus] = useState(null);
-  const [ytGoogleEmail, setYtGoogleEmail] = useState('');
   const [moduleSettings, setModuleSettings] = useState({});
   const [uploadForm, setUploadForm] = useState({
     title: '',
@@ -930,41 +929,39 @@ function DadJokeStudioDashboardInner() {
       {mainSection === 'upload' && (
         <div className="space-y-4 max-w-lg">
           <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-            Uses the same Google OAuth app as the rest of KiddConnect. Add your redirect URI:{' '}
-            <code className="text-xs">…/api/v2/dad-joke-studio/youtube/callback</code>
+            Uses the same Google OAuth app as the rest of KiddConnect. If Google shows <strong>redirect_uri_mismatch</strong>, add this exact redirect URI in Google Cloud (see{' '}
+            <Link href="/dashboard/v2/modules/dad-joke-studio/settings" className="underline">
+              Settings
+            </Link>
+            ):
+          </p>
+          <pre
+            className="text-xs p-2 rounded border break-all whitespace-pre-wrap mb-2"
+            style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text-main)' }}
+          >
+            {ytStatus?.oauth_redirect_uri || `${API}/api/v2/dad-joke-studio/youtube/callback`}
+          </pre>
+          <p className="text-sm rounded-md p-3 mb-2" style={{ background: 'var(--color-bg)', color: 'var(--color-text-main)' }}>
+            <strong>Connect YouTube</strong> opens Google’s account chooser (no pre-selected account). We only store the primary YouTube channel for the Google user you choose.
           </p>
           <p className="text-sm">YouTube: {ytStatus?.connected ? `Connected (${ytStatus.channel_title || 'channel'})` : 'Not connected'}</p>
-          <label className="block text-xs mt-2" style={{ color: 'var(--color-text-muted)' }}>
-            Google email (optional — helps Google offer the right account first)
-            <input
-              type="email"
-              className="mt-1 w-full max-w-sm border p-2 text-sm rounded block"
-              style={{ background: 'var(--color-surface)', borderColor: 'var(--color-border)', color: 'var(--color-text-main)' }}
-              autoComplete="email"
-              value={ytGoogleEmail}
-              onChange={(e) => setYtGoogleEmail(e.target.value)}
-              placeholder="you@gmail.com"
-            />
-          </label>
-          <p className="text-xs mt-1" style={{ color: 'var(--color-text-muted)' }}>
-            We only store the <strong>primary</strong> YouTube channel for the Google account you pick. Wrong channel with one login? Set that channel as default in YouTube, or use incognito and pick the right Google user.
-          </p>
           <button
             type="button"
             className="px-3 py-2 rounded text-white text-sm mt-2"
             style={{ background: '#c00' }}
             onClick={async () => {
               setError(null);
-              const raw = ytGoogleEmail.trim();
-              const hasHint = raw && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw);
-              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, {
-                method: 'POST',
-                headers: buildHeaders(),
-                body: JSON.stringify(hasHint ? { login_hint: raw, email: raw } : {}),
-              });
+              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, { headers: buildHeaders() });
               const d = await res.json().catch(() => ({}));
-              if (res.ok && d.url) window.location.href = d.url;
-              else setError(d.error || 'Could not start YouTube sign-in');
+              if (d.configured === false) {
+                setError(
+                  d.error ||
+                    'Add OAuth Client ID and Secret in settings or set YOUTUBE_* env on the server (same as Kid Quiz).'
+                );
+                return;
+              }
+              if (d.url) window.location.href = d.url;
+              else setError(d.error || 'Could not get auth URL');
             }}
           >
             Connect YouTube

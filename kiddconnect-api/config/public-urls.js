@@ -45,6 +45,11 @@ export function kidquizYoutubeCallbackUrl() {
   return `${getApiPublicBaseUrl()}/api/v2/kidquiz/youtube/callback`;
 }
 
+/** Dad Joke Studio YouTube OAuth redirect (must be listed in Google Cloud → OAuth client). */
+export function dadjokeYoutubeCallbackUrl() {
+  return `${getApiPublicBaseUrl()}/api/v2/dad-joke-studio/youtube/callback`;
+}
+
 /** Riddle / per-channel Orbix YouTube OAuth redirect. */
 export function riddleYoutubeCallbackUrl() {
   return `${getApiPublicBaseUrl()}/api/v2/riddle/youtube/callback`;
