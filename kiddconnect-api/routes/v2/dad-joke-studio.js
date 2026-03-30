@@ -1036,8 +1036,19 @@ router.post('/publish-queue', async (req, res) => {
 
     let scheduleIso = null;
     if (schedule_publish_at_utc) {
-      scheduleIso = assertScheduleUtc(schedule_publish_at_utc);
+      try {
+        scheduleIso = assertScheduleUtc(schedule_publish_at_utc);
+      } catch (schedErr) {
+        return res.status(400).json({ error: schedErr.message || 'Invalid schedule time.' });
+      }
     }
+
+    console.log('[DadJokeStudio publish-queue] enqueue', {
+      businessId,
+      generated_content_id,
+      rendered_output_id,
+      scheduled: !!scheduleIso,
+    });
 
     const { data: pubRow, error: pErr } = await supabaseClient
       .from('dadjoke_studio_publish_queue')
