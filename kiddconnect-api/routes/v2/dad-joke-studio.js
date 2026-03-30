@@ -18,6 +18,7 @@ import {
   generateShortsScript,
   generateLongFormScript,
   generatePlaceholderLongForm,
+  generateYouTubeMetadata,
 } from '../../services/dadjoke-studio/ai.js';
 import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-resolver.js';
 
@@ -247,6 +248,62 @@ router.get('/youtube/status', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+function parseJsonField(v, fallback) {
+  if (v == null) return fallback;
+  if (typeof v === 'object' && !Buffer.isBuffer(v)) return v;
+  if (typeof v === 'string') {
+    try {
+      return JSON.parse(v);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function storyboardToExcerpt(sb) {
+  const arr = Array.isArray(sb) ? sb : [];
+  return arr
+    .map((x) => [x?.label, x?.text].filter(Boolean).join(': '))
+    .join('\n')
+    .slice(0, 6000);
+}
+
+/** AI-filled title, description, tags for YouTube publish (from current library item). */
+router.post('/youtube/suggest-metadata', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const { generated_content_id } = req.body || {};
+    if (!generated_content_id) {
+      return res.status(400).json({ error: 'generated_content_id is required' });
+    }
+    const { data: row, error } = await supabaseClient
+      .from('dadjoke_studio_generated_content')
+      .select('id, title, content_type, format_key, storyboard_json, content_json, ai_prompt')
+      .eq('id', generated_content_id)
+      .eq('business_id', businessId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!row) return res.status(404).json({ error: 'Content not found' });
+
+    const cj = parseJsonField(row.content_json, {});
+    const sb = parseJsonField(row.storyboard_json, []);
+    const meta = await generateYouTubeMetadata({
+      title: String(row.title || '').trim(),
+      content_type: row.content_type || '',
+      format_key: row.format_key || '',
+      script_excerpt: storyboardToExcerpt(sb),
+      setup: String(cj.setup || '').trim(),
+      punchline: String(cj.punchline || '').trim(),
+      ai_prompt: String(row.ai_prompt || '').trim(),
+    });
+    res.json(meta);
+  } catch (err) {
+    console.error('[DadJokeStudio youtube/suggest-metadata]', err);
+    res.status(500).json({ error: err.message || 'Failed to suggest metadata' });
   }
 });
 
