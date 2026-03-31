@@ -58,7 +58,6 @@ function DadJokeStudioDashboardInner() {
   const [libFilter, setLibFilter] = useState({ content_type: '', format_key: '', status: '' });
   const [assets, setAssets] = useState([]);
   const [ytStatus, setYtStatus] = useState(null);
-  const [moduleSettings, setModuleSettings] = useState({});
   const [uploadForm, setUploadForm] = useState({
     title: '',
     description: '',
@@ -72,6 +71,8 @@ function DadJokeStudioDashboardInner() {
   const [generating, setGenerating] = useState(false);
   const [uploadScope, setUploadScope] = useState('global');
   const [uploadFormatKeys, setUploadFormatKeys] = useState([]);
+  const [suggestingYoutubeMeta, setSuggestingYoutubeMeta] = useState(false);
+  const [publishing, setPublishing] = useState(false);
 
   const loadFormats = useCallback(async () => {
     const res = await fetch(`${API}/api/v2/dad-joke-studio/formats`, { headers: buildHeaders() });
@@ -86,18 +87,16 @@ function DadJokeStudioDashboardInner() {
     try {
       await loadFormats();
       const h = buildHeaders();
-      const [so, libRes, astRes, yt, ms] = await Promise.all([
+      const [so, libRes, astRes, yt] = await Promise.all([
         fetch(`${API}/api/v2/dad-joke-studio/style-options`, { headers: h }).then((r) => r.json()),
         fetch(`${API}/api/v2/dad-joke-studio/content`, { headers: h }).then((r) => r.json()),
         fetch(`${API}/api/v2/dad-joke-studio/assets`, { headers: h }).then((r) => r.json()),
         fetch(`${API}/api/v2/dad-joke-studio/youtube/status`, { headers: h }).then((r) => r.json()),
-        fetch(`${API}/api/v2/settings/modules/${MODULE}`, { headers: h }).then((r) => r.json()),
       ]);
       setStyleCategories(so.categories || {});
       setLibrary(libRes.items || []);
       setAssets(astRes.assets || []);
       setYtStatus(yt);
-      setModuleSettings(ms.settings || {});
     } catch (e) {
       setError(e.message);
     } finally {
@@ -146,7 +145,7 @@ function DadJokeStudioDashboardInner() {
 
   useEffect(() => {
     const sec = searchParams.get('studioSection');
-    if (sec) setMainSection(sec);
+    if (sec) setMainSection(sec === 'upload' ? 'studio' : sec);
     if (accessAllowed === true && searchParams.get('youtube_connected') === 'true') loadAll();
   }, [searchParams, loadAll, accessAllowed]);
 
@@ -331,27 +330,73 @@ function DadJokeStudioDashboardInner() {
   }
 
   async function runPublish() {
-    if (!content?.id || !content.current_render_id) return;
+    if (!content?.id) {
+      setError('Open a draft from Studio or Library first.');
+      return;
+    }
+    let renderedOutputId = content.current_render_id;
+    if (!renderedOutputId) {
+      try {
+        const rs = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}/render-status`, {
+          headers: buildHeaders(),
+        });
+        const rsData = await rs.json().catch(() => ({}));
+        if (rs.ok && rsData.render?.render_status === 'READY' && rsData.render?.id) {
+          renderedOutputId = rsData.render.id;
+          setContent((c) =>
+            c
+              ? {
+                  ...c,
+                  current_render_id: rsData.render.id,
+                  status: c.status === 'RENDERING' ? 'RENDERED' : c.status,
+                }
+              : c
+          );
+        }
+      } catch {
+        /* non-fatal */
+      }
+    }
+    if (!renderedOutputId) {
+      setError('No render for this draft yet. Approve and render above, then publish in step 4.');
+      return;
+    }
     setError(null);
+    setPublishing(true);
     const tags = uploadForm.tags.split(',').map((s) => s.trim()).filter(Boolean);
-    const res = await fetch(`${API}/api/v2/dad-joke-studio/publish-queue`, {
-      method: 'POST',
-      headers: buildHeaders(),
-      body: JSON.stringify({
-        generated_content_id: content.id,
-        rendered_output_id: content.current_render_id,
-        title: uploadForm.title || content.title || 'Dad Joke Video',
-        description: uploadForm.description,
-        tags,
-        privacy_status: uploadForm.privacy,
-        self_declared_made_for_kids: uploadForm.made_for_kids,
-        category_id: uploadForm.category_id,
-        schedule_publish_at_utc: uploadForm.schedule ? new Date(uploadForm.schedule).toISOString() : null,
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) return setError(data.error);
-    loadAll();
+    try {
+      const res = await fetch(`${API}/api/v2/dad-joke-studio/publish-queue`, {
+        method: 'POST',
+        headers: buildHeaders(),
+        body: JSON.stringify({
+          generated_content_id: content.id,
+          rendered_output_id: renderedOutputId,
+          title: uploadForm.title || content.title || 'Dad Joke Video',
+          description: uploadForm.description,
+          tags,
+          privacy_status: uploadForm.privacy,
+          self_declared_made_for_kids: uploadForm.made_for_kids,
+          category_id: uploadForm.category_id,
+          schedule_publish_at_utc: uploadForm.schedule ? new Date(uploadForm.schedule).toISOString() : null,
+        }),
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        setError(`Publish failed (${res.status}). Check the API or try again.`);
+        return;
+      }
+      if (!res.ok) {
+        setError(data?.error || `Publish failed (${res.status})`);
+        return;
+      }
+      await loadAll();
+    } catch (e) {
+      setError(e?.message || 'Publish request failed');
+    } finally {
+      setPublishing(false);
+    }
   }
 
   async function generateIdeas() {
@@ -367,17 +412,45 @@ function DadJokeStudioDashboardInner() {
     loadAll();
   }
 
-  async function saveModuleSettings(nextSettings) {
-    const res = await fetch(`${API}/api/v2/settings/modules/${MODULE}`, {
-      method: 'PUT',
-      headers: buildHeaders(),
-      body: JSON.stringify({ settings: nextSettings }),
-    });
-    if (!res.ok) {
-      const d = await res.json();
-      throw new Error(d.error || 'Save failed');
+  async function suggestYoutubeMetadataWithAi() {
+    if (!content?.id) {
+      setError('Create or open a draft in step 1 first, then use AI metadata.');
+      return;
     }
-    setModuleSettings(nextSettings);
+    setError(null);
+    setSuggestingYoutubeMeta(true);
+    try {
+      const headers = { ...buildHeaders(), 'Content-Type': 'application/json' };
+      const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/suggest-metadata`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          generated_content_id: content.id,
+          script_text: content.script_text ?? '',
+          ai_prompt: content.ai_prompt ?? '',
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `AI metadata failed (${res.status})`);
+      setUploadForm((f) => {
+        let nextTags = f.tags;
+        if (Array.isArray(data.tags)) {
+          nextTags = data.tags.map((t) => String(t).trim()).filter(Boolean).join(', ');
+        } else if (typeof data.tags === 'string' && data.tags.trim()) {
+          nextTags = data.tags.trim();
+        }
+        return {
+          ...f,
+          title: typeof data.title === 'string' && data.title.trim() ? data.title.trim() : f.title,
+          description: typeof data.description === 'string' ? data.description : f.description,
+          tags: nextTags,
+        };
+      });
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSuggestingYoutubeMeta(false);
+    }
   }
 
   function toggleTrait(cat, trait) {
@@ -437,7 +510,9 @@ function DadJokeStudioDashboardInner() {
         Dad Joke Studio
       </h1>
       <p className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>
-        Ideas → script → approve → render → upload or schedule. Shorts (9:16) and long form (16:9) stay separate.
+        Everything for one video stays on <strong>Studio</strong>: script, preview, render, YouTube metadata, and publish.
+        Shorts (9:16) and long form (16:9) stay separate. <strong>Library</strong> is only to browse and open drafts or finished items — not for publishing.
+        <strong> Assets</strong> is for backgrounds/music. YouTube OAuth lives in <Link href="/dashboard/v2/modules/dad-joke-studio/settings" className="underline">Settings</Link>.
       </p>
 
       {error && (
@@ -447,7 +522,7 @@ function DadJokeStudioDashboardInner() {
       )}
 
       <div className="flex flex-wrap gap-2 mb-6">
-        {['studio', 'ideas', 'library', 'assets', 'upload'].map((s) => (
+        {['studio', 'ideas', 'library', 'assets'].map((s) => (
           <button
             key={s}
             type="button"
@@ -462,6 +537,17 @@ function DadJokeStudioDashboardInner() {
             {s === 'ideas' ? 'AI Ideas' : s}
           </button>
         ))}
+        <Link
+          href="/dashboard/v2/modules/dad-joke-studio/settings"
+          className="px-4 py-2 rounded-lg text-sm font-semibold"
+          style={{
+            background: 'var(--color-surface)',
+            color: 'var(--color-text-main)',
+            border: '1px solid var(--color-border)',
+          }}
+        >
+          Settings
+        </Link>
       </div>
 
       {loading && <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>Loading…</p>}
@@ -550,9 +636,11 @@ function DadJokeStudioDashboardInner() {
             </div>
           )}
 
-          <div className="grid md:grid-cols-2 gap-4 mb-6">
-            <div className="p-4 rounded-xl" style={{ border: '1px solid var(--color-border)' }}>
-              <h3 className="font-semibold mb-2">AI & script</h3>
+          <div className="space-y-6 mb-6">
+            <section id="djs-ai-script" className="p-4 rounded-xl" style={{ border: '1px solid var(--color-border)' }}>
+              <h3 className="font-semibold mb-3" style={{ color: 'var(--color-text-main)' }}>
+                <span className="text-slate-400 mr-2 font-normal">1.</span>AI &amp; script
+              </h3>
               <label className="text-xs block mb-1">Prompt / direction</label>
               <textarea
                 className="w-full border rounded p-2 text-sm mb-2"
@@ -594,10 +682,12 @@ function DadJokeStudioDashboardInner() {
               <button type="button" className="mt-2 px-3 py-1 text-xs rounded bg-gray-800 text-white" onClick={() => saveContent({ script_text: content?.script_text, ai_prompt: content?.ai_prompt, style_recipe_snapshot: recipe })}>
                 Save draft
               </button>
-            </div>
+            </section>
 
-            <div className="p-4 rounded-xl" style={{ border: '1px solid var(--color-border)' }}>
-              <h3 className="font-semibold mb-2">Preview & pipeline</h3>
+            <section id="djs-preview" className="p-4 rounded-xl" style={{ border: '1px solid var(--color-border)' }}>
+              <h3 className="font-semibold mb-3" style={{ color: 'var(--color-text-main)' }}>
+                <span className="text-slate-400 mr-2 font-normal">2.</span>Preview &amp; pipeline
+              </h3>
               <p className="text-xs mb-2" style={{ color: 'var(--color-text-muted)' }}>Orientation: {currentFormat?.orientation} ({currentFormat?.default_width}×{currentFormat?.default_height})</p>
               <div className="mb-3 p-2 rounded border text-xs space-y-2" style={{ borderColor: 'var(--color-border)' }}>
                 <p className="font-semibold" style={{ color: 'var(--color-text-main)' }}>Assets for this draft</p>
@@ -688,9 +778,80 @@ function DadJokeStudioDashboardInner() {
                 <button type="button" className="px-2 py-1 text-xs rounded text-white" style={{ background: '#10b981' }} onClick={runRender} disabled={!content?.id}>Render video</button>
               </div>
               {content?.status === 'RENDERED' && (
-                <p className="text-xs mt-2 text-green-700">Video ready — use Upload tab to publish or schedule.</p>
+                <p className="text-xs mt-2 text-green-700">Video ready — fill YouTube metadata below, then publish.</p>
               )}
-            </div>
+            </section>
+
+            <section id="djs-metadata" className="p-4 rounded-xl" style={{ border: '1px solid var(--color-border)' }}>
+              <h3 className="font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>
+                <span className="text-slate-400 mr-2 font-normal">3.</span>YouTube metadata
+              </h3>
+              <p className="text-xs mb-3" style={{ color: 'var(--color-text-muted)' }}>
+                For the draft in steps 1–2. AI suggests title, description, and tags from your script.
+              </p>
+              {!content?.id && (
+                <p className="text-xs rounded-lg p-3 mb-3" style={{ background: '#fef3c7', color: '#92400e' }}>
+                  Create or open a draft in step 1 (or pick one from Library) before publishing.
+                </p>
+              )}
+              {content?.id && !content?.current_render_id && (
+                <p className="text-xs rounded-lg p-3 mb-3" style={{ background: '#fef3c7', color: '#92400e' }}>
+                  Approve and render in step 2 first. You can still edit title and tags here while waiting.
+                </p>
+              )}
+              <button
+                type="button"
+                className="px-3 py-2 rounded text-sm border font-medium disabled:opacity-50 mb-3"
+                style={{ borderColor: 'var(--color-border)', color: 'var(--color-text-main)' }}
+                disabled={!content?.id || suggestingYoutubeMeta}
+                onClick={() => suggestYoutubeMetadataWithAi()}
+              >
+                {suggestingYoutubeMeta ? 'AI is writing metadata…' : 'AI: fill YouTube metadata'}
+              </button>
+              <input className="w-full border p-2 text-sm mb-2 rounded" placeholder="Title" value={uploadForm.title} onChange={(e) => setUploadForm((f) => ({ ...f, title: e.target.value }))} />
+              <textarea className="w-full border p-2 text-sm mb-2 rounded" placeholder="Description" rows={4} value={uploadForm.description} onChange={(e) => setUploadForm((f) => ({ ...f, description: e.target.value }))} />
+              <input className="w-full border p-2 text-sm mb-2 rounded" placeholder="Tags (comma separated)" value={uploadForm.tags} onChange={(e) => setUploadForm((f) => ({ ...f, tags: e.target.value }))} />
+              <div className="flex flex-wrap gap-3 items-center mb-2">
+                <select className="border p-2 text-sm rounded" value={uploadForm.privacy} onChange={(e) => setUploadForm((f) => ({ ...f, privacy: e.target.value }))}>
+                  <option value="public">public</option>
+                  <option value="unlisted">unlisted</option>
+                  <option value="private">private</option>
+                </select>
+                <label className="flex items-center gap-2 text-sm">
+                  <input type="checkbox" checked={uploadForm.made_for_kids} onChange={(e) => setUploadForm((f) => ({ ...f, made_for_kids: e.target.checked }))} />
+                  Made for kids
+                </label>
+              </div>
+              <input className="w-full border p-2 text-sm mb-2 rounded" placeholder="Category ID (YouTube)" value={uploadForm.category_id} onChange={(e) => setUploadForm((f) => ({ ...f, category_id: e.target.value }))} />
+              <label className="text-xs block mb-1" style={{ color: 'var(--color-text-muted)' }}>Schedule (local datetime; must be ≥15 min ahead UTC)</label>
+              <input type="datetime-local" className="border p-2 text-sm rounded w-full max-w-xs" value={uploadForm.schedule} onChange={(e) => setUploadForm((f) => ({ ...f, schedule: e.target.value }))} />
+            </section>
+
+            <section id="djs-publish" className="p-4 rounded-xl" style={{ border: '1px solid var(--color-border)' }}>
+              <h3 className="font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>
+                <span className="text-slate-400 mr-2 font-normal">4.</span>Publish to YouTube
+              </h3>
+              <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>
+                YouTube:{' '}
+                <strong style={{ color: 'var(--color-text-main)' }}>
+                  {ytStatus?.connected ? `Connected (${ytStatus.channel_title || 'channel'})` : 'Not connected'}
+                </strong>
+                . OAuth, redirect URI, and optional client ID/secret are in{' '}
+                <Link href="/dashboard/v2/modules/dad-joke-studio/settings" className="underline font-medium">
+                  Settings
+                </Link>
+                .
+              </p>
+              <button
+                type="button"
+                className="px-4 py-2 rounded text-white disabled:opacity-50 text-sm font-semibold"
+                style={{ background: '#0ea5e9' }}
+                disabled={publishing || !content?.id}
+                onClick={() => runPublish()}
+              >
+                {publishing ? 'Publishing…' : 'Publish now or schedule'}
+              </button>
+            </section>
           </div>
         </>
       )}
@@ -717,7 +878,7 @@ function DadJokeStudioDashboardInner() {
       {mainSection === 'library' && (
         <div>
           <p className="text-sm mb-2" style={{ color: 'var(--color-text-muted)' }}>
-            Tap or click a row (or press Enter when focused) to open that draft in Studio and keep editing.
+            Browse drafts and completed videos. Open a row to load it on the <strong>Studio</strong> page (steps 1–4) — nothing uploads from here.
           </p>
           <div className="flex flex-wrap gap-2 mb-3">
             <select className="border rounded p-1 text-sm" value={libFilter.content_type} onChange={(e) => setLibFilter((f) => ({ ...f, content_type: e.target.value }))}>
@@ -923,80 +1084,6 @@ function DadJokeStudioDashboardInner() {
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {mainSection === 'upload' && (
-        <div className="space-y-4 max-w-lg">
-          <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-            Uses the same Google OAuth app as the rest of KiddConnect. If Google shows <strong>redirect_uri_mismatch</strong>, add this exact redirect URI in Google Cloud (see{' '}
-            <Link href="/dashboard/v2/modules/dad-joke-studio/settings" className="underline">
-              Settings
-            </Link>
-            ):
-          </p>
-          <pre
-            className="text-xs p-2 rounded border break-all whitespace-pre-wrap mb-2"
-            style={{ background: 'var(--color-bg)', borderColor: 'var(--color-border)', color: 'var(--color-text-main)' }}
-          >
-            {ytStatus?.oauth_redirect_uri || `${API}/api/v2/dad-joke-studio/youtube/callback`}
-          </pre>
-          <p className="text-sm rounded-md p-3 mb-2" style={{ background: 'var(--color-bg)', color: 'var(--color-text-main)' }}>
-            <strong>Connect YouTube</strong> opens Google’s account chooser (no pre-selected account). We only store the primary YouTube channel for the Google user you choose.
-          </p>
-          <p className="text-sm">YouTube: {ytStatus?.connected ? `Connected (${ytStatus.channel_title || 'channel'})` : 'Not connected'}</p>
-          <button
-            type="button"
-            className="px-3 py-2 rounded text-white text-sm mt-2"
-            style={{ background: '#c00' }}
-            onClick={async () => {
-              setError(null);
-              const res = await fetch(`${API}/api/v2/dad-joke-studio/youtube/auth-url`, { headers: buildHeaders() });
-              const d = await res.json().catch(() => ({}));
-              if (d.configured === false) {
-                setError(
-                  d.error ||
-                    'Add OAuth Client ID and Secret in settings or set YOUTUBE_* env on the server (same as Kid Quiz).'
-                );
-                return;
-              }
-              if (d.url) window.location.href = d.url;
-              else setError(d.error || 'Could not get auth URL');
-            }}
-          >
-            Connect YouTube
-          </button>
-          <div className="p-3 rounded border text-sm space-y-2">
-            <p className="font-semibold">OAuth client (stored in module settings)</p>
-            <input className="w-full border p-1 text-xs" placeholder="Client ID" value={moduleSettings?.youtube?.client_id || ''} onChange={(e) => setModuleSettings((s) => ({ ...s, youtube: { ...(s.youtube || {}), client_id: e.target.value } }))} />
-            <input className="w-full border p-1 text-xs" placeholder="Client Secret" type="password" value={moduleSettings?.youtube?.client_secret || ''} onChange={(e) => setModuleSettings((s) => ({ ...s, youtube: { ...(s.youtube || {}), client_secret: e.target.value } }))} />
-            <button
-              type="button"
-              className="px-2 py-1 text-xs border rounded"
-              onClick={() => saveModuleSettings({ ...moduleSettings, youtube: moduleSettings.youtube }).catch((e) => setError(e.message))}
-            >
-              Save OAuth app
-            </button>
-          </div>
-          <h3 className="font-bold">Publish current rendered item</h3>
-          <input className="w-full border p-2 text-sm" placeholder="Title" value={uploadForm.title} onChange={(e) => setUploadForm((f) => ({ ...f, title: e.target.value }))} />
-          <textarea className="w-full border p-2 text-sm" placeholder="Description" value={uploadForm.description} onChange={(e) => setUploadForm((f) => ({ ...f, description: e.target.value }))} />
-          <input className="w-full border p-2 text-sm" placeholder="Tags comma separated" value={uploadForm.tags} onChange={(e) => setUploadForm((f) => ({ ...f, tags: e.target.value }))} />
-          <select className="border p-2 text-sm" value={uploadForm.privacy} onChange={(e) => setUploadForm((f) => ({ ...f, privacy: e.target.value }))}>
-            <option value="public">public</option>
-            <option value="unlisted">unlisted</option>
-            <option value="private">private</option>
-          </select>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={uploadForm.made_for_kids} onChange={(e) => setUploadForm((f) => ({ ...f, made_for_kids: e.target.checked }))} />
-            Made for kids
-          </label>
-          <input className="w-full border p-2 text-sm" placeholder="Category ID (YouTube)" value={uploadForm.category_id} onChange={(e) => setUploadForm((f) => ({ ...f, category_id: e.target.value }))} />
-          <label className="text-xs block">Schedule (local datetime — browser; must be ≥15 min ahead UTC)</label>
-          <input type="datetime-local" className="border p-2 text-sm" value={uploadForm.schedule} onChange={(e) => setUploadForm((f) => ({ ...f, schedule: e.target.value }))} />
-          <button type="button" className="px-4 py-2 rounded text-white" style={{ background: '#0ea5e9' }} onClick={runPublish}>
-            Publish now or schedule
-          </button>
         </div>
       )}
     </div>

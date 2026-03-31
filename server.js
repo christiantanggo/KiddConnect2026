@@ -633,14 +633,7 @@ try {
     console.warn('⚠️  Kid Quiz Studio routes not loaded:', kqErr.message);
   }
 
-  // Dad Joke Studio (PUBLIC YouTube callback before authenticated routes)
-  try {
-    const djsCallback = (await import("./routes/v2/dad-joke-studio-youtube-callback.js")).default;
-    app.use("/api/v2/dad-joke-studio", djsCallback);
-    console.log("✅ Dad Joke Studio YouTube OAuth callback loaded (public)");
-  } catch (djsCbErr) {
-    console.warn("⚠️  Dad Joke Studio YouTube callback not loaded:", djsCbErr.message);
-  }
+  // Dad Joke Studio (YouTube OAuth callback is mounted inside dad-joke-studio.js before auth)
   try {
     const djsRoutes = (await import("./routes/v2/dad-joke-studio.js")).default;
     app.use("/api/v2/dad-joke-studio", djsRoutes);

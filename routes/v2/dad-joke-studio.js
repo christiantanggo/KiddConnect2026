@@ -18,8 +18,10 @@ import {
   generateShortsScript,
   generateLongFormScript,
   generatePlaceholderLongForm,
+  generateYouTubeMetadata,
 } from '../../services/dadjoke-studio/ai.js';
 import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-resolver.js';
+import djsYouTubeCallbackRouter from './dad-joke-studio-youtube-callback.js';
 
 const MODULE_KEY = 'dad-joke-studio';
 const ASSETS_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_DADJOKE_STUDIO_ASSETS || 'dadjoke-studio-assets';
@@ -30,6 +32,8 @@ const upload = multer({
 });
 
 const router = express.Router();
+/** Public OAuth callback only — must run before authenticate (Google redirect has no Bearer token). */
+router.use(djsYouTubeCallbackRouter);
 router.use(authenticate);
 router.use(requireBusinessContext);
 
@@ -251,6 +255,69 @@ router.get('/youtube/status', async (req, res) => {
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+function parseJsonField(v, fallback) {
+  if (v == null) return fallback;
+  if (typeof v === 'object' && !Buffer.isBuffer(v)) return v;
+  if (typeof v === 'string') {
+    try {
+      return JSON.parse(v);
+    } catch {
+      return fallback;
+    }
+  }
+  return fallback;
+}
+
+function storyboardToExcerpt(sb) {
+  const arr = Array.isArray(sb) ? sb : [];
+  return arr
+    .map((x) => [x?.label, x?.text].filter(Boolean).join(': '))
+    .join('\n')
+    .slice(0, 6000);
+}
+
+/** AI-filled title, description, tags for YouTube publish (from current library item). */
+router.post('/youtube/suggest-metadata', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const { generated_content_id, script_text: bodyScript, ai_prompt: bodyAiPrompt } = req.body || {};
+    if (generated_content_id == null || String(generated_content_id).trim() === '') {
+      return res.status(400).json({ error: 'generated_content_id is required' });
+    }
+    const contentId = String(generated_content_id).trim();
+    const { data: row, error } = await supabaseClient
+      .from('dadjoke_studio_generated_content')
+      .select('id, title, summary, content_type, format_key, storyboard_json, content_json, ai_prompt, script_text')
+      .eq('id', contentId)
+      .eq('business_id', businessId)
+      .maybeSingle();
+    if (error) throw error;
+    if (!row) return res.status(404).json({ error: 'Content not found' });
+
+    const cj = parseJsonField(row.content_json, {});
+    const sb = parseJsonField(row.storyboard_json, []);
+    const scriptFromBody = typeof bodyScript === 'string' ? bodyScript.trim() : '';
+    const promptFromBody = typeof bodyAiPrompt === 'string' ? bodyAiPrompt.trim() : '';
+    const scriptForAi = scriptFromBody || String(row.script_text || '').trim();
+    const aiPromptForAi = promptFromBody || String(row.ai_prompt || '').trim();
+    const meta = await generateYouTubeMetadata({
+      title: String(row.title || '').trim(),
+      summary: String(row.summary || '').trim(),
+      content_type: row.content_type || '',
+      format_key: row.format_key || '',
+      script_excerpt: storyboardToExcerpt(sb),
+      script_text: scriptForAi,
+      setup: String(cj.setup || '').trim(),
+      punchline: String(cj.punchline || '').trim(),
+      ai_prompt: aiPromptForAi,
+    });
+    res.json(meta);
+  } catch (err) {
+    console.error('[DadJokeStudio youtube/suggest-metadata]', err);
+    res.status(500).json({ error: err.message || 'Failed to suggest metadata' });
   }
 });
 
@@ -983,8 +1050,19 @@ router.post('/publish-queue', async (req, res) => {
 
     let scheduleIso = null;
     if (schedule_publish_at_utc) {
-      scheduleIso = assertScheduleUtc(schedule_publish_at_utc);
+      try {
+        scheduleIso = assertScheduleUtc(schedule_publish_at_utc);
+      } catch (schedErr) {
+        return res.status(400).json({ error: schedErr.message || 'Invalid schedule time.' });
+      }
     }
+
+    console.log('[DadJokeStudio publish-queue] enqueue', {
+      businessId,
+      generated_content_id,
+      rendered_output_id,
+      scheduled: !!scheduleIso,
+    });
 
     const { data: pubRow, error: pErr } = await supabaseClient
       .from('dadjoke_studio_publish_queue')

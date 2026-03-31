@@ -104,7 +104,7 @@ function AdminLoginPage() {
       
       {/* Deployment date indicator */}
       <div style={{ position: 'fixed', bottom: '16px', left: '16px', fontSize: '12px', color: '#6b7280', backgroundColor: 'rgba(255, 255, 255, 0.9)', padding: '4px 8px', borderRadius: '4px', zIndex: 9999 }}>
-        Deployed March 21 2026 V1
+        Deployed March 31 2026 V1
       </div>
     </div>
   );

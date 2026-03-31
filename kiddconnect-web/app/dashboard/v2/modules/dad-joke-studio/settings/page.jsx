@@ -31,7 +31,10 @@ function getBusinessId() {
 }
 
 function buildHeaders() {
-  return { ...getAuthHeaders(), 'X-Active-Business-Id': getBusinessId() };
+  const h = { ...getAuthHeaders() };
+  const bid = getBusinessId();
+  if (bid) h['X-Active-Business-Id'] = bid;
+  return h;
 }
 
 function DadJokeStudioSettingsInner() {
