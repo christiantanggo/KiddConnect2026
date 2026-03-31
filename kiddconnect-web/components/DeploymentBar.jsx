@@ -1,7 +1,7 @@
 /**
  * Site-wide deployment stamp (black bar). Update DEPLOYMENT_LABEL when you ship.
  */
-export const DEPLOYMENT_LABEL = 'March 29 2026 V1';
+export const DEPLOYMENT_LABEL = 'March 31 2026 V1';
 
 export default function DeploymentBar() {
   return (

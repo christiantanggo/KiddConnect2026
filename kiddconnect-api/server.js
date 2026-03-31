@@ -447,16 +447,9 @@ try {
   }
 
   try {
-    const djsCallback = (await import('./routes/v2/dad-joke-studio-youtube-callback.js')).default;
-    app.use('/api/v2/dad-joke-studio', djsCallback);
-    console.log('✅ Dad Joke Studio YouTube callback (public)');
-  } catch (djsCbErr) {
-    console.warn('⚠️ Dad Joke Studio callback not loaded:', djsCbErr.message);
-  }
-  try {
     const djsRoutes = (await import('./routes/v2/dad-joke-studio.js')).default;
     app.use('/api/v2/dad-joke-studio', djsRoutes);
-    console.log('✅ Dad Joke Studio routes');
+    console.log('✅ Dad Joke Studio routes (OAuth callback included before auth)');
   } catch (djsErr) {
     console.warn('⚠️ Dad Joke Studio routes not loaded:', djsErr.message);
   }

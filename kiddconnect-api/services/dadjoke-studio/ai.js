@@ -276,18 +276,25 @@ export async function generateYouTubeMetadata(ctx) {
     content_type = '',
     format_key = '',
     script_excerpt = '',
+    script_text = '',
+    summary = '',
     setup = '',
     punchline = '',
     ai_prompt = '',
   } = ctx || {};
 
+  const scriptBody = String(script_text || '').trim().slice(0, 8000);
+  const summaryLine = String(summary || '').trim().slice(0, 500);
+
   const openai = getClient();
   const userBlock = [
     `Working title (you may improve): ${title || '(none)'}`,
     `Video type: ${content_type || 'unknown'}; format: ${format_key || 'unknown'}`,
+    summaryLine ? `Summary: ${summaryLine}` : '',
     setup ? `Setup: ${setup}` : '',
     punchline ? `Punchline: ${punchline}` : '',
     script_excerpt ? `Storyboard / script beats:\n${script_excerpt}` : '',
+    scriptBody ? `Full script (what will be voiced / shown):\n${scriptBody}` : '',
     ai_prompt ? `Creator notes: ${ai_prompt}` : '',
   ]
     .filter(Boolean)

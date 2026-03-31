@@ -21,6 +21,7 @@ import {
   generateYouTubeMetadata,
 } from '../../services/dadjoke-studio/ai.js';
 import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-resolver.js';
+import djsYouTubeCallbackRouter from './dad-joke-studio-youtube-callback.js';
 
 const MODULE_KEY = 'dad-joke-studio';
 const ASSETS_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_DADJOKE_STUDIO_ASSETS || 'dadjoke-studio-assets';
@@ -31,6 +32,8 @@ const upload = multer({
 });
 
 const router = express.Router();
+/** Public OAuth callback only — must run before authenticate (Google redirect has no Bearer token). */
+router.use(djsYouTubeCallbackRouter);
 router.use(authenticate);
 router.use(requireBusinessContext);
 
@@ -276,14 +279,15 @@ function storyboardToExcerpt(sb) {
 router.post('/youtube/suggest-metadata', async (req, res) => {
   try {
     const businessId = req.active_business_id;
-    const { generated_content_id } = req.body || {};
-    if (!generated_content_id) {
+    const { generated_content_id, script_text: bodyScript, ai_prompt: bodyAiPrompt } = req.body || {};
+    if (generated_content_id == null || String(generated_content_id).trim() === '') {
       return res.status(400).json({ error: 'generated_content_id is required' });
     }
+    const contentId = String(generated_content_id).trim();
     const { data: row, error } = await supabaseClient
       .from('dadjoke_studio_generated_content')
-      .select('id, title, content_type, format_key, storyboard_json, content_json, ai_prompt')
-      .eq('id', generated_content_id)
+      .select('id, title, summary, content_type, format_key, storyboard_json, content_json, ai_prompt, script_text')
+      .eq('id', contentId)
       .eq('business_id', businessId)
       .maybeSingle();
     if (error) throw error;
@@ -291,14 +295,20 @@ router.post('/youtube/suggest-metadata', async (req, res) => {
 
     const cj = parseJsonField(row.content_json, {});
     const sb = parseJsonField(row.storyboard_json, []);
+    const scriptFromBody = typeof bodyScript === 'string' ? bodyScript.trim() : '';
+    const promptFromBody = typeof bodyAiPrompt === 'string' ? bodyAiPrompt.trim() : '';
+    const scriptForAi = scriptFromBody || String(row.script_text || '').trim();
+    const aiPromptForAi = promptFromBody || String(row.ai_prompt || '').trim();
     const meta = await generateYouTubeMetadata({
       title: String(row.title || '').trim(),
+      summary: String(row.summary || '').trim(),
       content_type: row.content_type || '',
       format_key: row.format_key || '',
       script_excerpt: storyboardToExcerpt(sb),
+      script_text: scriptForAi,
       setup: String(cj.setup || '').trim(),
       punchline: String(cj.punchline || '').trim(),
-      ai_prompt: String(row.ai_prompt || '').trim(),
+      ai_prompt: aiPromptForAi,
     });
     res.json(meta);
   } catch (err) {
