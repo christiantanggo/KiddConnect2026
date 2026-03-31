@@ -5,7 +5,10 @@
 import express from 'express';
 import { google } from 'googleapis';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
-import { defaultOrbixYoutubeCallbackUrl, getFrontendPublicBaseUrl } from '../../config/public-urls.js';
+import {
+  dadjokeYoutubeCallbackUrl,
+  getFrontendPublicBaseUrl,
+} from '../../config/public-urls.js';
 
 const router = express.Router();
 const MODULE_KEY = 'dad-joke-studio';
