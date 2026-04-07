@@ -21,10 +21,84 @@ import {
   generateYouTubeMetadata,
 } from '../../services/dadjoke-studio/ai.js';
 import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-resolver.js';
+import { rebuildGenericStoryboardFromScript } from '../../services/dadjoke-studio/generic-shorts-ass.js';
 import djsYouTubeCallbackRouter from './dad-joke-studio-youtube-callback.js';
 
 const MODULE_KEY = 'dad-joke-studio';
+/** Retired formats: hidden from /formats; cannot create or switch drafts to these keys. */
+const RETIRED_DADJOKE_STUDIO_FORMAT_KEYS = new Set(['shorts_micro_story']);
 const ASSETS_BUCKET = process.env.SUPABASE_STORAGE_BUCKET_DADJOKE_STUDIO_ASSETS || 'dadjoke-studio-assets';
+const VISUAL_ASSET_TYPES = new Set(['background', 'image', 'thumbnail']);
+const ASSET_PREVIEW_SIGNED_SEC = Math.min(
+  86400,
+  Math.max(300, Number(process.env.DADJOKE_STUDIO_ASSET_PREVIEW_TTL_SEC) || 3600)
+);
+
+/** Canonical JSON string (sorted object keys) so key order does not false-trigger draft reset. */
+function jsonCanonicalStringify(value) {
+  if (value === null || value === undefined) return JSON.stringify(value);
+  const t = typeof value;
+  if (t !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((x) => jsonCanonicalStringify(x)).join(',')}]`;
+  }
+  const keys = Object.keys(value).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${jsonCanonicalStringify(value[k])}`).join(',')}}`;
+}
+
+function studioJsonSnapshotEqual(a, b) {
+  try {
+    return jsonCanonicalStringify(a ?? null) === jsonCanonicalStringify(b ?? null);
+  } catch {
+    return a === b;
+  }
+}
+
+function normalizeStudioPrompt(v) {
+  if (v == null) return null;
+  const s = String(v).trim();
+  return s.length ? s : null;
+}
+
+function normalizeStudioScriptForCompare(v) {
+  if (v == null) return '';
+  return String(v).replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+}
+
+function studioRegenFieldMeaningfullyChanged(field, body, existing) {
+  if (body[field] === undefined) return false;
+  const next = body[field];
+  const prev = existing[field];
+  switch (field) {
+    case 'storyboard_json':
+    case 'content_json':
+    case 'asset_snapshot':
+    case 'style_recipe_snapshot':
+      return !studioJsonSnapshotEqual(next, prev);
+    case 'ai_prompt':
+      return normalizeStudioPrompt(next) !== normalizeStudioPrompt(prev);
+    case 'ai_mode':
+      return String(next || 'manual') !== String(prev || 'manual');
+    default:
+      return next !== prev;
+  }
+}
+
+async function attachStudioAssetUrls(row) {
+  if (!row?.storage_path) {
+    return { ...row, public_url: null, preview_url: null };
+  }
+  const { data: pub } = supabaseClient.storage.from(ASSETS_BUCKET).getPublicUrl(row.storage_path);
+  const public_url = pub?.publicUrl || pub?.publicURL || null;
+  let preview_url = public_url;
+  if (VISUAL_ASSET_TYPES.has(row.asset_type)) {
+    const { data: signed, error: signErr } = await supabaseClient.storage
+      .from(ASSETS_BUCKET)
+      .createSignedUrl(row.storage_path, ASSET_PREVIEW_SIGNED_SEC);
+    if (!signErr && signed?.signedUrl) preview_url = signed.signedUrl;
+  }
+  return { ...row, public_url, preview_url };
+}
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -136,6 +210,7 @@ router.get('/formats', async (req, res) => {
     const role = req.orgRole || 'staff';
     const canSeeDisabled = ['owner', 'admin'].includes(role);
     const out = (formats || [])
+      .filter((f) => !RETIRED_DADJOKE_STUDIO_FORMAT_KEYS.has(f.format_key))
       .map((f) => {
         const b = map[f.id];
         const enabled = b ? b.enabled !== false : true;
@@ -431,11 +506,7 @@ router.get('/assets', async (req, res) => {
     if (forContentType && forFormatKey) {
       rows = rows.filter((a) => isAssetEligibleForRender(a, forContentType, forFormatKey));
     }
-    const withUrls = rows.map((a) => {
-      const { data: pub } = supabaseClient.storage.from(ASSETS_BUCKET).getPublicUrl(a.storage_path);
-      const public_url = pub?.publicUrl || pub?.publicURL || null;
-      return { ...a, public_url };
-    });
+    const withUrls = await Promise.all((rows || []).map((a) => attachStudioAssetUrls(a)));
     res.json({ assets: withUrls });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -500,8 +571,8 @@ router.post('/assets', upload.single('file'), async (req, res) => {
       .select()
       .single();
     if (insErr) throw insErr;
-    const { data: pub } = supabaseClient.storage.from(ASSETS_BUCKET).getPublicUrl(path);
-    res.json({ asset: { ...row, public_url: pub?.publicUrl || null } });
+    const out = await attachStudioAssetUrls(row);
+    res.json({ asset: out });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -535,8 +606,8 @@ router.patch('/assets/:id', async (req, res) => {
       .select()
       .single();
     if (error) throw error;
-    const { data: pub } = supabaseClient.storage.from(ASSETS_BUCKET).getPublicUrl(row.storage_path);
-    res.json({ asset: { ...row, public_url: pub?.publicUrl || null } });
+    const out = await attachStudioAssetUrls(row);
+    res.json({ asset: out });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -666,6 +737,9 @@ router.post('/content', async (req, res) => {
       .eq('format_key', format_key)
       .single();
     if (!formatRow) return res.status(404).json({ error: 'Unknown format' });
+    if (formatRow.deleted_at || RETIRED_DADJOKE_STUDIO_FORMAT_KEYS.has(String(format_key).trim())) {
+      return res.status(400).json({ error: 'This format is no longer available.' });
+    }
     if (!(await isFormatEnabledForBusiness(businessId, formatRow.id))) {
       return res.status(403).json({ error: 'Format disabled for this business' });
     }
@@ -748,15 +822,53 @@ router.put('/content/:id', async (req, res) => {
       'upload_tags',
       'ai_mode',
       'ai_prompt',
+      'style_recipe_snapshot',
     ];
     for (const f of fields) {
       if (body[f] !== undefined) patch[f] = body[f];
     }
 
     const scriptChanged =
-      body.script_text !== undefined && body.script_text !== existing.script_text;
+      body.script_text !== undefined &&
+      normalizeStudioScriptForCompare(body.script_text) !== normalizeStudioScriptForCompare(existing.script_text);
+    if (
+      scriptChanged &&
+      existing.content_type === 'shorts' &&
+      existing.format_key !== 'shorts_classic_loop' &&
+      body.storyboard_json === undefined
+    ) {
+      patch.storyboard_json = rebuildGenericStoryboardFromScript(String(patch.script_text ?? ''));
+    }
+
+    let formatChanged = false;
+    if (body.format_key !== undefined && String(body.format_key).trim() !== existing.format_key) {
+      const fk = String(body.format_key).trim();
+      const { data: formatRow, error: fmtErr } = await supabaseClient
+        .from('dadjoke_studio_formats')
+        .select('*')
+        .eq('format_key', fk)
+        .is('deleted_at', null)
+        .maybeSingle();
+      if (fmtErr) throw fmtErr;
+      if (!formatRow) return res.status(400).json({ error: 'Unknown format' });
+      if (RETIRED_DADJOKE_STUDIO_FORMAT_KEYS.has(fk)) {
+        return res.status(400).json({ error: 'This format is no longer available.' });
+      }
+      if (formatRow.content_type !== existing.content_type) {
+        return res.status(400).json({ error: 'Format does not match this draft type (shorts vs long form).' });
+      }
+      if (!(await isFormatEnabledForBusiness(businessId, formatRow.id))) {
+        return res.status(403).json({ error: 'Format disabled for this business' });
+      }
+      patch.format_key = fk;
+      patch.format_id = formatRow.id;
+      patch.orientation = formatRow.orientation;
+      formatChanged = true;
+    }
+
     const regenFields = ['storyboard_json', 'content_json', 'asset_snapshot', 'ai_prompt', 'ai_mode', 'style_recipe_snapshot'];
-    const shouldReset = scriptChanged || regenFields.some((f) => body[f] !== undefined);
+    const regenTriggered = regenFields.some((f) => studioRegenFieldMeaningfullyChanged(f, body, existing));
+    const shouldReset = scriptChanged || formatChanged || regenTriggered;
 
     if (shouldReset && ['APPROVED', 'RENDERING', 'RENDERED', 'UPLOAD_QUEUED', 'UPLOADING', 'SCHEDULED', 'PUBLISHED'].includes(existing.status)) {
       await clearDownstreamOnRegenerate(req.params.id, businessId);
@@ -800,6 +912,8 @@ router.post('/content/:id/generate', async (req, res) => {
         aiMode: body.ai_mode || existing.ai_mode || 'manual',
         aiPrompt: body.ai_prompt || existing.ai_prompt,
         extra: body,
+        businessId,
+        excludeContentId: req.params.id,
       });
     } else if (existing.format_key === 'long_style_engine') {
       gen = await generateLongFormScript({
@@ -828,6 +942,13 @@ router.post('/content/:id/generate', async (req, res) => {
         punchline: gen.punchline,
         voice_script: gen.voice_script || gen.setup,
         hook: gen.hook || contentJson.hook,
+      };
+    }
+    if (existing.format_key === 'shorts_guess_punchline' && gen.punchline) {
+      contentJson = {
+        ...contentJson,
+        setup: String(gen.setup ?? contentJson.setup ?? '').trim(),
+        punchline: String(gen.punchline).trim(),
       };
     }
     const patch = {
@@ -878,7 +999,7 @@ router.post('/content/:id/approve', async (req, res) => {
   try {
     const businessId = req.active_business_id;
     const now = new Date().toISOString();
-    const { data, error } = await supabaseClient
+    const { data: updated, error } = await supabaseClient
       .from('dadjoke_studio_generated_content')
       .update({
         status: 'APPROVED',
@@ -891,8 +1012,19 @@ router.post('/content/:id/approve', async (req, res) => {
       .in('status', ['DRAFT', 'PENDING_APPROVAL'])
       .select()
       .single();
-    if (error || !data) return res.status(400).json({ error: 'Only draft or pending items can be approved' });
-    res.json({ item: data });
+    if (!error && updated) return res.json({ item: updated });
+
+    const { data: existing, error: fetchErr } = await supabaseClient
+      .from('dadjoke_studio_generated_content')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('business_id', businessId)
+      .maybeSingle();
+    if (fetchErr || !existing) return res.status(404).json({ error: 'Not found' });
+    if (existing.status === 'APPROVED') {
+      return res.json({ item: existing, already_approved: true });
+    }
+    return res.status(400).json({ error: 'Only draft or pending items can be approved' });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -915,8 +1047,17 @@ router.post('/content/:id/render', async (req, res) => {
         .eq('id', content.id);
       content.status = 'APPROVED';
     }
-    if (content.status !== 'APPROVED') {
-      return res.status(400).json({ error: 'Content must be APPROVED before rendering (or retry after a render failure).' });
+    const canStartRender = content.status === 'APPROVED' || content.status === 'RENDERED';
+    if (!canStartRender) {
+      if (content.status === 'RENDERING') {
+        return res.status(400).json({
+          error: 'This draft is already rendering. Wait for the video preview or refresh the page.',
+        });
+      }
+      return res.status(400).json({
+        error:
+          'Approve this draft first (step 2), then render. If you already have a video, the item should show status RENDERED — refresh the page or open it from Library.',
+      });
     }
     if (!(content.script_text || '').trim()) return res.status(400).json({ error: 'Script is empty.' });
 
@@ -947,6 +1088,52 @@ router.post('/content/:id/render', async (req, res) => {
       });
 
     res.json({ render_id: renderRow.id, status: 'RENDERING' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/content/:id/cancel-render', async (req, res) => {
+  try {
+    const businessId = req.active_business_id;
+    const { data: content, error: cErr } = await supabaseClient
+      .from('dadjoke_studio_generated_content')
+      .select('*')
+      .eq('id', req.params.id)
+      .eq('business_id', businessId)
+      .single();
+    if (cErr || !content) return res.status(404).json({ error: 'Not found' });
+
+    if (content.status !== 'RENDERING') {
+      return res.status(400).json({ error: 'Nothing to cancel — this draft is not rendering.' });
+    }
+
+    if (content.current_render_id) {
+      await supabaseClient
+        .from('dadjoke_studio_rendered_outputs')
+        .update({
+          render_status: 'FAILED',
+          error_message: 'Cancelled by user',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', content.current_render_id)
+        .in('render_status', ['PENDING', 'RENDERING']);
+    }
+
+    const { data: updated, error: uErr } = await supabaseClient
+      .from('dadjoke_studio_generated_content')
+      .update({
+        status: 'APPROVED',
+        current_render_id: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', content.id)
+      .eq('business_id', businessId)
+      .select()
+      .single();
+
+    if (uErr || !updated) return res.status(500).json({ error: uErr?.message || 'Could not reset draft' });
+    res.json({ item: updated });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
