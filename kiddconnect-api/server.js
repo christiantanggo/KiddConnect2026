@@ -356,6 +356,9 @@ app.use('/api/auth/signup', authLimiter);
 app.use('/api/auth', authRoutes);
 app.use('/api/business', businessRoutes);
 
+/** Which v2 routers actually mounted (health uses this — avoids advertising broken routes). */
+const v2RouteMountStatus = { dadJokeStudio: false };
+
 try {
   const v2OrganizationsRoutes = (await import('./routes/v2/organizations.js')).default;
   const v2ModulesRoutes = (await import('./routes/v2/modules.js')).default;
@@ -447,11 +450,25 @@ try {
   }
 
   try {
+    const djsYouTubeCallback = (await import('./routes/v2/dad-joke-studio-youtube-callback.js')).default;
+    app.use('/api/v2/dad-joke-studio', djsYouTubeCallback);
+    console.log('✅ Dad Joke Studio YouTube callback (public)');
+  } catch (djsCbErr) {
+    console.error('⚠️ Dad Joke Studio YouTube callback not loaded:', djsCbErr?.message);
+    if (djsCbErr?.stack) console.error(djsCbErr.stack);
+  }
+
+  try {
     const djsRoutes = (await import('./routes/v2/dad-joke-studio.js')).default;
+    if (typeof djsRoutes !== 'function') {
+      throw new Error('dad-joke-studio.js did not export a default Express router');
+    }
     app.use('/api/v2/dad-joke-studio', djsRoutes);
-    console.log('✅ Dad Joke Studio routes (OAuth callback included before auth)');
+    v2RouteMountStatus.dadJokeStudio = true;
+    console.log('✅ Dad Joke Studio routes');
   } catch (djsErr) {
-    console.warn('⚠️ Dad Joke Studio routes not loaded:', djsErr.message);
+    console.error('⚠️ Dad Joke Studio routes not loaded:', djsErr?.message);
+    if (djsErr?.stack) console.error(djsErr.stack);
   }
 
   try {
@@ -467,6 +484,9 @@ try {
       status: 'ok',
       version: DEPLOYMENT_VERSION,
       profile: 'kiddconnect-studio',
+      mounted: {
+        dadJokeStudio: v2RouteMountStatus.dadJokeStudio,
+      },
       routes: {
         auth: '/api/auth',
         business: '/api/business',
@@ -478,7 +498,7 @@ try {
         notifications: '/api/v2/notifications',
         orbixNetwork: '/api/v2/orbix-network',
         kidquiz: '/api/v2/kidquiz',
-        dadJokeStudio: '/api/v2/dad-joke-studio',
+        dadJokeStudio: v2RouteMountStatus.dadJokeStudio ? '/api/v2/dad-joke-studio' : null,
         movieReview: '/api/v2/movie-review',
         webhooks: {
           stripe: '/api/v2/webhooks/stripe',

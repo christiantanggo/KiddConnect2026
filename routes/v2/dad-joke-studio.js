@@ -22,7 +22,6 @@ import {
 } from '../../services/dadjoke-studio/ai.js';
 import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-resolver.js';
 import { rebuildGenericStoryboardFromScript } from '../../services/dadjoke-studio/generic-shorts-ass.js';
-import djsYouTubeCallbackRouter from './dad-joke-studio-youtube-callback.js';
 
 const MODULE_KEY = 'dad-joke-studio';
 /** Retired formats: hidden from /formats; cannot create or switch drafts to these keys. */
@@ -106,8 +105,7 @@ const upload = multer({
 });
 
 const router = express.Router();
-/** Public OAuth callback only — must run before authenticate (Google redirect has no Bearer token). */
-router.use(djsYouTubeCallbackRouter);
+/** YouTube OAuth callback is mounted separately in server.js (before this router), same pattern as Kid Quiz. */
 router.use(authenticate);
 router.use(requireBusinessContext);
 

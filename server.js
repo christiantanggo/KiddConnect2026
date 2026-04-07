@@ -481,6 +481,7 @@ app.use("/api/kiosk", kioskRoutes);
 
 // ========== TAVARI AI CORE v2 ROUTES ==========
 // Mount v2 routes (built in parallel, does not touch Phone Agent)
+const v2RouteMountStatus = { dadJokeStudio: false };
 try {
   const v2OrganizationsRoutes = (await import("./routes/v2/organizations.js")).default;
   const v2ModulesRoutes = (await import("./routes/v2/modules.js")).default;
@@ -656,6 +657,9 @@ try {
     res.json({
       status: "ok",
       version: DEPLOYMENT_VERSION,
+      mounted: {
+        dadJokeStudio: v2RouteMountStatus.dadJokeStudio,
+      },
       routes: {
         organizations: "/api/v2/organizations",
         modules: "/api/v2/modules",
@@ -668,6 +672,7 @@ try {
         orbixNetwork: "/api/v2/orbix-network",
         emergencyNetwork: "/api/v2/emergency-network",
         deliveryNetwork: "/api/v2/delivery-network",
+        dadJokeStudio: v2RouteMountStatus.dadJokeStudio ? "/api/v2/dad-joke-studio" : null,
         webhooks: {
           stripe: "/api/v2/webhooks/stripe",
           clickbank: "/api/v2/webhooks/clickbank"
