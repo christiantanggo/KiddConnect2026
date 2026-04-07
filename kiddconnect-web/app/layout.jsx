@@ -2,12 +2,10 @@ import './globals.css';
 import { ToastProvider } from '@/components/ToastProvider';
 import DeploymentBar from '@/components/DeploymentBar';
 import Script from 'next/script';
+import { APP_DISPLAY_NAME, APP_DESCRIPTION } from '@/lib/appBrand';
 
-const title = (process.env.NEXT_PUBLIC_APP_DISPLAY_NAME || 'Tavari Ai').trim();
-const description = (
-  process.env.NEXT_PUBLIC_APP_DESCRIPTION ||
-  'Tavari Ai — AI communications, phone agents, and business tools'
-).trim();
+const title = APP_DISPLAY_NAME;
+const description = APP_DESCRIPTION;
 
 export const metadata = {
   title,

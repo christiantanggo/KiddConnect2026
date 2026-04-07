@@ -8,6 +8,10 @@ function isUpstreamHtmlError(error) {
   return trimmed.startsWith('<') || trimmed.includes('<!DOCTYPE') || trimmed.includes('cloudflare');
 }
 
+/** Avoid log spam when clients poll every few seconds during a Supabase/Cloudflare blip. */
+let lastUpstreamHtmlLogAt = 0;
+const UPSTREAM_HTML_LOG_COOLDOWN_MS = 60_000;
+
 /** Strip junk values clients sometimes send for X-Active-Business-Id (e.g. literal "null"). */
 function normalizeActiveBusinessHeader(raw) {
   const v = String(raw ?? '').trim();
@@ -61,7 +65,13 @@ export const requireBusinessContext = async (req, res, next) => {
     next();
   } catch (error) {
     if (isUpstreamHtmlError(error)) {
-      console.error('[requireBusinessContext] Database returned HTML (e.g. Supabase/Cloudflare 500).', error?.code ?? '');
+      const now = Date.now();
+      if (now - lastUpstreamHtmlLogAt >= UPSTREAM_HTML_LOG_COOLDOWN_MS) {
+        lastUpstreamHtmlLogAt = now;
+        console.error(
+          '[requireBusinessContext] Upstream returned HTML (Supabase/Cloudflare outage or 500). Clients get 503 SERVICE_UNAVAILABLE. Check Supabase status & pooler.'
+        );
+      }
       return res.status(503).json({
         error: 'Service temporarily unavailable',
         code: 'SERVICE_UNAVAILABLE',

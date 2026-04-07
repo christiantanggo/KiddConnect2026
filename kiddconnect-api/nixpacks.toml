@@ -1,7 +1,7 @@
 # Node 20 + ffmpeg. One install path only: duplicate npm i + npm ci breaks on
 # BuildKit cache at node_modules/.cache (EBUSY rmdir).
 [phases.setup]
-nixPkgs = ["nodejs_20", "ffmpeg"]
+nixPkgs = ["nodejs_20", "ffmpeg", "dejavu_fonts"]
 
 [phases.install]
 cmds = ["npm ci"]

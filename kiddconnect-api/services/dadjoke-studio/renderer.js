@@ -1,7 +1,7 @@
 /**
  * Dad Joke Studio — FFmpeg render (KiddConnect module, not Orbix).
  * shorts_classic_loop: same pipeline as Orbix dad-joke Shorts (dadjoke-renderer.js).
- * Other formats: generic motion background + TTS or silent + optional music.
+ * Other formats: generic motion + ASS burn-in (preview-aligned) + TTS/silent + optional music bed.
  */
 import { spawn } from 'child_process';
 import { unlink } from 'fs';
@@ -17,6 +17,16 @@ import {
 } from '../orbix-network/video-renderer.js';
 import { renderOrbixStyleDadJokeShortToFile } from '../orbix-network/dadjoke-renderer.js';
 import { resolveDadJokeStudioRenderMedia } from './asset-resolver.js';
+import {
+  buildGenericStudioPhases,
+  writeGenericStudioShortsAssFile,
+  escapeAssPathForFfmpeg,
+  genericShortsVideoFilterChain,
+  resolveSubtitleFontsDir,
+  viewerSafeGuessPunchlineContent,
+  STUDIO_SHORTS_VOICE_GAIN,
+  STUDIO_SHORTS_MUSIC_BED,
+} from './generic-shorts-ass.js';
 
 const unlinkAsync = promisify(unlink);
 
@@ -230,10 +240,30 @@ export async function processDadJokeStudioRender(renderOutputId) {
 
   const businessId = content.business_id;
 
-  await supabaseClient
+  const { data: began } = await supabaseClient
     .from('dadjoke_studio_rendered_outputs')
     .update({ render_status: 'RENDERING', updated_at: new Date().toISOString() })
-    .eq('id', renderOutputId);
+    .eq('id', renderOutputId)
+    .eq('render_status', 'PENDING')
+    .select('id')
+    .maybeSingle();
+
+  if (!began) {
+    console.warn(
+      `[DadJokeStudio Renderer] Skipped render_output_id=${renderOutputId} — row not PENDING (cancelled or already processed).`
+    );
+    return;
+  }
+
+  const { data: verifyRow } = await supabaseClient
+    .from('dadjoke_studio_rendered_outputs')
+    .select('render_status')
+    .eq('id', renderOutputId)
+    .maybeSingle();
+  if (verifyRow?.render_status !== 'RENDERING') {
+    console.warn(`[DadJokeStudio Renderer] Aborted render_output_id=${renderOutputId} — row no longer active (cancelled).`);
+    return;
+  }
 
   await supabaseClient
     .from('dadjoke_studio_generated_content')
@@ -311,7 +341,11 @@ export async function processDadJokeStudioRender(renderOutputId) {
   }
 
   // ─── Generic formats ───
-  const script = (content.script_text || '').trim();
+  const contentForGeneric =
+    formatRow.format_key === 'shorts_guess_punchline'
+      ? viewerSafeGuessPunchlineContent(content)
+      : content;
+  const script = (contentForGeneric.script_text || '').trim();
   if (!script) {
     await markFailed('No script text to render');
     throw new Error('No script text to render');
@@ -335,7 +369,9 @@ export async function processDadJokeStudioRender(renderOutputId) {
   const orientation = formatRow.orientation;
 
   let bgLocal = null;
-  let baseVideoPath = null;
+  let motionVideoPath = null;
+  let composedVideoPath = null;
+  let assPath = null;
   let audioPath = null;
   let musicPath = null;
   let finalPath = null;
@@ -367,39 +403,65 @@ export async function processDadJokeStudioRender(renderOutputId) {
     }
 
     if (orientation === 'vertical_9_16') {
-      baseVideoPath = await applyMotionToImage(bgLocal, durationSec);
+      motionVideoPath = await applyMotionToImage(bgLocal, durationSec);
     } else {
-      baseVideoPath = await buildLandscapeVideo(bgLocal, durationSec, w, h);
+      motionVideoPath = await buildLandscapeVideo(bgLocal, durationSec, w, h);
     }
+
+    const phases = buildGenericStudioPhases(contentForGeneric);
+    assPath = await writeGenericStudioShortsAssFile({
+      phases,
+      durationSec,
+      width: w,
+      height: h,
+    });
+    const fontsDir = resolveSubtitleFontsDir();
+    const escapedFonts = fontsDir ? escapeAssPathForFfmpeg(fontsDir) : null;
+    const vfChain = genericShortsVideoFilterChain(escapeAssPathForFfmpeg(assPath), escapedFonts);
+    composedVideoPath = join(tmpdir(), `djs-generic-composed-${Date.now()}.mp4`);
+    await runFfmpegSpawn([
+      '-i', motionVideoPath,
+      '-filter_complex', vfChain,
+      '-map', '[vout]',
+      '-c:v', 'libx264', '-preset', 'medium', '-crf', '23',
+      '-pix_fmt', 'yuv420p',
+      '-t', String(durationSec),
+      '-y', composedVideoPath,
+    ]);
 
     if (cfg.music_public_url) {
       musicPath = await prepareMusicTrack(cfg.music_public_url, durationSec);
     }
 
+    const dStr = String(durationSec);
+    const voiceGain = `[1:a]atrim=0:${dStr},asetpts=PTS-STARTPTS,volume=${STUDIO_SHORTS_VOICE_GAIN}`;
+
     finalPath = join(tmpdir(), `djs-final-${Date.now()}.mp4`);
     if (musicPath) {
       await runFfmpegSpawn([
-        '-i', baseVideoPath,
+        '-i', composedVideoPath,
         '-i', audioPath,
         '-i', musicPath,
         '-filter_complex',
-        '[1:a]volume=1[voice];[2:a]volume=0.14[mus];[voice][mus]amix=inputs=2:duration=first:dropout_transition=2[aout]',
+        `${voiceGain}[voice];[2:a]volume=${STUDIO_SHORTS_MUSIC_BED}[mus];[voice][mus]amix=inputs=2:duration=first:dropout_transition=2[aout]`,
         '-map', '0:v',
         '-map', '[aout]',
         '-c:v', 'copy',
         '-c:a', 'aac', '-b:a', '192k',
-        '-t', String(durationSec),
+        '-t', dStr,
         '-y', finalPath,
       ]);
     } else {
       await runFfmpegSpawn([
-        '-i', baseVideoPath,
+        '-i', composedVideoPath,
         '-i', audioPath,
+        '-filter_complex',
+        `${voiceGain}[aout]`,
         '-map', '0:v',
-        '-map', '1:a',
+        '-map', '[aout]',
         '-c:v', 'copy',
         '-c:a', 'aac', '-b:a', '192k',
-        '-shortest',
+        '-t', dStr,
         '-y', finalPath,
       ]);
     }
@@ -420,7 +482,7 @@ export async function processDadJokeStudioRender(renderOutputId) {
     await markFailed(err.message);
     throw err;
   } finally {
-    const paths = [bgLocal, baseVideoPath, musicPath, finalPath, silentMp3].filter(Boolean);
+    const paths = [bgLocal, motionVideoPath, composedVideoPath, assPath, musicPath, finalPath, silentMp3].filter(Boolean);
     for (const p of paths) {
       try { await unlinkAsync(p); } catch (_) {}
     }

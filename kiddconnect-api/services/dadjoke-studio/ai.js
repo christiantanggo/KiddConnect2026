@@ -2,6 +2,9 @@
  * Dad Joke Studio — OpenAI helpers (same stack as Kid Quiz).
  */
 import OpenAI from 'openai';
+import { buildRecentStudioShortsPromptBlock, isStudioShortsDuplicate } from './joke-dedup.js';
+
+const SHORTS_DEDUP_ATTEMPTS = 5;
 
 export const STYLE_OPTIONS = {
   base: [
@@ -150,6 +153,8 @@ export async function generateIdeasList(prompt, count = 8) {
 
 /**
  * @param {object} params
+ * @param {string} [params.businessId] — when set with excludeContentId, avoids repeats vs other studio shorts for that business.
+ * @param {string} [params.excludeContentId] — current draft id (excluded from duplicate scan).
  */
 export async function generateShortsScript(params) {
   const {
@@ -157,14 +162,16 @@ export async function generateShortsScript(params) {
     aiMode,
     aiPrompt,
     extra = {},
+    businessId,
+    excludeContentId,
   } = params;
   const openai = getClient();
   const formatHints = {
     shorts_classic_loop:
       'Orbix-optimized vertical Short: setup on screen 0–4s with voice; 3-2-1 countdown 4–7s; punchline voice at 7s; loop CTA. Return structured fields for the renderer.',
     shorts_vs: 'Two dad jokes labeled A and B; ask which wins; encourage comments.',
-    shorts_guess_punchline: 'Setup first, pause beat, then punchline reveal.',
-    shorts_micro_story: '3–4 ultra-short lines of story, last line is the dad joke punchline.',
+    shorts_guess_punchline:
+      'Guess-the-punchline Short: viewers must NOT hear or see the answer — they comment their guess. Setup + CTA only in voice and on-screen.',
   };
   const hint = formatHints[formatKey] || formatHints.shorts_classic_loop;
 
@@ -185,21 +192,53 @@ export async function generateShortsScript(params) {
   const systemGeneric =
     'You write short vertical YouTube dad-joke scripts. Return JSON: {"script_text":"","storyboard":[{"label":"","text":""}],"summary":""}. script_text is full narration; storyboard is on-screen beats.';
 
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      {
-        role: 'system',
-        content: formatKey === 'shorts_classic_loop' ? systemClassic : systemGeneric,
-      },
-      { role: 'user', content: userParts.join('\n') },
-    ],
-    response_format: { type: 'json_object' },
-    temperature: aiMode === 'auto' ? 1 : 0.85,
-  });
-  const text = completion.choices[0]?.message?.content || '{}';
-  try {
-    const parsed = JSON.parse(text);
+  const systemGuessPunchline =
+    'You write a "guess the punchline" vertical YouTube Short. The audience must NOT hear or see the real answer — they type their guess in comments. ' +
+    'Return JSON only: {"setup":"","punchline":"","script_text":"","storyboard":[{"label":"","text":""}],"summary":"","content_json":{"setup":"","punchline":""}}. ' +
+    'Rules: (1) setup = joke setup only, no punchline. (2) punchline = the actual answer — CREATOR / LIBRARY REFERENCE ONLY; must never appear in script_text or any storyboard text. ' +
+    '(3) script_text = spoken VO: setup + a short CTA to comment their punchline (e.g. "Drop yours below"). Do not speak the punchline. ' +
+    '(4) storyboard = on-screen beats matching VO — setup lines, then a beat inviting comments; never show the punchline. ' +
+    '(5) summary may mention the format; do not put the punchline in summary if you can avoid it (optional one line for creator). ' +
+    '(6) storyboard label must be empty or a short beat name (e.g. setup, cta). Never use "Text on screen", "On-screen text", or similar as label. Never prefix storyboard text with "Text on screen:" — only the exact words viewers should read. ' +
+    'setup and punchline must be non-empty. No emoji.';
+
+  const dedupOn = !!(businessId && excludeContentId);
+  const recentBlock = dedupOn ? await buildRecentStudioShortsPromptBlock(businessId, excludeContentId, 15) : '';
+  const baseUser = userParts.join('\n');
+  const maxAttempts = dedupOn ? SHORTS_DEDUP_ATTEMPTS : 1;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const retryHint =
+      attempt > 1 && dedupOn
+        ? '\nYour previous output was too close to an existing joke in this studio. Write a clearly different joke (new topic and wordplay).'
+        : '';
+    const userContent = [baseUser, recentBlock, retryHint].filter(Boolean).join('\n');
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'system',
+          content:
+            formatKey === 'shorts_classic_loop'
+              ? systemClassic
+              : formatKey === 'shorts_guess_punchline'
+                ? systemGuessPunchline
+                : systemGeneric,
+        },
+        { role: 'user', content: userContent },
+      ],
+      response_format: { type: 'json_object' },
+      temperature: Math.min(1, (aiMode === 'auto' ? 0.95 : 0.82) + (attempt - 1) * 0.04),
+    });
+    const text = completion.choices[0]?.message?.content || '{}';
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      if (attempt === maxAttempts) return { script_text: '', storyboard: [], summary: '' };
+      continue;
+    }
     if (formatKey === 'shorts_classic_loop' && parsed.setup && parsed.punchline) {
       const base = parsed.content_json && typeof parsed.content_json === 'object' ? parsed.content_json : {};
       parsed.content_json = {
@@ -211,10 +250,39 @@ export async function generateShortsScript(params) {
         episode_number: typeof parsed.episode_number === 'number' ? parsed.episode_number : (base.episode_number ?? 0),
       };
     }
+    if (formatKey === 'shorts_guess_punchline' && parsed.setup && parsed.punchline) {
+      const base = parsed.content_json && typeof parsed.content_json === 'object' ? parsed.content_json : {};
+      parsed.content_json = {
+        ...base,
+        setup: String(parsed.setup).trim(),
+        punchline: String(parsed.punchline).trim(),
+      };
+    }
+    let hasBody = false;
+    if (formatKey === 'shorts_classic_loop') {
+      hasBody = !!(parsed.setup && parsed.punchline);
+    } else if (formatKey === 'shorts_guess_punchline') {
+      hasBody = !!(String(parsed.script_text || '').trim() && String(parsed.punchline || '').trim());
+    } else {
+      hasBody = !!(parsed.script_text && String(parsed.script_text).trim());
+    }
+    if (!hasBody) {
+      if (attempt === maxAttempts) return { script_text: '', storyboard: [], summary: '' };
+      continue;
+    }
+    if (dedupOn && (await isStudioShortsDuplicate(businessId, parsed, excludeContentId))) {
+      console.log(`[DadJokeStudio AI] shorts duplicate, retry ${attempt}/${maxAttempts}`);
+      if (attempt === maxAttempts) {
+        throw new Error(
+          'Could not generate a joke that is new for your studio after several tries. Change your prompt or edit older drafts.'
+        );
+      }
+      continue;
+    }
     return parsed;
-  } catch {
-    return { script_text: '', storyboard: [], summary: '' };
   }
+
+  return { script_text: '', storyboard: [], summary: '' };
 }
 
 export async function generateLongFormScript(params) {

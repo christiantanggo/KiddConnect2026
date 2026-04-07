@@ -2,26 +2,44 @@
  * Dad Joke Studio — resolve background + music URLs from module assets only (no Orbix library).
  */
 
-const BG_TYPES = ['background', 'image'];
+const BG_TYPES = ['background', 'image', 'thumbnail'];
 const MUSIC_TYPES = ['music'];
+
+/** Normalize JSONB / string format_keys for scope "formats". */
+export function normalizeDjsFormatKeys(raw) {
+  if (raw == null) return [];
+  let keys = raw;
+  if (typeof keys === 'string') {
+    try {
+      keys = JSON.parse(keys);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(keys)) {
+    return keys.map((k) => String(k).trim()).filter(Boolean);
+  }
+  if (typeof keys === 'object') {
+    return Object.values(keys)
+      .map((k) => String(k).trim())
+      .filter(Boolean);
+  }
+  return [];
+}
 
 export function isAssetEligibleForRender(asset, contentType, formatKey) {
   if (!asset || asset.deleted_at || asset.enabled === false) return false;
-  const scope = asset.usage_scope || 'global';
+  const scope = String(asset.usage_scope || 'global')
+    .toLowerCase()
+    .trim();
+  const fk = formatKey != null ? String(formatKey).trim() : '';
   if (scope === 'global') return true;
   if (scope === 'shorts') return contentType === 'shorts';
   if (scope === 'long_form') return contentType === 'long_form';
   if (scope === 'formats') {
-    let keys = asset.format_keys;
-    if (typeof keys === 'string') {
-      try {
-        keys = JSON.parse(keys);
-      } catch {
-        keys = [];
-      }
-    }
-    if (!Array.isArray(keys)) keys = [];
-    return keys.includes(formatKey);
+    if (!fk) return false;
+    const keys = normalizeDjsFormatKeys(asset.format_keys);
+    return keys.includes(fk);
   }
   return false;
 }

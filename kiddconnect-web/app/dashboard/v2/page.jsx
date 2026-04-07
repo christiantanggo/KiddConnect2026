@@ -152,7 +152,7 @@ export default function V2DashboardPage() {
           {/* Header */}
           <div className="mb-8">
             <h1 className="text-3xl font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>
-              Tavari AI v2 Dashboard
+              {APP_DISPLAY_NAME} — Dashboard
             </h1>
             <p style={{ color: 'var(--color-text-muted)' }}>
               Manage your organizations, modules, and subscriptions
@@ -452,7 +452,7 @@ export default function V2DashboardPage() {
               >
                 <h3 className="text-lg font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>Documentation</h3>
                 <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>
-                  Learn how to use Tavari AI v2
+                  Learn how to use {APP_DISPLAY_NAME}
                 </p>
               </div>
             </div>

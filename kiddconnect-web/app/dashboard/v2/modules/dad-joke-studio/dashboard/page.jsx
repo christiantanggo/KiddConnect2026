@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState, useCallback, useMemo, Suspense } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
+import { useToast } from '@/components/ToastProvider';
 
 const API = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
 const MODULE = 'dad-joke-studio';
@@ -30,23 +31,113 @@ function isVisualStudioAssetType(t) {
   return ['background', 'thumbnail', 'image'].includes(t);
 }
 
+function normalizeDjsFormatKeysClient(raw) {
+  if (raw == null) return [];
+  let keys = raw;
+  if (typeof keys === 'string') {
+    try {
+      keys = JSON.parse(keys);
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(keys)) return keys.map((k) => String(k).trim()).filter(Boolean);
+  if (typeof keys === 'object') return Object.values(keys).map((k) => String(k).trim()).filter(Boolean);
+  return [];
+}
+
+/** Single <select> value ↔ API (one list: global, all shorts, each format, all long, each long). */
+function djsAssetScopeSelectToApi(val) {
+  if (!val || val === 'global') return { usage_scope: 'global', format_keys: [] };
+  if (val === 'shorts') return { usage_scope: 'shorts', format_keys: [] };
+  if (val === 'long_form') return { usage_scope: 'long_form', format_keys: [] };
+  if (val.startsWith('fmt:')) {
+    const k = val.slice(4).trim();
+    return k ? { usage_scope: 'formats', format_keys: [k] } : { usage_scope: 'global', format_keys: [] };
+  }
+  if (val.startsWith('__multi:')) {
+    const keys = val
+      .slice(8)
+      .split('|')
+      .map((k) => k.trim())
+      .filter(Boolean);
+    return keys.length ? { usage_scope: 'formats', format_keys: keys } : { usage_scope: 'global', format_keys: [] };
+  }
+  return { usage_scope: 'global', format_keys: [] };
+}
+
+function djsAssetScopeSelectValue(usageScope, formatKeysRaw) {
+  const s = String(usageScope || 'global').toLowerCase().trim();
+  const keys = [...normalizeDjsFormatKeysClient(formatKeysRaw)].sort();
+  if (s === 'global') return 'global';
+  if (s === 'shorts') return 'shorts';
+  if (s === 'long_form') return 'long_form';
+  if (s === 'formats') {
+    if (keys.length === 0) return 'global';
+    if (keys.length === 1) return `fmt:${keys[0]}`;
+    return `__multi:${keys.join('|')}`;
+  }
+  return 'global';
+}
+
+function djsFormatNamesForKeys(keys, shortFormats, longFormats) {
+  const all = [...(shortFormats || []), ...(longFormats || [])];
+  return keys.map((k) => all.find((f) => f.format_key === k)?.name || k).join(', ');
+}
+
+function djsAssetScopeDisplaySummary(usageScope, formatKeysRaw, shortFormats, longFormats) {
+  const s = String(usageScope || 'global').toLowerCase().trim();
+  const format_keys = normalizeDjsFormatKeysClient(formatKeysRaw);
+  if (s === 'global') return 'global';
+  if (s === 'shorts') return 'all shorts subcategories';
+  if (s === 'long_form') return 'all long form';
+  if (s === 'formats' && format_keys.length === 0) return 'formats (none)';
+  if (s === 'formats' && format_keys.length === 1) {
+    const all = [...(shortFormats || []), ...(longFormats || [])];
+    const row = all.find((f) => f.format_key === format_keys[0]);
+    return row?.name || format_keys[0];
+  }
+  if (s === 'formats') return `multiple: ${djsFormatNamesForKeys(format_keys, shortFormats, longFormats)}`;
+  return String(usageScope || 'global');
+}
+
+function DjsAssetScopeSelectOptions({ shortFormats, longFormats }) {
+  return (
+    <>
+      <option value="global">Global — every video</option>
+      <optgroup label="Shorts (vertical)">
+        <option value="shorts">All shorts subcategories</option>
+        {(shortFormats || []).map((f) => (
+          <option key={f.format_key} value={`fmt:${f.format_key}`}>
+            {f.name}
+          </option>
+        ))}
+      </optgroup>
+      <optgroup label="Long form (horizontal)">
+        <option value="long_form">All long form types</option>
+        {(longFormats || []).map((f) => (
+          <option key={f.format_key} value={`fmt:${f.format_key}`}>
+            {f.name}
+          </option>
+        ))}
+      </optgroup>
+    </>
+  );
+}
+
 function isAssetEligibleForVideo(a, contentType, formatKey) {
-  if (!a || a.deleted_at) return false;
-  const scope = a.usage_scope || 'global';
+  if (!a || a.deleted_at || a.enabled === false) return false;
+  const scope = String(a.usage_scope || 'global')
+    .toLowerCase()
+    .trim();
+  const fk = formatKey != null ? String(formatKey).trim() : '';
   if (scope === 'global') return true;
   if (scope === 'shorts') return contentType === 'shorts';
   if (scope === 'long_form') return contentType === 'long_form';
   if (scope === 'formats') {
-    let keys = a.format_keys;
-    if (typeof keys === 'string') {
-      try {
-        keys = JSON.parse(keys);
-      } catch {
-        keys = [];
-      }
-    }
-    if (!Array.isArray(keys)) keys = [];
-    return keys.includes(formatKey);
+    if (!fk) return false;
+    const keys = normalizeDjsFormatKeysClient(a.format_keys);
+    return keys.includes(fk);
   }
   return false;
 }
@@ -97,6 +188,15 @@ function storyboardTextByLabel(sb, label) {
   return String(row?.text || '').trim();
 }
 
+/** Preview + excerpts: show generated script first; summary is metadata, not the spoken script. */
+function studioPreviewPrimaryText(content, maxLen = 900) {
+  const st = String(content?.script_text || '').trim();
+  if (st) return st.length > maxLen ? `${st.slice(0, maxLen)}…` : st;
+  const sm = String(content?.summary || '').trim();
+  if (sm) return sm.length > maxLen ? `${sm.slice(0, maxLen)}…` : sm;
+  return 'Script / storyboard preview for this format.';
+}
+
 function parseClassicLoopLines(content) {
   const sb = parseStoryboardArrayStudio(content);
   const cj = parseContentJsonStudio(content);
@@ -125,7 +225,7 @@ function parseClassicLoopLines(content) {
   }
 
   if (!setup || !punchline) {
-    for (const raw of [String(content?.summary || '').trim(), String(content?.script_text || '').trim()]) {
+    for (const raw of [String(content?.script_text || '').trim(), String(content?.summary || '').trim()]) {
       if (!raw || raw.includes('\n\n')) continue;
       const q = raw.indexOf('?');
       if (q > 0 && q < raw.length - 2) {
@@ -151,13 +251,273 @@ function deterministicAssetIndex(id, len) {
 function resolveClassicPreviewBackgroundUrl(content, eligibleBg) {
   const sorted = sortedStudioAssetsById(eligibleBg);
   if (!sorted.length) return null;
+  const pickUrl = (row) => row?.preview_url || row?.public_url || null;
   const sel = content?.asset_snapshot?.background_asset_id;
   if (sel) {
     const row = sorted.find((a) => String(a.id) === String(sel));
-    return row?.public_url || null;
+    return pickUrl(row);
   }
   const idx = deterministicAssetIndex(content?.id, sorted.length);
-  return sorted[idx]?.public_url || null;
+  return pickUrl(sorted[idx]);
+}
+
+function wordCountStudio(s) {
+  return (String(s || '').trim().split(/\s+/).filter(Boolean).length) || 0;
+}
+
+/** Matches `estimateSilentDuration` in dadjoke-studio/renderer.js for preview timing. */
+function estimateGenericShortsDurationSec(scriptText, targetSec, maxSec) {
+  const w = wordCountStudio(scriptText);
+  const fromWords = Math.max(8, Math.ceil(w / 2.4));
+  const t = Number(targetSec) || 30;
+  const m = Number(maxSec) || 60;
+  return Math.min(m, Math.max(6, Math.max(fromWords, t * 0.6)));
+}
+
+function sanitizeStudioOnScreenBeatStudio(label, text) {
+  let lab = String(label ?? '').trim();
+  let txt = String(text ?? '').trim();
+  const normLab = lab.replace(/\s+/g, ' ');
+  if (/^(text\s*on\s*screen|on-?\s*screen\s*text)(\s*:)?\s*$/i.test(normLab)) lab = '';
+  txt = txt.replace(/^\s*(text\s*on\s*screen|on-?\s*screen\s*text)\s*:\s*/i, '').trim();
+  return { label: lab, text: txt };
+}
+
+function storyboardRowToPhaseStudio(x) {
+  const label = String(x?.label ?? '').trim();
+  const text = String(x?.text ?? x?.line ?? x?.body ?? x?.copy ?? x?.content ?? '').trim();
+  return sanitizeStudioOnScreenBeatStudio(label, text);
+}
+
+function escapeRegExpStudio(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Match server `viewerSafeGuessPunchlineContent` — preview shows what the MP4 will show (no answer on screen). */
+function viewerSafeGuessPunchlinePreviewContent(content) {
+  const cj = parseContentJsonStudio(content);
+  const punchline = String(cj.punchline || '').trim();
+  if (!punchline) return content;
+  const strip = (t) =>
+    String(t || '')
+      .replace(new RegExp(escapeRegExpStudio(punchline), 'gi'), ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+  let script_text = strip(content.script_text);
+  script_text = sanitizeStudioOnScreenBeatStudio('', script_text).text;
+  if (!script_text) script_text = 'Think you know the punchline? Drop it in the comments.';
+  const sb = parseStoryboardArrayStudio(content);
+  const storyboard_json = sb.map((row) => {
+    const label0 = String(row?.label ?? '').trim();
+    const raw = String(row?.text ?? '').trim();
+    let text = strip(raw);
+    const cleaned = sanitizeStudioOnScreenBeatStudio(label0, text);
+    let { label, text: t2 } = cleaned;
+    if (!t2) t2 = 'COMMENT YOUR PUNCHLINE!';
+    return { ...row, label, text: t2 };
+  });
+  return { ...content, script_text, storyboard_json };
+}
+
+/** Match server `rebuildGenericStoryboardFromScript` for live script edits in preview. */
+function rebuildGenericStoryboardFromScriptStudio(scriptText) {
+  const script = String(scriptText || '').trim();
+  if (!script) return [];
+  let chunks = script.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
+  if (chunks.length <= 1) {
+    chunks = script
+      .split(/(?<=[.!?])\s+/)
+      .map((p) => p.trim())
+      .filter((p) => p.length > 8);
+  }
+  if (chunks.length === 0) chunks = [script];
+  return chunks.slice(0, 14).map((t) => sanitizeStudioOnScreenBeatStudio('', t));
+}
+
+function buildGenericShortsPreviewPhases(content, formatKey) {
+  const fk = String(formatKey || '').trim();
+  const scriptFirst = fk !== 'shorts_classic_loop';
+
+  if (scriptFirst) {
+    const script = String(content?.script_text || '').trim();
+    if (script) {
+      const fromScript = rebuildGenericStoryboardFromScriptStudio(script).filter((x) => x.text);
+      if (fromScript.length > 0) return fromScript;
+    }
+  }
+
+  const sb = parseStoryboardArrayStudio(content);
+  const fromBoard = sb.map(storyboardRowToPhaseStudio).filter((x) => x.text);
+  if (fromBoard.length > 0) return fromBoard;
+
+  const script = String(content?.script_text || '').trim();
+  if (!script) {
+    return [{ label: '', text: 'Generate a script to see timed preview beats.' }];
+  }
+  const fromFallback = rebuildGenericStoryboardFromScriptStudio(script).filter((x) => x.text);
+  return fromFallback.length > 0 ? fromFallback : [{ label: '', text: 'Generate a script to see timed preview beats.' }];
+}
+
+/** Approximate Orbix 4-segment motion (zoom / pan / zoom / pan) like `applyMotionToImage`. */
+function kenBurnsTransformGeneric(tMs, totalMs) {
+  if (totalMs <= 0) return 'translate(-50%, -50%) scale(1.1)';
+  const p = ((tMs % totalMs) / totalMs) * 4;
+  const seg = Math.min(3, Math.floor(p));
+  const u = p - seg;
+  let scale = 1.08;
+  let tx = 0;
+  let ty = 0;
+  if (seg === 0) scale = 1.08 + 0.1 * u;
+  else if (seg === 1) {
+    scale = 1.18;
+    tx = -5 * u;
+    ty = 1.5 * u;
+  } else if (seg === 2) scale = 1.18 - 0.1 * u;
+  else {
+    scale = 1.08;
+    tx = 5 * u;
+    ty = -1.5 * u;
+  }
+  return `translate(calc(-50% + ${tx}%), calc(-50% + ${ty}%)) scale(${scale})`;
+}
+
+function DadJokeGenericShortsPreview({ aspectRatio, content, eligibleBackgroundAssets, currentFormat, musicNote, formatKey }) {
+  const contentForPreview = useMemo(
+    () =>
+      formatKey === 'shorts_guess_punchline'
+        ? viewerSafeGuessPunchlinePreviewContent(content)
+        : content,
+    [content, formatKey]
+  );
+  const bgUrl = useMemo(
+    () => resolveClassicPreviewBackgroundUrl(content, eligibleBackgroundAssets),
+    [content?.id, content?.asset_snapshot?.background_asset_id, eligibleBackgroundAssets]
+  );
+  const phases = useMemo(
+    () => buildGenericShortsPreviewPhases(contentForPreview, formatKey),
+    [contentForPreview, formatKey]
+  );
+  const durationSec = useMemo(() => {
+    const script = String(contentForPreview?.script_text || '').trim();
+    const target = Number(currentFormat?.target_duration_sec) || 30;
+    const maxD = Number(currentFormat?.max_duration_sec) || 60;
+    if (!script) return Math.min(maxD, Math.max(10, target));
+    return estimateGenericShortsDurationSec(script, target, maxD);
+  }, [contentForPreview?.script_text, currentFormat?.target_duration_sec, currentFormat?.max_duration_sec]);
+
+  const totalMs = Math.max(4000, Math.round(durationSec * 1000));
+  const [tMs, setTMs] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    let rafId = 0;
+    const start = performance.now();
+    function frame() {
+      if (cancelled) return;
+      const elapsed = (performance.now() - start) % totalMs;
+      setTMs(elapsed);
+      rafId = requestAnimationFrame(frame);
+    }
+    rafId = requestAnimationFrame(frame);
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(rafId);
+    };
+  }, [content?.id, totalMs, formatKey]);
+
+  const barPct = (tMs / totalMs) * 100;
+  const n = phases.length;
+  const phaseIdx = n > 0 ? Math.min(n - 1, Math.floor((tMs / totalMs) * n)) : 0;
+  const beat = phases[phaseIdx] || { label: '', text: '' };
+  const motionStyle = kenBurnsTransformGeneric(tMs, totalMs);
+
+  return (
+    <div>
+      <div
+        className="mx-auto mb-2 relative overflow-hidden flex flex-col"
+        style={{
+          aspectRatio,
+          maxHeight: 380,
+          borderRadius: 8,
+          background: '#0f172a',
+          color: '#e2e8f0',
+        }}
+      >
+        <div className="absolute inset-0 overflow-hidden">
+          {bgUrl ? (
+            <>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={bgUrl}
+                alt=""
+                referrerPolicy="no-referrer"
+                className="absolute left-1/2 top-1/2 min-h-[115%] min-w-[115%] max-w-none object-cover"
+                style={{ transform: motionStyle, transformOrigin: 'center center' }}
+              />
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{ background: 'linear-gradient(to bottom, rgba(0,0,0,0.4) 0%, rgba(0,0,0,0.65) 100%)' }}
+              />
+            </>
+          ) : (
+            <div
+              className="absolute inset-0 flex items-center justify-center text-[11px] px-4 text-center"
+              style={{ color: 'rgba(248,250,252,0.65)' }}
+            >
+              No eligible background — add one under Assets to match the render.
+            </div>
+          )}
+        </div>
+        <div className="relative z-10 flex flex-col flex-1 min-h-[200px]">
+          <div className="flex-1 flex flex-col items-center justify-center px-4 py-5 text-center min-h-[160px]">
+            {beat.label ? (
+              <p className="text-[10px] uppercase tracking-[0.2em] opacity-75 mb-2" style={{ textShadow: '0 1px 8px rgba(0,0,0,0.9)' }}>
+                {stripEmojiStudio(beat.label)}
+              </p>
+            ) : null}
+            <p
+              className="text-sm sm:text-base font-semibold leading-snug max-w-[95%] line-clamp-[8]"
+              style={{ textShadow: '0 2px 14px rgba(0,0,0,0.95)' }}
+            >
+              {stripEmojiStudio(beat.text)}
+            </p>
+            <p className="text-[10px] mt-3 opacity-70 tabular-nums" style={{ textShadow: '0 1px 6px rgba(0,0,0,0.9)' }}>
+              Beat {phaseIdx + 1} of {n} · ~{durationSec}s loop (est. render length)
+            </p>
+          </div>
+          <div className="px-[5%] pb-4 pt-1">
+            <div className="h-3 w-full rounded-full overflow-hidden" style={{ background: 'rgba(255,255,255,0.15)' }}>
+              <div
+                className="h-full rounded-full transition-none"
+                style={{ width: `${Math.min(100, barPct)}%`, background: 'rgba(255,255,255,0.9)' }}
+              />
+            </div>
+            <p className="text-[10px] mt-2 text-center opacity-80" style={{ color: 'rgba(248,250,252,0.75)' }}>
+              Motion matches the render. The exported MP4 burns in these beats (timed by word weight) plus voiceover and optional music.
+            </p>
+          </div>
+        </div>
+      </div>
+      {musicNote ? (
+        <p className="text-[10px] mt-1 text-center" style={{ color: 'var(--color-text-muted)' }}>
+          {musicNote}
+        </p>
+      ) : null}
+      {formatKey === 'shorts_guess_punchline' ? (() => {
+        const ans = String(parseContentJsonStudio(content).punchline || '').trim();
+        if (!ans) return null;
+        return (
+          <p
+            className="text-[10px] mt-2 mx-auto max-w-lg px-3 py-2 rounded-lg text-center"
+            style={{ background: 'rgba(251, 191, 36, 0.12)', border: '1px solid rgba(251, 191, 36, 0.35)', color: '#92400e' }}
+          >
+            <span className="font-semibold">Answer (not spoken or burned into the video):</span>{' '}
+            {stripEmojiStudio(ans)}
+          </p>
+        );
+      })() : null}
+    </div>
+  );
 }
 
 function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAssets, musicNote }) {
@@ -246,7 +606,7 @@ function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAss
             className="absolute inset-0 flex items-center justify-center text-[11px] px-4 text-center"
             style={{ color: 'rgba(248,250,252,0.65)' }}
           >
-            No eligible background for this draft — upload under Assets (e.g. Shorts only) or pick one above.
+            No eligible background for this draft — upload under Assets (e.g. all shorts subcategories) or pick one above.
           </div>
         )}
         <div className="relative z-10 flex flex-col flex-1 min-h-0">
@@ -314,6 +674,7 @@ function DadJokeClassicLoopPreview({ aspectRatio, content, eligibleBackgroundAss
 function DadJokeStudioDashboardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { success: showPublishSuccess } = useToast();
   /** null = checking subscription; unsubscribed users are sent to the module page to activate (avoids settings ↔ marketplace loop). */
   const [accessAllowed, setAccessAllowed] = useState(null);
   const [mainSection, setMainSection] = useState('studio');
@@ -347,11 +708,58 @@ function DadJokeStudioDashboardInner() {
   /** Latest row from `dadjoke_studio_rendered_outputs` for `content.current_render_id` (includes output_url). */
   const [currentRender, setCurrentRender] = useState(null);
   const [generating, setGenerating] = useState(false);
-  const [uploadScope, setUploadScope] = useState('global');
-  const [uploadFormatKeys, setUploadFormatKeys] = useState([]);
+  const [uploadScopeSelect, setUploadScopeSelect] = useState('global');
   const [uploadImagePreviewUrl, setUploadImagePreviewUrl] = useState(null);
   const [suggestingYoutubeMeta, setSuggestingYoutubeMeta] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [publishSuccessHint, setPublishSuccessHint] = useState(null);
+  const [approving, setApproving] = useState(false);
+  const [rendering, setRendering] = useState(false);
+  const [cancellingRender, setCancellingRender] = useState(false);
+
+  const publishPollRef = useRef(null);
+  const libFilterRef = useRef(libFilter);
+  const contentIdRef = useRef(null);
+
+  useEffect(() => {
+    libFilterRef.current = libFilter;
+  }, [libFilter]);
+
+  useEffect(() => {
+    contentIdRef.current = content?.id ?? null;
+  }, [content?.id]);
+
+  useEffect(
+    () => () => {
+      if (publishPollRef.current != null) {
+        clearInterval(publishPollRef.current);
+        publishPollRef.current = null;
+      }
+    },
+    []
+  );
+
+  const clearPublishPoll = useCallback(() => {
+    if (publishPollRef.current != null) {
+      clearInterval(publishPollRef.current);
+      publishPollRef.current = null;
+    }
+  }, []);
+
+  const refreshLibrary = useCallback(async () => {
+    const f = libFilterRef.current;
+    const q = new URLSearchParams();
+    if (f.content_type) q.set('content_type', f.content_type);
+    if (f.format_key) q.set('format_key', f.format_key);
+    if (f.status) q.set('status', f.status);
+    try {
+      const res = await fetch(`${API}/api/v2/dad-joke-studio/content?${q}`, { headers: buildHeaders() });
+      const d = await res.json();
+      setLibrary(d.items || []);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   useEffect(() => () => {
     if (uploadImagePreviewUrl) URL.revokeObjectURL(uploadImagePreviewUrl);
@@ -436,6 +844,21 @@ function DadJokeStudioDashboardInner() {
   }, [mainSection]);
 
   useEffect(() => {
+    if (mainSection !== 'library') return;
+    refreshLibrary();
+  }, [mainSection, refreshLibrary]);
+
+  useEffect(() => {
+    if (mainSection !== 'library') return;
+    const busy = library.some((r) => ['UPLOADING', 'UPLOAD_QUEUED'].includes(r.status));
+    if (!busy) return;
+    const t = setInterval(() => {
+      refreshLibrary();
+    }, 4000);
+    return () => clearInterval(t);
+  }, [mainSection, library, refreshLibrary]);
+
+  useEffect(() => {
     const sec = searchParams.get('studioSection');
     if (sec) setMainSection(sec === 'upload' ? 'studio' : sec);
     if (accessAllowed === true && searchParams.get('youtube_connected') === 'true') loadAll();
@@ -444,18 +867,40 @@ function DadJokeStudioDashboardInner() {
   useEffect(() => {
     if (!pollRender || !content?.id) return;
     const id = content.id;
-    const t = setInterval(async () => {
-      const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${id}/render-status`, { headers: buildHeaders() });
-      const data = await res.json();
-      if (data.render?.render_status === 'READY' || data.render?.render_status === 'FAILED') {
-        clearInterval(t);
-        setPollRender(null);
-        setCurrentRender(data.render || null);
-        const full = await fetch(`${API}/api/v2/dad-joke-studio/content/${id}`, { headers: buildHeaders() }).then((r) => r.json());
-        if (full.item) setContent(full.item);
-        if (full.current_render) setCurrentRender(full.current_render);
-        loadAll();
-      }
+    const t = setInterval(() => {
+      void (async () => {
+        try {
+          const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${id}/render-status`, {
+            headers: buildHeaders(),
+          });
+          if (!res.ok) return;
+          const data = await res.json().catch(() => ({}));
+          if (data.render?.render_status === 'READY' || data.render?.render_status === 'FAILED') {
+            clearInterval(t);
+            setPollRender(null);
+            setCurrentRender(data.render || null);
+            try {
+              const fullRes = await fetch(`${API}/api/v2/dad-joke-studio/content/${id}`, {
+                headers: buildHeaders(),
+              });
+              if (fullRes.ok) {
+                const full = await fullRes.json().catch(() => ({}));
+                if (full.item) setContent(full.item);
+                if (full.current_render) setCurrentRender(full.current_render);
+              }
+            } catch {
+              /* ignore */
+            }
+            try {
+              await loadAll();
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch {
+          /* API down or offline — keep polling until reachable or user leaves */
+        }
+      })();
     }, 3000);
     return () => clearInterval(t);
   }, [pollRender, content?.id, loadAll]);
@@ -520,15 +965,42 @@ function DadJokeStudioDashboardInner() {
   }
 
   async function saveContent(patch) {
-    if (!content?.id) return;
-    const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}`, {
-      method: 'PUT',
-      headers: buildHeaders(),
-      body: JSON.stringify(patch),
-    });
-    const data = await res.json();
-    if (!res.ok) return setError(data.error);
-    setContent(data.item);
+    if (!content?.id) return null;
+    try {
+      const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}`, {
+        method: 'PUT',
+        headers: buildHeaders(),
+        body: JSON.stringify(patch),
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        /* non-JSON body */
+      }
+      if (!res.ok) {
+        setError(data?.error || `Save failed (${res.status}).`);
+        return null;
+      }
+      setContent(data.item);
+      return data.item;
+    } catch (e) {
+      const msg = String(e?.message || '');
+      setError(
+        msg.includes('Failed to fetch') || msg.includes('NetworkError')
+          ? `Cannot reach API at ${API}. Check NEXT_PUBLIC_API_URL or that the server is running.`
+          : msg || 'Save failed.'
+      );
+      return null;
+    }
+  }
+
+  async function selectStudioFormat(f) {
+    if (studioTop === 'shorts') setShortKey(f.format_key);
+    else setLongKey(f.format_key);
+    if (content?.id && content.content_type === f.content_type && content.format_key !== f.format_key) {
+      await saveContent({ format_key: f.format_key });
+    }
   }
 
   async function openDraftInStudio(id) {
@@ -575,7 +1047,7 @@ function DadJokeStudioDashboardInner() {
   async function deleteLibraryRow(e, row) {
     e.preventDefault();
     e.stopPropagation();
-    if (['RENDERING', 'UPLOADING'].includes(row.status)) {
+    if (['RENDERING', 'UPLOADING', 'UPLOAD_QUEUED'].includes(row.status)) {
       setError('Wait for render or upload to finish before deleting.');
       return;
     }
@@ -665,25 +1137,114 @@ function DadJokeStudioDashboardInner() {
   }
 
   async function runRender() {
-    if (!content?.id) return;
-    const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}/render`, {
-      method: 'POST',
-      headers: buildHeaders(),
-    });
-    const data = await res.json();
-    if (!res.ok) return setError(data.error);
-    setPollRender(true);
-    setContent((c) =>
-      c
-        ? {
-            ...c,
-            status: 'RENDERING',
-            current_render_id: data.render_id ?? c.current_render_id,
-          }
-        : c
-    );
-    if (data.render_id) {
-      setCurrentRender((r) => (r?.id === data.render_id ? r : { id: data.render_id, render_status: 'PENDING', output_url: null }));
+    if (!content?.id || rendering) return;
+    if (!String(content.script_text || '').trim()) {
+      setError('Script is empty — add or generate script text before rendering.');
+      return;
+    }
+    if (content.status === 'RENDERING') {
+      setError('A render is already in progress for this draft. Wait for the preview or refresh the page.');
+      return;
+    }
+    setError(null);
+    setRendering(true);
+    try {
+      const savePatch = {
+        script_text: content.script_text,
+        ai_prompt: content.ai_prompt,
+      };
+      if (studioTop === 'long_form' && longKey === 'long_style_engine') {
+        savePatch.style_recipe_snapshot = recipe;
+      }
+      const saved = await saveContent(savePatch);
+      if (!saved) return;
+
+      if (saved.status === 'RENDERING') {
+        setError('A render is already in progress for this draft. Wait for the preview or refresh the page.');
+        return;
+      }
+      if (
+        saved.status !== 'APPROVED' &&
+        saved.status !== 'FAILED' &&
+        saved.status !== 'RENDERED'
+      ) {
+        setError(
+          'Approve this draft first (step 2), then render. If you edited the script after approving, the draft was reset to DRAFT — approve again.'
+        );
+        return;
+      }
+
+      const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${saved.id}/render`, {
+        method: 'POST',
+        headers: buildHeaders(),
+      });
+      let data = {};
+      try {
+        data = await res.json();
+      } catch {
+        /* non-JSON body */
+      }
+      if (!res.ok) {
+        setError(
+          data?.error ||
+            (res.status === 0
+              ? `Cannot reach API (${API}). Start the backend or check the port in config.`
+              : `Render failed (${res.status}).`)
+        );
+        return;
+      }
+      setPollRender(true);
+      setContent((c) =>
+        c
+          ? {
+              ...c,
+              status: 'RENDERING',
+              current_render_id: data.render_id ?? c.current_render_id,
+            }
+          : c
+      );
+      if (data.render_id) {
+        setCurrentRender((r) => (r?.id === data.render_id ? r : { id: data.render_id, render_status: 'PENDING', output_url: null }));
+      }
+    } catch (e) {
+      const msg = String(e?.message || '');
+      setError(
+        msg.includes('Failed to fetch') || msg.includes('NetworkError')
+          ? `Cannot reach API at ${API}. Is the server running (e.g. localhost:5003)?`
+          : msg || 'Render failed.'
+      );
+    } finally {
+      setRendering(false);
+    }
+  }
+
+  async function cancelRender() {
+    if (!content?.id || cancellingRender) return;
+    setCancellingRender(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}/cancel-render`, {
+        method: 'POST',
+        headers: buildHeaders(),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(d.error || `Cancel failed (${res.status}).`);
+        return;
+      }
+      setPollRender(false);
+      if (d.item) setContent(d.item);
+      setCurrentRender(null);
+      await loadAll();
+    } catch (e) {
+      const msg = String(e?.message || '');
+      setError(
+        msg.includes('Failed to fetch') || msg.includes('NetworkError')
+          ? `Cannot reach API at ${API}. Is the server running?`
+          : msg || 'Cancel failed.'
+      );
+    } finally {
+      setCancellingRender(false);
     }
   }
 
@@ -702,6 +1263,7 @@ function DadJokeStudioDashboardInner() {
       return;
     }
     setError(null);
+    setPublishSuccessHint(null);
     setPublishing(true);
     const tags = uploadForm.tags.split(',').map((s) => s.trim()).filter(Boolean);
     try {
@@ -731,14 +1293,59 @@ function DadJokeStudioDashboardInner() {
         setError(data?.error || `Publish failed (${res.status})`);
         return;
       }
+      const isScheduled = Boolean(uploadForm.schedule?.trim());
+      showPublishSuccess(
+        isScheduled
+          ? 'Scheduled. Your video will go live on YouTube at the time you chose.'
+          : 'Queued for YouTube. The upload runs in the background—check the Library in a minute for status.'
+      );
+      setPublishSuccessHint(
+        isScheduled
+          ? 'Scheduled — YouTube will publish at your chosen time.'
+          : 'Queued — uploading to YouTube in the background. Check Library for status.'
+      );
+      const generatedContentId = content.id;
       await loadAll();
       try {
-        const refresh = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}`, { headers: buildHeaders() });
+        const refresh = await fetch(`${API}/api/v2/dad-joke-studio/content/${generatedContentId}`, { headers: buildHeaders() });
         const rd = await refresh.json().catch(() => ({}));
         if (refresh.ok && rd.item) setContent(rd.item);
         if (refresh.ok && rd.current_render) setCurrentRender(rd.current_render);
       } catch {
         /* non-fatal */
+      }
+      const publishId = data.publish?.id;
+      clearPublishPoll();
+      if (publishId) {
+        const started = Date.now();
+        publishPollRef.current = setInterval(async () => {
+          if (Date.now() - started > 180000) {
+            clearPublishPoll();
+            return;
+          }
+          try {
+            const stRes = await fetch(`${API}/api/v2/dad-joke-studio/publish-queue/${publishId}/status`, {
+              headers: buildHeaders(),
+            });
+            const stData = await stRes.json().catch(() => ({}));
+            const ps = stData.publish?.publish_status;
+            await refreshLibrary();
+            if (contentIdRef.current === generatedContentId) {
+              const fullRes = await fetch(`${API}/api/v2/dad-joke-studio/content/${generatedContentId}`, {
+                headers: buildHeaders(),
+              });
+              const full = await fullRes.json().catch(() => ({}));
+              if (full.item) setContent(full.item);
+              if (full.current_render) setCurrentRender(full.current_render);
+            }
+            if (ps && ['PUBLISHED', 'SCHEDULED', 'FAILED'].includes(ps)) {
+              clearPublishPoll();
+              await loadAll();
+            }
+          } catch {
+            /* ignore */
+          }
+        }, 3000);
       }
     } catch (e) {
       setError(e?.message || 'Publish request failed');
@@ -809,29 +1416,73 @@ function DadJokeStudioDashboardInner() {
     });
   }
 
-  const shortFormats = formats.filter((f) => f.content_type === 'shorts');
-  const longFormats = formats.filter((f) => f.content_type === 'long_form');
+  const shortFormats = useMemo(
+    () =>
+      (formats || []).filter((f) => f.content_type === 'shorts' && f.format_key !== 'shorts_micro_story'),
+    [formats]
+  );
+  const longFormats = useMemo(
+    () => (formats || []).filter((f) => f.content_type === 'long_form'),
+    [formats]
+  );
+
+  useEffect(() => {
+    if (shortKey !== 'shorts_micro_story') return;
+    const next = shortFormats[0]?.format_key || 'shorts_classic_loop';
+    setShortKey(next);
+  }, [shortKey, shortFormats]);
 
   /**
-   * Which content_type + format_key to use for “eligible” background/music lists.
-   * When no draft is open, `content` is null — we still use the active Shorts/Long tab + format keys
-   * so uploads don’t look “missing” on the Studio screen (only the Assets tab had the full list before).
+   * Eligible assets follow the **selected** Shorts/Long tab + format pill when the open draft is the
+   * same bucket (e.g. shorts). Otherwise we’d show Classic Loop in the DB while the UI says “Vs” and
+   * format-scoped uploads would disappear; render also used the wrong format_key until saved.
    */
   const assetEligibilityContext = useMemo(() => {
-    if (content?.content_type && content?.format_key) {
-      return { contentType: content.content_type, formatKey: content.format_key };
+    const tabContentType = studioTop === 'long_form' ? 'long_form' : 'shorts';
+    const tabFormatKey = studioTop === 'long_form' ? longKey : shortKey;
+    if (!content?.id) {
+      return { contentType: tabContentType, formatKey: tabFormatKey };
     }
-    const contentType = studioTop === 'long_form' ? 'long_form' : 'shorts';
-    const formatKey = studioTop === 'long_form' ? longKey : shortKey;
-    return { contentType, formatKey };
-  }, [content?.content_type, content?.format_key, studioTop, shortKey, longKey]);
+    if (content.content_type === tabContentType) {
+      return { contentType: tabContentType, formatKey: tabFormatKey };
+    }
+    // Shorts draft while Long tab is selected (or the reverse): use the draft’s format, not the wrong tab’s pill.
+    const savedFk = content.format_key && String(content.format_key).trim();
+    if (savedFk) {
+      return { contentType: content.content_type, formatKey: savedFk };
+    }
+    const firstOfType =
+      content.content_type === 'shorts' ? shortFormats[0] : longFormats[0];
+    return {
+      contentType: content.content_type,
+      formatKey: firstOfType?.format_key || tabFormatKey,
+    };
+  }, [content?.id, content?.content_type, content?.format_key, studioTop, shortKey, longKey, shortFormats, longFormats]);
 
   const eligibleBackgroundAssets = useMemo(() => {
     const { contentType: ct, formatKey: fk } = assetEligibilityContext;
     if (!fk) return [];
     return assets.filter(
-      (a) => ['background', 'image'].includes(a.asset_type) && isAssetEligibleForVideo(a, ct, fk)
+      (a) =>
+        ['background', 'image', 'thumbnail'].includes(a.asset_type) && isAssetEligibleForVideo(a, ct, fk)
     );
+  }, [assets, assetEligibilityContext]);
+
+  const backgroundEligibilityHint = useMemo(() => {
+    const { contentType: ct, formatKey: fk } = assetEligibilityContext;
+    const visual = assets.filter(
+      (a) =>
+        ['background', 'image', 'thumbnail'].includes(a.asset_type) && !a.deleted_at && a.enabled !== false
+    );
+    if (visual.length === 0) {
+      return 'Upload an image with type “background” or “image” (thumbnail works too). Music files cannot be used as the video background.';
+    }
+    const onlyFormats = visual.filter((a) => String(a.usage_scope || '').toLowerCase().trim() === 'formats');
+    const fkStr = fk || '—';
+    if (onlyFormats.length === visual.length && onlyFormats.length > 0) {
+      return `All ${visual.length} image asset(s) are scoped to specific subcategories only. In Assets, either check the box for this format (${fkStr}), or change scope to “All shorts subcategories” / “Global”.`;
+    }
+    return `${visual.length} image asset(s) in the library, but none match ${ct === 'shorts' ? 'Shorts' : 'long form'} / format “${fkStr}”. Wrong tab (Long vs Shorts) or scope (e.g. Long form only) will hide backgrounds here.`;
   }, [assets, assetEligibilityContext]);
 
   const eligibleMusicAssets = useMemo(() => {
@@ -865,10 +1516,6 @@ function DadJokeStudioDashboardInner() {
     if (!res.ok) throw new Error(data.error || 'Update failed');
     const astRes = await fetch(`${API}/api/v2/dad-joke-studio/assets`, { headers: buildHeaders() }).then((r) => r.json());
     setAssets(astRes.assets || []);
-  }
-
-  function toggleUploadFormatKey(key) {
-    setUploadFormatKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
   }
 
   if (accessAllowed === null) {
@@ -953,7 +1600,7 @@ function DadJokeStudioDashboardInner() {
               <button
                 key={f.format_key}
                 type="button"
-                onClick={() => (studioTop === 'shorts' ? setShortKey(f.format_key) : setLongKey(f.format_key))}
+                onClick={() => void selectStudioFormat(f)}
                 className="px-3 py-1.5 rounded-lg text-xs font-semibold"
                 style={{
                   background: formatKey === f.format_key ? 'var(--color-accent)' : 'transparent',
@@ -1110,7 +1757,7 @@ function DadJokeStudioDashboardInner() {
                   ))}
                 </select>
                 {content?.id && eligibleBackgroundAssets.length === 0 && (
-                  <p className="text-amber-800 text-[11px]">No eligible background for this format — upload one in Assets with the right scope.</p>
+                  <p className="text-amber-800 text-[11px] whitespace-pre-wrap">{backgroundEligibilityHint}</p>
                 )}
               </div>
               {formatKey === 'shorts_classic_loop' ? (
@@ -1119,6 +1766,15 @@ function DadJokeStudioDashboardInner() {
                   content={content}
                   eligibleBackgroundAssets={eligibleBackgroundAssets}
                   musicNote={classicLoopMusicNote}
+                />
+              ) : studioTop === 'shorts' ? (
+                <DadJokeGenericShortsPreview
+                  aspectRatio={previewAspect}
+                  content={content}
+                  eligibleBackgroundAssets={eligibleBackgroundAssets}
+                  currentFormat={currentFormat}
+                  musicNote={classicLoopMusicNote}
+                  formatKey={formatKey}
                 />
               ) : (
                 <div
@@ -1131,7 +1787,7 @@ function DadJokeStudioDashboardInner() {
                     borderRadius: 8,
                   }}
                 >
-                  {content?.summary || content?.script_text?.slice(0, 200) || 'Script / storyboard preview for this format.'}
+                  <span className="whitespace-pre-wrap text-left block px-1">{studioPreviewPrimaryText(content)}</span>
                 </div>
               )}
               {content?.status === 'RENDERING' && (
@@ -1200,18 +1856,67 @@ function DadJokeStudioDashboardInner() {
                 </button>
                 <button
                   type="button"
-                  className="px-2 py-1 text-xs border rounded"
+                  className="px-2 py-1 text-xs border rounded disabled:opacity-50"
                   onClick={async () => {
-                    if (!content?.id) return;
-                    const r = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}/approve`, { method: 'POST', headers: buildHeaders() });
-                    const d = await r.json();
-                    if (d.item) setContent(d.item);
+                    if (!content?.id || approving) return;
+                    setApproving(true);
+                    setError(null);
+                    try {
+                      const r = await fetch(`${API}/api/v2/dad-joke-studio/content/${content.id}/approve`, {
+                        method: 'POST',
+                        headers: buildHeaders(),
+                      });
+                      const d = await r.json().catch(() => ({}));
+                      if (!r.ok) {
+                        setError(
+                          d.error ||
+                            (r.status === 0
+                              ? `Cannot reach API (${API}). Start the backend or check the port.`
+                              : `Approve failed (${r.status}).`)
+                        );
+                        return;
+                      }
+                      if (d.item) setContent(d.item);
+                      await loadAll();
+                    } catch (e) {
+                      const msg = String(e?.message || '');
+                      setError(
+                        msg.includes('Failed to fetch') || msg.includes('NetworkError')
+                          ? `Cannot reach API at ${API}. Is the server running?`
+                          : msg || 'Approve failed.'
+                      );
+                    } finally {
+                      setApproving(false);
+                    }
                   }}
-                  disabled={!content?.id}
+                  disabled={!content?.id || approving}
                 >
-                  Approve
+                  {approving ? 'Approving…' : 'Approve'}
                 </button>
-                <button type="button" className="px-2 py-1 text-xs rounded text-white" style={{ background: '#10b981' }} onClick={runRender} disabled={!content?.id}>Render video</button>
+                <button
+                  type="button"
+                  className="px-2 py-1 text-xs rounded text-white disabled:opacity-50"
+                  style={{ background: '#10b981' }}
+                  onClick={() => void runRender()}
+                  disabled={!content?.id || rendering || content?.status === 'RENDERING' || cancellingRender}
+                  title="Starts a new FFmpeg job on the server. Use after deploy or script changes so the file matches latest code and data."
+                >
+                  {rendering
+                    ? 'Starting…'
+                    : content?.status === 'RENDERED' || currentRender?.render_status === 'READY'
+                      ? 'Re-render video'
+                      : 'Render video'}
+                </button>
+                <button
+                  type="button"
+                  className="px-2 py-1 text-xs rounded border border-amber-700 text-amber-900 dark:text-amber-200 disabled:opacity-50"
+                  style={{ background: 'var(--color-surface, #fff8e7)' }}
+                  onClick={() => void cancelRender()}
+                  disabled={!content?.id || content?.status !== 'RENDERING' || cancellingRender || rendering}
+                  title="Stop a stuck render and return the draft to Approved so you can render again."
+                >
+                  {cancellingRender ? 'Cancelling…' : 'Cancel render'}
+                </button>
               </div>
             </section>
 
@@ -1284,6 +1989,15 @@ function DadJokeStudioDashboardInner() {
               >
                 {publishing ? 'Publishing…' : 'Publish now or schedule'}
               </button>
+              {publishSuccessHint && (
+                <p
+                  className="text-sm mt-3 rounded-lg p-3 border"
+                  style={{ background: '#ecfdf5', color: '#065f46', borderColor: '#a7f3d0' }}
+                  role="status"
+                >
+                  {publishSuccessHint}
+                </p>
+              )}
             </section>
           </div>
         </>
@@ -1321,17 +2035,7 @@ function DadJokeStudioDashboardInner() {
             </select>
             <input className="border rounded p-1 text-sm" placeholder="format_key" value={libFilter.format_key} onChange={(e) => setLibFilter((f) => ({ ...f, format_key: e.target.value }))} />
             <input className="border rounded p-1 text-sm" placeholder="status" value={libFilter.status} onChange={(e) => setLibFilter((f) => ({ ...f, status: e.target.value }))} />
-            <button
-              type="button"
-              className="px-2 py-1 text-xs border rounded"
-              onClick={() => {
-                const q = new URLSearchParams();
-                if (libFilter.content_type) q.set('content_type', libFilter.content_type);
-                if (libFilter.format_key) q.set('format_key', libFilter.format_key);
-                if (libFilter.status) q.set('status', libFilter.status);
-                fetch(`${API}/api/v2/dad-joke-studio/content?${q}`, { headers: buildHeaders() }).then((r) => r.json()).then((d) => setLibrary(d.items || []));
-              }}
-            >
+            <button type="button" className="px-2 py-1 text-xs border rounded" onClick={() => refreshLibrary()}>
               Filter
             </button>
           </div>
@@ -1377,11 +2081,11 @@ function DadJokeStudioDashboardInner() {
                         type="button"
                         className="text-xs px-2 py-0.5 rounded border border-red-300 text-red-700 hover:bg-red-50"
                         title={
-                          ['RENDERING', 'UPLOADING'].includes(row.status)
+                          ['RENDERING', 'UPLOADING', 'UPLOAD_QUEUED'].includes(row.status)
                             ? 'Wait for render or upload to finish'
                             : 'Remove from library'
                         }
-                        disabled={['RENDERING', 'UPLOADING'].includes(row.status)}
+                        disabled={['RENDERING', 'UPLOADING', 'UPLOAD_QUEUED'].includes(row.status)}
                         onClick={(e) => deleteLibraryRow(e, row)}
                       >
                         Delete
@@ -1398,8 +2102,8 @@ function DadJokeStudioDashboardInner() {
       {mainSection === 'assets' && (
         <div>
           <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>
-            <strong>Global</strong> — any short/long video. <strong>Shorts only</strong> / <strong>Long form only</strong> — that side only.
-            <strong> Specific formats</strong> — only the checked formats. Renders never pull Orbix stock backgrounds/music.
+            Choose scope in the list: <strong>Global</strong>, <strong>all shorts</strong> or <strong>one shorts type</strong> (Classic loop, Vs, Guess the punchline…), same for long form, or one long format. If an older asset used several types at once, the menu shows that combined row until you pick a single scope.
+            Renders never pull Orbix stock backgrounds/music.
           </p>
           <form
             className="mb-6 flex flex-col gap-3 border rounded p-3"
@@ -1410,8 +2114,9 @@ function DadJokeStudioDashboardInner() {
               const fd = new FormData(e.target);
               const file = fd.get('file');
               if (!file?.size) return;
-              if (uploadScope === 'formats' && uploadFormatKeys.length === 0) {
-                setError('Choose at least one format when scope is “Specific formats”.');
+              const { usage_scope, format_keys } = djsAssetScopeSelectToApi(uploadScopeSelect);
+              if (usage_scope === 'formats' && format_keys.length === 0) {
+                setError('Pick a valid scope from the list.');
                 return;
               }
               const h = { Authorization: getAuthHeaders().Authorization };
@@ -1420,8 +2125,8 @@ function DadJokeStudioDashboardInner() {
               const up = new FormData();
               up.append('file', file);
               up.append('asset_type', fd.get('asset_type'));
-              up.append('usage_scope', uploadScope);
-              up.append('format_keys', JSON.stringify(uploadScope === 'formats' ? uploadFormatKeys : []));
+              up.append('usage_scope', usage_scope);
+              up.append('format_keys', JSON.stringify(format_keys));
               const res = await fetch(`${API}/api/v2/dad-joke-studio/assets`, { method: 'POST', headers: h, body: up });
               const data = await res.json().catch(() => ({}));
               if (!res.ok) {
@@ -1430,8 +2135,7 @@ function DadJokeStudioDashboardInner() {
               }
               loadAll();
               e.target.reset();
-              setUploadScope('global');
-              setUploadFormatKeys([]);
+              setUploadScopeSelect('global');
               setUploadImagePreviewUrl(null);
             }}
           >
@@ -1468,33 +2172,24 @@ function DadJokeStudioDashboardInner() {
                     <option value="thumbnail">thumbnail</option>
                     <option value="image">image</option>
                   </select>
-                  <select className="border rounded p-1" value={uploadScope} onChange={(e) => setUploadScope(e.target.value)}>
-                    <option value="global">Scope: Global</option>
-                    <option value="shorts">Scope: Shorts only</option>
-                    <option value="long_form">Scope: Long form only</option>
-                    <option value="formats">Scope: Specific formats</option>
+                  <select
+                    className="border rounded p-1 max-w-[min(100%,min(28rem,100%))] w-full sm:w-auto min-w-[12rem]"
+                    value={uploadScopeSelect}
+                    onChange={(e) => setUploadScopeSelect(e.target.value)}
+                  >
+                    <DjsAssetScopeSelectOptions shortFormats={shortFormats} longFormats={longFormats} />
                   </select>
                   <button type="submit" className="px-3 py-1 rounded text-white text-sm" style={{ background: '#6366f1' }}>Upload</button>
                 </div>
               </div>
             </div>
-            {uploadScope === 'formats' && (
-              <div className="flex flex-wrap gap-2 text-xs">
-                {formats.map((f) => (
-                  <label key={f.format_key} className="flex items-center gap-1 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={uploadFormatKeys.includes(f.format_key)}
-                      onChange={() => toggleUploadFormatKey(f.format_key)}
-                    />
-                    {f.name}
-                  </label>
-                ))}
-              </div>
-            )}
           </form>
           <ul className="text-sm space-y-3">
-            {assets.map((a) => (
+            {assets.map((a) => {
+              const assetSel = djsAssetScopeSelectValue(a.usage_scope, a.format_keys);
+              const multiKeys =
+                assetSel.startsWith('__multi:') ? assetSel.slice(8).split('|').filter(Boolean) : [];
+              return (
               <li key={a.id} className="border-b pb-2 flex gap-3 items-start">
                 <div
                   className="shrink-0 w-20 h-20 rounded border overflow-hidden flex items-center justify-center text-[10px] text-center leading-tight px-0.5"
@@ -1511,7 +2206,9 @@ function DadJokeStudioDashboardInner() {
                 <div className="flex flex-wrap justify-between gap-2 items-start">
                   <div>
                     <span className="font-medium">{a.asset_type}:</span> {a.display_name}
-                    <span className="text-xs ml-2 opacity-70">({a.usage_scope || 'global'})</span>
+                    <span className="text-xs ml-2 opacity-70">
+                      ({djsAssetScopeDisplaySummary(a.usage_scope, a.format_keys, shortFormats, longFormats)})
+                    </span>
                   </div>
                   <button
                     type="button"
@@ -1524,58 +2221,32 @@ function DadJokeStudioDashboardInner() {
                 <div className="flex flex-wrap gap-2 mt-1 items-center text-xs">
                   <span>Scope:</span>
                   <select
-                    className="border rounded p-1"
-                    value={a.usage_scope || 'global'}
+                    className="border rounded p-1 max-w-[min(100%,min(28rem,100%))] w-full sm:w-auto min-w-[12rem]"
+                    value={assetSel}
                     onChange={async (e) => {
                       const v = e.target.value;
-                      let fk = Array.isArray(a.format_keys) ? [...a.format_keys] : [];
-                      if (v === 'formats' && fk.length === 0 && formats[0]) fk = [formats[0].format_key];
+                      if (v === assetSel) return;
+                      const { usage_scope, format_keys } = djsAssetScopeSelectToApi(v);
                       try {
                         setError(null);
-                        await patchAsset(a.id, { usage_scope: v, format_keys: v === 'formats' ? fk : [] });
+                        await patchAsset(a.id, { usage_scope, format_keys });
                       } catch (err) {
                         setError(err.message);
                       }
                     }}
                   >
-                    <option value="global">Global</option>
-                    <option value="shorts">Shorts only</option>
-                    <option value="long_form">Long form only</option>
-                    <option value="formats">Specific formats</option>
+                    {multiKeys.length > 1 ? (
+                      <option value={assetSel}>
+                        Multiple types: {djsFormatNamesForKeys(multiKeys, shortFormats, longFormats)}
+                      </option>
+                    ) : null}
+                    <DjsAssetScopeSelectOptions shortFormats={shortFormats} longFormats={longFormats} />
                   </select>
                 </div>
-                {(a.usage_scope || '') === 'formats' && (
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs pl-1">
-                    {formats.map((f) => (
-                      <label key={f.format_key} className="flex items-center gap-1 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={(Array.isArray(a.format_keys) ? a.format_keys : []).includes(f.format_key)}
-                          onChange={async () => {
-                            const cur = new Set(Array.isArray(a.format_keys) ? a.format_keys : []);
-                            if (cur.has(f.format_key)) cur.delete(f.format_key);
-                            else cur.add(f.format_key);
-                            const next = [...cur];
-                            if (next.length === 0) {
-                              setError('Keep at least one format, or change scope.');
-                              return;
-                            }
-                            try {
-                              setError(null);
-                              await patchAsset(a.id, { usage_scope: 'formats', format_keys: next });
-                            } catch (err) {
-                              setError(err.message);
-                            }
-                          }}
-                        />
-                        {f.name}
-                      </label>
-                    ))}
-                  </div>
-                )}
                 </div>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </div>
       )}
