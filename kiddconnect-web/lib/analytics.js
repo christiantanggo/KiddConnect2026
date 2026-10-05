@@ -36,7 +36,7 @@ export function trackEvent(eventName, eventData = {}) {
 
   // Also track with custom API (database) for redundancy
   try {
-    const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+    const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
     const payload = {
       event_name: eventName,
       category,

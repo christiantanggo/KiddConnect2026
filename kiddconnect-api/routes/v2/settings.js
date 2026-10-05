@@ -580,7 +580,7 @@ router.post('/users', async (req, res) => {
       // Send invite email (non-fatal if it fails)
       try {
         const { sendEmail } = await import('../../services/notifications.js');
-        const loginUrl = `${(process.env.FRONTEND_URL || 'https://www.tavarios.com').replace(/\/$/, '')}/login`;
+        const loginUrl = `${(process.env.FRONTEND_URL || 'https://www.lefournier.ca').replace(/\/$/, '')}/login`;
         const subject = `You've been added to ${business?.name || 'an organization'} on Tavari`;
         const bodyText = [
           `Hi${first_name ? ' ' + first_name : ''},`,

@@ -5,9 +5,9 @@ import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { logout } from '@/lib/auth';
 import { APP_DISPLAY_NAME } from '@/lib/appBrand';
-import { Bell, Menu, X, Settings, HelpCircle, LogOut } from 'lucide-react';
+import { Bell, Menu, X, Settings, LogOut } from 'lucide-react';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 export default function V2DashboardHeader({ onMobileMenuToggle, mobileMenuOpen }) {
   const pathname = usePathname();
@@ -119,10 +119,6 @@ export default function V2DashboardHeader({ onMobileMenuToggle, mobileMenuOpen }
               Settings
             </Link>
             <span style={{ color: 'var(--color-border)' }}>|</span>
-            <Link href="/dashboard/v2/support" className="px-3 py-2 text-sm font-medium transition-colors" style={navLinkStyle(pathname?.includes('/support'))}>
-              Support
-            </Link>
-            <span style={{ color: 'var(--color-border)' }}>|</span>
             <Link href="/dashboard/v2/notifications" className="relative px-3 py-2 text-sm font-medium transition-colors flex items-center" style={navLinkStyle(pathname?.includes('/notifications'))}>
               <Bell className="w-5 h-5" />
               {unreadCount > 0 && (
@@ -176,15 +172,6 @@ export default function V2DashboardHeader({ onMobileMenuToggle, mobileMenuOpen }
                   >
                     <Settings className="w-4 h-4" style={{ color: 'var(--color-text-muted)' }} />
                     Settings
-                  </Link>
-                  <Link
-                    href="/dashboard/v2/support"
-                    className="flex items-center gap-3 px-4 py-3 text-sm font-medium"
-                    style={{ color: 'var(--color-text-main)', borderTop: '1px solid var(--color-border)' }}
-                    onClick={() => setDropdownOpen(false)}
-                  >
-                    <HelpCircle className="w-4 h-4" style={{ color: 'var(--color-text-muted)' }} />
-                    Support
                   </Link>
                   <button
                     onClick={() => { setDropdownOpen(false); logout(); }}

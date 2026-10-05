@@ -1,7 +1,7 @@
 /**
  * Riddle (per-channel) YouTube OAuth callback — PUBLIC route, no auth.
  * Redirect URI in Google Cloud must match getRiddleYoutubeRedirectUri() for your API host
- * (e.g. https://api.tavarios.com/api/v2/riddle/youtube/callback).
+ * (e.g. https://api.lefournier.ca/api/v2/riddle/youtube/callback).
  * State = businessId:orbixChannelId or businessId:orbixChannelId:setup
  */
 import express from 'express';

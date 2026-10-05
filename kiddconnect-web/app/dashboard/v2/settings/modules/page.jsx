@@ -5,17 +5,16 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
-import { ArrowLeft, CheckCircle2, Lock, Settings, ExternalLink, Loader, Phone } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, Lock, Settings, ExternalLink, Loader } from 'lucide-react';
+import { isYoutubeStyleModule } from '@/lib/archived-module-keys';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 export default function ModuleSettingsPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [modules, setModules] = useState([]);
   const [error, setError] = useState(null);
-  const [phoneAgentEnabled, setPhoneAgentEnabled] = useState(null);
-  const [phoneAgentToggling, setPhoneAgentToggling] = useState(false);
 
   useEffect(() => {
     loadModules();
@@ -90,23 +89,14 @@ export default function ModuleSettingsPage() {
 
       headers['X-Active-Business-Id'] = businessId;
 
-      const [modulesRes, userRes] = await Promise.all([
-        fetch(`${API_URL}/api/v2/modules`, { headers }),
-        fetch(`${API_URL}/api/auth/me`, { headers }),
-      ]);
+      const modulesRes = await fetch(`${API_URL}/api/v2/modules`, { headers });
 
       if (modulesRes.ok) {
         const data = await modulesRes.json();
-        setModules(data.modules || []);
+        setModules((data.modules || []).filter(isYoutubeStyleModule));
       } else {
         const errorData = await modulesRes.json().catch(() => ({ error: 'Failed to load modules' }));
         setError(errorData.error || 'Failed to load modules');
-      }
-
-      if (userRes.ok) {
-        const userData = await userRes.json();
-        const biz = userData.business;
-        if (biz) setPhoneAgentEnabled(biz.ai_enabled ?? true);
       }
     } catch (err) {
       console.error('[Module Settings] Error:', err);
@@ -116,55 +106,9 @@ export default function ModuleSettingsPage() {
     }
   };
 
-  const togglePhoneAgent = async (enabled) => {
-    setPhoneAgentToggling(true);
-    const prev = phoneAgentEnabled;
-    setPhoneAgentEnabled(enabled);
-    try {
-      const headers = getAuthHeaders();
-      const businessId = getActiveBusinessId();
-      headers['X-Active-Business-Id'] = businessId;
-      const res = await fetch(`${API_URL}/api/business/settings`, {
-        method: 'PUT',
-        headers,
-        body: JSON.stringify({ ai_enabled: enabled }),
-      });
-      if (!res.ok) {
-        setPhoneAgentEnabled(prev);
-        console.error('[Module Settings] Failed to toggle phone agent');
-      }
-    } catch (err) {
-      setPhoneAgentEnabled(prev);
-      console.error('[Module Settings] Toggle phone agent error:', err);
-    } finally {
-      setPhoneAgentToggling(false);
-    }
-  };
+  const getModuleSettingsPath = (moduleKey) => `/dashboard/v2/modules/${moduleKey}/settings`;
 
-  const getModuleSettingsPath = (moduleKey) => {
-    // Map module keys to their settings paths
-    const paths = {
-      'reviews': '/review-reply-ai/dashboard/settings',
-      'phone-agent': '/tavari-ai-phone/dashboard/settings',
-      'orbix-network': '/dashboard/v2/modules/orbix-network/settings',
-      'dad-joke-studio': '/dashboard/v2/modules/dad-joke-studio/settings',
-      'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
-      'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
-    };
-    return paths[moduleKey] || null;
-  };
-
-  const getModuleDashboardPath = (moduleKey) => {
-    // Map module keys to their dashboard paths
-    const paths = {
-      'reviews': '/review-reply-ai/dashboard',
-      'phone-agent': '/tavari-ai-phone/dashboard',
-      'orbix-network': '/dashboard/v2/modules/orbix-network/dashboard',
-      'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
-      'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
-    };
-    return paths[moduleKey] || `/dashboard/v2/modules/${moduleKey}/dashboard`;
-  };
+  const getModuleDashboardPath = (moduleKey) => `/dashboard/v2/modules/${moduleKey}/dashboard`;
 
   if (loading) {
     return (
@@ -218,7 +162,6 @@ export default function ModuleSettingsPage() {
                 const isSubscribed = module.subscribed || module.subscription_status === 'active';
                 const settingsPath = getModuleSettingsPath(module.key);
                 const dashboardPath = getModuleDashboardPath(module.key);
-                const isPhoneAgent = module.key === 'phone-agent';
 
                 return (
                   <div
@@ -272,51 +215,6 @@ export default function ModuleSettingsPage() {
                           </p>
                         )}
 
-                        {/* Phone Agent quick on/off toggle */}
-                        {isPhoneAgent && isSubscribed && phoneAgentEnabled !== null && (
-                          <div
-                            className="mt-3 pt-3 flex items-center gap-3"
-                            style={{ borderTop: '1px solid var(--color-border)' }}
-                          >
-                            <Phone className="w-4 h-4 flex-shrink-0" style={{ color: phoneAgentEnabled ? 'var(--color-accent)' : 'var(--color-text-muted)' }} />
-                            <div className="flex-1">
-                              <p className="text-sm font-medium" style={{ color: 'var(--color-text-main)' }}>
-                                AI Agent {phoneAgentEnabled ? 'is answering calls' : 'is off — calls go straight to your number'}
-                              </p>
-                              <p className="text-xs" style={{ color: 'var(--color-text-muted)' }}>
-                                {phoneAgentEnabled
-                                  ? 'Turn off to temporarily disable the AI and forward all calls directly.'
-                                  : 'Turn on to have the AI answer calls again.'}
-                              </p>
-                            </div>
-                            <button
-                              onClick={() => togglePhoneAgent(!phoneAgentEnabled)}
-                              disabled={phoneAgentToggling}
-                              className="relative inline-flex items-center flex-shrink-0"
-                              style={{ cursor: phoneAgentToggling ? 'wait' : 'pointer' }}
-                              aria-label={phoneAgentEnabled ? 'Disable phone agent' : 'Enable phone agent'}
-                            >
-                              <span
-                                className="flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md transition-all"
-                                style={{
-                                  backgroundColor: phoneAgentEnabled ? 'rgba(239,68,68,0.1)' : 'rgba(20,184,166,0.1)',
-                                  color: phoneAgentEnabled ? '#ef4444' : 'var(--color-accent)',
-                                  borderRadius: 'var(--button-radius)',
-                                  border: `1px solid ${phoneAgentEnabled ? '#ef4444' : 'var(--color-accent)'}`,
-                                  opacity: phoneAgentToggling ? 0.6 : 1,
-                                }}
-                              >
-                                {phoneAgentToggling ? (
-                                  <Loader className="w-3 h-3 animate-spin" />
-                                ) : phoneAgentEnabled ? (
-                                  'Turn Off'
-                                ) : (
-                                  'Turn On'
-                                )}
-                              </span>
-                            </button>
-                          </div>
-                        )}
                       </div>
                       <div className="flex gap-2 ml-4">
                         {isSubscribed && settingsPath && (

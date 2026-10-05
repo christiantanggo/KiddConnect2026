@@ -6,17 +6,16 @@ import Link from 'next/link';
 import AuthGuard from '@/components/AuthGuard';
 import V2DashboardHeader from '@/components/V2DashboardHeader';
 import V2Sidebar from '@/components/V2Sidebar';
-import { ArrowLeft, ArrowRight, CheckCircle2, Lock, Archive, ChevronDown, ChevronRight } from 'lucide-react';
-import { isYoutubeStyleModule } from '@/lib/archived-module-keys';
+import { ArrowRight, CheckCircle2, Lock } from 'lucide-react';
+import { isYoutubeStyleModule, getV2ModuleSidebarHref } from '@/lib/archived-module-keys';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 export default function ModulesMarketplacePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [modules, setModules] = useState([]);
   const [error, setError] = useState(null);
-  const [archiveExpanded, setArchiveExpanded] = useState(false);
 
   useEffect(() => {
     loadModules();
@@ -138,23 +137,11 @@ export default function ModulesMarketplacePage() {
     return null;
   };
 
-  // Get app logo path for module
-  const getModuleLogo = (moduleKey) => {
-    const logoMap = {
-      'phone-agent': '/App-Logos/Tavari-Phone-Agent.png',
-      'reviews': '/App-Logos/Tavari-Review-Reply-AI.png',
-      // Add more modules as logo files are added
-    };
-    return logoMap[moduleKey] || null;
-  };
-
   const activeModules = modules.filter(m => m.subscribed && m.health_status !== 'offline' && isYoutubeStyleModule(m));
   const availableModules = modules.filter(m => !m.subscribed && isYoutubeStyleModule(m));
-  const archivedModules = modules.filter(m => !isYoutubeStyleModule(m));
 
   // Module card component
   const ModuleCard = ({ module }) => {
-    const logoPath = getModuleLogo(module.key);
     return (
       <div
         key={module.key}
@@ -166,18 +153,6 @@ export default function ModulesMarketplacePage() {
         onMouseEnter={(e) => e.currentTarget.style.boxShadow = '0 10px 15px rgba(0,0,0,0.1)'}
         onMouseLeave={(e) => e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,0.1)'}
       >
-        {/* App Logo Tile at Top */}
-        {logoPath && (
-          <div className="w-full h-48 flex items-center justify-center" style={{ backgroundColor: 'var(--color-background)' }}>
-            <img
-              src={logoPath}
-              alt={module.name}
-              className="w-full h-full object-contain"
-              style={{ padding: '1rem' }}
-            />
-          </div>
-        )}
-        
         {/* Card Content */}
         <div className="flex flex-col flex-1" style={{ padding: 'var(--padding-base)' }}>
           {/* Module Title */}
@@ -200,10 +175,7 @@ export default function ModulesMarketplacePage() {
           {/* Action Button */}
           <div className="mt-auto">
             <Link
-              href={module.subscribed 
-                ? (module.key === 'phone-agent' ? '/tavari-ai-phone/dashboard' : module.key === 'reviews' ? '/review-reply-ai/dashboard' : (module.key === 'delivery-dispatch' || module.key === 'emergency-dispatch') ? `/dashboard/v2/modules/${module.key}` : `/dashboard/v2/modules/${module.key}/dashboard`)
-                : `/dashboard/v2/modules/${module.key}`
-              }
+              href={getV2ModuleSidebarHref(module)}
               className="inline-flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium transition-colors rounded w-full"
               style={{ 
                 backgroundColor: 'var(--color-accent)',
@@ -253,7 +225,7 @@ export default function ModulesMarketplacePage() {
                 <div>
                   <h1 className="text-3xl font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>Module Marketplace</h1>
                   <p style={{ color: 'var(--color-text-muted)' }}>
-                    Browse and activate AI modules for your organization
+                    Your studio tools
                   </p>
                 </div>
               </div>
@@ -295,48 +267,6 @@ export default function ModulesMarketplacePage() {
               </div>
             )}
 
-            {/* Archive (collapsible, collapsed by default) */}
-            {archivedModules.length > 0 && (
-              <div 
-                className="mb-12"
-                style={{
-                  backgroundColor: 'var(--color-surface)',
-                  borderRadius: 'var(--card-radius)',
-                  border: '1px solid var(--color-border)',
-                  overflow: 'hidden',
-                  boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setArchiveExpanded((v) => !v)}
-                  className="w-full flex items-center justify-between gap-2 px-6 py-4 text-left transition-colors"
-                  style={{ color: 'var(--color-text-muted)' }}
-                  onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.03)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-                >
-                  <div className="flex items-center gap-2">
-                    <Archive className="w-5 h-5" />
-                    <h2 className="text-2xl font-semibold">Archive</h2>
-                    <span className="text-sm">({archivedModules.length})</span>
-                  </div>
-                  {archiveExpanded ? <ChevronDown className="w-5 h-5" /> : <ChevronRight className="w-5 h-5" />}
-                </button>
-                {archiveExpanded && (
-                  <div className="p-6 pt-0">
-                    <p className="text-sm mb-4" style={{ color: 'var(--color-text-muted)' }}>
-                      Phone, reviews, dispatch, and other non-YouTube modules. YouTube studio modules are listed above.
-                    </p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {archivedModules.map((module) => (
-                        <ModuleCard key={module.key} module={module} />
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-
             {/* Available Modules Section */}
             {availableModules.length > 0 && (
               <div>
@@ -360,7 +290,7 @@ export default function ModulesMarketplacePage() {
             )}
 
             {/* Empty State */}
-            {activeModules.length === 0 && availableModules.length === 0 && archivedModules.length === 0 && (
+            {activeModules.length === 0 && availableModules.length === 0 && (
               <div 
                 className="shadow p-12 text-center"
                 style={{

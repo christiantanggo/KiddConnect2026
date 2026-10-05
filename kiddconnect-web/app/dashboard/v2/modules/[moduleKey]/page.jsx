@@ -384,7 +384,7 @@ export default function ModuleDetailPage() {
                   Configure Module
                 </Link>
                 <Link
-                  href={moduleKey === 'phone-agent' ? '/tavari-ai-phone/dashboard' : moduleKey === 'reviews' ? '/review-reply-ai/dashboard' : (moduleKey === 'delivery-dispatch' || moduleKey === 'emergency-dispatch') ? `/dashboard/v2/modules/${moduleKey}` : `/dashboard/v2/modules/${moduleKey}/dashboard`}
+                  href={`/dashboard/v2/modules/${moduleKey}/dashboard`}
                   className="px-6 py-3 font-medium transition-colors"
                   style={{
                     backgroundColor: 'var(--color-surface)',
@@ -524,60 +524,6 @@ export default function ModuleDetailPage() {
                 </div>
               </div>
             )}
-          </div>
-
-          {/* Module Links */}
-          <div 
-            className="mt-6 shadow"
-            style={{
-              backgroundColor: 'var(--color-surface)',
-              borderRadius: 'var(--card-radius)',
-              padding: 'var(--padding-base)',
-            }}
-          >
-            <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--color-text-main)' }}>Module Resources</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Link
-                href={moduleKey === 'phone-agent' ? '/tavari-ai-phone/landing' : moduleKey === 'reviews' ? '/review-reply-ai/landing' : `/${moduleKey}/landing`}
-                className="p-4 transition-all"
-                style={{
-                  border: '1px solid var(--color-border)',
-                  borderRadius: 'var(--card-radius)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-accent)';
-                  e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--color-border)';
-                  e.currentTarget.style.boxShadow = 'none';
-                }}
-              >
-                <div className="font-medium mb-1" style={{ color: 'var(--color-text-main)' }}>Landing Page</div>
-                <div className="text-sm" style={{ color: 'var(--color-text-muted)' }}>View public landing page</div>
-              </Link>
-              {module.subscribed && (
-                <Link
-                  href={moduleKey === 'phone-agent' ? '/tavari-ai-phone/clickbank' : moduleKey === 'reviews' ? '/review-reply-ai/clickbank' : `/${moduleKey}/clickbank`}
-                  className="p-4 transition-all"
-                  style={{
-                    border: '1px solid var(--color-border)',
-                    borderRadius: 'var(--card-radius)',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--color-accent)';
-                    e.currentTarget.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.borderColor = 'var(--color-border)';
-                    e.currentTarget.style.boxShadow = 'none';
-                  }}
-                >
-                  <div className="font-medium mb-1" style={{ color: 'var(--color-text-main)' }}>ClickBank</div>
-                  <div className="text-sm" style={{ color: 'var(--color-text-muted)' }}>ClickBank integration</div>
-                </Link>
-              )}
-            </div>
           </div>
             </div>
           </div>

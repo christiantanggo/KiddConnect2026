@@ -11,8 +11,8 @@ try {
 }
 
 const isProd = process.env.NODE_ENV === 'production';
-// Production default must resolve in DNS. api.kiddconnect.ca is optional; override with
-// NEXT_PUBLIC_API_URL on Vercel (e.g. https://api.kiddconnect.ca) when the record exists.
+// Production default must resolve in DNS. Set NEXT_PUBLIC_API_URL on Vercel to https://api.lefournier.ca
+// once that custom domain is live on Railway.
 const PRODUCTION_API_FALLBACK = 'https://kiddconnect2026-production.up.railway.app';
 const defaultApiUrl = process.env.NEXT_PUBLIC_API_URL
   ? undefined

@@ -7,7 +7,7 @@ import AuthGuard from '@/components/AuthGuard';
 import V2AppShell from '@/components/V2AppShell';
 import { useToast } from '@/components/ToastProvider';
 
-const API = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 const MODULE = 'dad-joke-studio';
 
 function getAuthHeaders() {

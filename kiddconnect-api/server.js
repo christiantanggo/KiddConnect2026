@@ -1,8 +1,8 @@
 /**
- * KiddConnect API — deploy this folder alone (Railway). Own .env + Supabase.
+ * Le Fournier API — deploy this folder alone (Railway). Own .env + Supabase.
  * Run: npm install && npm start
  */
-const DEPLOYMENT_VERSION = 'KiddConnect-API-2-standalone';
+const DEPLOYMENT_VERSION = 'LeFournier-API-2026-10-04';
 
 if (typeof globalThis.File === 'undefined' && typeof Blob !== 'undefined') {
   globalThis.File = class File extends Blob {
@@ -114,6 +114,8 @@ const extraOrigins = (process.env.CORS_ALLOWED_ORIGINS || '')
   .map((o) => String(o).trim())
   .filter(Boolean);
 const allowedOrigins = [
+  'https://www.lefournier.ca',
+  'https://lefournier.ca',
   'https://www.kiddconnect.ca',
   'https://kiddconnect.ca',
   `http://localhost:${__DEV_FE__}`,
@@ -140,24 +142,19 @@ function parsedOriginOrigin(originStr) {
   }
 }
 
-function isTavariosHost(hostname) {
+const SITE_DOMAINS = ['lefournier.ca', 'kiddconnect.ca'];
+
+function isSiteHost(hostname) {
   const h = String(hostname || '')
     .replace(/\.$/, '')
     .toLowerCase();
-  return h === 'tavarios.com' || h.endsWith('.tavarios.com');
+  return SITE_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`));
 }
 
-function isKiddConnectHost(hostname) {
-  const h = String(hostname || '')
-    .replace(/\.$/, '')
-    .toLowerCase();
-  return h === 'kiddconnect.ca' || h.endsWith('.kiddconnect.ca');
-}
-
-function isKiddConnectProductionOrigin(originStr) {
+function isSiteProductionOrigin(originStr) {
   try {
     const u = new URL(originStr);
-    return isKiddConnectHost(u.hostname);
+    return isSiteHost(u.hostname);
   } catch {
     return false;
   }
@@ -173,7 +170,7 @@ function isOriginAllowed(originRaw) {
   const reqOrigin = parsedOriginOrigin(origin);
   if (reqOrigin && allowedOrigins.some((a) => parsedOriginOrigin(a) === reqOrigin)) return true;
 
-  if (isKiddConnectProductionOrigin(origin)) {
+  if (isSiteProductionOrigin(origin)) {
     try {
       const u = new URL(origin);
       if (process.env.NODE_ENV === 'production' && u.protocol !== 'https:') return false;
@@ -299,9 +296,9 @@ app.get('/', (_req, res) => {
   const port = LISTEN_PORT;
   res.type('html').status(200).send(`
     <!DOCTYPE html>
-    <html><head><meta charset="utf-8"><title>KiddConnect API</title></head>
+    <html><head><meta charset="utf-8"><title>Le Fournier API</title></head>
     <body style="font-family:sans-serif;max-width:520px;margin:2rem auto;padding:0 1rem;">
-      <h1>KiddConnect API</h1>
+      <h1>Le Fournier API</h1>
       <p>Studio backend (YouTube / Orbix / Kid Quiz / Dad Joke / Movie Review). No app UI here.</p>
       <p><a href="/health">Health</a> · <a href="/ready">Ready</a> · <a href="/api/v2/health">v2 health</a></p>
       <p>Local web: <code>cd kiddconnect-web && npm run dev</code> — set <code>NEXT_PUBLIC_API_URL=http://localhost:${port}</code></p>
@@ -313,7 +310,7 @@ app.get('/health', (_req, res) => {
   res.status(200).json({
     status: 'ok',
     version: DEPLOYMENT_VERSION,
-    server: 'KiddConnect API',
+    server: 'Le Fournier API',
     timestamp: new Date().toISOString(),
   });
 });
@@ -358,6 +355,7 @@ app.use('/api/business', businessRoutes);
 
 /** Which v2 routers actually mounted (health uses this — avoids advertising broken routes). */
 const v2RouteMountStatus = { dadJokeStudio: false };
+let dadJokeStudioLastLoadError = null;
 
 try {
   const v2OrganizationsRoutes = (await import('./routes/v2/organizations.js')).default;
@@ -483,9 +481,12 @@ try {
     res.json({
       status: 'ok',
       version: DEPLOYMENT_VERSION,
-      profile: 'kiddconnect-studio',
+      profile: 'lefournier-studio',
       mounted: {
         dadJokeStudio: v2RouteMountStatus.dadJokeStudio,
+        ...(v2RouteMountStatus.dadJokeStudio
+          ? {}
+          : { dadJokeStudioLoadError: dadJokeStudioLastLoadError }),
       },
       routes: {
         auth: '/api/auth',

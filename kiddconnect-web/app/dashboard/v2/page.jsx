@@ -8,7 +8,7 @@ import V2AppShell from '@/components/V2AppShell';
 import { ArrowRight, AlertTriangle, Archive, ChevronDown, ChevronRight } from 'lucide-react';
 import { isYoutubeStyleModule, getV2ModuleSidebarHref } from '@/lib/archived-module-keys';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 export default function V2DashboardPage() {
   const router = useRouter();

@@ -3,8 +3,9 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { APP_DISPLAY_NAME } from '@/lib/appBrand';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 export default function AcceptTermsPage() {
   const router = useRouter();
@@ -89,7 +90,7 @@ export default function AcceptTermsPage() {
         </h1>
         
         <p className="mb-6 text-sm" style={{ color: 'var(--color-text-muted)' }}>
-          Please review and accept our Terms of Service and Privacy Policy to continue using Tavari AI.
+          Please review and accept our Terms of Service and Privacy Policy to continue using {APP_DISPLAY_NAME}.
         </p>
 
         {termsVersion && (
@@ -127,10 +128,10 @@ export default function AcceptTermsPage() {
           </h2>
           <div className="text-sm space-y-3" style={{ color: 'var(--color-text-muted)' }}>
             <p>
-              By using Tavari AI, you agree to the following terms and conditions. Please read them carefully.
+              By using {APP_DISPLAY_NAME}, you agree to the following terms and conditions. Please read them carefully.
             </p>
             <p>
-              <strong>1. Service Description:</strong> Tavari AI provides AI-powered communication and automation services for businesses.
+              <strong>1. Service Description:</strong> {APP_DISPLAY_NAME} is a family project website with tools for creating videos and publishing them to YouTube.
             </p>
             <p>
               <strong>2. User Responsibilities:</strong> You are responsible for maintaining the confidentiality of your account and for all activities that occur under your account.

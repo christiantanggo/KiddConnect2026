@@ -4,16 +4,15 @@ import { useState, useEffect, useRef } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { LEGACY_DASHBOARD_LABEL } from '@/lib/appBrand';
-import { CheckCircle2, Lock, AlertTriangle, Layout, Archive, ChevronDown, ChevronRight } from 'lucide-react';
+import { CheckCircle2, Lock, AlertTriangle, Layout } from 'lucide-react';
 import { isYoutubeStyleModule, getV2ModuleSidebarHref } from '@/lib/archived-module-keys';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 export default function V2Sidebar({ mobileOpen = false, onClose }) {
   const pathname = usePathname();
   const [modules, setModules] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [archiveExpanded, setArchiveExpanded] = useState(false);
   const isLoadingRef = useRef(false);
   const hasLoadedRef = useRef(false);
   const rateLimitedRef = useRef(false);
@@ -100,7 +99,6 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
 
   const activeModules = modules.filter(m => m.subscribed && m.health_status !== 'offline' && isYoutubeStyleModule(m));
   const availableModules = modules.filter(m => !m.subscribed && isYoutubeStyleModule(m));
-  const archivedModules = modules.filter(m => !isYoutubeStyleModule(m));
   
   // Check if we're on the main dashboard
   const isDashboardActive = pathname === '/dashboard' && !pathname?.startsWith('/dashboard/v2');
@@ -137,7 +135,7 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
         }
       `}</style>
       <nav className="p-6 space-y-1 flex-1 overflow-y-auto">
-        {/* Tavari AI Dashboard Button */}
+        {/* Dashboard Button */}
         <div className="mb-6">
           <Link
             href="/dashboard"
@@ -165,19 +163,8 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
               Active Modules
             </div>
             {activeModules.map((module) => {
-              // Special handling for certain modules that have their own dashboard paths
-              const href = module.key === 'phone-agent' 
-                ? '/dashboard' 
-                : module.key === 'reviews'
-                ? '/review-reply-ai/dashboard'
-                : (module.key === 'delivery-dispatch' || module.key === 'emergency-dispatch')
-                ? `/dashboard/v2/modules/${module.key}`
-                : `/dashboard/v2/modules/${module.key}/dashboard`;
-              
-              // For phone-agent, check if we're on the Phone Agent dashboard
-              const isActive = module.key === 'phone-agent' 
-                ? pathname === '/dashboard' || pathname?.startsWith('/dashboard/') && !pathname?.startsWith('/dashboard/v2')
-                : pathname?.startsWith(`/dashboard/v2/modules/${module.key}`);
+              const href = getV2ModuleSidebarHref(module);
+              const isActive = pathname?.startsWith(`/dashboard/v2/modules/${module.key}`);
               
               return (
                 <Link
@@ -258,60 +245,6 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
           </div>
         )}
 
-        {/* Archive (collapsible, collapsed by default) */}
-        {!loading && archivedModules.length > 0 && (
-          <div className="mt-6">
-            <button
-              type="button"
-              onClick={() => setArchiveExpanded((v) => !v)}
-              className="flex items-center justify-between w-full px-3 py-2 text-xs font-semibold uppercase tracking-wider text-left transition-colors"
-              style={{ color: 'var(--color-text-muted)' }}
-              onMouseEnter={(e) => { e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.05)'; }}
-              onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
-            >
-              <span className="flex items-center gap-2">
-                <Archive className="w-4 h-4" />
-                Archive ({archivedModules.length})
-              </span>
-              {archiveExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-            </button>
-            {archiveExpanded && archivedModules.map((module) => {
-              const href = getV2ModuleSidebarHref(module);
-              const isActive = module.key === 'phone-agent' 
-                ? pathname === '/dashboard' || (pathname?.startsWith('/dashboard/') && !pathname?.startsWith('/dashboard/v2'))
-                : pathname?.startsWith(`/dashboard/v2/modules/${module.key}`) || pathname?.startsWith('/review-reply-ai');
-              return (
-                <Link
-                  key={module.key}
-                  href={href}
-                  onClick={handleLinkClick}
-                  className={`flex items-center justify-between px-3 py-2 text-sm font-medium transition-colors`}
-                  style={{
-                    borderRadius: 'var(--button-radius)',
-                    ...(isActive
-                      ? { backgroundColor: 'rgba(20, 184, 166, 0.1)', color: 'var(--color-accent)' }
-                      : { color: 'var(--color-text-muted)' }),
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!isActive) e.currentTarget.style.backgroundColor = 'rgba(0, 0, 0, 0.05)';
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!isActive) e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <div className="flex items-center">
-                    <Archive className="w-4 h-4 mr-2" style={{ color: 'var(--color-text-muted)' }} />
-                    <span>{module.name}</span>
-                  </div>
-                  {module.subscribed && module.health_status === 'degraded' && (
-                    <AlertTriangle className="w-4 h-4" style={{ color: 'var(--color-accent-2)' }} />
-                  )}
-                </Link>
-              );
-            })}
-          </div>
-        )}
-
         {/* Loading State */}
         {loading && (
           <div className="px-3 py-2 text-sm" style={{ color: 'var(--color-text-muted)' }}>
@@ -320,7 +253,7 @@ export default function V2Sidebar({ mobileOpen = false, onClose }) {
         )}
 
         {/* No Modules */}
-        {!loading && modules.length === 0 && (
+        {!loading && activeModules.length === 0 && availableModules.length === 0 && (
           <div className="px-3 py-2 text-sm" style={{ color: 'var(--color-text-muted)' }}>
             No modules available
           </div>

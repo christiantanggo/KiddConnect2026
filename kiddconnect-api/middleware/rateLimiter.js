@@ -133,7 +133,7 @@ export const aiRateLimiter = rateLimit({
     // Log rate limit violation if audit_logs available
     if (req.user && req.active_business_id) {
       // Async - don't block response
-      import('../../models/v2/AuditLog.js').then(({ AuditLog }) => {
+      import('../models/v2/AuditLog.js').then(({ AuditLog }) => {
         AuditLog.create({
           business_id: req.active_business_id,
           user_id: req.user.id,

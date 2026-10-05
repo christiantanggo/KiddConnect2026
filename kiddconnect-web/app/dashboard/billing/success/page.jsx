@@ -19,7 +19,7 @@ function BillingSuccessContent() {
       // If coming from setup wizard without session_id, just redirect to step 6
       if (fromSetup && packageId && !sessionId) {
         const timer = setTimeout(() => {
-          router.push('/dashboard/setup?step=6&payment_completed=true');
+          router.push('/dashboard/v2/settings/billing?payment_completed=true');
         }, 2000);
         setLoading(false);
         return () => clearTimeout(timer);
@@ -37,7 +37,7 @@ function BillingSuccessContent() {
             // If coming from setup wizard, redirect back to setup at step 6
             if (fromSetup) {
               const timer = setTimeout(() => {
-                router.push('/dashboard/setup?step=6&payment_completed=true');
+                router.push('/dashboard/v2/settings/billing?payment_completed=true');
               }, 2000);
               setLoading(false);
               return () => clearTimeout(timer);
@@ -58,7 +58,7 @@ function BillingSuccessContent() {
           // Still redirect after delay even if verification fails (webhook may have processed it)
           const timer = setTimeout(() => {
             if (fromSetup) {
-              router.push('/dashboard/setup?step=6&payment_completed=true');
+              router.push('/dashboard/v2/settings/billing?payment_completed=true');
             } else {
               router.push('/dashboard/billing');
             }

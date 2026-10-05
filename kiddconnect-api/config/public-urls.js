@@ -1,5 +1,5 @@
 /**
- * Public API / frontend base URLs for KiddConnect.
+ * Public API / frontend base URLs for Le Fournier.
  * Set BACKEND_URL, FRONTEND_URL, YOUTUBE_REDIRECT_* in production.
  */
 
@@ -9,10 +9,10 @@ import { getDevBackendPort, getDevFrontendPort } from './load-dev-ports.js';
 export const DEFAULT_API_PUBLIC_BASE = 'https://kiddconnect2026-production.up.railway.app';
 
 /** Production app origin when FRONTEND_URL is not set. */
-export const DEFAULT_FRONTEND_PUBLIC_BASE = 'https://www.kiddconnect.ca';
+export const DEFAULT_FRONTEND_PUBLIC_BASE = 'https://www.lefournier.ca';
 
 /**
- * Public base URL of this API (no trailing slash), e.g. https://api.kiddconnect.ca
+ * Public base URL of this API (no trailing slash), e.g. https://api.lefournier.ca
  */
 export function getApiPublicBaseUrl() {
   const raw = (process.env.YOUTUBE_REDIRECT_URI || '').trim();

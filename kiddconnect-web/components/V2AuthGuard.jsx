@@ -5,7 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import { isAuthenticated } from '@/lib/auth';
 import OrganizationSelectionModal from './OrganizationSelectionModal';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 /**
  * V2AuthGuard - Enhanced auth guard for v2 dashboard

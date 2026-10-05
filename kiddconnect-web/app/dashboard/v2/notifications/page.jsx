@@ -7,7 +7,7 @@ import V2AppShell from '@/components/V2AppShell';
 import { ArrowLeft, Check, Bell } from 'lucide-react';
 import api from '@/lib/api';
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 export default function NotificationsPage() {
   const [notifications, setNotifications] = useState([]);

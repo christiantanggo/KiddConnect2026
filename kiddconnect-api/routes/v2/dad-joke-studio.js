@@ -10,18 +10,13 @@ import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { OrganizationUser } from '../../models/v2/OrganizationUser.js';
 import { google } from 'googleapis';
 import { dadjokeYoutubeCallbackUrl } from '../../config/public-urls.js';
-import {
-  STYLE_OPTIONS,
-  analyzeStyleRecipe,
-  smartRandomRecipe,
-  generateIdeasList,
-  generateShortsScript,
-  generateLongFormScript,
-  generatePlaceholderLongForm,
-  generateYouTubeMetadata,
-} from '../../services/dadjoke-studio/ai.js';
 import { isAssetEligibleForRender } from '../../services/dadjoke-studio/asset-resolver.js';
 import { rebuildGenericStoryboardFromScript } from '../../services/dadjoke-studio/generic-shorts-ass.js';
+
+/** Lazy-load OpenAI + dedup stack so this router mounts on cold start (avoids startup import failures). */
+function loadDadJokeAi() {
+  return import('../../services/dadjoke-studio/ai.js');
+}
 
 const MODULE_KEY = 'dad-joke-studio';
 /** Retired formats: hidden from /formats; cannot create or switch drafts to these keys. */
@@ -372,6 +367,7 @@ router.post('/youtube/suggest-metadata', async (req, res) => {
     const promptFromBody = typeof bodyAiPrompt === 'string' ? bodyAiPrompt.trim() : '';
     const scriptForAi = scriptFromBody || String(row.script_text || '').trim();
     const aiPromptForAi = promptFromBody || String(row.ai_prompt || '').trim();
+    const { generateYouTubeMetadata } = await loadDadJokeAi();
     const meta = await generateYouTubeMetadata({
       title: String(row.title || '').trim(),
       summary: String(row.summary || '').trim(),
@@ -392,23 +388,30 @@ router.post('/youtube/suggest-metadata', async (req, res) => {
 
 // ─── Style engine ─────────────────────────────────────────────────────────────
 
-router.get('/style-options', (req, res) => {
-  res.json({ categories: STYLE_OPTIONS });
+router.get('/style-options', async (req, res) => {
+  try {
+    const { STYLE_OPTIONS } = await loadDadJokeAi();
+    res.json({ categories: STYLE_OPTIONS });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-router.post('/style-engine/analyze', (req, res) => {
+router.post('/style-engine/analyze', async (req, res) => {
   try {
     const { recipe } = req.body;
+    const { analyzeStyleRecipe } = await loadDadJokeAi();
     res.json(analyzeStyleRecipe(recipe || {}));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/style-engine/random', (req, res) => {
+router.post('/style-engine/random', async (req, res) => {
   try {
     const { mode = 'safe', locked = {}, seed } = req.body;
     const m = ['safe', 'creative', 'wild'].includes(mode) ? mode : 'safe';
+    const { smartRandomRecipe } = await loadDadJokeAi();
     res.json({ recipe: smartRandomRecipe(m, locked, seed) });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -656,6 +659,7 @@ router.post('/ideas/generate', async (req, res) => {
     const businessId = req.active_business_id;
     const { prompt, count = 8, mode = 'manual' } = req.body;
     if (!prompt) return res.status(400).json({ error: 'prompt required' });
+    const { generateIdeasList } = await loadDadJokeAi();
     const { ideas } = await generateIdeasList(prompt, Math.min(20, Number(count) || 8));
     const { data, error } = await supabaseClient
       .from('dadjoke_studio_ideas')
@@ -903,6 +907,11 @@ router.post('/content/:id/generate', async (req, res) => {
     await clearDownstreamOnRegenerate(req.params.id, businessId);
 
     const body = req.body;
+    const {
+      generateShortsScript,
+      generateLongFormScript,
+      generatePlaceholderLongForm,
+    } = await loadDadJokeAi();
     let gen;
     if (existing.content_type === 'shorts') {
       gen = await generateShortsScript({

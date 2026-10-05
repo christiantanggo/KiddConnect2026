@@ -12,7 +12,7 @@ const TABS = [
   { label: '⚙️ Settings',   href: '/dashboard/v2/modules/kidquiz/settings' },
 ];
 
-const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.kiddconnect.ca').replace(/\/$/, '');
+const API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://api.lefournier.ca').replace(/\/$/, '');
 
 const STATUS_CONFIG = {
   DRAFT:            { label: 'Draft',            color: '#6b7280', icon: Clock },

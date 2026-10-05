@@ -1,6 +1,5 @@
 /**
- * KiddConnect dashboard: YouTube / studio-line modules show under Active + Available.
- * All other modules (phone, reviews, dispatch, etc.) appear under Archive.
+ * Studio modules shown in the dashboard. Any other module keys still in the database are hidden.
  */
 export const YOUTUBE_STYLE_MODULE_KEYS = [
   'kidquiz',
@@ -17,11 +16,6 @@ export function isYoutubeStyleModule(m) {
 /** Sidebar link: unsubscribed modules go to the module detail / upgrade page. */
 export function getV2ModuleSidebarHref(module) {
   if (!module?.subscribed) {
-    return `/dashboard/v2/modules/${module.key}`;
-  }
-  if (module.key === 'phone-agent') return '/dashboard';
-  if (module.key === 'reviews') return '/review-reply-ai/dashboard';
-  if (module.key === 'delivery-dispatch' || module.key === 'emergency-dispatch') {
     return `/dashboard/v2/modules/${module.key}`;
   }
   return `/dashboard/v2/modules/${module.key}/dashboard`;
