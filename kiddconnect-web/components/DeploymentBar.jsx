@@ -1,9 +1,18 @@
+'use client';
+
+import { usePathname } from 'next/navigation';
+
 /**
- * Site-wide deployment stamp (black bar). Update DEPLOYMENT_LABEL when you ship.
+ * Deployment stamp (black bar) for signed-in pages. Update DEPLOYMENT_LABEL when you ship.
  */
-export const DEPLOYMENT_LABEL = 'Oct 4 2026 V1 — Le Fournier';
+export const DEPLOYMENT_LABEL = 'Oct 5 2026 V2 — Le Fournier';
+
+const PUBLIC_PATHS = ['/', '/privacy', '/terms', '/legal/privacy', '/legal/terms'];
 
 export default function DeploymentBar() {
+  const pathname = usePathname();
+  if (PUBLIC_PATHS.includes(pathname)) return null;
+
   return (
     <div
       role="status"

@@ -2,16 +2,9 @@
 
 import { useEffect } from 'react';
 import Link from 'next/link';
-import { Clapperboard, Smile, HelpCircle, Film } from 'lucide-react';
+import { Mail } from 'lucide-react';
 import { trackPageView, trackButtonClick } from '@/lib/analytics';
-import { APP_DISPLAY_NAME } from '@/lib/appBrand';
-
-const PROJECTS = [
-  { icon: Smile, title: 'Dad Joke Studio', text: 'Turn our worst jokes into Shorts.' },
-  { icon: HelpCircle, title: 'Kid Quiz', text: 'Quiz videos the kids help make.' },
-  { icon: Clapperboard, title: 'Orbix Network', text: 'Riddles, trivia, and brain teasers.' },
-  { icon: Film, title: 'Movie Review', text: 'Family movie nights, reviewed.' },
-];
+import { APP_DISPLAY_NAME, CONTACT_EMAIL } from '@/lib/appBrand';
 
 export default function HomePage() {
   useEffect(() => {
@@ -19,15 +12,21 @@ export default function HomePage() {
   }, []);
 
   return (
-    <div className="min-h-screen flex flex-col bg-white">
-      <nav className="border-b border-gray-200 bg-white shrink-0">
-        <div className="container mx-auto px-4 py-4 flex justify-between items-center">
-          <Link href="/" className="text-2xl md:text-3xl font-bold text-blue-600 tracking-tight">
-            {APP_DISPLAY_NAME}
-          </Link>
+    <div className="public-page relative min-h-screen flex flex-col overflow-hidden bg-stone-950 text-stone-100">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            'radial-gradient(ellipse 60% 50% at 50% 35%, rgba(217, 168, 92, 0.16), transparent 70%), radial-gradient(ellipse 80% 60% at 50% 110%, rgba(120, 72, 32, 0.25), transparent 70%)',
+        }}
+      />
+
+      <nav className="relative z-10 shrink-0">
+        <div className="mx-auto max-w-6xl px-6 py-6 flex justify-end">
           <Link
             href="/login"
-            className="text-sm font-semibold text-blue-600 hover:text-blue-700"
+            className="text-xs uppercase tracking-[0.25em] text-stone-400 hover:text-amber-200 transition-colors"
             onClick={() => trackButtonClick('login', 'home_nav')}
           >
             Log in
@@ -35,45 +34,49 @@ export default function HomePage() {
         </div>
       </nav>
 
-      <main className="flex-1">
-        <section className="container mx-auto px-4 pt-20 pb-12 text-center max-w-2xl">
-          <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">Welcome to {APP_DISPLAY_NAME}</h1>
-          <p className="text-lg text-gray-600 mb-10">
-            Our family&apos;s home for creative projects &mdash; the videos we make together and the tools we build to
-            make them.
-          </p>
-          <Link
-            href="/login"
-            className="inline-block bg-blue-600 text-white px-10 py-4 rounded-lg text-lg font-semibold hover:bg-blue-700 transition-all shadow-md hover:shadow-lg"
-            onClick={() => trackButtonClick('login', 'home_hero')}
-          >
-            Log in
-          </Link>
-        </section>
+      <main className="relative z-10 flex-1 flex flex-col items-center justify-center px-6 pb-16 text-center">
+        <div className="mb-10 flex h-24 w-24 items-center justify-center rounded-full border border-amber-200/40 bg-stone-900/60 shadow-[0_0_60px_-15px_rgba(217,168,92,0.5)]">
+          <span className="font-serif text-3xl font-bold tracking-wide text-amber-100">LF</span>
+        </div>
 
-        <section className="container mx-auto px-4 pb-20 max-w-4xl">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {PROJECTS.map(({ icon: Icon, title, text }) => (
-              <div key={title} className="flex items-start gap-4 rounded-lg border border-gray-200 p-5">
-                <Icon className="w-6 h-6 text-blue-600 shrink-0 mt-0.5" />
-                <div>
-                  <h2 className="font-semibold text-gray-900">{title}</h2>
-                  <p className="text-sm text-gray-600">{text}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+        <h1 className="font-serif text-5xl sm:text-7xl md:text-8xl font-bold tracking-tight text-stone-50">
+          {APP_DISPLAY_NAME}
+        </h1>
+
+        <div className="my-8 flex items-center gap-4" aria-hidden="true">
+          <span className="h-px w-12 bg-amber-200/40" />
+          <span className="h-1.5 w-1.5 rotate-45 bg-amber-200/70" />
+          <span className="h-px w-12 bg-amber-200/40" />
+        </div>
+
+        <p className="text-sm uppercase tracking-[0.35em] text-stone-400">Made together</p>
+
+        {CONTACT_EMAIL && (
+          <section className="mt-20 max-w-lg">
+            <h2 className="font-serif text-2xl text-stone-100 mb-3">Get in touch</h2>
+            <p className="text-stone-400 mb-8">
+              Questions, ideas, or just saying hello &mdash; we&apos;d love to hear from you.
+            </p>
+            <a
+              href={`mailto:${CONTACT_EMAIL}`}
+              className="inline-flex items-center gap-3 rounded-full border border-amber-200/50 px-8 py-3.5 text-amber-100 hover:bg-amber-200 hover:text-stone-950 transition-colors"
+              onClick={() => trackButtonClick('contact_email', 'home_contact')}
+            >
+              <Mail className="h-4 w-4" />
+              {CONTACT_EMAIL}
+            </a>
+          </section>
+        )}
       </main>
 
-      <footer className="border-t border-gray-200 bg-gray-50 py-8 shrink-0">
-        <div className="container mx-auto px-4 flex flex-col md:flex-row justify-between items-center gap-4 text-sm text-gray-600">
+      <footer className="relative z-10 shrink-0 border-t border-stone-800/80">
+        <div className="mx-auto max-w-6xl px-6 py-6 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-stone-500">
           <span>&copy; {new Date().getFullYear()} {APP_DISPLAY_NAME}</span>
-          <div className="flex space-x-6">
-            <Link href="/privacy" className="hover:text-blue-600 transition-colors">
+          <div className="flex gap-6">
+            <Link href="/privacy" className="hover:text-amber-200 transition-colors">
               Privacy Policy
             </Link>
-            <Link href="/terms" className="hover:text-blue-600 transition-colors">
+            <Link href="/terms" className="hover:text-amber-200 transition-colors">
               Terms of Service
             </Link>
           </div>

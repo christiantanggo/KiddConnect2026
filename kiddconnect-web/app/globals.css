@@ -61,6 +61,10 @@ body {
   padding-bottom: var(--deployment-bar-height);
 }
 
+body:has(.public-page) {
+  padding-bottom: 0;
+}
+
 @keyframes slide-in {
   from {
     transform: translateX(100%);
