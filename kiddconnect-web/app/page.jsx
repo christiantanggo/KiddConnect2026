@@ -1,14 +1,21 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Mail } from 'lucide-react';
 import { trackPageView, trackButtonClick } from '@/lib/analytics';
-import { APP_DISPLAY_NAME, CONTACT_EMAIL } from '@/lib/appBrand';
+import { APP_DISPLAY_NAME } from '@/lib/appBrand';
+import ContactModal from '@/components/ContactModal';
 
 export default function HomePage() {
+  const [contactOpen, setContactOpen] = useState(false);
+  const closeContact = useCallback(() => setContactOpen(false), []);
+
   useEffect(() => {
     trackPageView('home');
+    if (new URLSearchParams(window.location.search).get('contact') === '1') {
+      setContactOpen(true);
+    }
   }, []);
 
   return (
@@ -51,23 +58,26 @@ export default function HomePage() {
 
         <p className="text-sm uppercase tracking-[0.35em] text-stone-400">Made together</p>
 
-        {CONTACT_EMAIL && (
-          <section className="mt-20 max-w-lg">
-            <h2 className="font-serif text-2xl text-stone-100 mb-3">Get in touch</h2>
-            <p className="text-stone-400 mb-8">
-              Questions, ideas, or just saying hello &mdash; we&apos;d love to hear from you.
-            </p>
-            <a
-              href={`mailto:${CONTACT_EMAIL}`}
-              className="inline-flex items-center gap-3 rounded-full border border-amber-200/50 px-8 py-3.5 text-amber-100 hover:bg-amber-200 hover:text-stone-950 transition-colors"
-              onClick={() => trackButtonClick('contact_email', 'home_contact')}
-            >
-              <Mail className="h-4 w-4" />
-              {CONTACT_EMAIL}
-            </a>
-          </section>
-        )}
+        <section className="mt-20 max-w-lg">
+          <h2 className="font-serif text-2xl text-stone-100 mb-3">Get in touch</h2>
+          <p className="text-stone-400 mb-8">
+            Questions, ideas, or just saying hello &mdash; we&apos;d love to hear from you.
+          </p>
+          <button
+            type="button"
+            className="inline-flex items-center gap-3 rounded-full border border-amber-200/50 px-8 py-3.5 text-amber-100 hover:bg-amber-200 hover:text-stone-950 transition-colors"
+            onClick={() => {
+              trackButtonClick('contact_us', 'home_contact');
+              setContactOpen(true);
+            }}
+          >
+            <Mail className="h-4 w-4" />
+            Contact Us
+          </button>
+        </section>
       </main>
+
+      <ContactModal open={contactOpen} onClose={closeContact} />
 
       <footer className="relative z-10 shrink-0 border-t border-stone-800/80">
         <div className="mx-auto max-w-6xl px-6 py-6 flex flex-col sm:flex-row justify-between items-center gap-3 text-xs text-stone-500">

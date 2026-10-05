@@ -9,7 +9,7 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const FROM_EMAIL = process.env.AWS_SES_FROM_EMAIL || "noreply@tanggo.ca";
-const FROM_NAME = "Tavari";
+const FROM_NAME = "Le Fournier";
 const TELNYX_API_KEY = process.env.TELNYX_API_KEY;
 
 /**

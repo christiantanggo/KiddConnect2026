@@ -20,6 +20,10 @@ export default function PrivacyPolicyPage() {
       <LegalSection title="2. Information we collect">
         <ul className="list-disc pl-6 space-y-1">
           <li>Account details you give us: name, email address, and a password (stored only as a secure hash).</li>
+          <li>
+            If you use the Contact Us form: your name, email address, and message, which are emailed to us so we can
+            reply.
+          </li>
           <li>Content you create in the studio tools, such as scripts, images, audio, and rendered videos.</li>
           <li>Basic technical data needed to run the site, such as server logs and the cookie that keeps you logged in.</li>
           <li>
@@ -69,8 +73,8 @@ export default function PrivacyPolicyPage() {
       <LegalSection title="5. Service providers">
         <p>
           The site runs on third-party infrastructure that processes data on our behalf: Vercel (website hosting),
-          Railway (application server), Supabase (database and file storage), and OpenAI (AI text and image
-          generation for studio tools). Payments, if any, are handled by our payment processors; we do not store card
+          Railway (application server), Supabase (database and file storage), Amazon Web Services (email delivery),
+          and OpenAI (AI text and image generation for studio tools). Payments, if any, are handled by our payment processors; we do not store card
           numbers.
         </p>
       </LegalSection>

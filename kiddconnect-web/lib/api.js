@@ -118,6 +118,11 @@ export const authAPI = {
   deleteUser: (userId) => api.delete(`/auth/users/${userId}`),
 };
 
+// Public contact form
+export const contactAPI = {
+  send: (data) => api.post('/contact', data),
+};
+
 // Usage API
 export const usageAPI = {
   getStatus: () => api.get('/usage/status'),

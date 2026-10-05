@@ -26,9 +26,10 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { getDevBackendPort, getDevFrontendPort } from './config/load-dev-ports.js';
-import { apiLimiter, authLimiter } from './middleware/rateLimiter.js';
+import { apiLimiter, authLimiter, contactLimiter } from './middleware/rateLimiter.js';
 import authRoutes from './routes/auth.js';
 import businessRoutes from './routes/business.js';
+import contactRoutes from './routes/contact.js';
 import { errorHandler } from './middleware/errorHandler.js';
 
 const repoRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -352,6 +353,7 @@ app.use('/api/auth/signup', authLimiter);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/business', businessRoutes);
+app.use('/api/contact', contactLimiter, contactRoutes);
 
 /** Which v2 routers actually mounted (health uses this — avoids advertising broken routes). */
 const v2RouteMountStatus = { dadJokeStudio: false };
@@ -491,6 +493,7 @@ try {
       routes: {
         auth: '/api/auth',
         business: '/api/business',
+        contact: '/api/contact',
         organizations: '/api/v2/organizations',
         modules: '/api/v2/modules',
         settings: '/api/v2/settings',

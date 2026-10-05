@@ -1,7 +1,7 @@
 import Link from 'next/link';
-import { APP_DISPLAY_NAME, CONTACT_EMAIL } from '@/lib/appBrand';
+import { APP_DISPLAY_NAME } from '@/lib/appBrand';
 
-export const LEGAL_LAST_UPDATED = 'October 4, 2026';
+export const LEGAL_LAST_UPDATED = 'October 5, 2026';
 
 export function LegalSection({ title, children }) {
   return (
@@ -13,14 +13,13 @@ export function LegalSection({ title, children }) {
 }
 
 export function ContactLine() {
-  if (!CONTACT_EMAIL) return null;
   return (
     <p>
-      Questions? Email{' '}
-      <a href={`mailto:${CONTACT_EMAIL}`} className="text-blue-600 hover:underline">
-        {CONTACT_EMAIL}
-      </a>
-      .
+      Questions? Send us a message using the{' '}
+      <Link href="/?contact=1" className="text-blue-600 hover:underline">
+        Contact Us form
+      </Link>{' '}
+      on our home page.
     </p>
   );
 }
