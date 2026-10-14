@@ -123,12 +123,6 @@ export const contactAPI = {
   send: (data) => api.post('/contact', data),
 };
 
-// Usage API
-export const usageAPI = {
-  getStatus: () => api.get('/usage/status'),
-  getMonthly: (year, month) => api.get('/usage/monthly', { params: { year, month } }),
-};
-
 // Billing API
 export const billingAPI = {
   getStatus: () => api.get('/billing/status'),
@@ -140,29 +134,6 @@ export const billingAPI = {
   createCheckout: (packageId) => api.post('/billing/checkout', { packageId }),
   verifyStripeSession: (sessionId) => api.get('/billing/verify-session', { params: { session_id: sessionId } }),
   getTestMode: () => api.get('/billing/test-mode'),
-};
-
-// Invoices API
-export const invoicesAPI = {
-  list: () => api.get('/invoices'),
-  get: (id) => api.get(`/invoices/${id}`),
-  downloadPDF: (id) => api.get(`/invoices/${id}/pdf`, { responseType: 'blob' }),
-};
-
-// Business API
-export const businessAPI = {
-  updateSettings: (data) => api.put('/business/settings', data),
-  retryActivation: () => api.post('/business/retry-activation'),
-  searchPhoneNumbers: (params) => api.get('/business/phone-numbers/search', { params }),
-  provisionPhoneNumber: (data) => api.post('/business/phone-numbers/provision', data),
-  linkAssistant: () => api.post('/business/link-assistant'),
-  sendTestEmail: () => api.post('/business/test-email'),
-  sendTestSMS: (data) => api.post('/business/test-sms', data),
-  sendTestMissedCall: (data) => api.post('/business/test-missed-call', data),
-  // Kiosk token management
-  generateKioskToken: () => api.post('/business/kiosk-token'),
-  getKioskToken: () => api.get('/business/kiosk-token'),
-  revokeKioskToken: () => api.delete('/business/kiosk-token'),
 };
 
 // Modules API (v2)
@@ -270,16 +241,6 @@ export const orbixNetworkAPI = {
     api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/reset-render`, {}, { params }),
   uploadLongformDadjokeToYoutube: (id, params) =>
     api.post(`/v2/orbix-network/longform/dadjoke/videos/${id}/upload-to-youtube`, {}, { params }),
-};
-
-// V2 Settings – business profile (timezone, etc.). Uses same active-business header for consistency.
-function v2ActiveBusinessHeaders() {
-  if (typeof window === 'undefined') return {};
-  const id = localStorage.getItem('activeBusinessId') || localStorage.getItem('businessId');
-  return id ? { 'X-Active-Business-Id': id } : {};
-}
-export const settingsV2API = {
-  getBusiness: () => api.get('/v2/settings/business', { headers: v2ActiveBusinessHeaders() }),
 };
 
 export default api;

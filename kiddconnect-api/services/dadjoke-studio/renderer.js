@@ -177,6 +177,22 @@ async function finalizeStudioRender({
   height,
 }) {
   const fs = (await import('fs')).default;
+  const unlinkQuiet = async (p) => {
+    try {
+      await fs.promises.unlink(p);
+    } catch (_) {}
+  };
+
+  const { data: rcheck } = await supabaseClient
+    .from('dadjoke_studio_rendered_outputs')
+    .select('render_status')
+    .eq('id', renderOutputId)
+    .maybeSingle();
+  if (rcheck?.render_status === 'FAILED') {
+    await unlinkQuiet(localFilePath);
+    return { outputUrl: null, durationSec, cancelled: true };
+  }
+
   const buffer = await fs.promises.readFile(localFilePath);
   const remotePath = `${content.business_id}/${content.id}/${renderOutputId}.mp4`;
   const { data: up, error: upErr } = await supabaseClient.storage
@@ -187,7 +203,7 @@ async function finalizeStudioRender({
   const { data: pub } = supabaseClient.storage.from(RENDERS_BUCKET).getPublicUrl(up.path);
   const outputUrl = pub?.publicUrl ? `${pub.publicUrl}?v=${Date.now()}` : null;
 
-  await supabaseClient
+  const { data: readyRow, error: readyErr } = await supabaseClient
     .from('dadjoke_studio_rendered_outputs')
     .update({
       render_status: 'READY',
@@ -200,7 +216,15 @@ async function finalizeStudioRender({
       error_message: null,
       updated_at: new Date().toISOString(),
     })
-    .eq('id', renderOutputId);
+    .eq('id', renderOutputId)
+    .eq('render_status', 'RENDERING')
+    .select('id')
+    .maybeSingle();
+
+  if (readyErr || !readyRow) {
+    await unlinkQuiet(localFilePath);
+    return { outputUrl: null, durationSec, cancelled: true };
+  }
 
   await supabaseClient
     .from('dadjoke_studio_generated_content')
