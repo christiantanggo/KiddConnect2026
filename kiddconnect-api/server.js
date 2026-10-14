@@ -2,7 +2,7 @@
  * Le Fournier API — deploy this folder alone (Railway). Own .env + Supabase.
  * Run: npm install && npm start
  */
-const DEPLOYMENT_VERSION = 'LeFournier-API-2026-10-04';
+const DEPLOYMENT_VERSION = 'LeFournier-API-2026-10-13';
 
 if (typeof globalThis.File === 'undefined' && typeof Blob !== 'undefined') {
   globalThis.File = class File extends Blob {

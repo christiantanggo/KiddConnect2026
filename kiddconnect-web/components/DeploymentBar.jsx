@@ -5,7 +5,7 @@ import { usePathname } from 'next/navigation';
 /**
  * Deployment stamp (black bar) for signed-in pages. Update DEPLOYMENT_LABEL when you ship.
  */
-export const DEPLOYMENT_LABEL = 'Oct 5 2026 V2 — Le Fournier';
+export const DEPLOYMENT_LABEL = 'Oct 13 2026 V3 — Le Fournier';
 
 const PUBLIC_PATHS = ['/', '/privacy', '/terms', '/legal/privacy', '/legal/terms'];
 
