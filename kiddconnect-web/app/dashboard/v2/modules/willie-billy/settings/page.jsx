@@ -141,6 +141,13 @@ function WillieBillyProductionInner() {
             ? `Connected to ${youtube.channel_handle || youtube.channel_title || 'your channel'}.`
             : 'Not connected yet.'}
         </p>
+        {youtube?.last_attempt && !youtube.connected && (
+          <p className="text-sm mb-3" style={{ color: '#b91c1c' }}>
+            {youtube.last_attempt.reason === 'no_channel'
+              ? 'The Google login you approved has no YouTube channel of its own. Where’s Willie & Billy has to be its own row on the account list.'
+              : `The last try opened ${youtube.last_attempt.channel_handle || youtube.last_attempt.channel_title || 'a different channel'}. That is not @WheresWillieAndBilly, so it was not saved.`}
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           <button
             type="button"

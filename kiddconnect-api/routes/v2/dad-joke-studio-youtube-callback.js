@@ -13,10 +13,12 @@ const MODULE_KEY = 'dad-joke-studio';
 const FRONTEND = getFrontendPublicBaseUrl();
 
 router.get('/youtube/callback', async (req, res) => {
+  let forWillie = false;
+  const willieBack = `${getFrontendPublicBaseUrl()}/dashboard/v2/modules/willie-billy/settings`;
   try {
     const { code, state, error } = req.query;
     const stateParts = (state || '').split(':');
-    const forWillie = stateParts[1] === 'willie-billy';
+    forWillie = stateParts[1] === 'willie-billy';
     const settingsPath = forWillie
       ? `${FRONTEND}/dashboard/v2/modules/willie-billy/settings`
       : `${FRONTEND}/dashboard/v2/modules/dad-joke-studio/settings`;
@@ -121,6 +123,10 @@ router.get('/youtube/callback', async (req, res) => {
 
     res.redirect(`${settingsPath}?youtube_connected=true`);
   } catch (err) {
+    if (forWillie) {
+      console.error('[WillieBilly YouTube] Error:', err?.message);
+      return res.redirect(`${willieBack}?error=youtube_oauth_error`);
+    }
     const settingsPath = `${FRONTEND}/dashboard/v2/modules/dad-joke-studio/settings`;
     const isInvalidGrant = err?.response?.data?.error === 'invalid_grant' || err?.message?.includes('invalid_grant');
     console.error('[DadJokeStudio YouTube Callback] Error:', err?.message);
