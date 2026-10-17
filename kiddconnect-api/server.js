@@ -2,7 +2,7 @@
  * Le Fournier API — deploy this folder alone (Railway). Own .env + Supabase.
  * Run: npm install && npm start
  */
-const DEPLOYMENT_VERSION = 'LeFournier-API-2026-10-17b';
+const DEPLOYMENT_VERSION = 'LeFournier-API-2026-10-17c';
 
 if (typeof globalThis.File === 'undefined' && typeof Blob !== 'undefined') {
   globalThis.File = class File extends Blob {
@@ -120,6 +120,8 @@ const allowedOrigins = [
   'https://kiddconnect.ca',
   `http://localhost:${__DEV_FE__}`,
   `http://127.0.0.1:${__DEV_FE__}`,
+  'http://localhost:3010',
+  'http://127.0.0.1:3010',
   'http://localhost:3000',
   'http://localhost:3001',
   'http://127.0.0.1:3000',

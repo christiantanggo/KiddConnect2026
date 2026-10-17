@@ -1,7 +1,7 @@
 import axios from 'axios';
 import Cookies from 'js-cookie';
 
-const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5003').replace(/\/$/, '');
+const DEFAULT_API_URL = (process.env.NEXT_PUBLIC_API_URL || 'https://kiddconnect2026-production.up.railway.app').replace(/\/$/, '');
 /** Runtime override before app loads (no redeploy). */
 export function getApiBaseUrl() {
   if (typeof window !== 'undefined') {
