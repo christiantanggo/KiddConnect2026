@@ -13,6 +13,12 @@ import {
   queueToday,
   saveSchedule,
 } from '../../services/willie-billy/queue.js';
+import {
+  disconnectWillieYouTube,
+  uploadWillieRender,
+  willieYouTubeAuthUrl,
+  willieYouTubeStatus,
+} from '../../services/willie-billy/youtube.js';
 
 const router = express.Router();
 router.use(authenticate);
@@ -63,6 +69,39 @@ router.post('/renders', async (req, res) => {
     const status = error.status || 500;
     if (status >= 500) console.error('[WillieBilly] enqueue', error.message);
     res.status(status).json({ error: error.message });
+  }
+});
+
+router.get('/youtube/status', async (req, res) => {
+  try {
+    res.json(await willieYouTubeStatus(req.active_business_id));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/youtube/auth-url', async (req, res) => {
+  try {
+    res.json(await willieYouTubeAuthUrl(req.active_business_id));
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
+  }
+});
+
+router.post('/youtube/disconnect', async (req, res) => {
+  try {
+    res.json(await disconnectWillieYouTube(req.active_business_id));
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/renders/:id/youtube', async (req, res) => {
+  try {
+    const render = await uploadWillieRender(req.active_business_id, req.params.id);
+    res.json({ render });
+  } catch (error) {
+    res.status(error.status || 500).json({ error: error.message });
   }
 });
 

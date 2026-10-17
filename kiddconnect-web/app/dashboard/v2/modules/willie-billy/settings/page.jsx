@@ -1,13 +1,27 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import WillieBillyPage from '@/components/willie-billy/WillieBillyNav';
 import {
+  connectWillieYouTube,
+  disconnectWillieYouTube,
   getWillieSchedule,
+  getWillieYouTube,
   listWillieRenders,
+  postWillieRender,
   produceWillieToday,
   saveWillieSchedule,
 } from '@/lib/willie-billy/client';
+
+const YOUTUBE_ERRORS = {
+  youtube_oauth_denied: 'Google sign-in was cancelled.',
+  youtube_oauth_failed: 'Google did not return an authorization code. Try again.',
+  youtube_not_configured: 'YouTube OAuth is not configured on the server yet.',
+  invalid_grant: 'Google rejected the authorization. Click Connect YouTube again.',
+  no_channel_found: 'That Google account has no YouTube channel.',
+  youtube_oauth_error: 'Something went wrong connecting YouTube. Try again.',
+};
 
 function dayLabel(schedule) {
   const day = schedule?.day_number;
@@ -18,23 +32,50 @@ function dayLabel(schedule) {
 }
 
 export default function WillieBillyProduction() {
+  return (
+    <Suspense fallback={null}>
+      <WillieBillyProductionInner />
+    </Suspense>
+  );
+}
+
+function WillieBillyProductionInner() {
   const [schedule, setSchedule] = useState(null);
   const [renders, setRenders] = useState([]);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [youtube, setYoutube] = useState(null);
+  const [posting, setPosting] = useState(null);
+  const searchParams = useSearchParams();
 
   async function refresh() {
-    const [scheduleRes, renderRes] = await Promise.all([
+    const [scheduleRes, renderRes, youtubeRes] = await Promise.all([
       getWillieSchedule(),
       listWillieRenders(),
+      getWillieYouTube().catch(() => null),
     ]);
     setSchedule(scheduleRes.schedule);
     setRenders(renderRes.renders || []);
+    if (youtubeRes) setYoutube(youtubeRes);
   }
 
   useEffect(() => {
     refresh().catch((err) => setError(err.message));
   }, []);
+
+  useEffect(() => {
+    if (searchParams.get('youtube_connected') === 'true') {
+      setError('');
+    }
+    const code = searchParams.get('error');
+    if (!code) return;
+    const channel = searchParams.get('channel');
+    if (code === 'wrong_channel') {
+      setError(`That Google account opened ${channel || 'a different channel'}. Connect @WheresWillieAndBilly.`);
+      return;
+    }
+    setError(YOUTUBE_ERRORS[code] || `YouTube: ${code}`);
+  }, [searchParams]);
 
   useEffect(() => {
     const pending = renders.some((row) => row.status === 'queued' || row.status === 'rendering');
@@ -86,6 +127,63 @@ export default function WillieBillyProduction() {
       {error && (
         <p className="text-sm mb-4" style={{ color: '#b91c1c' }}>{error}</p>
       )}
+
+      <section
+        className="rounded-2xl p-4 mb-6"
+        style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}
+      >
+        <h2 className="font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>YouTube</h2>
+        <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>
+          Connect {youtube?.account || 'christian.fournierattanggo@gmail.com'} and choose {youtube?.expected_handle || '@WheresWillieAndBilly'}. Finished videos post as unlisted until you make them public on YouTube.
+        </p>
+        <p className="text-sm mb-3" style={{ color: 'var(--color-text-main)' }}>
+          {youtube?.connected
+            ? `Connected to ${youtube.channel_handle || youtube.channel_title || 'your channel'}.`
+            : 'Not connected yet.'}
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setError('');
+              try {
+                const data = await connectWillieYouTube();
+                window.location.href = data.url;
+              } catch (err) {
+                setError(err.message);
+                setBusy(false);
+              }
+            }}
+            className="px-3 py-1.5 rounded-lg text-sm font-semibold"
+            style={{ background: '#1d4ed8', color: '#fff' }}
+          >
+            {youtube?.connected ? 'Reconnect YouTube' : 'Connect YouTube'}
+          </button>
+          {youtube?.connected && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setError('');
+                try {
+                  setYoutube(await disconnectWillieYouTube());
+                } catch (err) {
+                  setError(err.message);
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold"
+              style={{ background: 'var(--color-surface)', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
+            >
+              Disconnect
+            </button>
+          )}
+        </div>
+      </section>
 
       <section
         className="rounded-2xl p-4 mb-6"
@@ -152,6 +250,33 @@ export default function WillieBillyProduction() {
                   playsInline
                   className="mt-2 w-full max-w-sm rounded-xl bg-black"
                 />
+              )}
+              {row.youtube_url && (
+                <a href={row.youtube_url} target="_blank" rel="noreferrer" className="text-xs font-semibold mt-2 inline-block" style={{ color: '#1d4ed8' }}>
+                  Open on YouTube
+                </a>
+              )}
+              {row.video_url && !row.youtube_url && (
+                <button
+                  type="button"
+                  disabled={posting === row.id}
+                  onClick={async () => {
+                    setPosting(row.id);
+                    setError('');
+                    try {
+                      await postWillieRender(row.id);
+                      await refresh();
+                    } catch (err) {
+                      setError(err.message);
+                    } finally {
+                      setPosting(null);
+                    }
+                  }}
+                  className="text-xs font-semibold mt-2"
+                  style={{ color: '#1d4ed8' }}
+                >
+                  {posting === row.id ? 'Posting…' : 'Post to YouTube'}
+                </button>
               )}
             </article>
           ))}

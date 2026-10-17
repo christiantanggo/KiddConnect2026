@@ -184,7 +184,7 @@ export async function enqueueChapter(businessId, week, { force = false } = {}) {
 export async function listRenders(businessId, { week, limit = 40 } = {}) {
   let query = supabaseClient
     .from(TABLE)
-    .select('id, kind, episode_number, week, day, slot, title, youtube_title, status, video_url, image_url, error, created_at, updated_at')
+    .select('id, kind, episode_number, week, day, slot, title, youtube_title, status, video_url, image_url, youtube_url, error, created_at, updated_at')
     .eq('business_id', businessId)
     .order('updated_at', { ascending: false })
     .limit(Math.min(200, Math.max(1, Number(limit) || 40)));

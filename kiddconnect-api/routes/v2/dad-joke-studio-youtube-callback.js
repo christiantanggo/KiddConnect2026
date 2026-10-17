@@ -6,6 +6,7 @@ import express from 'express';
 import { google } from 'googleapis';
 import { ModuleSettings } from '../../models/v2/ModuleSettings.js';
 import { dadjokeYoutubeCallbackUrl, getFrontendPublicBaseUrl } from '../../config/public-urls.js';
+import { completeWillieYouTubeConnect } from '../../services/willie-billy/youtube.js';
 
 const router = express.Router();
 const MODULE_KEY = 'dad-joke-studio';
@@ -14,8 +15,11 @@ const FRONTEND = getFrontendPublicBaseUrl();
 router.get('/youtube/callback', async (req, res) => {
   try {
     const { code, state, error } = req.query;
-
-    const settingsPath = `${FRONTEND}/dashboard/v2/modules/dad-joke-studio/settings`;
+    const stateParts = (state || '').split(':');
+    const forWillie = stateParts[1] === 'willie-billy';
+    const settingsPath = forWillie
+      ? `${FRONTEND}/dashboard/v2/modules/willie-billy/settings`
+      : `${FRONTEND}/dashboard/v2/modules/dad-joke-studio/settings`;
 
     if (error) {
       return res.redirect(`${settingsPath}?error=youtube_oauth_denied`);
@@ -24,8 +28,14 @@ router.get('/youtube/callback', async (req, res) => {
       return res.redirect(`${settingsPath}?error=youtube_oauth_failed`);
     }
 
-    const stateParts = (state || '').split(':');
     const businessId = stateParts[0] || state;
+    if (forWillie) {
+      if (!code || !businessId) {
+        return res.redirect(`${getFrontendPublicBaseUrl()}/dashboard/v2/modules/willie-billy/settings?error=youtube_oauth_failed`);
+      }
+      const done = await completeWillieYouTubeConnect(code, businessId);
+      return res.redirect(done.redirect);
+    }
     const isManual = stateParts[2] === 'manual';
     if (!businessId) {
       return res.redirect(`${settingsPath}?error=invalid_state`);
