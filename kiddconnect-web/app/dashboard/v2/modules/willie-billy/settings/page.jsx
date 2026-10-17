@@ -71,7 +71,7 @@ function WillieBillyProductionInner() {
     if (!code) return;
     const channel = searchParams.get('channel');
     if (code === 'wrong_channel') {
-      setError(`That Google account opened ${channel || 'a different channel'}. Connect @WheresWillieAndBilly.`);
+      setError(`Google opened ${channel || 'a channel'}, but the connection was not saved. Try Connect YouTube again.`);
       return;
     }
     setError(YOUTUBE_ERRORS[code] || `YouTube: ${code}`);
@@ -134,7 +134,7 @@ function WillieBillyProductionInner() {
       >
         <h2 className="font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>YouTube</h2>
         <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>
-          Connect {youtube?.account || 'christian.fournierattanggo@gmail.com'} and choose {youtube?.expected_handle || '@WheresWillieAndBilly'}. Finished videos post as unlisted until you make them public on YouTube.
+          Connect any YouTube channel on your Google account. After it is connected, update that channel’s name and art to Where’s Willie & Billy. Finished videos post as unlisted until you make them public on YouTube.
         </p>
         <p className="text-sm mb-3" style={{ color: 'var(--color-text-main)' }}>
           {youtube?.connected
@@ -144,8 +144,8 @@ function WillieBillyProductionInner() {
         {youtube?.last_attempt && !youtube.connected && (
           <p className="text-sm mb-3" style={{ color: '#b91c1c' }}>
             {youtube.last_attempt.reason === 'no_channel'
-              ? 'The Google login you approved has no YouTube channel of its own. Where’s Willie & Billy has to be its own row on the account list.'
-              : `The last try opened ${youtube.last_attempt.channel_handle || youtube.last_attempt.channel_title || 'a different channel'}. That is not @WheresWillieAndBilly, so it was not saved.`}
+              ? 'That Google login has no YouTube channel.'
+              : `The last try opened ${youtube.last_attempt.channel_handle || youtube.last_attempt.channel_title || 'a channel'} and it was not saved. Connect again.`}
           </p>
         )}
         <div className="flex flex-wrap gap-2">

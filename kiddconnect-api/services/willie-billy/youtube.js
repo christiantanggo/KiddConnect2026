@@ -88,19 +88,6 @@ export async function disconnectWillieYouTube(businessId) {
   return willieYouTubeStatus(businessId);
 }
 
-function handleOf(channel) {
-  return String(channel?.snippet?.customUrl || '')
-    .replace(/^@/, '')
-    .toLowerCase();
-}
-
-function isWillieChannel(channel) {
-  const handle = handleOf(channel);
-  const title = String(channel?.snippet?.title || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (handle === WILLIE_CHANNEL_HANDLE) return true;
-  return title.includes('willie') && title.includes('billy');
-}
-
 async function rememberAttempt(businessId, attempt) {
   const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
   const settings = existing?.settings ? { ...existing.settings } : {};
@@ -135,18 +122,6 @@ export async function completeWillieYouTubeConnect(code, businessId) {
   if (!channel) {
     await rememberAttempt(businessId, { reason: 'no_channel', at: new Date().toISOString() });
     return { redirect: `${back}?error=no_channel_found` };
-  }
-
-  const handle = handleOf(channel);
-  if (!isWillieChannel(channel)) {
-    const shown = channel.snippet?.customUrl || channel.snippet?.title || 'another channel';
-    await rememberAttempt(businessId, {
-      reason: 'wrong_channel',
-      channel_title: channel.snippet?.title || '',
-      channel_handle: channel.snippet?.customUrl || '',
-      at: new Date().toISOString(),
-    });
-    return { redirect: `${back}?error=wrong_channel&channel=${encodeURIComponent(shown)}` };
   }
 
   const existing = await ModuleSettings.findByBusinessAndModule(businessId, MODULE_KEY);
