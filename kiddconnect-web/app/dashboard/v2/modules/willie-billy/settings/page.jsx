@@ -2,41 +2,90 @@
 
 import { useEffect, useState } from 'react';
 import WillieBillyPage from '@/components/willie-billy/WillieBillyNav';
+import {
+  getWillieSchedule,
+  listWillieRenders,
+  produceWillieToday,
+  saveWillieSchedule,
+} from '@/lib/willie-billy/client';
 
-const START_KEY = 'willie-billy-day-one';
-
-function dayNumber(startIso) {
-  if (!startIso) return null;
-  const start = new Date(`${startIso}T00:00:00`);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const diff = Math.round((today - start) / 86400000) + 1;
-  if (diff < 1) return { day: diff, label: `Day 1 is ${1 - diff} day${1 - diff === 1 ? '' : 's'} away.` };
-  if (diff > 365) return { day: diff, label: 'The cartoon year is over. This is the real-world year.' };
-  return { day: diff, label: `Today is Day ${diff}. Morning is episode ${diff * 2 - 1}. Night is episode ${diff * 2}.` };
+function dayLabel(schedule) {
+  const day = schedule?.day_number;
+  if (!schedule?.day_one || day == null) return 'Set the morning the series starts.';
+  if (day < 1) return `Day 1 is ${1 - day} day${1 - day === 1 ? '' : 's'} away.`;
+  if (day > 365) return 'The cartoon year is over. This is the real-world year.';
+  return `Today is Day ${day}. Morning is episode ${day * 2 - 1}. Night is episode ${day * 2}.`;
 }
 
 export default function WillieBillyProduction() {
-  const [start, setStart] = useState('');
+  const [schedule, setSchedule] = useState(null);
+  const [renders, setRenders] = useState([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    setStart(window.localStorage.getItem(START_KEY) || '');
-  }, []);
-
-  function save(value) {
-    setStart(value);
-    if (value) window.localStorage.setItem(START_KEY, value);
-    else window.localStorage.removeItem(START_KEY);
+  async function refresh() {
+    const [scheduleRes, renderRes] = await Promise.all([
+      getWillieSchedule(),
+      listWillieRenders(),
+    ]);
+    setSchedule(scheduleRes.schedule);
+    setRenders(renderRes.renders || []);
   }
 
-  const today = dayNumber(start);
+  useEffect(() => {
+    refresh().catch((err) => setError(err.message));
+  }, []);
+
+  useEffect(() => {
+    const pending = renders.some((row) => row.status === 'queued' || row.status === 'rendering');
+    if (!pending) return undefined;
+    const timer = setInterval(() => {
+      refresh().catch(() => {});
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [renders]);
+
+  async function save(patch) {
+    setBusy(true);
+    setError('');
+    try {
+      const res = await saveWillieSchedule(patch);
+      setSchedule(res.schedule);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function makeToday() {
+    setBusy(true);
+    setError('');
+    try {
+      if (!schedule?.day_one) {
+        const today = new Date();
+        const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+        await saveWillieSchedule({ day_one: iso, auto_produce: true, timezone: 'America/Toronto' });
+      }
+      await produceWillieToday();
+      await refresh();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <WillieBillyPage>
       <h1 className="text-3xl font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>Production</h1>
       <p className="mb-6 text-sm" style={{ color: 'var(--color-text-muted)', maxWidth: 680 }}>
-        Two shorts every day, then one chapter on the last day of the week. The morning short is the hide. The night short is what almost went wrong. The chapter is the only video that moves the plot, and it has to open on a scene the shorts never showed.
+        Two shorts every day, then one chapter on the last day of the week. Each short is a new picture and a short narration. The chapter is a longer film once a week. Finished videos play here.
       </p>
+
+      {error && (
+        <p className="text-sm mb-4" style={{ color: '#b91c1c' }}>{error}</p>
+      )}
 
       <section
         className="rounded-2xl p-4 mb-6"
@@ -44,18 +93,69 @@ export default function WillieBillyProduction() {
       >
         <h2 className="font-semibold mb-2" style={{ color: 'var(--color-text-main)' }}>Day 1</h2>
         <p className="text-sm mb-3" style={{ color: 'var(--color-text-muted)' }}>
-          Set the morning the series starts. This stays on this browser so the board can tell you which day you are on.
+          The daily run uses this date in Toronto time. It makes today’s morning and night, and the chapter when the week ends. A missed day stays missed until you open that chapter and make it.
         </p>
         <input
           type="date"
-          value={start}
-          onChange={(e) => save(e.target.value)}
+          value={schedule?.day_one || ''}
+          onChange={(e) => save({ day_one: e.target.value || null })}
           className="px-3 py-2 rounded-lg text-sm"
           style={{ border: '1px solid var(--color-border)', color: 'var(--color-text-main)' }}
         />
-        {today && (
-          <p className="text-sm mt-3" style={{ color: 'var(--color-text-main)' }}>{today.label}</p>
+        <p className="text-sm mt-3" style={{ color: 'var(--color-text-main)' }}>{dayLabel(schedule)}</p>
+        <div className="flex flex-wrap gap-2 mt-4">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => save({ auto_produce: !schedule?.auto_produce })}
+            className="px-3 py-1.5 rounded-lg text-sm font-semibold"
+            style={{ background: schedule?.auto_produce ? '#dbeafe' : 'var(--color-surface)', color: '#1d4ed8', border: '1px solid #bfdbfe' }}
+          >
+            {schedule?.auto_produce ? 'Daily run is on' : 'Turn on the daily run'}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={makeToday}
+            className="px-3 py-1.5 rounded-lg text-sm font-semibold"
+            style={{ background: '#1d4ed8', color: '#fff' }}
+          >
+            Make today’s shorts
+          </button>
+        </div>
+      </section>
+
+      <section
+        className="rounded-2xl p-4 mb-6"
+        style={{ background: 'var(--color-surface)', border: '1px solid var(--color-border)' }}
+      >
+        <h2 className="font-semibold mb-3" style={{ color: 'var(--color-text-main)' }}>Recent videos</h2>
+        {renders.length === 0 && (
+          <p className="text-sm" style={{ color: 'var(--color-text-muted)' }}>Nothing has been made yet.</p>
         )}
+        <div className="space-y-4">
+          {renders.slice(0, 8).map((row) => (
+            <article key={row.id}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h3 className="text-sm font-semibold" style={{ color: 'var(--color-text-main)' }}>
+                  {row.kind === 'chapter' ? `Chapter ${row.week}` : `Episode ${row.episode_number}`} · {row.title}
+                </h3>
+                <span className="text-xs font-semibold" style={{ color: '#1d4ed8' }}>{row.status}</span>
+              </div>
+              {row.error && <p className="text-xs mt-1" style={{ color: '#b91c1c' }}>{row.error}</p>}
+              {row.video_url && (
+                <video
+                  key={row.video_url}
+                  src={row.video_url}
+                  poster={row.image_url || undefined}
+                  controls
+                  playsInline
+                  className="mt-2 w-full max-w-sm rounded-xl bg-black"
+                />
+              )}
+            </article>
+          ))}
+        </div>
       </section>
 
       <section

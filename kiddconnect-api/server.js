@@ -2,7 +2,7 @@
  * Le Fournier API — deploy this folder alone (Railway). Own .env + Supabase.
  * Run: npm install && npm start
  */
-const DEPLOYMENT_VERSION = 'LeFournier-API-2026-10-17';
+const DEPLOYMENT_VERSION = 'LeFournier-API-2026-10-17b';
 
 if (typeof globalThis.File === 'undefined' && typeof Blob !== 'undefined') {
   globalThis.File = class File extends Blob {
@@ -477,6 +477,14 @@ try {
     console.warn('⚠️ Movie Review routes not loaded:', mrErr.message);
   }
 
+  try {
+    const willieBillyRoutes = (await import('./routes/v2/willie-billy.js')).default;
+    app.use('/api/v2/willie-billy', willieBillyRoutes);
+    console.log('✅ Willie & Billy routes');
+  } catch (wbErr) {
+    console.warn('⚠️ Willie & Billy routes not loaded:', wbErr.message);
+  }
+
   app.get('/api/v2/health', (_req, res) => {
     res.json({
       status: 'ok',
@@ -501,6 +509,7 @@ try {
         kidquiz: '/api/v2/kidquiz',
         dadJokeStudio: v2RouteMountStatus.dadJokeStudio ? '/api/v2/dad-joke-studio' : null,
         movieReview: '/api/v2/movie-review',
+        willieBilly: '/api/v2/willie-billy',
         webhooks: {
           stripe: '/api/v2/webhooks/stripe',
           clickbank: '/api/v2/webhooks/clickbank',
@@ -583,6 +592,24 @@ try {
   console.warn('⚠️ Orbix scheduled jobs not started:', error.message);
 }
 
+const willieBillyIntervals = [];
+const willieWorkerOn = process.env.WILLIE_BILLY_WORKER !== 'false'
+  && (process.env.RAILWAY_ENVIRONMENT || process.env.WILLIE_BILLY_WORKER === 'true');
+if (willieWorkerOn) {
+  try {
+    const { processOneWillieBillyRender, queueDueBusinesses } = await import('./services/willie-billy/queue.js');
+    const runSafe = (fn, name) => () => {
+      fn().catch((err) => console.error(`[WillieBilly] ${name}:`, err?.message || err));
+    };
+    willieBillyIntervals.push(setInterval(runSafe(processOneWillieBillyRender, 'render'), 45 * 1000));
+    willieBillyIntervals.push(setInterval(runSafe(queueDueBusinesses, 'schedule'), 10 * 60 * 1000));
+    setTimeout(runSafe(queueDueBusinesses, 'schedule'), 20 * 1000);
+    console.log('✅ Willie & Billy daily producer started');
+  } catch (error) {
+    console.warn('⚠️ Willie & Billy producer not started:', error.message);
+  }
+}
+
 const server = app.listen(__SERVER_PORT__, '0.0.0.0', () => {
   const localUrl = `http://localhost:${__SERVER_PORT__}`;
   console.log('\n' + '='.repeat(60));
@@ -596,6 +623,7 @@ const server = app.listen(__SERVER_PORT__, '0.0.0.0', () => {
 function gracefulShutdown(signal) {
   console.log(`[KiddConnect API] ${signal} received, shutting down...`);
   Object.values(orbixNetworkIntervals).forEach((id) => clearInterval(id));
+  willieBillyIntervals.forEach((id) => clearInterval(id));
   if (server && typeof server.close === 'function') {
     server.close(() => {
       console.log('[KiddConnect API] HTTP closed');

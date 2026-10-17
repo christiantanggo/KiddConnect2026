@@ -1,5 +1,6 @@
 /**
  * Willie & Billy — one-year series bible.
+ * Kept in sync with kiddconnect-api/services/willie-billy/series.js.
  * Two shorts a day (morning hide, night almost) and one weekly chapter.
  * Weeks 1–51 are 7 days. Week 52 is 8 days so Day 365 lands in the finale.
  */

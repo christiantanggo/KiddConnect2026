@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import WillieBillyPage from '@/components/willie-billy/WillieBillyNav';
 import {
@@ -12,10 +12,16 @@ import {
   searchSeries,
   weekRangeLabel,
 } from '@/lib/willie-billy/series';
+import { getWillieSchedule } from '@/lib/willie-billy/client';
 
 export default function WillieBillyDashboard() {
   const [season, setSeason] = useState(0);
   const [query, setQuery] = useState('');
+  const [schedule, setSchedule] = useState(null);
+
+  useEffect(() => {
+    getWillieSchedule().then((res) => setSchedule(res.schedule)).catch(() => {});
+  }, []);
 
   const visible = useMemo(() => {
     if (!season) return CHAPTERS;
@@ -38,6 +44,16 @@ export default function WillieBillyDashboard() {
           {SERIES.logline}
         </p>
       </header>
+
+      <Link
+        href="/dashboard/v2/modules/willie-billy/settings"
+        className="block rounded-xl px-4 py-3 mb-6 text-sm"
+        style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e3a8a' }}
+      >
+        {schedule?.auto_produce && schedule?.day_number >= 1 && schedule?.day_number <= 365
+          ? `Daily run is on. Today is Day ${schedule.day_number}, chapter ${schedule.week}.`
+          : 'Production is ready. Set Day 1 and turn on the daily run.'}
+      </Link>
 
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
         {[

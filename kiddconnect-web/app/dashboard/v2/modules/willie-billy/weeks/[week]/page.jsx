@@ -13,6 +13,7 @@ import {
   weekRangeLabel,
   youtubeTitle,
 } from '@/lib/willie-billy/series';
+import { enqueueWillieRender, listWillieRenders } from '@/lib/willie-billy/client';
 
 const READY_KEY = 'willie-billy-ready-weeks';
 
@@ -32,10 +33,40 @@ export default function WillieBillyWeekPage() {
   const chapter = chapterByWeek(week);
   const [copied, setCopied] = useState(null);
   const [ready, setReady] = useState([]);
+  const [renders, setRenders] = useState([]);
+  const [making, setMaking] = useState(null);
+  const [makeError, setMakeError] = useState('');
 
   useEffect(() => {
     setReady(readReady());
   }, []);
+
+  useEffect(() => {
+    if (!chapter) return undefined;
+    let stop = false;
+    const load = () => {
+      listWillieRenders(week)
+        .then((res) => {
+          if (!stop) setRenders(res.renders || []);
+        })
+        .catch((err) => {
+          if (!stop) setMakeError(err.message);
+        });
+    };
+    load();
+    return () => { stop = true; };
+  }, [chapter, week]);
+
+  useEffect(() => {
+    const pending = renders.some((row) => row.status === 'queued' || row.status === 'rendering');
+    if (!pending) return undefined;
+    const timer = setInterval(() => {
+      listWillieRenders(week)
+        .then((res) => setRenders(res.renders || []))
+        .catch(() => {});
+    }, 8000);
+    return () => clearInterval(timer);
+  }, [renders, week]);
 
   const episodes = useMemo(() => (chapter ? episodesForWeek(week) : []), [chapter, week]);
   const brief = chapter ? longformBrief(week) : null;
@@ -45,6 +76,26 @@ export default function WillieBillyWeekPage() {
     const next = ready.includes(week) ? ready.filter((n) => n !== week) : [...ready, week];
     setReady(next);
     window.localStorage.setItem(READY_KEY, JSON.stringify(next));
+  }
+
+  function renderForEpisode(episodeNumber) {
+    return renders.find((row) => row.kind === 'short' && row.episode_number === episodeNumber) || null;
+  }
+
+  const chapterRender = renders.find((row) => row.kind === 'chapter') || null;
+
+  async function makeRender(body, key) {
+    setMaking(key);
+    setMakeError('');
+    try {
+      await enqueueWillieRender(body);
+      const res = await listWillieRenders(week);
+      setRenders(res.renders || []);
+    } catch (err) {
+      setMakeError(err.message);
+    } finally {
+      setMaking(null);
+    }
   }
 
   async function copyTitle(episode) {
@@ -118,12 +169,22 @@ export default function WillieBillyWeekPage() {
       >
         <h2 className="font-semibold mb-1" style={{ color: '#1e3a8a' }}>{brief.title}</h2>
         <p className="text-sm mb-2" style={{ color: '#1e3a8a' }}>{brief.runtime}. {brief.beat}</p>
-        <ul className="text-sm space-y-1" style={{ color: '#1e40af' }}>
+        <ul className="text-sm space-y-1 mb-3" style={{ color: '#1e40af' }}>
           {brief.rules.map((rule) => (
             <li key={rule}>{rule}</li>
           ))}
         </ul>
+        <RenderActions
+          row={chapterRender}
+          busy={making === 'chapter'}
+          onMake={() => makeRender({ kind: 'chapter', week, force: chapterRender?.status === 'failed' }, 'chapter')}
+          label="Make this chapter"
+        />
       </section>
+
+      {makeError && (
+        <p className="text-sm mb-4" style={{ color: '#b91c1c' }}>{makeError}</p>
+      )}
 
       <div className="space-y-2">
         {episodes.map((episode) => (
@@ -141,17 +202,63 @@ export default function WillieBillyWeekPage() {
               </span>
             </div>
             <p className="text-sm mt-1" style={{ color: 'var(--color-text-muted)' }}>{episode.happens}</p>
-            <button
-              type="button"
-              onClick={() => copyTitle(episode)}
-              className="text-xs mt-2 font-semibold"
-              style={{ color: '#1d4ed8' }}
-            >
-              {copied === episode.episode ? 'Copied' : 'Copy YouTube title'}
-            </button>
+            <div className="flex flex-wrap items-center gap-3 mt-2">
+              <button
+                type="button"
+                onClick={() => copyTitle(episode)}
+                className="text-xs font-semibold"
+                style={{ color: '#1d4ed8' }}
+              >
+                {copied === episode.episode ? 'Copied' : 'Copy YouTube title'}
+              </button>
+              <RenderActions
+                row={renderForEpisode(episode.episode)}
+                busy={making === episode.episode}
+                onMake={() => makeRender({
+                  episode: episode.episode,
+                  force: renderForEpisode(episode.episode)?.status === 'failed',
+                }, episode.episode)}
+                label="Make this short"
+              />
+            </div>
           </article>
         ))}
       </div>
     </WillieBillyPage>
+  );
+}
+
+function RenderActions({ row, busy, onMake, label }) {
+  const pending = row && (row.status === 'queued' || row.status === 'rendering');
+  return (
+    <div className="mt-2">
+      {!row?.video_url && (
+        <button
+          type="button"
+          disabled={busy || pending}
+          onClick={onMake}
+          className="text-xs font-semibold"
+          style={{ color: '#1d4ed8' }}
+        >
+          {pending ? (row.status === 'rendering' ? 'Making the video…' : 'Queued') : (busy ? 'Sending…' : label)}
+        </button>
+      )}
+      {row?.status === 'failed' && (
+        <button type="button" onClick={onMake} className="text-xs font-semibold ml-3" style={{ color: '#b91c1c' }}>
+          Try again
+        </button>
+      )}
+      {row?.error && <p className="text-xs mt-1" style={{ color: '#b91c1c' }}>{row.error}</p>}
+      {row?.video_url && (
+        <video
+          key={row.video_url}
+          src={row.video_url}
+          poster={row.image_url || undefined}
+          controls
+          playsInline
+          className="mt-2 w-full max-w-xs rounded-xl bg-black"
+        />
+      )}
+    </div>
   );
 }
