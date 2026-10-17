@@ -1,6 +1,6 @@
 # Le Fournier (lefournier.ca)
 
-Studio dashboard for YouTube content modules: Orbix Network, Kid Quiz, Dad Joke Studio, and Movie Review.
+Studio dashboard for YouTube content modules: Orbix Network, Kid Quiz, Dad Joke Studio, Movie Review, and Willie & Billy.
 
 | Folder | What it is | Hosted on |
 |--------|------------|-----------|

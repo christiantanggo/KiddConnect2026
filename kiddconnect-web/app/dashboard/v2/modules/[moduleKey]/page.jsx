@@ -370,7 +370,9 @@ export default function ModuleDetailPage() {
                           ? '/dashboard/v2/modules/movie-review/settings'
                           : moduleKey === 'dad-joke-studio'
                             ? '/dashboard/v2/modules/dad-joke-studio/settings'
-                            : '/dashboard/v2/settings/modules'
+                            : moduleKey === 'willie-billy'
+                              ? '/dashboard/v2/modules/willie-billy/settings'
+                              : '/dashboard/v2/settings/modules'
                   }
                   className="px-6 py-3 text-white font-medium transition-colors"
                   style={{

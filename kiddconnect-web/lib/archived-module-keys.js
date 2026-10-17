@@ -6,6 +6,7 @@ export const YOUTUBE_STYLE_MODULE_KEYS = [
   'movie-review',
   'orbix-network',
   'dad-joke-studio',
+  'willie-billy',
 ];
 
 export function isYoutubeStyleModule(m) {

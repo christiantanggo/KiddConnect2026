@@ -133,7 +133,7 @@ router.get('/:moduleKey', authenticate, requireBusinessContext, async (req, res)
  */
 // Internal/free modules that don't require Stripe or legal acceptance gate
 // delivery-dispatch removed: uses same billing as rest of app (Stripe subscription, legal acceptance)
-const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network', 'dad-joke-studio']);
+const FREE_MODULES = new Set(['kidquiz', 'movie-review', 'emergency-dispatch', 'emergency-network', 'dad-joke-studio', 'willie-billy']);
 
 router.post('/:moduleKey/activate',
   authenticate,
@@ -196,9 +196,10 @@ router.post('/:moduleKey/activate',
       
       let subscriptionItemId = null;
       
-      if (testMode) {
-        // TEST MODE: Skip Stripe entirely, create test subscription
-        console.log(`[TEST MODE] Activating ${moduleKey} for business ${businessId} without Stripe`);
+      const studioFree = moduleKey === 'willie-billy' && !testMode;
+      if (testMode || studioFree) {
+        // Skip Stripe. Test mode is development-only. Willie & Billy is an internal studio module.
+        console.log(`[${studioFree ? 'STUDIO' : 'TEST MODE'}] Activating ${moduleKey} for business ${businessId} without Stripe`);
         
         // Create test subscription record in database
         const billingCycle = calculateBillingCycle(business);
@@ -208,9 +209,9 @@ router.post('/:moduleKey/activate',
         const testSubscription = await Subscription.create({
           business_id: businessId,
           module_key: moduleKey,
-          plan: 'test', // Mark as test subscription
+          plan: studioFree ? 'studio' : 'test',
           status: 'active',
-          stripe_subscription_item_id: `test_${businessId}_${moduleKey}_${Date.now()}`, // Fake Stripe ID for test
+          stripe_subscription_item_id: `${studioFree ? 'studio' : 'test'}_${businessId}_${moduleKey}_${Date.now()}`,
           usage_limit: pricing.usage_limit || null,
           usage_limit_reset_date: resetDate.toISOString().split('T')[0],
           started_at: new Date().toISOString(),
@@ -638,6 +639,7 @@ router.post('/:moduleKey/activate',
       const moduleDashboards = {
         'kidquiz': '/dashboard/v2/modules/kidquiz/dashboard',
         'movie-review': '/dashboard/v2/modules/movie-review/dashboard',
+        'willie-billy': '/dashboard/v2/modules/willie-billy/dashboard',
         'emergency-dispatch': '/dashboard/v2/modules/emergency-dispatch',
         'emergency-network': '/dashboard/v2/modules/emergency-dispatch',
         'delivery-dispatch': '/dashboard/v2/modules/delivery-dispatch',
